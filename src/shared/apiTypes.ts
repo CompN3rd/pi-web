@@ -15,6 +15,7 @@ export const PI_WEB_CAPABILITIES = {
   piPackagesManage: "piPackages.manage",
   selectedMachineSettings: "settings.selectedMachine",
   agentProfileConfig: "settings.agentProfile",
+  automations: "automations",
 } as const;
 
 export type PiWebCapability = typeof PI_WEB_CAPABILITIES[keyof typeof PI_WEB_CAPABILITIES];
@@ -198,6 +199,159 @@ export interface Workspace {
   isGitWorktree: boolean;
   /** Workspace-effective project/global settings needed by workspace UI features. */
   effectiveConfig?: WorkspaceEffectiveConfig;
+}
+
+/** A durable trigger for a fresh-session automation. Cron expressions use six fields including seconds. */
+export type AutomationTrigger =
+  | { type: "manual" }
+  | { type: "once"; at: string }
+  | { type: "interval"; intervalMs: number }
+  | { type: "cron"; expression: string; timeZone: string };
+
+export type AutomationModelPolicy =
+  | { mode: "default" }
+  | { mode: "fixed"; provider: string; id: string; name?: string };
+
+export type AutomationThinkingPolicy =
+  | { mode: "default" }
+  | { mode: "fixed"; level: string };
+
+export type AutomationRunSource = "manual" | "scheduled";
+export type AutomationRunStatus = "queued" | "starting" | "running" | "cancelling" | "completed" | "failed" | "cancelled" | "timed_out" | "skipped" | "unknown";
+export type AutomationAttemptStatus = "starting" | "running" | "aborting" | "completed" | "failed" | "cancelled" | "timed_out" | "unknown";
+export type AutomationUsageQuality = "estimated" | "partial" | "provider_reported" | "unknown";
+
+export interface AutomationUsageSnapshot {
+  scope: "root_session";
+  quality: AutomationUsageQuality;
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  /** Estimated USD represented as integer millionths of a dollar. */
+  estimatedCostMicros?: number;
+  capturedAt: string;
+}
+
+export interface AutomationDefinition {
+  id: string;
+  projectId: string;
+  workspaceId: string;
+  workspacePath: string;
+  name: string;
+  description?: string;
+  prompt: string;
+  enabled: boolean;
+  revision: number;
+  testedRevision?: number;
+  trigger: AutomationTrigger;
+  model: AutomationModelPolicy;
+  thinking: AutomationThinkingPolicy;
+  timeoutMs: number;
+  abortGraceMs: number;
+  nextRunAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationAttempt {
+  id: string;
+  runId: string;
+  attemptNumber: number;
+  status: AutomationAttemptStatus;
+  sessionId?: string;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+  forceStopped: boolean;
+  usage?: AutomationUsageSnapshot;
+}
+
+export interface AutomationRun {
+  id: string;
+  automationId: string;
+  automationRevision: number;
+  automationName: string;
+  projectId: string;
+  workspaceId: string;
+  workspacePath: string;
+  source: AutomationRunSource;
+  scheduledFor: string;
+  status: AutomationRunStatus;
+  prompt: string;
+  trigger: AutomationTrigger;
+  configuredModel: AutomationModelPolicy;
+  configuredThinking: AutomationThinkingPolicy;
+  actualModel?: SessionModel;
+  actualThinkingLevel?: string;
+  timeoutMs: number;
+  queuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  deadlineAt?: string;
+  cancelRequestedAt?: string;
+  cancellationKind?: "user" | "timeout";
+  sessionId?: string;
+  reason?: string;
+  error?: string;
+  usage?: AutomationUsageSnapshot;
+  attempt?: AutomationAttempt;
+}
+
+export interface AutomationDraft {
+  projectId: string;
+  workspaceId: string;
+  name: string;
+  description?: string;
+  prompt: string;
+  trigger: AutomationTrigger;
+  model: AutomationModelPolicy;
+  thinking: AutomationThinkingPolicy;
+  timeoutMs?: number;
+}
+
+export interface UpdateAutomationRequest {
+  projectId: string;
+  workspaceId: string;
+  expectedRevision: number;
+  name?: string;
+  description?: string;
+  prompt?: string;
+  trigger?: AutomationTrigger;
+  model?: AutomationModelPolicy;
+  thinking?: AutomationThinkingPolicy;
+  timeoutMs?: number;
+  enabled?: boolean;
+}
+
+export interface AutomationScopeRequest {
+  projectId: string;
+  workspaceId: string;
+}
+
+export interface AutomationsResponse {
+  automations: AutomationDefinition[];
+  generatedAt: string;
+}
+
+export interface AutomationResponse {
+  automation: AutomationDefinition;
+}
+
+export interface AutomationRunResponse {
+  run: AutomationRun;
+}
+
+export interface AutomationRunsResponse {
+  runs: AutomationRun[];
+  nextCursor?: string;
+  generatedAt: string;
+}
+
+export interface AutomationModelsResponse {
+  models: SessionModel[];
+  defaultModel?: SessionModel;
+  thinkingLevels: string[];
+  defaultTimeoutMs: number;
+  minTimeoutMs: number;
+  maxTimeoutMs: number;
 }
 
 export interface SessionRef {
@@ -482,6 +636,13 @@ export interface SessionModel {
   name?: string;
   contextWindow?: number;
   reasoning?: unknown;
+  /**
+   * Thinking levels this specific model supports, as reported by pi's
+   * `getSupportedThinkingLevels`. Present where the server enumerates selectable
+   * models (e.g. automations) so the UI can offer only levels the model accepts
+   * rather than the full known set. Absent when the concrete model is unknown.
+   */
+  thinkingLevels?: string[];
 }
 
 // Domain type is owned by pi and re-exported from the shared thinking-levels
@@ -978,4 +1139,7 @@ export type GlobalSessionEvent =
   | Extract<SessionUiEventBody, { type: "status.update" | "activity.update" | "session.name" | "session.created" }>
   | SessionNotificationSummaryEvent
   | SessionUnreadEvent;
-export type RealtimeEvent = GlobalSessionEvent | TerminalUiEvent | WorkspaceActivityUiEvent;
+export type AutomationRealtimeEvent =
+  | { type: "automation.changed"; change: "created" | "updated" | "deleted"; automation: AutomationDefinition }
+  | { type: "automation.run.changed"; run: AutomationRun };
+export type RealtimeEvent = GlobalSessionEvent | TerminalUiEvent | WorkspaceActivityUiEvent | AutomationRealtimeEvent;

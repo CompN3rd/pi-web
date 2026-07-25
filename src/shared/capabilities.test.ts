@@ -90,6 +90,20 @@ describe("PI WEB capabilities", () => {
     })).toContain(unread);
   });
 
+  it("requires both web and sessiond to advertise Automations", () => {
+    const automations = PI_WEB_CAPABILITIES.automations;
+    expect(WEB_RUNTIME_CAPABILITIES).toContain(automations);
+    expect(SESSIOND_RUNTIME_CAPABILITIES).toContain(automations);
+    expect(effectivePiWebCapabilities({
+      web: { available: true, capabilities: [automations] },
+      sessiond: { available: true, capabilities: [] },
+    })).not.toContain(automations);
+    expect(effectivePiWebCapabilities({
+      web: { available: true, capabilities: [automations] },
+      sessiond: { available: true, capabilities: [automations] },
+    })).toContain(automations);
+  });
+
   it("keeps only known string capabilities when parsing runtime data", () => {
     expect(parseKnownPiWebCapabilities([PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.selectedMachineSettings, "future.capability"])).toEqual([PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.selectedMachineSettings]);
     expect(parseKnownPiWebCapabilities([PI_WEB_CAPABILITIES.piPackagesManage, 1])).toBeUndefined();

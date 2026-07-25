@@ -15,6 +15,11 @@ import { registerSessionRoutes } from "./sessions/sessionRoutes.js";
 import { SessionNotificationStore } from "./sessions/sessionNotificationStore.js";
 import { FileSessionUnreadPersistence, SessionUnreadStore } from "./sessions/sessionUnreadStore.js";
 import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver.js";
+import { registerAutomationRoutes } from "./automations/automationRoutes.js";
+import { AutomationService } from "./automations/automationService.js";
+import { AutomationSessionRunner } from "./automations/automationSessionRunner.js";
+import { AutomationStore, defaultAutomationDatabasePath } from "./automations/automationStore.js";
+import { AutomationWorkspaceAuthorizer } from "./automations/automationWorkspaceAuthorizer.js";
 import { ProjectService } from "./projects/projectService.js";
 import { ProjectStore } from "./storage/projectStore.js";
 import { WorkspaceService } from "./workspaces/workspaceService.js";
@@ -55,8 +60,10 @@ await runSessionDaemonStartup({
     // still mutable, then freeze every later extension-provider mutation before
     // any real session can load project resources.
     await bootstrapAndFreezeGlobalExtensionProviders(auth.runtime, activeAgentProfile.dir, app.log);
+    const projects = new ProjectService(new ProjectStore());
+    const workspaces = new WorkspaceService();
     const spawnTargets = config.spawnSessions
-      ? new ProjectScopedSpawnTargetResolver({ projects: new ProjectService(new ProjectStore()), workspaces: new WorkspaceService() })
+      ? new ProjectScopedSpawnTargetResolver({ projects, workspaces })
       : undefined;
     const sessions = new PiSessionService(eventHub, {
       modelRuntime: auth.runtime,
@@ -75,17 +82,27 @@ await runSessionDaemonStartup({
     });
     auth.subscribe((change) => { sessions.applyAuthChange(change); });
     const terminals = new TerminalService(eventHub, workspaceActivity);
+    const automationStore = new AutomationStore(defaultAutomationDatabasePath(daemonEnvironment));
+    const automations = new AutomationService(
+      automationStore,
+      new AutomationWorkspaceAuthorizer(projects, workspaces),
+      new AutomationSessionRunner(sessions),
+      eventHub,
+      app.log,
+    );
+
     const runtimeComponent = Object.freeze({
       ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES),
       activeAgentProfile,
     });
-    return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent };
+    return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, automations, activeAgentProfile, runtimeComponent };
   },
-  registerRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent }) {
+  registerRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, automations, runtimeComponent }) {
     registerWorkspaceActivityRoutes(app, workspaceActivity);
     registerAuthRoutes(app, auth);
     registerSessionRoutes(app, sessions, eventHub);
     registerTerminalRoutes(app, terminals);
+    registerAutomationRoutes(app, automations);
 
     app.get("/health", () => ({
       ok: true,
@@ -102,7 +119,7 @@ await runSessionDaemonStartup({
 
     app.get("/runtime", () => runtimeComponent);
   },
-  async listen({ auth, sessions, terminals, unreadStore }) {
+  async listen({ auth, sessions, terminals, unreadStore, automations }) {
     let shuttingDown = false;
     async function shutdown(signal: NodeJS.Signals): Promise<void> {
       if (shuttingDown) return;
@@ -116,15 +133,23 @@ await runSessionDaemonStartup({
           app.log.error({ err: error, operation }, "session daemon shutdown operation failed");
         }
       };
+      await attempt("stop automations scheduler", () => automations.stop());
       await attempt("dispose terminals", () => { terminals.dispose(); });
       await attempt("dispose auth", () => { auth.dispose(); });
       await attempt("dispose sessions", () => sessions.dispose());
       await attempt("flush session unread state", () => unreadStore.flush());
       await attempt("close server", () => app.close());
+      // Keep the durable scheduler fence until the listener and every session
+      // runtime have stopped, preventing split-owner restart races.
+      await attempt("dispose automations scheduler fence", () => { automations.dispose(); });
     }
 
     process.once("SIGINT", (signal) => { void shutdown(signal); });
     process.once("SIGTERM", (signal) => { void shutdown(signal); });
+
+    // Fence the durable scheduler before touching the listener. A second
+    // daemon must not unlink the active socket or recover/dispatch the same DB.
+    automations.acquireOwnership();
 
     const portValue = daemonEnvironment["PI_WEB_SESSIOND_PORT"];
     const port = portValue !== undefined && portValue !== "" ? Number(portValue) : undefined;
@@ -139,5 +164,7 @@ await runSessionDaemonStartup({
       await app.listen({ path });
       process.on("exit", () => void rm(path, { force: true }));
     }
+
+    automations.start();
   },
 });
