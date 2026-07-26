@@ -588,6 +588,26 @@ export interface QueuedSessionMessage {
 }
 
 /**
+ * Progress of the session startup window, where the daemon is still
+ * constructing the agent session and no `PiAgentSession` exists yet, so
+ * `activity.update` cannot be published for it.
+ *
+ * `cwd` is the routing key for a browser row that is still waiting for a
+ * session id: a client-invented pending start knows its workspace path but not
+ * the daemon's session id. `activity.sessionId` carries the daemon's real id, so
+ * the same event also serves the case where the browser already knows it (an
+ * open of an existing session).
+ *
+ * `activity.phase === "idle"` means the startup window ended with nothing left
+ * to report, so a browser that substituted its own text should restore it.
+ */
+export interface SessionStartupProgressEvent {
+  type: "session.startup";
+  cwd: string;
+  activity: SessionActivity;
+}
+
+/**
  * A pi-native image attachment carried with a prompt. The wire format mirrors
  * pi's own `ImageContent` shape (`{ type: "image", data, mimeType }`) so these
  * attachments are compatible with native multimodal delivery after validation.
@@ -1138,7 +1158,8 @@ type SessionUiEventBody =
 export type GlobalSessionEvent =
   | Extract<SessionUiEventBody, { type: "status.update" | "activity.update" | "session.name" | "session.created" }>
   | SessionNotificationSummaryEvent
-  | SessionUnreadEvent;
+  | SessionUnreadEvent
+  | SessionStartupProgressEvent;
 export type AutomationRealtimeEvent =
   | { type: "automation.changed"; change: "created" | "updated" | "deleted"; automation: AutomationDefinition }
   | { type: "automation.run.changed"; run: AutomationRun };

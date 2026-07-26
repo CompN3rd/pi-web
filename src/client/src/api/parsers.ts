@@ -1,5 +1,5 @@
 import { SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type GitDiffResponse, type GitFileState, type GitStatusFile, type GitStatusResponse, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceActivity, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
-import type { PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot } from "../../../shared/apiTypes";
+import type { PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot } from "../../../shared/apiTypes";
 import { parseActiveAgentProfileDescriptor } from "../../../shared/activeAgentProfile";
 import { parseKnownPiWebCapabilities } from "../../../shared/capabilities";
 
@@ -270,6 +270,39 @@ export function parseSessionUnreadEvent(value: unknown): SessionUnreadEvent {
     cwd,
     unread,
   };
+}
+
+/**
+ * Validate a startup progress frame. The browser substitutes its own wording
+ * from this event, so a malformed frame must be dropped rather than rendered:
+ * `cwd` is the routing key, and an activity missing its phase or label could
+ * otherwise blank out or freeze the text a user is reading while they wait.
+ */
+export function parseSessionStartupProgressEvent(value: unknown): SessionStartupProgressEvent {
+  const record = requireRecord(value);
+  if (record["type"] !== "session.startup") throw new Error("Invalid session startup event type");
+  return {
+    type: "session.startup",
+    cwd: requireNonEmptyString(record, "cwd"),
+    activity: parseSessionActivity(record["activity"]),
+  };
+}
+
+function parseSessionActivity(value: unknown): SessionActivity {
+  const record = requireRecord(value);
+  return {
+    sessionId: requireNonEmptyString(record, "sessionId"),
+    phase: requireSessionActivityPhase(record, "phase"),
+    label: requireNonEmptyString(record, "label"),
+    ...optionalField("detail", optionalString(record, "detail")),
+    at: requireNonEmptyString(record, "at"),
+  };
+}
+
+function requireSessionActivityPhase(record: Record<string, unknown>, key: string): SessionActivity["phase"] {
+  const value = requireString(record, key);
+  if (value !== "active" && value !== "idle" && value !== "error") throw new Error(`Expected session activity phase field: ${key}`);
+  return value;
 }
 
 function parseSessionUnreadSummary(value: unknown): SessionUnreadSummary {

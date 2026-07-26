@@ -11,7 +11,7 @@ import { CapturingSessionEventHub, createTestModelRuntime, fakeRuntime, runtimeC
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 
 beforeEach(() => {
-  // Pi 0.81 uses PI_OFFLINE for refreshes after runtime creation. These tests
+  // Pi 0.82 uses PI_OFFLINE for refreshes after runtime creation. These tests
   // exercise local model/auth behavior and must never fetch provider catalogs.
   vi.stubEnv("PI_OFFLINE", "1");
 });

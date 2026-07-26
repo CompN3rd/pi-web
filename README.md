@@ -37,7 +37,7 @@ Requirements:
 
 - Node.js 22.19.0 or newer
 - npm
-- Pi Coding Agent `>=0.81.1 <0.82`, configured for your user
+- Pi Coding Agent `>=0.82.1 <0.83`, configured for your user
 - git and the development tools your agents need
 
 Install and start PI WEB as per-user services:

@@ -100,6 +100,7 @@
             <a href="#manual-uploads">Manual uploads</a>
             <a href="#agent-runtime">Agent profile and companion CLI</a>
             <a href="#pi-extension-provider-baseline">Pi extension providers</a>
+            <a href="#catalog-refresh">Model catalog refresh</a>
             <a href="#session-tools">Session tools</a>
             <a href="#completion-tools">Completion tools</a>
           </aside>
@@ -176,7 +177,7 @@
                 <li><code>pathAccess</code>: applies on the next request; existing file views may need a browser refresh.</li>
                 <li><code>uploads.defaultFolder</code>: applies to newly opened Files upload dialogs and new direct drag/drop batches after config/workspace refresh.</li>
                 <li><code>plugins</code>: reload the browser tab after changing PI WEB plugin enablement.</li>
-                <li>Pi package install/remove/update: not a PI WEB config key; after a mutation, type <code>/reload</code> in each idle PI WEB session on the target machine to refresh ordinary Pi resources such as extensions, skills, prompt templates, themes, and context/system prompt files. Reload the browser page separately for PI WEB browser plugin changes. If a global Pi extension adds, removes, or changes a provider, manually restart <code>pi-web-sessiond.service</code>; <code>/reload</code> cannot change the startup provider baseline. See <a href="#pi-extension-provider-baseline">Pi extension provider baseline</a>.</li>
+                <li>Pi package install/remove/update: not a PI WEB config key; after a mutation, type <code>/reload</code> in each idle PI WEB session on the target machine to refresh ordinary Pi resources such as extensions, skills, prompt templates, themes, and context/system prompt files. Reload the browser page separately for PI WEB browser plugin changes. If a global Pi extension adds or removes a provider, or changes a provider's connection settings, manually restart <code>pi-web-sessiond.service</code>; <code>/reload</code> cannot change the startup provider baseline. A known provider refreshing only its own model list is applied without a restart. See <a href="#pi-extension-provider-baseline">Pi extension provider baseline</a>.</li>
                 <li><code>shortcuts</code>: saved settings apply in the browser after config refresh/save.</li>
               </ul>
             </section>
@@ -479,6 +480,17 @@
                       <td>Not supported locally</td>
                       <td>Restart web/API after env changes</td>
                     </tr>
+                    <tr>
+                      <td>Offline mode</td>
+                      <td>—</td>
+                      <td><code>PI_WEB_OFFLINE</code>, <code>PI_OFFLINE</code></td>
+                      <td>Web/API + session daemon env</td>
+                      <td>Not supported locally</td>
+                      <td>
+                        Restart session daemon and web/API after env changes; also disables the
+                        <a href="#catalog-refresh">background model catalog refresh</a>
+                      </td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -616,18 +628,59 @@
                 providers from the active agent directory's <code>models.json</code>.
               </p>
               <p>
-                After startup capture, every later Pi extension provider registration, native registration, and
-                unregistration is a no-op, regardless of source or provider ID. This includes global extensions replayed
-                while sessions load, project extensions attempting to add or replace a provider, same-ID replacement or
-                unregistration, lifecycle callbacks such as <code>session_start</code>, and <code>/reload</code>. The
-                captured provider stays unchanged while non-provider Pi extension features continue to load and reload
-                normally.
+                After startup capture, a provider's connection settings are fixed for the daemon lifetime. Later
+                attempts to add a provider, replace an existing provider's configuration, register a native provider, or
+                unregister a provider are no-ops, regardless of source or provider ID. This includes project extensions
+                attempting to add or replace a provider, lifecycle callbacks such as <code>session_start</code>, and
+                <code>/reload</code>. Non-provider Pi extension features continue to load and reload normally.
+              </p>
+
+              <h3>Model list refresh for a known provider</h3>
+              <p>
+                One narrow update is applied after startup: a provider captured in the baseline may refresh
+                <strong>its own model list</strong>. Extensions that fetch an updated catalog typically re-send their
+                complete provider configuration, so PI WEB compares the incoming registration against the recorded
+                baseline and applies it only when both hold:
+              </p>
+              <ul>
+                <li>the provider ID is already in the startup baseline, and</li>
+                <li>
+                  every field except the model list is unchanged — <code>name</code>, <code>baseUrl</code>,
+                  <code>apiKey</code>, <code>api</code>, <code>streamSimple</code>, <code>headers</code>,
+                  <code>authHeader</code>, <code>oauth</code>, and <code>refreshModels</code>.
+                </li>
+              </ul>
+              <p>
+                Anything else stays a no-op, including a provider that was not in the baseline and a known provider
+                whose credentials, base URL, or API surface differ from startup. Function-valued fields cannot be
+                compared by value, so a registration that supplies a new <code>streamSimple</code>,
+                <code>refreshModels</code>, or <code>oauth</code> implementation is treated as a change and ignored.
               </p>
               <p>
-                Ignored mutations are written to the session-daemon log once per operation and provider ID. The log entry
-                contains no provider configuration or credentials, and PI WEB does not show a session warning or
-                notification. This prevents accidental provider, configuration, or credential contamination between
-                projects; it is not a security boundary because Pi extensions remain trusted daemon code.
+                An applied refresh becomes the new comparison point, so a provider can refresh repeatedly. Re-sending an
+                unchanged model list is a replay rather than an update and is ignored. Refreshed models are visible to
+                sessions immediately; no restart and no network request is involved, because the extension has already
+                produced the catalog.
+              </p>
+              <p>
+                Model lists are shared daemon-wide state. If extensions in two workspaces register different model lists
+                for the same provider ID, the last registration wins. A model entry may also carry its own
+                <code>baseUrl</code> and <code>headers</code>, which take precedence over the provider-level values for
+                that model, so an accepted refresh can change where requests for those models are sent. Both are
+                accepted trade-offs: a catalog is treated as a property of the provider rather than of the project, and
+                Pi extensions are trusted daemon code.
+              </p>
+
+              <h3>Provider decisions in the daemon log</h3>
+              <p>
+                Ignored mutations are written to the session-daemon log once per operation and provider ID, so a
+                replaying extension cannot flood the log. Applied model list refreshes are logged every time, with the
+                resulting model count, because each one changes shared runtime state. Neither entry contains provider
+                configuration or credentials, and PI WEB does not show a session warning or notification.
+              </p>
+              <p>
+                This prevents accidental provider, configuration, or credential contamination between projects; it is
+                not a security boundary because Pi extensions remain trusted daemon code.
               </p>
               <p>
                 Configure providers before the daemon starts: use the active agent directory's
@@ -640,6 +693,53 @@
                 (<code>systemctl --user restart pi-web-sessiond</code>). Restarting only the web/API service and running
                 <code>/reload</code> do not rebuild the baseline.
               </div>
+            </section>
+
+            <section id="catalog-refresh">
+              <h2>Background model catalog refresh</h2>
+              <p>
+                PI WEB shares one model runtime across all sessions, and provider model catalogs are refreshed over the
+                network only on the session daemon's own background schedule. Requests never start a catalog fetch of
+                their own, so a slow or unreachable provider cannot stall opening the model selector, starting a session,
+                or the auth dialogs on its own account.
+              </p>
+              <p>
+                A refresh that is <em>already</em> in flight can still briefly delay starting or opening a session,
+                because the shared runtime is read while that refresh is running. PI WEB says so while you wait: the
+                session's activity line names the startup step it is on and adds
+                <code>provider model lists are refreshing</code> when a background refresh is running at the same time.
+                That note reports what is happening concurrently, not a proven cause.
+              </p>
+              <p>The session daemon runs the refresh:</p>
+              <ul>
+                <li>
+                  <strong>15 seconds after the daemon starts</strong>, then <strong>hourly</strong>. Pi treats stored
+                  catalogs as fresh for four hours, so most hourly ticks make no network request at all; the shorter tick
+                  only makes sure a due refresh is not delayed to the next tick.
+                </li>
+                <li>
+                  <strong>Immediately after a provider login or logout</strong>, bypassing that freshness window, because
+                  the cached catalog is known to be wrong.
+                </li>
+              </ul>
+              <p>
+                Each run is bounded: it is aborted after <strong>60 seconds</strong>, and a run that times out or cannot
+                reach a provider earns <strong>one retry after five minutes</strong>; a provider that answers with an
+                error status is retried on the next scheduled refresh instead. Failures never clear the stored catalogs
+                — the last successfully fetched models stay in use and the daemon log records what failed. A refresh in
+                flight is also aborted when the daemon shuts down.
+              </p>
+              <p>
+                Models fetched by a background refresh appear the next time a client asks for the model list, so a model
+                selector left open across a refresh may need to be reopened.
+              </p>
+              <p>
+                To turn the background refresh off entirely, set <code>PI_WEB_OFFLINE</code> or <code>PI_OFFLINE</code> in
+                the session daemon's environment and restart it. In offline mode PI WEB performs no provider catalog
+                network requests, including after logins, and sessions use the catalogs already stored in the agent
+                profile. The <code>PI_WEB_SKIP_VERSION_CHECK</code> and <code>PI_SKIP_VERSION_CHECK</code> keys do
+                <strong>not</strong> affect this refresh; they only suppress PI WEB release checks.
+              </p>
             </section>
 
             <section id="session-tools">

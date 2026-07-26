@@ -11,7 +11,7 @@ import { SessionSocket, type GlobalSessionEvent, type SessionUiEvent } from "../
 import { isArchivableSessionInfo, isTransientNewSessionInfo, sessionPersistenceOptionsForRuntime } from "../sessionPersistence";
 import { isSessionActive } from "../../../shared/activity";
 import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
-import type { PromptAttachmentDelivery, SessionNotificationInboxEvent } from "../../../shared/apiTypes";
+import type { PromptAttachmentDelivery, SessionNotificationInboxEvent, SessionStartupProgressEvent } from "../../../shared/apiTypes";
 import { InMemorySessionSelectionMemory, markSessionArchived, markSessionsArchived, selectPreferredSession, selectionAfterArchivingSession, selectionAfterArchivingSessions, shouldDeselectAfterArchivedCollapse, type SessionSelectionMemory } from "./sessionSelection";
 import { selectedMachineId, type GetState, type SetState, type UpdateUrl } from "./types";
 import { TrailingRefreshCoordinator } from "./trailingRefreshCoordinator";
@@ -140,6 +140,7 @@ export class SessionController {
     else if (event.type === "activity.update") this.queueActivityUpdate(event.activity);
     else if (event.type === "session.created") this.applyCreatedSession(event.session);
     else if (event.type === "session.name") this.applySessionName(event.sessionId, event.name);
+    else if (event.type === "session.startup") this.queueStartupProgress(event);
   }
 
   dispose() {
@@ -1305,6 +1306,41 @@ export class SessionController {
   private queueActivityUpdate(activity: SessionActivity): void {
     this.pendingActivityBySession.set(activity.sessionId, activity);
     this.schedulePendingFlush();
+  }
+
+  // Session startup progress arrives while the daemon is still constructing the
+  // session, so the target row is resolved by session id when the browser knows
+  // it and by workspace path when it does not: a pending start knows its cwd but
+  // not the session id the daemon is creating. Once the row is resolved the
+  // progress goes through the normal activity buffer, so it renders exactly like
+  // any other activity and stays batched per frame.
+  private queueStartupProgress(event: SessionStartupProgressEvent): void {
+    // A known session id is the strongest possible proof of the target, so it is
+    // checked first: while a create is pending in a workspace, an *existing*
+    // session in that same workspace can be opened too (another row selected,
+    // another tab, a subsession), and that open publishes the same cwd. Matching
+    // on cwd first would paint the pending row with another session's phase.
+    if (this.getState().sessions.some((session) => session.id === event.activity.sessionId)) {
+      this.queueActivityUpdate(event.activity);
+      return;
+    }
+    // The id is unknown, so this can only be a create whose id the browser has
+    // not been told yet. Route it by workspace path, the one key both sides share.
+    const pending = this.startupProgressPendingStart(event.cwd);
+    if (pending === undefined) return;
+    // An idle startup phase means the daemon has nothing left to attribute, so
+    // restore this row's own generic wording rather than clearing the text of a
+    // creation request that has not returned yet.
+    this.queueActivityUpdate(event.activity.phase === "idle"
+      ? creatingPendingSessionActivity(pending.tempId, pending.queuedSends.length)
+      : { ...event.activity, sessionId: pending.tempId });
+  }
+
+  private startupProgressPendingStart(cwd: string): PendingSessionStart | undefined {
+    const machineId = selectedMachineId(this.getState());
+    const matches = Array.from(this.pendingSessionStarts.values())
+      .filter((pending) => pending.cwd === cwd && pending.machineId === machineId && !pending.discarded);
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   private schedulePendingFlush(): void {

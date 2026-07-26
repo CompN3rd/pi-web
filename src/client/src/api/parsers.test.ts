@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
+import { parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
 
 describe("API parsers", () => {
   it("preserves additive interactive API-key flow hints and defaults legacy options", () => {
@@ -287,6 +287,36 @@ describe("API parsers", () => {
       cwd: "/repo",
       unread: null,
     })).toThrow("positive safe integer");
+  });
+
+  it("parses session startup progress with and without a wait detail", () => {
+    const activity = { sessionId: "session-1", phase: "active", label: "Creating session", detail: "Starting the Pi session", at: "2026-07-20T00:00:01.000Z" };
+
+    expect(parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity })).toEqual({
+      type: "session.startup",
+      cwd: "/repo",
+      activity,
+    });
+    const idle = { sessionId: "session-1", phase: "idle", label: "idle", at: "2026-07-20T00:00:02.000Z" };
+    expect(parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: idle })).toEqual({
+      type: "session.startup",
+      cwd: "/repo",
+      activity: idle,
+    });
+  });
+
+  it("rejects session startup progress that cannot be routed or rendered honestly", () => {
+    const activity = { sessionId: "session-1", phase: "active", label: "Creating session", at: "2026-07-20T00:00:01.000Z" };
+
+    expect(() => parseSessionStartupProgressEvent({ type: "activity.update", cwd: "/repo", activity })).toThrow("Invalid session startup event type");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", activity })).toThrow("Expected string field: cwd");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "", activity })).toThrow("Expected non-empty string field: cwd");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo" })).toThrow("Expected object response");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, phase: "waiting" } })).toThrow("Expected session activity phase field: phase");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, label: 7 } })).toThrow("Expected string field: label");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, label: "" } })).toThrow("Expected non-empty string field: label");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, detail: 7 } })).toThrow("Expected optional string field: detail");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, sessionId: "" } })).toThrow("Expected non-empty string field: sessionId");
   });
 
   it("parses session cleanup preview and execute responses", () => {

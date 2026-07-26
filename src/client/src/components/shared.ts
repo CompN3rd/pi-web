@@ -465,8 +465,8 @@ export const chatStyles = css`
 export const formattedTextStyles = css`
   :host { display: block; }
   .formatted { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; text-align: start; unicode-bidi: plaintext; }
-  p, ul, ol, pre, blockquote, table, .code-block-wrapper { margin: 0 0 10px; }
-  :is(p, ul, ol, pre, blockquote, table, .code-block-wrapper):last-child { margin-bottom: 0; }
+  p, ul, ol, pre, blockquote, .table-scroll, .code-block-wrapper { margin: 0 0 10px; }
+  :is(p, ul, ol, pre, blockquote, .table-scroll, .code-block-wrapper):last-child { margin-bottom: 0; }
   ul, ol { padding-left: 22px; }
   li + li { margin-top: 3px; }
   code { border: 1px solid var(--pi-border); border-radius: 4px; background: var(--pi-bg); padding: 1px 4px; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; direction: ltr; text-align: left; unicode-bidi: isolate; }
@@ -484,8 +484,10 @@ export const formattedTextStyles = css`
   h2 { font-size: 17px; }
   h3 { font-size: 15px; }
   h4 { font-size: 14px; }
-  table { border-collapse: collapse; display: block; overflow-x: auto; overflow-y: hidden; }
-  th, td { border: 1px solid var(--pi-border); padding: 4px 8px; }
+  .table-scroll { max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+  .table-scroll:focus-visible { outline: 1px solid var(--pi-accent); outline-offset: 2px; }
+  table { border-collapse: collapse; width: max-content; min-width: 100%; max-width: none; }
+  th, td { border: 1px solid var(--pi-border); padding: 4px 8px; max-width: 48ch; overflow-wrap: anywhere; }
   th { background: var(--pi-surface); }
 `;
 

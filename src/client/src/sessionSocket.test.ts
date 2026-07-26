@@ -90,6 +90,19 @@ describe("notification socket guards", () => {
     })).toBeUndefined();
   });
 
+  it("accepts validated session startup progress and drops malformed frames", () => {
+    const activity = { sessionId: "session-1", phase: "active", label: "Creating session", detail: "Starting the Pi session", at: "2026-07-20T00:00:01.000Z" };
+
+    expect(parseRealtimeSocketEvent({ type: "session.startup", cwd: "/repo", activity }))
+      .toMatchObject({ type: "session.startup", cwd: "/repo", activity });
+    expect(parseRealtimeSocketEvent({ type: "session.startup", cwd: "", activity })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "session.startup", cwd: "/repo" })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, phase: "waiting" } })).toBeUndefined();
+    // Startup progress is global-only, so it must not be accepted as a
+    // per-session frame even when it is well formed.
+    expect(parseSessionSocketEvent({ type: "session.startup", cwd: "/repo", activity })).toBeUndefined();
+  });
+
   it("preserves existing event acceptance without treating unknown types as realtime events", () => {
     expect(parseSessionSocketEvent({ type: "command.output", level: "info", message: "legacy" })).toMatchObject({ type: "command.output" });
     expect(parseRealtimeSocketEvent({ type: "future.notification", payload: {} })).toBeUndefined();
