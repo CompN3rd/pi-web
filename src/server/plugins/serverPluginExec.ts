@@ -45,7 +45,7 @@ function runExecFile(
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(request.file, [...(request.args ?? [])], {
       ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
-      env: { ...options.baseEnv, ...(request.env ?? {}) },
+      env: commandEnvironment(options.baseEnv, request),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       detached: process.platform !== "win32",
@@ -147,10 +147,23 @@ function validateRequest(request: ServerPluginExecFileRequest): void {
   if (request.env !== undefined && !Object.values(request.env).every((value) => typeof value === "string")) {
     throw new Error("Server plugin command env values must be strings");
   }
+  if (request.unsetEnv !== undefined && (!Array.isArray(request.unsetEnv) || !request.unsetEnv.every(isEnvironmentKey))) {
+    throw new Error("Server plugin command unsetEnv keys must be non-empty strings without '=' or null bytes");
+  }
   if (request.timeoutMs !== undefined && (!Number.isInteger(request.timeoutMs) || request.timeoutMs <= 0)) {
     throw new Error("Server plugin command timeoutMs must be a positive integer");
   }
   if (!isAbortSignal(request.signal)) throw new Error("Server plugin commands require an AbortSignal");
+}
+
+function commandEnvironment(baseEnv: NodeJS.ProcessEnv, request: ServerPluginExecFileRequest): NodeJS.ProcessEnv {
+  const env = { ...baseEnv, ...(request.env ?? {}) };
+  for (const key of request.unsetEnv ?? []) Reflect.deleteProperty(env, key);
+  return env;
+}
+
+function isEnvironmentKey(value: unknown): value is string {
+  return typeof value === "string" && value !== "" && !value.includes("=") && !value.includes("\0");
 }
 
 interface KillableChild {

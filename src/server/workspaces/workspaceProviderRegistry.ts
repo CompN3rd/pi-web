@@ -1,0 +1,471 @@
+import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
+import type { ProjectInput, ProviderClaim } from "../../server-plugin-api.js";
+import type {
+  JsonObject,
+  JsonValue,
+  Project,
+  Workspace,
+  WorkspaceRemovalPresentation,
+} from "../../shared/apiTypes.js";
+import type {
+  ServerPluginHealthInspection,
+  ServerPluginProviderContribution,
+} from "../plugins/serverPluginRuntime.js";
+
+const DEFAULT_PROVIDER_TIMEOUT_MS = 10_000;
+
+type ProviderTier = "primary" | "fallback";
+type ProviderOperation = "probe" | "list";
+
+export type WorkspaceProviderDiagnosticCode = "probe-failed" | "claim-conflict" | "list-failed";
+
+export interface WorkspaceProviderDiagnostic {
+  code: WorkspaceProviderDiagnosticCode;
+  message: string;
+  tier: ProviderTier;
+  pluginId?: string;
+  pluginIds?: readonly string[];
+}
+
+export interface WorkspaceProviderResolution {
+  status: "provider" | "folder" | "degraded";
+  projectId: string;
+  ownerPluginId?: string;
+  workspaces: readonly Workspace[];
+  diagnostics: readonly WorkspaceProviderDiagnostic[];
+}
+
+export interface WorkspaceProviderRegistryLogger {
+  warn(details: Record<string, unknown>, message: string): void;
+}
+
+export type WorkspacePathInspector = (path: string) => boolean | Promise<boolean>;
+
+export interface WorkspaceProviderRegistryOptions {
+  /** Active contributions from one immutable server-plugin runtime snapshot. */
+  contributions: readonly ServerPluginProviderContribution[];
+  logger: WorkspaceProviderRegistryLogger;
+  providerTimeoutMs?: number;
+  pathInspector?: WorkspacePathInspector;
+}
+
+interface ParsedProviderWorkspace {
+  key: string;
+  path: string;
+  label: string;
+  isMain: boolean;
+  data?: unknown;
+  publicMetadata?: unknown;
+  removal?: unknown;
+}
+
+interface TierSelectionNone {
+  kind: "none";
+}
+
+interface TierSelectionWinner {
+  kind: "winner";
+  contribution: ServerPluginProviderContribution;
+}
+
+interface TierSelectionConflict {
+  kind: "conflict";
+  pluginIds: readonly string[];
+}
+
+type TierSelection = TierSelectionNone | TierSelectionWinner | TierSelectionConflict;
+
+/** Keep only active providers whose bounded startup health inspection is not unhealthy. */
+export function eligibleWorkspaceProviderContributions(
+  contributions: readonly ServerPluginProviderContribution[],
+  inspections: readonly ServerPluginHealthInspection[],
+): readonly ServerPluginProviderContribution[] {
+  const healthByPluginId = new Map(inspections.map(({ pluginId, health }) => [pluginId, health.status]));
+  return Object.freeze(contributions.filter(({ pluginId }) => {
+    const status = healthByPluginId.get(pluginId);
+    return status === "healthy" || status === "degraded";
+  }));
+}
+
+/**
+ * Resolves one exclusive workspace owner from the active server-plugin snapshot.
+ * Probe failures are local to one resolution; a claimant that later fails to
+ * list never falls through to a lower-priority provider.
+ */
+export class WorkspaceProviderRegistry {
+  private readonly contributions: readonly ServerPluginProviderContribution[];
+  private readonly providerTimeoutMs: number;
+  private readonly pathInspector: WorkspacePathInspector;
+
+  constructor(private readonly options: WorkspaceProviderRegistryOptions) {
+    this.contributions = Object.freeze([...options.contributions]
+      .sort((left, right) => left.pluginId.localeCompare(right.pluginId)));
+    this.providerTimeoutMs = positiveInteger(options.providerTimeoutMs, DEFAULT_PROVIDER_TIMEOUT_MS, "providerTimeoutMs");
+    this.pathInspector = options.pathInspector ?? pathIsDirectory;
+  }
+
+  /** Workspace-lister adapter used by spawned-session target validation. */
+  async list(project: Project): Promise<Workspace[]> {
+    const resolution = await this.resolve(project);
+    return [...resolution.workspaces];
+  }
+
+  /** Resolve workspaces together with attributable diagnostics for host consumers. */
+  async resolve(project: Project): Promise<WorkspaceProviderResolution> {
+    const input = snapshotProject(project);
+    const diagnostics: WorkspaceProviderDiagnostic[] = [];
+
+    for (const tier of ["primary", "fallback"] as const) {
+      const selection = await this.selectInTier(input, tier, diagnostics);
+      if (selection.kind === "none") continue;
+      if (selection.kind === "conflict") {
+        const message = `Workspace provider conflict in ${tier} tier: ${selection.pluginIds.join(", ")}`;
+        const diagnostic = freezeDiagnostic({
+          code: "claim-conflict",
+          message,
+          tier,
+          pluginIds: selection.pluginIds,
+        });
+        diagnostics.push(diagnostic);
+        this.options.logger.warn({ projectId: input.id, tier, pluginIds: selection.pluginIds }, "workspace provider claim conflict");
+        return degradedResolution(input, diagnostics);
+      }
+      return await this.resolveWinner(input, tier, selection.contribution, diagnostics);
+    }
+
+    return Object.freeze({
+      status: "folder",
+      projectId: input.id,
+      workspaces: Object.freeze([folderWorkspace(input)]),
+      diagnostics: Object.freeze([...diagnostics]),
+    });
+  }
+
+  private async selectInTier(
+    project: ProjectInput,
+    tier: ProviderTier,
+    diagnostics: WorkspaceProviderDiagnostic[],
+  ): Promise<TierSelection> {
+    const candidates = this.contributions.filter(({ provider }) => (provider.fallback === true) === (tier === "fallback"));
+    const claimants: ServerPluginProviderContribution[] = [];
+
+    for (const contribution of candidates) {
+      try {
+        const claim = await runBoundedProviderOperation(
+          contribution.pluginId,
+          "probe",
+          this.providerTimeoutMs,
+          (signal) => contribution.provider.probe(project, signal),
+        );
+        if (!isProviderClaim(claim)) {
+          throw new WorkspaceProviderContractError(`Workspace provider ${contribution.pluginId} returned an invalid probe result`);
+        }
+        if (claim === "claim") claimants.push(contribution);
+      } catch (error) {
+        const message = errorMessage(error);
+        diagnostics.push(freezeDiagnostic({
+          code: "probe-failed",
+          message,
+          tier,
+          pluginId: contribution.pluginId,
+        }));
+        this.options.logger.warn(
+          { err: error, projectId: project.id, pluginId: contribution.pluginId, tier, operation: "probe" },
+          "workspace provider probe failed",
+        );
+      }
+    }
+
+    if (claimants.length === 0) return { kind: "none" };
+    if (claimants.length === 1) {
+      const contribution = claimants[0];
+      if (contribution === undefined) throw new Error("Workspace provider claimant disappeared");
+      return { kind: "winner", contribution };
+    }
+    return Object.freeze({
+      kind: "conflict",
+      pluginIds: Object.freeze(claimants.map(({ pluginId }) => pluginId)),
+    });
+  }
+
+  private async resolveWinner(
+    project: ProjectInput,
+    tier: ProviderTier,
+    contribution: ServerPluginProviderContribution,
+    diagnostics: WorkspaceProviderDiagnostic[],
+  ): Promise<WorkspaceProviderResolution> {
+    try {
+      const listed: unknown = await runBoundedProviderOperation(
+        contribution.pluginId,
+        "list",
+        this.providerTimeoutMs,
+        (signal) => contribution.provider.list(project, signal),
+      );
+      const workspaces = await validateProviderWorkspaces(project, contribution, listed, this.pathInspector);
+      return Object.freeze({
+        status: "provider",
+        projectId: project.id,
+        ownerPluginId: contribution.pluginId,
+        workspaces: Object.freeze(workspaces),
+        diagnostics: Object.freeze([...diagnostics]),
+      });
+    } catch (error) {
+      const message = errorMessage(error);
+      diagnostics.push(freezeDiagnostic({
+        code: "list-failed",
+        message,
+        tier,
+        pluginId: contribution.pluginId,
+      }));
+      this.options.logger.warn(
+        { err: error, projectId: project.id, pluginId: contribution.pluginId, tier, operation: "list" },
+        "workspace provider listing failed after claim",
+      );
+      return degradedResolution(project, diagnostics, contribution.pluginId);
+    }
+  }
+}
+
+async function validateProviderWorkspaces(
+  project: ProjectInput,
+  contribution: ServerPluginProviderContribution,
+  value: unknown,
+  pathInspector: WorkspacePathInspector,
+): Promise<Workspace[]> {
+  if (!Array.isArray(value)) {
+    throw new WorkspaceProviderContractError(`Workspace provider ${contribution.pluginId} list result must be an array`);
+  }
+
+  const keys = new Set<string>();
+  const paths = new Set<string>();
+  const workspaces: Workspace[] = [];
+  let mainCount = 0;
+
+  for (const [index, rawWorkspace] of value.entries()) {
+    const label = `Workspace provider ${contribution.pluginId} result ${String(index + 1)}`;
+    const candidate = parseProviderWorkspace(rawWorkspace, label);
+    if (keys.has(candidate.key)) throw new WorkspaceProviderContractError(`${label} has duplicate key: ${candidate.key}`);
+    keys.add(candidate.key);
+
+    const path = normalizeAbsolutePath(candidate.path, `${label} path`);
+    if (paths.has(path)) throw new WorkspaceProviderContractError(`${label} has duplicate path: ${path}`);
+    paths.add(path);
+    if (!(await pathInspector(path))) throw new WorkspaceProviderContractError(`${label} path is not an accessible directory: ${path}`);
+
+    if (candidate.isMain) mainCount += 1;
+
+    const metadata = candidate.publicMetadata === undefined
+      ? undefined
+      : cloneJsonObject(candidate.publicMetadata, `${label} publicMetadata`);
+    if (candidate.data !== undefined) validateJsonValue(candidate.data, `${label} data`);
+    const removal = candidate.removal === undefined ? undefined : parseRemoval(candidate.removal, `${label} removal`);
+    const workspace: Workspace = {
+      id: workspaceId(project.id, candidate.key),
+      projectId: project.id,
+      path,
+      label: candidate.label,
+      isMain: candidate.isMain,
+      // Browser v1 keeps these required transition fields. Provider-neutral
+      // registry resolution never infers integration-specific values.
+      isGitRepo: false,
+      isGitWorktree: false,
+      provider: {
+        pluginId: contribution.pluginId,
+        capabilities: {
+          request: contribution.provider.request !== undefined,
+          remove: contribution.provider.prepareRemove !== undefined,
+        },
+        ...(metadata === undefined ? {} : { metadata }),
+      },
+      ...(removal === undefined ? {} : { removal }),
+    };
+    workspaces.push(Object.freeze(workspace));
+  }
+
+  if (mainCount !== 1) {
+    throw new WorkspaceProviderContractError(`Workspace provider ${contribution.pluginId} must return exactly one main workspace`);
+  }
+  return workspaces;
+}
+
+function parseProviderWorkspace(value: unknown, label: string): ParsedProviderWorkspace {
+  if (!isRecord(value)) throw new WorkspaceProviderContractError(`${label} must be an object`);
+  const key = value["key"];
+  const path = value["path"];
+  const workspaceLabel = value["label"];
+  const isMain = value["isMain"];
+  if (typeof key !== "string" || key === "") throw new WorkspaceProviderContractError(`${label} key must be a non-empty string`);
+  if (typeof path !== "string" || path === "") throw new WorkspaceProviderContractError(`${label} path must be a non-empty string`);
+  if (typeof workspaceLabel !== "string" || workspaceLabel === "") throw new WorkspaceProviderContractError(`${label} label must be a non-empty string`);
+  if (typeof isMain !== "boolean") throw new WorkspaceProviderContractError(`${label} isMain must be a boolean`);
+
+  return {
+    key,
+    path,
+    label: workspaceLabel,
+    isMain,
+    ...(value["data"] === undefined ? {} : { data: value["data"] }),
+    ...(value["publicMetadata"] === undefined ? {} : { publicMetadata: value["publicMetadata"] }),
+    ...(value["removal"] === undefined ? {} : { removal: value["removal"] }),
+  };
+}
+
+function parseRemoval(value: unknown, label: string): WorkspaceRemovalPresentation {
+  if (!isRecord(value)) throw new WorkspaceProviderContractError(`${label} must be an object`);
+  const actionLabel = value["actionLabel"];
+  const confirmation = value["confirmation"];
+  if (typeof actionLabel !== "string" || actionLabel === "") throw new WorkspaceProviderContractError(`${label} actionLabel must be a non-empty string`);
+  if (typeof confirmation !== "string" || confirmation === "") throw new WorkspaceProviderContractError(`${label} confirmation must be a non-empty string`);
+  return Object.freeze({ actionLabel, confirmation });
+}
+
+function snapshotProject(project: Project): ProjectInput {
+  if (typeof project.id !== "string" || project.id === "") throw new Error("Project id must be a non-empty string");
+  if (typeof project.name !== "string" || project.name === "") throw new Error("Project name must be a non-empty string");
+  return Object.freeze({
+    id: project.id,
+    name: project.name,
+    path: normalizeAbsolutePath(project.path, "Project path"),
+  });
+}
+
+function degradedResolution(
+  project: ProjectInput,
+  diagnostics: WorkspaceProviderDiagnostic[],
+  ownerPluginId?: string,
+): WorkspaceProviderResolution {
+  return Object.freeze({
+    status: "degraded",
+    projectId: project.id,
+    ...(ownerPluginId === undefined ? {} : { ownerPluginId }),
+    workspaces: Object.freeze([folderWorkspace(project)]),
+    diagnostics: Object.freeze([...diagnostics]),
+  });
+}
+
+function folderWorkspace(project: ProjectInput): Workspace {
+  return Object.freeze({
+    id: workspaceId(project.id, project.path),
+    projectId: project.id,
+    path: project.path,
+    label: project.name,
+    isMain: true,
+    isGitRepo: false,
+    isGitWorktree: false,
+  });
+}
+
+function workspaceId(projectId: string, providerKey: string): string {
+  return createHash("sha1").update(`${projectId}:${providerKey}`).digest("hex").slice(0, 12);
+}
+
+function normalizeAbsolutePath(path: string, label: string): string {
+  if (!isAbsolute(path)) throw new WorkspaceProviderContractError(`${label} must be absolute`);
+  return resolve(path);
+}
+
+async function pathIsDirectory(path: string): Promise<boolean> {
+  const value = await stat(path).catch(() => undefined);
+  return value?.isDirectory() === true;
+}
+
+async function runBoundedProviderOperation<T>(
+  pluginId: string,
+  operation: ProviderOperation,
+  timeoutMs: number,
+  callback: (signal: AbortSignal) => T | Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutError = new WorkspaceProviderTimeoutError(`Workspace provider ${pluginId} ${operation} timed out after ${String(timeoutMs)}ms`);
+  const timeout = setTimeout(() => { controller.abort(timeoutError); }, timeoutMs);
+  timeout.unref();
+  const deadline = new Promise<never>((_resolve, rejectPromise) => {
+    controller.signal.addEventListener("abort", () => { rejectPromise(abortError(controller.signal)); }, { once: true });
+  });
+  const result = Promise.resolve().then(() => callback(controller.signal));
+  try {
+    return await Promise.race([result, deadline]);
+  } finally {
+    clearTimeout(timeout);
+    if (!controller.signal.aborted) controller.abort(new DOMException("Workspace provider operation completed", "AbortError"));
+  }
+}
+
+function freezeDiagnostic(diagnostic: WorkspaceProviderDiagnostic): WorkspaceProviderDiagnostic {
+  const pluginIds = diagnostic.pluginIds === undefined ? undefined : Object.freeze([...diagnostic.pluginIds]);
+  return Object.freeze({
+    ...diagnostic,
+    ...(pluginIds === undefined ? {} : { pluginIds }),
+  });
+}
+
+function cloneJsonObject(value: unknown, label: string): JsonObject {
+  if (!isRecord(value)) throw new WorkspaceProviderContractError(`${label} must be a JSON object`);
+  const cloned = cloneJsonRecord(value, new Set<object>(), label);
+  return cloned;
+}
+
+function cloneJsonRecord(value: Record<string, unknown>, ancestors: Set<object>, label: string): JsonObject {
+  if (ancestors.has(value)) throw new WorkspaceProviderContractError(`${label} must not contain cycles`);
+  ancestors.add(value);
+  const output: Record<string, JsonValue> = {};
+  for (const [key, child] of Object.entries(value)) output[key] = cloneJsonValue(child, ancestors, label);
+  ancestors.delete(value);
+  Object.freeze(output);
+  return output;
+}
+
+function cloneJsonValue(value: unknown, ancestors: Set<object>, label: string): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new WorkspaceProviderContractError(`${label} must contain only finite JSON numbers`);
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) throw new WorkspaceProviderContractError(`${label} must not contain cycles`);
+    ancestors.add(value);
+    const output = value.map((child) => cloneJsonValue(child, ancestors, label));
+    ancestors.delete(value);
+    Object.freeze(output);
+    return output;
+  }
+  if (isRecord(value)) return cloneJsonRecord(value, ancestors, label);
+  throw new WorkspaceProviderContractError(`${label} must contain only JSON values`);
+}
+
+function validateJsonValue(value: unknown, label: string): void {
+  cloneJsonValue(value, new Set<object>(), label);
+}
+
+function isProviderClaim(value: unknown): value is ProviderClaim {
+  return value === "claim" || value === "pass";
+}
+
+function abortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error ? reason : new Error("Workspace provider operation aborted", { cause: reason });
+}
+
+function positiveInteger(value: number | undefined, fallback: number, key: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved <= 0) throw new Error(`${key} must be a positive integer`);
+  return resolved;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+class WorkspaceProviderContractError extends Error {
+  override name = "WorkspaceProviderContractError";
+}
+
+class WorkspaceProviderTimeoutError extends Error {
+  override name = "TimeoutError";
+}

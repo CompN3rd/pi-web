@@ -209,6 +209,39 @@ describe("server plugin runtime", () => {
     }));
   });
 
+  it("bounds health inspection and reports a timed-out provider as unhealthy", async () => {
+    vi.useFakeTimers();
+    let observedSignal: AbortSignal | undefined;
+    const runtime = await createServerPluginRuntime({
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([entry("health-timeout")])) },
+      importer: () => Promise.resolve(pluginModule("Health timeout", {
+        workspaceProvider: testProvider(),
+        health: (signal) => new Promise((_resolve, rejectPromise) => {
+          observedSignal = signal;
+          signal.addEventListener("abort", () => {
+            const reason: unknown = signal.reason;
+            rejectPromise(reason instanceof Error ? reason : new Error("Fixture health inspection aborted", { cause: reason }));
+          }, { once: true });
+        }),
+      })),
+      logger: testLogger(),
+      lifecycleTimeoutMs: 50,
+    });
+
+    const inspecting = runtime.inspectHealth();
+    await vi.advanceTimersByTimeAsync(50);
+    const [inspection] = await inspecting;
+
+    expect(observedSignal?.aborted).toBe(true);
+    expect(inspection).toMatchObject({
+      pluginId: "health-timeout",
+      health: { status: "unhealthy" },
+      phase: "health",
+    });
+    expect(inspection?.health.message).toContain("timed out");
+    expect(inspection?.error).toContain("timed out");
+  });
+
   it("publishes validated snapshots rather than mutable activation properties", async () => {
     const provider = testProvider();
     const mutableActivation: Record<string, unknown> = { workspaceProvider: provider };

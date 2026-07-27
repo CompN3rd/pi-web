@@ -41,6 +41,8 @@ export interface ServerPluginExecFileRequest {
   args?: readonly string[];
   cwd?: string;
   env?: Readonly<Record<string, string>>;
+  /** Environment keys removed after host defaults and plugin overrides merge. */
+  unsetEnv?: readonly string[];
   /** Requested timeout; the host may apply a lower maximum. */
   timeoutMs?: number;
   signal: AbortSignal;

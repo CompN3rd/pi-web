@@ -18,7 +18,10 @@ import { FileSessionUnreadPersistence, SessionUnreadStore } from "./sessions/ses
 import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver.js";
 import { ProjectService } from "./projects/projectService.js";
 import { ProjectStore } from "./storage/projectStore.js";
-import { WorkspaceService } from "./workspaces/workspaceService.js";
+import {
+  eligibleWorkspaceProviderContributions,
+  WorkspaceProviderRegistry,
+} from "./workspaces/workspaceProviderRegistry.js";
 import { sessiondSocketPath } from "../sessiond/config.js";
 import { TerminalService } from "./terminals/terminalService.js";
 import { registerTerminalRoutes } from "./terminals/terminalRoutes.js";
@@ -111,8 +114,14 @@ await runSessionDaemonStartup({
       });
       catalogRefresher.start();
       auth.subscribe(() => { catalogRefresher.requestRefresh(); });
+      const projects = new ProjectService(new ProjectStore());
+      const providerHealth = await serverPlugins.inspectHealth();
+      const workspaceProviders = new WorkspaceProviderRegistry({
+        contributions: eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth),
+        logger: app.log,
+      });
       const spawnTargets = config.spawnSessions
-        ? new ProjectScopedSpawnTargetResolver({ projects: new ProjectService(new ProjectStore()), workspaces: new WorkspaceService() })
+        ? new ProjectScopedSpawnTargetResolver({ projects, workspaces: workspaceProviders })
         : undefined;
       const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
         modelRuntime: auth.runtime,
@@ -156,7 +165,7 @@ await runSessionDaemonStartup({
           onFailure: () => { process.exitCode = 1; },
         });
       };
-      return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, shutdown };
+      return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, shutdown };
     } catch (error) {
       try {
         await serverPlugins.stop();

@@ -25,17 +25,29 @@ describe("server plugin execFile helper", () => {
     });
   });
 
-  it("merges bounded environment overrides without shell expansion", async () => {
-    const execFile = createServerPluginExecFile({ env: { BASE_VALUE: "base" } });
+  it("merges environment overrides, removes requested host keys, and never expands a shell", async () => {
+    const execFile = createServerPluginExecFile({ env: { BASE_VALUE: "base", REMOVE_ME: "host" } });
 
     const result = await execFile({
       file: process.execPath,
-      args: ["-e", "process.stdout.write(`${process.env.BASE_VALUE}:${process.env.PLUGIN_VALUE}`)"],
-      env: { PLUGIN_VALUE: "$BASE_VALUE literal" },
+      args: ["-e", "process.stdout.write(`${process.env.BASE_VALUE}:${process.env.PLUGIN_VALUE}:${String(process.env.REMOVE_ME)}`)"],
+      env: { PLUGIN_VALUE: "$BASE_VALUE literal", REMOVE_ME: "plugin" },
+      unsetEnv: ["REMOVE_ME"],
       signal: new AbortController().signal,
     });
 
-    expect(result.stdout).toBe("base:$BASE_VALUE literal");
+    expect(result.stdout).toBe("base:$BASE_VALUE literal:undefined");
+  });
+
+  it("rejects malformed environment keys before spawning", async () => {
+    const execFile = createServerPluginExecFile();
+
+    await expect(execFile({
+      file: process.execPath,
+      args: ["-e", "process.exit(99)"],
+      unsetEnv: ["INVALID=KEY"],
+      signal: new AbortController().signal,
+    })).rejects.toThrow("unsetEnv keys");
   });
 
   it("rejects an already-aborted operation without spawning", async () => {

@@ -7,6 +7,7 @@ import type {
   ProviderRequestContext,
   ServerPluginActivation,
   ServerPluginActivationContext,
+  ServerPluginExecFileRequest,
   ServerPluginExecFileResult,
   WorkspaceProvider,
 } from "@jmfederico/pi-web/server-plugin-api";
@@ -93,6 +94,9 @@ describe("public server plugin API", () => {
     >();
     expectTypeOf<keyof WorkspaceProvider>().toEqualTypeOf<
       "fallback" | "probe" | "list" | "request" | "prepareRemove"
+    >();
+    expectTypeOf<keyof ServerPluginExecFileRequest>().toEqualTypeOf<
+      "file" | "args" | "cwd" | "env" | "unsetEnv" | "timeoutMs" | "signal"
     >();
 
     const source = await readFile("src/server-plugin-api.ts", "utf8");
