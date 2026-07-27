@@ -13,6 +13,16 @@ afterEach(async () => {
 });
 
 describe("bundled Git package metadata", () => {
+  it("declares its generated browser and server JavaScript as ES modules", async () => {
+    const metadata: unknown = JSON.parse(await readFile("pi-web-plugins/git/package.json", "utf8"));
+
+    expect(metadata).toMatchObject({
+      private: true,
+      type: "module",
+      piWeb: { plugins: [{ id: "git", module: "pi-web-plugin.js", serverModule: "server-plugin.js" }] },
+    });
+  });
+
   it("is discovered as one bundled, machine-specific dual-entry plugin", async () => {
     const { catalog } = await gitCatalogFixture(true);
 

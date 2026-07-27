@@ -1,6 +1,7 @@
 {
   "name": "@pi-web/git-plugin",
   "private": true,
+  "type": "module",
   "piWeb": {
     "plugins": [
       {
