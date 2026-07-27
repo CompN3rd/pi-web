@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,11 +11,11 @@ import { ProjectStore } from "./storage/projectStore.js";
 import type { MachineClient } from "./machines/machineClient.js";
 import { MachineService } from "./machines/machineService.js";
 import { MachineStore } from "./machines/machineStore.js";
-import { WorkspaceService } from "./workspaces/workspaceService.js";
+import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
 import type { PiPackageService } from "./piPackageService.js";
 import type { SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
 import { PI_WEB_CAPABILITIES } from "../shared/capabilities.js";
-import type { ActiveAgentProfileDescriptor, PiPackageInfo, PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
+import type { ActiveAgentProfileDescriptor, PiPackageInfo, PiWebConfigResponse, PiWebConfigValues, Workspace } from "../shared/apiTypes.js";
 import type { SessionDaemonAgentProfileResult } from "../sessiond/sessionDaemonClient.js";
 
 interface AppTestContext {
@@ -24,6 +25,7 @@ interface AppTestContext {
   remoteClient: MachineClient | undefined;
   readonly sessionDaemonRequests: CapturedSessionDaemonRequest[];
   readonly piPackageRequests: CapturedPiPackageRequest[];
+  readonly workspaceCatalog: AppTestWorkspaceCatalog;
   piWebConfig: PiWebConfigValues;
   agentProfileResult: SessionDaemonAgentProfileResult;
 }
@@ -34,6 +36,7 @@ let projectDir: string | undefined;
 let remoteClient: MachineClient | undefined;
 let sessionDaemonRequests: CapturedSessionDaemonRequest[] = [];
 let piPackageRequests: CapturedPiPackageRequest[] = [];
+let workspaceCatalog: AppTestWorkspaceCatalog | undefined;
 let piWebConfig: PiWebConfigValues = {};
 let agentProfileResult: SessionDaemonAgentProfileResult = { status: "invalid", error: "App test harness was not initialized" };
 
@@ -62,6 +65,10 @@ export const appTestContext: AppTestContext = {
   get piPackageRequests() {
     return piPackageRequests;
   },
+  get workspaceCatalog() {
+    if (workspaceCatalog === undefined) throw new Error("App test workspace catalog was not initialized");
+    return workspaceCatalog;
+  },
   get piWebConfig() {
     return piWebConfig;
   },
@@ -85,9 +92,11 @@ export function registerAppTestHooks(): void {
     piPackageRequests = [];
     piWebConfig = {};
     agentProfileResult = { status: "available", profile: appTestAgentProfile(join(tempDir, "agent")) };
+    const projects = new ProjectService(new ProjectStore(join(tempDir, "projects.json")));
+    workspaceCatalog = new AppTestWorkspaceCatalog(projects);
     app = await buildApp({
-      projects: new ProjectService(new ProjectStore(join(tempDir, "projects.json"))),
-      workspaces: new WorkspaceService(),
+      projects,
+      workspaceCatalog,
       machines: new MachineService(new MachineStore(join(tempDir, "machines.json")), {
         remoteClientFactory: () => {
           if (remoteClient === undefined) throw new Error("No remote machine client configured");
@@ -127,6 +136,7 @@ export function registerAppTestHooks(): void {
     remoteClient = undefined;
     sessionDaemonRequests = [];
     piPackageRequests = [];
+    workspaceCatalog = undefined;
     piWebConfig = {};
     agentProfileResult = { status: "invalid", error: "App test harness was not initialized" };
 
@@ -140,6 +150,43 @@ function fakePiWebPluginAsset(pluginId: string, assetPath: string): Promise<{ co
   if (assetPath === "plugin.js") return Promise.resolve({ content: Buffer.from("export default {};"), contentType: "application/javascript; charset=utf-8" });
   if (assetPath === "assets/icon.svg") return Promise.resolve({ content: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'), contentType: "image/svg+xml" });
   return Promise.resolve(undefined);
+}
+
+export class AppTestWorkspaceCatalog implements WorkspaceCatalog {
+  private readonly overrides = new Map<string, readonly Workspace[]>();
+  private failure: Error | undefined;
+
+  constructor(private readonly projects: ProjectService) {}
+
+  async list(projectId: string): Promise<Workspace[]> {
+    if (this.failure !== undefined) throw this.failure;
+    const configured = this.overrides.get(projectId);
+    if (configured !== undefined) return configured.map((workspace) => ({ ...workspace }));
+    const project = await this.projects.requireProject(projectId);
+    return [{
+      id: createHash("sha1").update(`${project.id}:${project.path}`).digest("hex").slice(0, 12),
+      projectId: project.id,
+      path: project.path,
+      label: project.name,
+      isMain: true,
+      isGitRepo: false,
+      isGitWorktree: false,
+    }];
+  }
+
+  async resolve(projectId: string, workspaceId: string): Promise<Workspace> {
+    const workspace = (await this.list(projectId)).find((candidate) => candidate.id === workspaceId);
+    if (workspace === undefined) throw new Error("Workspace not found");
+    return workspace;
+  }
+
+  set(projectId: string, workspaces: readonly Workspace[]): void {
+    this.overrides.set(projectId, workspaces.map((workspace) => ({ ...workspace })));
+  }
+
+  fail(error: Error): void {
+    this.failure = error;
+  }
 }
 
 export interface CapturedSessionDaemonRequest {

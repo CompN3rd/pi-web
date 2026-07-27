@@ -36,6 +36,8 @@ import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
 import { runSessionDaemonShutdown } from "./sessiond/sessionDaemonShutdown.js";
 import { runSessionDaemonStartup } from "./sessiond/sessionDaemonStartup.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
+import { registerWorkspaceCatalogRoutes } from "./sessiond/workspaceCatalogRoutes.js";
+import { createWorkspaceProviderRuntimeSnapshot } from "./workspaces/workspaceCatalog.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
 const serverPluginRecovery = loadServerPluginRecoveryConfig({ env: daemonEnvironment });
@@ -120,6 +122,11 @@ await runSessionDaemonStartup({
         contributions: eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth),
         logger: app.log,
       });
+      const workspaceProviderRuntime = createWorkspaceProviderRuntimeSnapshot(
+        serverPlugins.healthRecords(),
+        providerHealth,
+        serverPlugins.safeStartLevel(),
+      );
       const spawnTargets = config.spawnSessions
         ? new ProjectScopedSpawnTargetResolver({ projects, workspaces: workspaceProviders })
         : undefined;
@@ -165,7 +172,7 @@ await runSessionDaemonStartup({
           onFailure: () => { process.exitCode = 1; },
         });
       };
-      return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, shutdown };
+      return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, workspaceProviderRuntime, shutdown };
     } catch (error) {
       try {
         await serverPlugins.stop();
@@ -175,11 +182,16 @@ await runSessionDaemonStartup({
       throw error;
     }
   },
-  registerRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent }) {
+  registerRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent, projects, workspaceProviders, workspaceProviderRuntime }) {
     registerWorkspaceActivityRoutes(app, workspaceActivity);
     registerAuthRoutes(app, auth);
     registerSessionRoutes(app, sessions, eventHub);
     registerTerminalRoutes(app, terminals);
+    registerWorkspaceCatalogRoutes(app, {
+      projects,
+      workspaces: workspaceProviders,
+      providerRuntime: workspaceProviderRuntime,
+    });
 
     app.get("/health", () => ({
       ok: true,

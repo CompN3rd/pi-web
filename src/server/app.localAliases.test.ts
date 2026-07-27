@@ -62,6 +62,34 @@ describe("buildApp local machine aliases", () => {
     expect(appTestContext.sessionDaemonRequests[2]).toEqual({ method: "DELETE", path: `/terminals?cwd=${encodeURIComponent(appTestContext.projectDir)}` });
   });
 
+  it("does not proxy terminals for a workspace removed from the daemon authority", async () => {
+    const addResponse = await appTestContext.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "Stale", path: appTestContext.projectDir, create: true },
+    });
+    const project = addResponse.json<Project>();
+    const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
+    const staleWorkspace = workspacesResponse.json<Workspace[]>()[0];
+    if (staleWorkspace === undefined) throw new Error("Expected workspace");
+    appTestContext.workspaceCatalog.set(project.id, [{
+      ...staleWorkspace,
+      id: "replacement",
+      path: appTestContext.tempDir,
+      label: "replacement",
+    }]);
+
+    const response = await appTestContext.app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/workspaces/${staleWorkspace.id}/terminals`,
+      payload: { name: "shell" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "Workspace not found" });
+    expect(appTestContext.sessionDaemonRequests).toEqual([]);
+  });
+
   it("serves local projects and workspaces through machine-scoped aliases", async () => {
     const addResponse = await appTestContext.app.inject({
       method: "POST",

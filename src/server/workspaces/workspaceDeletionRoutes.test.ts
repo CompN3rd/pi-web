@@ -5,8 +5,8 @@ import { ProjectService } from "../projects/projectService.js";
 import type { SessionProxyDaemon } from "../sessiond/sessionProxyRoutes.js";
 import { ProjectStore } from "../storage/projectStore.js";
 import type { Project, Workspace } from "../types.js";
+import type { WorkspaceCatalog } from "./workspaceCatalog.js";
 import { registerWorkspaceDeletionRoutes } from "./workspaceDeletionRoutes.js";
-import { WorkspaceService } from "./workspaceService.js";
 
 let app: FastifyInstance;
 let daemonRequests: DaemonRequest[];
@@ -109,8 +109,8 @@ function fakeProjects(): ProjectService {
   return new FakeProjectService();
 }
 
-function fakeWorkspaces(workspaces: Workspace[]): WorkspaceService {
-  return new FakeWorkspaceService(workspaces);
+function fakeWorkspaces(workspaces: Workspace[]): WorkspaceCatalog {
+  return new FakeWorkspaceCatalog(workspaces);
 }
 
 class FakeProjectService extends ProjectService {
@@ -123,13 +123,17 @@ class FakeProjectService extends ProjectService {
   }
 }
 
-class FakeWorkspaceService extends WorkspaceService {
-  constructor(private readonly workspaces: Workspace[]) {
-    super();
+class FakeWorkspaceCatalog implements WorkspaceCatalog {
+  constructor(private readonly workspaces: Workspace[]) {}
+
+  list(projectId: string): Promise<Workspace[]> {
+    return Promise.resolve(this.workspaces.filter((workspace) => workspace.projectId === projectId));
   }
 
-  override list(): Promise<Workspace[]> {
-    return Promise.resolve(this.workspaces);
+  async resolve(projectId: string, workspaceId: string): Promise<Workspace> {
+    const workspace = (await this.list(projectId)).find((candidate) => candidate.id === workspaceId);
+    if (workspace === undefined) throw new Error("Workspace not found");
+    return workspace;
   }
 }
 

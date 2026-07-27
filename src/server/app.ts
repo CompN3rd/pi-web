@@ -7,9 +7,12 @@ import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { ProjectStore } from "./storage/projectStore.js";
 import { ProjectService } from "./projects/projectService.js";
-import { WorkspaceService } from "./workspaces/workspaceService.js";
 import { isAbsoluteishFileSuggestionQuery, listFileSuggestions, listPathSuggestions } from "./workspaces/fileSuggestions.js";
-import { pathAccessForCwd } from "./workspaces/effectivePathAccess.js";
+import { pathAccessForWorkspaceContext } from "./workspaces/effectivePathAccess.js";
+import { resolveWorkspaceContextForCwd } from "./workspaces/workspaceContext.js";
+import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
+import { SessionDaemonWorkspaceCatalog } from "./workspaces/sessionDaemonWorkspaceCatalog.js";
+import { sendWorkspaceRequestError } from "./workspaces/workspaceRouteErrors.js";
 import { loadEffectiveProjectUploadsConfig } from "./workspaces/projectPiWebConfig.js";
 import { normalizeRequestCwd } from "./workingDirectory.js";
 import { listDirectorySuggestions } from "./projects/directorySuggestions.js";
@@ -39,7 +42,7 @@ import type { Project, Workspace } from "./types.js";
 
 export interface AppDependencies {
   projects?: ProjectService;
-  workspaces?: WorkspaceService;
+  workspaceCatalog?: WorkspaceCatalog;
   machines?: MachineService;
   sessionDaemon?: SessionProxyDaemon;
   agentProfileProvider?: ActiveAgentProfileProvider;
@@ -57,7 +60,7 @@ interface LocalProjectRouteOptions {
   config?: Pick<PiWebConfigService, "read">;
 }
 
-function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceService, prefix: string, options: LocalProjectRouteOptions = {}): void {
+function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceCatalog, prefix: string, options: LocalProjectRouteOptions = {}): void {
   app.get(`${prefix}/projects`, async () => projects.list());
 
   app.post<{ Body: { name?: string; path: string; create?: boolean } }>(`${prefix}/projects`, async (request, reply) => {
@@ -90,14 +93,14 @@ function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectServi
       const project = await projects.requireProject(request.params.projectId);
       return await listWorkspacesWithEffectiveConfig(project, workspaces, options.config);
     } catch (error) {
-      return reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
+      return sendWorkspaceRequestError(reply, error, 404);
     }
   });
 }
 
-async function listWorkspacesWithEffectiveConfig(project: Project, workspaces: WorkspaceService, config?: Pick<PiWebConfigService, "read">): Promise<Workspace[]> {
+async function listWorkspacesWithEffectiveConfig(project: Project, workspaces: WorkspaceCatalog, config?: Pick<PiWebConfigService, "read">): Promise<Workspace[]> {
   const [workspaceList, effectiveConfig] = await Promise.all([
-    workspaces.list(project),
+    workspaces.list(project.id),
     workspaceEffectiveConfig(project.path, config),
   ]);
   return workspaceList.map((workspace) => ({ ...workspace, effectiveConfig }));
@@ -112,17 +115,18 @@ interface LocalFileSuggestionRouteOptions {
   config?: Pick<PiWebConfigService, "read">;
 }
 
-function registerLocalFileSuggestionRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceService, prefix: string, options: LocalFileSuggestionRouteOptions = {}): void {
+function registerLocalFileSuggestionRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceCatalog, prefix: string, options: LocalFileSuggestionRouteOptions = {}): void {
   app.get<{ Querystring: { cwd?: string; q?: string; kind?: "tracked" | "untracked" | "other"; mode?: "file" | "path"; scope?: "tracked" | "all" } }>(`${prefix}/files`, async (request, reply) => {
     if (request.query.cwd === undefined || request.query.cwd === "") return reply.code(400).send({ error: "cwd query parameter is required" });
     try {
       const cwd = normalizeRequestCwd(request.query.cwd);
+      const context = await resolveWorkspaceContextForCwd(projects, workspaces, cwd);
       const query = request.query.q ?? "";
-      const pathAccess = isAbsoluteishFileSuggestionQuery(query) ? await pathAccessForCwd(cwd, projects, workspaces, options.config) : undefined;
-      if (request.query.mode === "path") return await listPathSuggestions(cwd, query, pathAccess);
-      return await listFileSuggestions(cwd, query, { kind: request.query.kind, scope: request.query.scope, pathAccess });
+      const pathAccess = isAbsoluteishFileSuggestionQuery(query) ? await pathAccessForWorkspaceContext(context, options.config) : undefined;
+      if (request.query.mode === "path") return await listPathSuggestions(context.root, query, pathAccess);
+      return await listFileSuggestions(context.root, query, { kind: request.query.kind, scope: request.query.scope, pathAccess });
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+      return sendWorkspaceRequestError(reply, error, 400);
     }
   });
 }
@@ -163,10 +167,10 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   await app.register(fastifyWebsocket);
 
   const projects = deps.projects ?? new ProjectService(new ProjectStore());
-  const workspaces = deps.workspaces ?? new WorkspaceService();
   const configService = deps.config ?? createFilePiWebConfigService();
   const readConfig = () => readEffectiveConfig(configService);
   const sessionDaemon = deps.sessionDaemon ?? new SessionDaemonClient();
+  const workspaces = deps.workspaceCatalog ?? new SessionDaemonWorkspaceCatalog(sessionDaemon);
   const agentProfileProvider = deps.agentProfileProvider ?? new SessionDaemonActiveAgentProfileProvider(sessionDaemon);
   const piWebPlugins = deps.piWebPlugins ?? new PiWebPluginService({
     configProvider: readConfig,

@@ -4,21 +4,22 @@ import { workspaceDeletionMetadata } from "../../shared/workspaceDeletion.js";
 import { SessionDaemonClient } from "../../sessiond/sessionDaemonClient.js";
 import type { ProjectService } from "../projects/projectService.js";
 import type { SessionProxyDaemon } from "../sessiond/sessionProxyRoutes.js";
-import type { WorkspaceService } from "./workspaceService.js";
+import type { WorkspaceCatalog } from "./workspaceCatalog.js";
+import { sendWorkspaceRequestError } from "./workspaceRouteErrors.js";
 
-export function registerWorkspaceDeletionRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceService, daemon: SessionProxyDaemon = new SessionDaemonClient(), prefix = "/api"): void {
+export function registerWorkspaceDeletionRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceCatalog, daemon: SessionProxyDaemon = new SessionDaemonClient(), prefix = "/api"): void {
   app.delete<{ Params: { projectId: string; workspaceId: string } }>(`${prefix}/projects/:projectId/workspaces/:workspaceId`, async (request, reply) => {
     try {
       return await deleteWorkspace(projects, workspaces, daemon, request.params.projectId, request.params.workspaceId);
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+      return sendWorkspaceRequestError(reply, error, 400);
     }
   });
 }
 
-async function deleteWorkspace(projects: ProjectService, workspaces: WorkspaceService, daemon: SessionProxyDaemon, projectId: string, workspaceId: string): Promise<TerminalCommandRun> {
+async function deleteWorkspace(projects: ProjectService, workspaces: WorkspaceCatalog, daemon: SessionProxyDaemon, projectId: string, workspaceId: string): Promise<TerminalCommandRun> {
   const project = await projects.requireProject(projectId);
-  const projectWorkspaces = await workspaces.list(project);
+  const projectWorkspaces = await workspaces.list(project.id);
   const targetWorkspace = projectWorkspaces.find((workspace) => workspace.id === workspaceId);
   if (targetWorkspace === undefined) throw new Error("Workspace not found");
   if (!canDeleteWorkspace(targetWorkspace)) throw new Error("Only secondary Git worktrees can be deleted");
