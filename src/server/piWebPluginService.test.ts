@@ -113,9 +113,9 @@ describe("PiWebPluginService", () => {
       configProvider: () => ({ plugins: { "server-only": { enabled: false } } }),
     });
 
-    await expect(service.manifest()).resolves.toMatchObject({
-      plugins: [{ id: "dual", machineSpecific: true }],
-    });
+    const manifest = await service.manifest();
+    expect(manifest).toMatchObject({ plugins: [{ id: "dual", machineSpecific: true }] });
+    expect(manifest.plugins[0]?.backendRevision).toMatch(/^\d+$/u);
     const plugins = await service.plugins();
     expect(plugins.plugins[0]).toMatchObject({ id: "dual", enabled: true, machineSpecific: true });
     expect(plugins.plugins[0]?.module).toContain("/dual/browser.js?v=");

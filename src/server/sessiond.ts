@@ -37,6 +37,7 @@ import { runSessionDaemonShutdown } from "./sessiond/sessionDaemonShutdown.js";
 import { runSessionDaemonStartup } from "./sessiond/sessionDaemonStartup.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
 import { registerWorkspaceCatalogRoutes } from "./sessiond/workspaceCatalogRoutes.js";
+import { registerPluginBackendRoutes } from "./sessiond/pluginBackendRoutes.js";
 import { createWorkspaceProviderRuntimeSnapshot } from "./workspaces/workspaceCatalog.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
@@ -191,6 +192,10 @@ await runSessionDaemonStartup({
       projects,
       workspaces: workspaceProviders,
       providerRuntime: workspaceProviderRuntime,
+    });
+    registerPluginBackendRoutes(app, {
+      projects,
+      backends: workspaceProviders,
     });
 
     app.get("/health", () => ({

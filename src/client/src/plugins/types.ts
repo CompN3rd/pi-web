@@ -1,6 +1,6 @@
 import type { TemplateResult } from "lit";
 import type { AppAction } from "../actions";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeEntry, GitDiffResponse, GitStatusResponse, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, RunTerminalCommandInput, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeEntry, GitDiffResponse, GitStatusResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, RunTerminalCommandInput, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { AppState } from "../appState";
 import type { SettingsSection } from "../settingsRoute";
 import type { LocalContributionId, PluginId, QualifiedContributionId } from "./ids";
@@ -14,7 +14,14 @@ export interface PiWebPluginRegistration {
   plugin: PiWebPlugin;
   machineId?: string;
   sourcePluginId?: PluginId;
+  backendRevision?: string;
   machineSpecific?: boolean;
+}
+
+export interface WorkspacePluginBinding {
+  registrationPluginId: PluginId;
+  sourcePluginId: PluginId;
+  backendRevision?: string;
 }
 
 export interface PiWebPlugin {
@@ -55,6 +62,10 @@ export interface WorkspaceFiles {
   moveFile(fromPath: string, toPath: string, options?: MoveWorkspaceFileOptions): Promise<MoveWorkspaceFileResponse>;
 }
 
+export interface WorkspaceBackend {
+  request(operation: string, input: JsonValue): Promise<JsonValue>;
+}
+
 export interface WorkspaceHost {
   requestRender(): void;
 }
@@ -64,6 +75,7 @@ export interface WorkspaceContext {
   workspace: Workspace;
   state: AppState;
   files: WorkspaceFiles;
+  backend: WorkspaceBackend;
   host: WorkspaceHost;
 }
 

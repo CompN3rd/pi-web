@@ -1,10 +1,12 @@
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
+import { requirePluginBackendRevision } from "../../../shared/pluginBackendProtocol";
 import { resolveAppUrl, type AppUrlContext } from "../appUrl";
 import type { PiWebPlugin, PiWebPluginRegistration } from "./types";
 
 export interface PluginManifestEntry {
   id: string;
   module: string;
+  backendRevision?: string;
   machineSpecific: boolean;
 }
 
@@ -34,6 +36,7 @@ export async function loadExternalPlugins(manifestUrl = "pi-web-plugins/manifest
         id: options.machineId === undefined ? entry.id : machineScopedPluginId(options.machineId, entry.id),
         plugin,
         machineSpecific: entry.machineSpecific,
+        ...(entry.backendRevision === undefined ? {} : { backendRevision: entry.backendRevision }),
         ...(options.machineId === undefined ? {} : { machineId: options.machineId, sourcePluginId: entry.id }),
       });
     } catch (error) {
@@ -64,9 +67,23 @@ function parseManifest(value: unknown): PluginManifest {
   return {
     plugins: value["plugins"].map((entry) => {
       if (!isRecord(entry) || typeof entry["id"] !== "string" || entry["id"] === "" || typeof entry["module"] !== "string" || entry["module"] === "") throw new Error("Invalid plugin manifest entry");
-      return { id: entry["id"], module: entry["module"], machineSpecific: parseMachineSpecific(entry["machineSpecific"]) };
+      return {
+        id: entry["id"],
+        module: entry["module"],
+        ...(parseBackendRevision(entry["backendRevision"])),
+        machineSpecific: parseMachineSpecific(entry["machineSpecific"]),
+      };
     }),
   };
+}
+
+function parseBackendRevision(value: unknown): { backendRevision?: string } {
+  if (value === undefined) return {};
+  try {
+    return { backendRevision: requirePluginBackendRevision(value) };
+  } catch {
+    throw new Error("Invalid plugin manifest entry");
+  }
 }
 
 function parseMachineSpecific(value: unknown): boolean {

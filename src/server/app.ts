@@ -37,6 +37,7 @@ import {
 import { MachineService } from "./machines/machineService.js";
 import { registerMachineRoutes } from "./machines/machineRoutes.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
+import { registerPluginBackendProxyRoutes } from "./plugins/pluginBackendProxyRoutes.js";
 import { proxyMachinePluginAsset, registerMachinePluginProxyRoutes } from "./machines/machinePluginProxyRoutes.js";
 import type { Project, Workspace } from "./types.js";
 
@@ -227,6 +228,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
 
   registerSessionProxyRoutes(app, sessionDaemon);
   registerSessionProxyRoutes(app, sessionDaemon, "/api/machines/local");
+  registerPluginBackendProxyRoutes(app, sessionDaemon);
   registerWorkspaceExplorerRoutes(app, projects, workspaces, "/api", { config: configService });
   registerWorkspaceExplorerRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
   registerGitRoutes(app, projects, workspaces);

@@ -1,7 +1,8 @@
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { RemoteMachineRequestError, type MachineClient } from "./machines/machineClient.js";
-import { PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS } from "../shared/federatedRoutes.js";
+import { PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS } from "../shared/federatedRoutes.js";
+import { PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES } from "../shared/pluginBackendProtocol.js";
 import { appTestContext, fakeRemoteClient, registerAppTestHooks } from "./app.testSupport.js";
 
 registerAppTestHooks();
@@ -84,6 +85,62 @@ describe("buildApp remote machine proxy routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ method: "POST", path: "/api/sessions/s1/tree/navigate", body: navigationBody });
     expect(request).toHaveBeenCalledWith("POST", "/api/sessions/s1/tree/navigate", navigationBody, { timeoutMs: SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS });
+  });
+
+  it("proxies only the allowlisted workspace provider backend shape with its bounded deadline", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const request = vi.fn<MachineClient["request"]>((method, path, body) => Promise.resolve({
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: Readable.from([JSON.stringify({ method, path, body })]),
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+    const payload = { revision: "server-r1", input: { cards: ["alpha"], includeClosed: false } };
+
+    const response = await appTestContext.app.inject({
+      method: "POST",
+      url: `/api/machines/${remote.id}/plugin-backends/board-tools/projects/${encodeURIComponent("p 1")}/workspaces/${encodeURIComponent("w 1")}/cards.summary`,
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      method: "POST",
+      path: "/api/plugin-backends/board-tools/projects/p%201/workspaces/w%201/cards.summary",
+      body: payload,
+    });
+    expect(request).toHaveBeenCalledWith(
+      "POST",
+      "/api/plugin-backends/board-tools/projects/p%201/workspaces/w%201/cards.summary",
+      payload,
+      { timeoutMs: PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS },
+    );
+  });
+
+  it("stops oversized federated plugin backend responses at the gateway", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const request = vi.fn<MachineClient["request"]>(() => Promise.resolve({
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: Readable.from([Buffer.alloc(PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES + 1, "x")]),
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    const response = await appTestContext.app.inject({
+      method: "POST",
+      url: `/api/machines/${remote.id}/plugin-backends/board-tools/projects/p1/workspaces/w1/cards.summary`,
+      payload: { revision: "server-r1", input: null },
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({
+      error: "Remote machine unavailable",
+      machineId: remote.id,
+      statusCode: 502,
+      detail: `Remote machine response exceeded the ${String(PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES)} byte limit`,
+    });
   });
 
   it("proxies remote workspace effective upload config through the existing federated workspace route", async () => {

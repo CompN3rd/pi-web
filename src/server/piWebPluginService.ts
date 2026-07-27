@@ -30,6 +30,8 @@ export interface PiWebPluginManifest {
 export interface PiWebPluginManifestEntry {
   id: string;
   module: string;
+  /** Desired server revision; sessiond rejects it until that exact revision is active. */
+  backendRevision?: string;
   source: string;
   scope: PiWebPluginScope;
   machineSpecific: boolean;
@@ -55,6 +57,7 @@ export class PiWebPluginService {
         return [{
           id: plugin.id,
           module: browserModuleUrl(plugin),
+          ...(plugin.serverModule === undefined ? {} : { backendRevision: plugin.serverModule.revision }),
           source: plugin.source,
           scope: plugin.scope,
           machineSpecific: plugin.machineSpecific,

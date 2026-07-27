@@ -29,12 +29,13 @@ import { hasAuthoritativeSessionPersistence as runtimeHasAuthoritativeSessionPer
 import { SessionUnreadController } from "../sessionUnread";
 import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility, toggleSessionWarnings } from "../sessionWarningVisibility";
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
-import type { PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext } from "../plugins/types";
+import type { PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "../plugins/types";
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins } from "../plugins/external";
-import { PluginRegistry, installPluginRuntimeScope, installWorkspacePanelScope } from "../plugins/registry";
+import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope } from "../plugins/registry";
+import { createPluginWorkspaceBackend } from "../plugins/workspaceBackend";
 import { queryNamespace, readNamespacedString, setNamespacedQueryKey } from "../namespacedQueryArgs";
 import { AppShellController } from "../appShell/appShellController";
 import { BrowserResumeController } from "../appShell/browserResumeController";
@@ -1529,13 +1530,15 @@ export class PiWebApp extends LitElement {
 
   private createWorkspaceLabelContext(workspace: Workspace): WorkspaceLabelContext {
     const machine = pluginMachineFromState(this.state);
-    return {
+    const createContext = (binding: WorkspacePluginBinding): WorkspaceLabelContext => installWorkspaceLabelScope({
       machine,
       workspace,
       state: this.state,
       files: this.createWorkspaceFiles(workspace, machine.id),
+      backend: createPluginWorkspaceBackend(binding, workspace, machine.id),
       host: this.createWorkspaceHost(),
-    };
+    }, createContext);
+    return createContext(coreWorkspacePluginBinding());
   }
 
   private createWorkspaceFiles(workspace: Workspace, machineId: string): WorkspaceFiles {
@@ -1568,13 +1571,14 @@ export class PiWebApp extends LitElement {
   private createWorkspacePanelContext(workspace: Workspace): WorkspacePanelContext {
     const machine = pluginMachineFromState(this.state);
     const machineId = machine.id;
-    const createContext = (origin: string): WorkspacePanelContext => {
-      const terminalCommandRuns = this.terminalCommandRunsForOrigin(origin, machineId);
+    const createContext = (binding: WorkspacePluginBinding): WorkspacePanelContext => {
+      const terminalCommandRuns = this.terminalCommandRunsForOrigin(binding.registrationPluginId, machineId);
       return installWorkspacePanelScope({
         machine,
         workspace,
         state: this.state,
         files: this.createWorkspaceFiles(workspace, machineId),
+        backend: createPluginWorkspaceBackend(binding, workspace, machineId),
         prompt: this.createPromptEditor(),
         terminal: {
           open: (options) => { void this.openRuntimeTerminal(machineId, workspace, options); },
@@ -1608,7 +1612,7 @@ export class PiWebApp extends LitElement {
         onSelectTerminal: (terminalId: string | undefined, options?: { replace?: boolean | undefined }) => { this.selectTerminal(terminalId, options); },
       }, createContext);
     };
-    return createContext("core");
+    return createContext(coreWorkspacePluginBinding());
   }
 
   private getActions(): AppAction[] {
@@ -2241,6 +2245,10 @@ function createPluginRegistry(): PluginRegistry {
   registry.register({ id: "core", plugin: corePlugin });
   registry.register({ id: "themes", plugin: themePackPlugin });
   return registry;
+}
+
+function coreWorkspacePluginBinding(): WorkspacePluginBinding {
+  return { registrationPluginId: "core", sourcePluginId: "core" };
 }
 
 function pluginMachineFromState(state: Pick<AppState, "selectedMachine">): PluginMachine {

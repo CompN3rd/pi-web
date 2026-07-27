@@ -1,12 +1,14 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { machineScopedPluginId, parseMachineScopedPluginId, type MachineScopedPluginIdParts } from "../../shared/machinePluginIds.js";
 import { isPiWebPluginId } from "../../shared/pluginIds.js";
+import { requirePluginBackendRevision } from "../../shared/pluginBackendProtocol.js";
 import { RemoteMachineRequestError, type MachineClient } from "./machineClient.js";
 import { MachineService } from "./machineService.js";
 
 interface RemotePluginManifestEntry {
   id: string;
   module: string;
+  backendRevision?: string;
   source?: string;
   scope?: string;
   machineSpecific?: boolean;
@@ -160,12 +162,22 @@ function parseRemoteManifest(value: unknown): RemotePluginManifest {
       return {
         id: entry["id"],
         module: entry["module"],
+        ...(parseRemoteBackendRevision(entry["backendRevision"])),
         ...(typeof entry["source"] === "string" ? { source: entry["source"] } : {}),
         ...(typeof entry["scope"] === "string" ? { scope: entry["scope"] } : {}),
         ...(parseRemoteMachineSpecific(entry["machineSpecific"])),
       };
     }),
   };
+}
+
+function parseRemoteBackendRevision(value: unknown): { backendRevision?: string } {
+  if (value === undefined) return {};
+  try {
+    return { backendRevision: requirePluginBackendRevision(value) };
+  } catch {
+    throw new Error("Invalid remote PI WEB plugin manifest entry");
+  }
 }
 
 function parseRemoteMachineSpecific(value: unknown): { machineSpecific?: boolean } {

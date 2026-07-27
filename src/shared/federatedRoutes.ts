@@ -1,3 +1,11 @@
+import {
+  PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS,
+  PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
+  PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES,
+} from "./pluginBackendProtocol.js";
+
+export { PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS } from "./pluginBackendProtocol.js";
+
 export type FederatedHttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
 export const PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS = 5 * 60_000;
@@ -7,6 +15,8 @@ export interface FederatedHttpRouteSpec {
   method: FederatedHttpMethod;
   path: string;
   timeoutMs?: number;
+  bodyLimit?: number;
+  responseBodyLimit?: number;
 }
 
 export const FEDERATED_HTTP_ROUTES = [
@@ -23,6 +33,13 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "DELETE", path: "/projects/:projectId" },
   { method: "GET", path: "/project-directories" },
   { method: "GET", path: "/projects/:projectId/workspaces" },
+  {
+    method: "POST",
+    path: "/plugin-backends/:pluginId/projects/:projectId/workspaces/:workspaceId/:operation",
+    timeoutMs: PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS,
+    bodyLimit: PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
+    responseBodyLimit: PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES,
+  },
   { method: "DELETE", path: "/projects/:projectId/workspaces/:workspaceId" },
   { method: "GET", path: "/projects/:projectId/workspaces/:workspaceId/tree" },
   { method: "GET", path: "/projects/:projectId/workspaces/:workspaceId/file" },

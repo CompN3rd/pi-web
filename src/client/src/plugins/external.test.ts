@@ -22,7 +22,7 @@ describe("external plugin manifests", () => {
   it("loads manifest-relative modules from a nested deployment", async () => {
     const manifestUrl = "https://pi.example.test/test/ai/pi-web-plugins/manifest.json";
     const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify({
-      plugins: [{ id: "info", module: "./info/pi-web-plugin.js?v=1", machineSpecific: false }],
+      plugins: [{ id: "info", module: "./info/pi-web-plugin.js?v=1", backendRevision: "server-r1", machineSpecific: false }],
     }))));
     const moduleLoader = vi.fn(() => Promise.resolve({
       default: { apiVersion: 1, name: "Info", activate: () => ({ contributions: {} }) },
@@ -33,7 +33,7 @@ describe("external plugin manifests", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(manifestUrl, { cache: "no-store" });
     expect(moduleLoader).toHaveBeenCalledWith("https://pi.example.test/test/ai/pi-web-plugins/info/pi-web-plugin.js?v=1");
-    expect(registrations).toMatchObject([{ id: "info", machineSpecific: false, plugin: { apiVersion: 1, name: "Info" } }]);
+    expect(registrations).toMatchObject([{ id: "info", backendRevision: "server-r1", machineSpecific: false, plugin: { apiVersion: 1, name: "Info" } }]);
   });
 
   it("treats root-style modules from existing manifests as application-root paths", () => {

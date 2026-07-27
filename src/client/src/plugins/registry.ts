@@ -1,10 +1,12 @@
 import { html, svg } from "lit";
-import type { PiWebPluginRegistration, PluginAction, PluginRuntimeContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, ThemeContribution, ThemePairContribution, WorkspaceLabelContext, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution } from "./types";
+import { requirePluginBackendRevision } from "../../../shared/pluginBackendProtocol";
+import type { PiWebPluginRegistration, PluginAction, PluginRuntimeContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, ThemeContribution, ThemePairContribution, WorkspaceLabelContext, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution, WorkspacePluginBinding } from "./types";
 
 const idPattern = /^[a-z][a-z0-9.-]*$/u;
 const localIdPattern = /^[a-z][a-z0-9.-]*$/u;
 const pluginRuntimeScopes = new WeakMap<PluginRuntimeContext, (pluginId: string) => PluginRuntimeContext>();
-const workspacePanelScopes = new WeakMap<WorkspacePanelContext, (pluginId: string) => WorkspacePanelContext>();
+const workspacePanelScopes = new WeakMap<WorkspacePanelContext, (binding: WorkspacePluginBinding) => WorkspacePanelContext>();
+const workspaceLabelScopes = new WeakMap<WorkspaceLabelContext, (binding: WorkspacePluginBinding) => WorkspaceLabelContext>();
 
 type RegisteredPluginAction = Omit<PluginAction, "id"> & {
   id: QualifiedContributionId;
@@ -30,6 +32,7 @@ export class PluginRegistry {
     const { id, plugin } = registration;
     this.validatePluginId(id);
     const machineSpecific = this.parseMachineSpecific(id, registration.machineSpecific);
+    const backendRevision = this.parseBackendRevision(id, registration.backendRevision);
     if (this.pluginIds.has(id)) throw new Error(`Duplicate plugin id: ${id}`);
     if (this.isRemoteDuplicateHiddenByGateway(registration.sourcePluginId, registration.machineId, machineSpecific)) return;
     this.pluginIds.add(id);
@@ -39,8 +42,8 @@ export class PluginRegistry {
     const result = plugin.activate({ apiVersion: 1, pluginId: id, html, svg });
     const contributions = result.contributions;
     for (const action of contributions.actions ?? []) this.actions.push(this.qualifyAction(id, action, registration.machineId, registration.sourcePluginId));
-    for (const panel of contributions.workspacePanels ?? []) this.workspacePanels.push(this.qualifyWorkspacePanel(id, panel, registration.machineId, registration.sourcePluginId));
-    for (const contribution of contributions.workspaceLabels ?? []) this.workspaceLabels.push(this.qualifyWorkspaceLabelContribution(id, contribution, registration.machineId, registration.sourcePluginId));
+    for (const panel of contributions.workspacePanels ?? []) this.workspacePanels.push(this.qualifyWorkspacePanel(id, panel, registration.machineId, registration.sourcePluginId, backendRevision));
+    for (const contribution of contributions.workspaceLabels ?? []) this.workspaceLabels.push(this.qualifyWorkspaceLabelContribution(id, contribution, registration.machineId, registration.sourcePluginId, backendRevision));
     if (registration.machineId === undefined) {
       for (const theme of contributions.themes ?? []) this.themes.push(this.qualifyTheme(id, theme));
       for (const pair of contributions.themePairs ?? []) this.themePairs.push(this.qualifyThemePair(id, pair));
@@ -104,34 +107,48 @@ export class PluginRegistry {
     return { ...action, id, pluginId, localId: action.id, ...(machineId === undefined ? {} : { machineId }), ...(sourcePluginId === undefined ? {} : { sourcePluginId }) };
   }
 
-  private qualifyWorkspacePanel(pluginId: string, panel: WorkspacePanelContribution, machineId: string | undefined, sourcePluginId: string | undefined): QualifiedWorkspacePanelContribution {
+  private qualifyWorkspacePanel(
+    pluginId: string,
+    panel: WorkspacePanelContribution,
+    machineId: string | undefined,
+    sourcePluginId: string | undefined,
+    backendRevision: string | undefined,
+  ): QualifiedWorkspacePanelContribution {
     const id = this.qualify(pluginId, panel.id);
     const badge = panel.badge;
     const visible = panel.visible;
+    const binding = workspacePluginBinding(pluginId, sourcePluginId, backendRevision);
     return {
       ...panel,
       id,
       pluginId,
       localId: panel.id,
       ...(machineId === undefined ? {} : { machineId }),
-      visible: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(workspacePanelContextFor(context, pluginId)) ?? true),
-      ...(badge === undefined ? {} : { badge: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? badge(workspacePanelContextFor(context, pluginId)) : undefined }),
-      render: (context: WorkspacePanelContext) => panel.render(workspacePanelContextFor(context, pluginId)),
+      visible: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(workspacePanelContextFor(context, binding)) ?? true),
+      ...(badge === undefined ? {} : { badge: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? badge(workspacePanelContextFor(context, binding)) : undefined }),
+      render: (context: WorkspacePanelContext) => panel.render(workspacePanelContextFor(context, binding)),
     };
   }
 
-  private qualifyWorkspaceLabelContribution(pluginId: string, contribution: WorkspaceLabelContribution, machineId: string | undefined, sourcePluginId: string | undefined): QualifiedWorkspaceLabelContribution {
+  private qualifyWorkspaceLabelContribution(
+    pluginId: string,
+    contribution: WorkspaceLabelContribution,
+    machineId: string | undefined,
+    sourcePluginId: string | undefined,
+    backendRevision: string | undefined,
+  ): QualifiedWorkspaceLabelContribution {
     const id = this.qualify(pluginId, contribution.id);
     const visible = contribution.visible;
     const items = contribution.items;
+    const binding = workspacePluginBinding(pluginId, sourcePluginId, backendRevision);
     return {
       ...contribution,
       id,
       pluginId,
       localId: contribution.id,
       ...(machineId === undefined ? {} : { machineId }),
-      visible: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(context) ?? true),
-      items: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? items(context) : [],
+      visible: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(workspaceLabelContextFor(context, binding)) ?? true),
+      items: (context) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? items(workspaceLabelContextFor(context, binding)) : [],
     };
   }
 
@@ -200,6 +217,15 @@ export class PluginRegistry {
     if (!localIdPattern.test(localId)) throw new Error(`Invalid contribution id: ${localId}`);
   }
 
+  private parseBackendRevision(pluginId: string, value: unknown): string | undefined {
+    if (value === undefined) return undefined;
+    try {
+      return requirePluginBackendRevision(value);
+    } catch {
+      throw new Error(`Invalid plugin backend revision for ${pluginId}`);
+    }
+  }
+
   private parseMachineSpecific(pluginId: string, value: unknown): boolean {
     if (value === undefined) return false;
     if (typeof value !== "boolean") throw new Error(`Invalid plugin machineSpecific value for ${pluginId}: ${formatUnknownValue(value)}`);
@@ -211,8 +237,12 @@ function pluginRuntimeContextFor(context: PluginRuntimeContext, pluginId: string
   return pluginRuntimeScopes.get(context)?.(pluginId) ?? context;
 }
 
-function workspacePanelContextFor(context: WorkspacePanelContext, pluginId: string): WorkspacePanelContext {
-  return workspacePanelScopes.get(context)?.(pluginId) ?? context;
+function workspacePanelContextFor(context: WorkspacePanelContext, binding: WorkspacePluginBinding): WorkspacePanelContext {
+  return workspacePanelScopes.get(context)?.(binding) ?? context;
+}
+
+function workspaceLabelContextFor(context: WorkspaceLabelContext, binding: WorkspacePluginBinding): WorkspaceLabelContext {
+  return workspaceLabelScopes.get(context)?.(binding) ?? context;
 }
 
 export function installPluginRuntimeScope(context: PluginRuntimeContext, scope: (pluginId: string) => PluginRuntimeContext): PluginRuntimeContext {
@@ -220,9 +250,32 @@ export function installPluginRuntimeScope(context: PluginRuntimeContext, scope: 
   return context;
 }
 
-export function installWorkspacePanelScope(context: WorkspacePanelContext, scope: (pluginId: string) => WorkspacePanelContext): WorkspacePanelContext {
+export function installWorkspacePanelScope(
+  context: WorkspacePanelContext,
+  scope: (binding: WorkspacePluginBinding) => WorkspacePanelContext,
+): WorkspacePanelContext {
   workspacePanelScopes.set(context, scope);
   return context;
+}
+
+export function installWorkspaceLabelScope(
+  context: WorkspaceLabelContext,
+  scope: (binding: WorkspacePluginBinding) => WorkspaceLabelContext,
+): WorkspaceLabelContext {
+  workspaceLabelScopes.set(context, scope);
+  return context;
+}
+
+function workspacePluginBinding(
+  registrationPluginId: string,
+  sourcePluginId: string | undefined,
+  backendRevision: string | undefined,
+): WorkspacePluginBinding {
+  return Object.freeze({
+    registrationPluginId,
+    sourcePluginId: sourcePluginId ?? registrationPluginId,
+    ...(backendRevision === undefined ? {} : { backendRevision }),
+  });
 }
 
 function addMappedSetValue(map: Map<string, Set<string>>, key: string, value: string): void {

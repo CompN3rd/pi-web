@@ -1,14 +1,16 @@
 import { html } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, MoveWorkspaceFileResponse, SessionInfo, SessionStatus, WriteWorkspaceFileResponse, Workspace } from "../api";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, JsonValue, MoveWorkspaceFileResponse, SessionInfo, SessionStatus, WriteWorkspaceFileResponse, Workspace } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { markCachedNewSessionInfo } from "../cachedNewSessions";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { corePlugin } from "./core";
-import { PluginRegistry } from "./registry";
+import { PluginRegistry, installWorkspaceLabelScope, installWorkspacePanelScope } from "./registry";
 import { themePackPlugin } from "./themes";
-import type { PluginRuntimeContext, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext } from "./types";
+import type { PluginRuntimeContext, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "./types";
+import { createPluginWorkspaceBackend } from "./workspaceBackend";
+import type { PluginBackendRequestTarget } from "../api/pluginBackends";
 
 function createContext(statePatch: Partial<AppState> = {}) {
   const calls: string[] = [];
@@ -520,6 +522,83 @@ describe("PluginRegistry", () => {
     expect(registry.getThemes()).toEqual([]);
   });
 
+  it("binds backend helpers to source identity rather than the machine-scoped registration id", () => {
+    const registry = new PluginRegistry();
+    const registrationPluginId = machineScopedPluginId("remote-1", "board-tools");
+    const observedBindings: WorkspacePluginBinding[] = [];
+    const observedRequests: { target: PluginBackendRequestTarget; operation: string; input: JsonValue }[] = [];
+    registry.register({
+      id: registrationPluginId,
+      machineId: "remote-1",
+      sourcePluginId: "board-tools",
+      backendRevision: "server-r7",
+      plugin: {
+        apiVersion: 1,
+        name: "Board Tools",
+        activate: ({ pluginId }) => {
+          expect(pluginId).toBe(registrationPluginId);
+          return {
+            contributions: {
+              workspacePanels: [{
+                id: "workspace.board",
+                title: "Board",
+                render: (context) => {
+                  void context.backend.request("cards.summary", { includeClosed: false });
+                  return html`<p>Board</p>`;
+                },
+              }],
+              workspaceLabels: [{
+                id: "board-count",
+                items: (context) => {
+                  void context.backend.request("cards.count", null);
+                  return [{ type: "text", text: "2 cards" }];
+                },
+              }],
+            },
+          };
+        },
+      },
+    });
+    const panelBase = createWorkspacePanelContext("remote-1");
+    const panelContext = installWorkspacePanelScope(panelBase, (binding) => ({
+      ...panelBase,
+      backend: createPluginWorkspaceBackend(binding, panelBase.workspace, panelBase.machine.id, (target, operation, input) => {
+        observedBindings.push(binding);
+        observedRequests.push({ target, operation, input });
+        return Promise.resolve(null);
+      }),
+    }));
+    const labelBase = createWorkspaceLabelContext("remote-1");
+    const labelContext = installWorkspaceLabelScope(labelBase, (binding) => ({
+      ...labelBase,
+      backend: createPluginWorkspaceBackend(binding, labelBase.workspace, labelBase.machine.id, (target, operation, input) => {
+        observedBindings.push(binding);
+        observedRequests.push({ target, operation, input });
+        return Promise.resolve(null);
+      }),
+    }));
+
+    registry.getWorkspacePanels().find(({ localId }) => localId === "workspace.board")?.render(panelContext);
+    expect(registry.getWorkspaceLabelItems(labelContext)).toEqual([{ type: "text", text: "2 cards" }]);
+
+    expect(observedBindings).toEqual([
+      { registrationPluginId, sourcePluginId: "board-tools", backendRevision: "server-r7" },
+      { registrationPluginId, sourcePluginId: "board-tools", backendRevision: "server-r7" },
+    ]);
+    expect(observedRequests).toEqual([
+      {
+        target: { pluginId: "board-tools", backendRevision: "server-r7", machineId: "remote-1", projectId: "p1", workspaceId: "w1" },
+        operation: "cards.summary",
+        input: { includeClosed: false },
+      },
+      {
+        target: { pluginId: "board-tools", backendRevision: "server-r7", machineId: "remote-1", projectId: "p1", workspaceId: "w1" },
+        operation: "cards.count",
+        input: null,
+      },
+    ]);
+  });
+
   it("prefers gateway plugins over remote plugins with the same source id", () => {
     const registry = new PluginRegistry();
     const remotePluginId = machineScopedPluginId("remote-1", "shared-tools");
@@ -681,6 +760,7 @@ function createWorkspaceLabelContext(machineId: string, workspace = testWorkspac
     workspace,
     state: { ...initialAppState(), selectedMachine: testMachine(machineId) },
     files,
+    backend: { request: vi.fn(() => Promise.resolve(null)) },
     host,
   };
 }
@@ -692,6 +772,7 @@ function createWorkspacePanelContext(machineId: string, prompt: WorkspacePanelCo
     workspace,
     state: { ...initialAppState(), selectedMachine: testMachine(machineId) },
     files: { readFile: vi.fn(), writeFile: vi.fn(), deleteFile: vi.fn(), moveFile: vi.fn() },
+    backend: { request: vi.fn(() => Promise.resolve(null)) },
     prompt,
     terminal: { open: vi.fn(), runCommand: vi.fn() },
     host: { requestRender: vi.fn() },

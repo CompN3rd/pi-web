@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import type { ProjectInput, ProviderClaim } from "../../server-plugin-api.js";
+import type { ProjectInput, ProviderClaim, ProviderWorkspace } from "../../server-plugin-api.js";
 import type {
   JsonObject,
   JsonValue,
@@ -9,15 +9,23 @@ import type {
   Workspace,
   WorkspaceRemovalPresentation,
 } from "../../shared/apiTypes.js";
+import { isPiWebPluginId } from "../../shared/pluginIds.js";
+import {
+  cloneBoundedPluginBackendJson,
+  PLUGIN_BACKEND_DISPATCH_TIMEOUT_MS,
+  PLUGIN_BACKEND_REQUEST_TIMEOUT_MS,
+  requirePluginBackendOperation,
+  requirePluginBackendRevision,
+} from "../../shared/pluginBackendProtocol.js";
 import type {
   ServerPluginHealthInspection,
   ServerPluginProviderContribution,
 } from "../plugins/serverPluginRuntime.js";
 
-const DEFAULT_PROVIDER_TIMEOUT_MS = 10_000;
+const DEFAULT_PROVIDER_TIMEOUT_MS = PLUGIN_BACKEND_REQUEST_TIMEOUT_MS;
 
 type ProviderTier = "primary" | "fallback";
-type ProviderOperation = "probe" | "list";
+type ProviderOperation = "probe" | "list" | "request";
 
 export type WorkspaceProviderDiagnosticCode = "probe-failed" | "claim-conflict" | "list-failed";
 
@@ -48,7 +56,46 @@ export interface WorkspaceProviderRegistryOptions {
   contributions: readonly ServerPluginProviderContribution[];
   logger: WorkspaceProviderRegistryLogger;
   providerTimeoutMs?: number;
+  /** End-to-end deadline for owner re-resolution plus one backend request. */
+  requestTimeoutMs?: number;
   pathInspector?: WorkspacePathInspector;
+}
+
+export interface WorkspaceProviderRequest {
+  pluginId: string;
+  moduleRevision: string;
+  project: Project;
+  workspaceId: string;
+  operation: string;
+  input: unknown;
+}
+
+export type WorkspaceProviderRequestErrorCode =
+  | "inactive-plugin"
+  | "stale-plugin-revision"
+  | "invalid-operation"
+  | "invalid-input"
+  | "owner-conflict"
+  | "owner-mismatch"
+  | "workspace-not-found"
+  | "resolution-failed"
+  | "resolution-timeout"
+  | "operation-unavailable"
+  | "request-failed"
+  | "request-timeout"
+  | "invalid-result";
+
+export class WorkspaceProviderRequestError extends Error {
+  override name = "WorkspaceProviderRequestError";
+
+  constructor(
+    readonly code: WorkspaceProviderRequestErrorCode,
+    readonly statusCode: number,
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+  }
 }
 
 interface ParsedProviderWorkspace {
@@ -75,6 +122,11 @@ interface TierSelectionConflict {
   pluginIds: readonly string[];
 }
 
+interface ValidatedProviderWorkspace {
+  workspace: Workspace;
+  providerWorkspace: ProviderWorkspace;
+}
+
 type TierSelection = TierSelectionNone | TierSelectionWinner | TierSelectionConflict;
 
 /** Keep only active providers whose bounded startup health inspection is not unhealthy. */
@@ -97,12 +149,14 @@ export function eligibleWorkspaceProviderContributions(
 export class WorkspaceProviderRegistry {
   private readonly contributions: readonly ServerPluginProviderContribution[];
   private readonly providerTimeoutMs: number;
+  private readonly requestTimeoutMs: number;
   private readonly pathInspector: WorkspacePathInspector;
 
   constructor(private readonly options: WorkspaceProviderRegistryOptions) {
     this.contributions = Object.freeze([...options.contributions]
       .sort((left, right) => left.pluginId.localeCompare(right.pluginId)));
     this.providerTimeoutMs = positiveInteger(options.providerTimeoutMs, DEFAULT_PROVIDER_TIMEOUT_MS, "providerTimeoutMs");
+    this.requestTimeoutMs = positiveInteger(options.requestTimeoutMs, PLUGIN_BACKEND_DISPATCH_TIMEOUT_MS, "requestTimeoutMs");
     this.pathInspector = options.pathInspector ?? pathIsDirectory;
   }
 
@@ -143,10 +197,176 @@ export class WorkspaceProviderRegistry {
     });
   }
 
+  /**
+   * Re-resolve the current owner and its private workspace snapshot before
+   * invoking one bounded provider operation. Callers never supply owner data.
+   */
+  async request(request: WorkspaceProviderRequest): Promise<JsonValue> {
+    try {
+      return await runBoundedProviderOperation(
+        request.pluginId,
+        "request",
+        this.requestTimeoutMs,
+        (signal) => this.dispatchRequest(request, signal),
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceProviderTimeoutError) {
+        throw providerRequestError("request-timeout", 504, boundedErrorMessage(error), error);
+      }
+      throw error;
+    }
+  }
+
+  private async dispatchRequest(request: WorkspaceProviderRequest, dispatchSignal: AbortSignal): Promise<JsonValue> {
+    const pluginId = request.pluginId;
+    if (!isPiWebPluginId(pluginId)) {
+      throw providerRequestError("inactive-plugin", 409, `Server plugin is not active: ${pluginId}`);
+    }
+
+    const operation = parseRequestOperation(request.operation);
+    const moduleRevision = parseRequestRevision(request.moduleRevision, operation);
+    const activeContribution = this.contributions.find((contribution) => contribution.pluginId === pluginId);
+    if (activeContribution === undefined) {
+      throw providerRequestError("inactive-plugin", 409, `Server plugin ${pluginId} is not active for workspace backend operation ${operation}`);
+    }
+    if (activeContribution.moduleRevision !== moduleRevision) {
+      throw providerRequestError(
+        "stale-plugin-revision",
+        409,
+        `Server plugin ${pluginId} backend revision is stale for operation ${operation}; reload after the session daemon restarts`,
+      );
+    }
+    if (request.workspaceId === "") {
+      throw providerRequestError("workspace-not-found", 404, `Workspace not found for server plugin ${pluginId} operation ${operation}`);
+    }
+
+    let input: JsonValue;
+    try {
+      input = cloneBoundedPluginBackendJson(request.input, `Server plugin ${pluginId} operation ${operation} input`);
+    } catch (error) {
+      throw providerRequestError("invalid-input", 400, boundedErrorMessage(error), error);
+    }
+
+    const project = snapshotProject(request.project);
+    const diagnostics: WorkspaceProviderDiagnostic[] = [];
+    for (const tier of ["primary", "fallback"] as const) {
+      const selection = await this.selectInTier(project, tier, diagnostics, dispatchSignal);
+      if (selection.kind === "none") continue;
+      if (selection.kind === "conflict") {
+        throw providerRequestError(
+          "owner-conflict",
+          409,
+          `Workspace owner conflict prevents server plugin ${pluginId} operation ${operation}: ${selection.pluginIds.join(", ")}`,
+        );
+      }
+      if (selection.contribution.pluginId !== pluginId) {
+        throw providerRequestError(
+          "owner-mismatch",
+          409,
+          `Server plugin ${pluginId} does not own project ${project.id}; current owner is ${selection.contribution.pluginId}`,
+        );
+      }
+
+      const validated = await this.listRequestWorkspaces(project, selection.contribution, operation, dispatchSignal);
+      const target = validated.find(({ workspace }) => workspace.id === request.workspaceId);
+      if (target === undefined) {
+        throw providerRequestError(
+          "workspace-not-found",
+          404,
+          `Workspace ${request.workspaceId} is stale or unavailable for server plugin ${pluginId} operation ${operation}`,
+        );
+      }
+      const callback = selection.contribution.provider.request?.bind(selection.contribution.provider);
+      if (callback === undefined) {
+        throw providerRequestError(
+          "operation-unavailable",
+          501,
+          `Server plugin ${pluginId} does not provide workspace backend operations`,
+        );
+      }
+
+      let result: unknown;
+      try {
+        result = await runBoundedProviderOperation(
+          pluginId,
+          "request",
+          this.providerTimeoutMs,
+          (signal) => callback(Object.freeze({
+            project,
+            workspace: target.providerWorkspace,
+            operation,
+            input,
+            signal,
+          })),
+          dispatchSignal,
+        );
+      } catch (error) {
+        if (error instanceof WorkspaceProviderTimeoutError) {
+          throw providerRequestError("request-timeout", 504, boundedErrorMessage(error), error);
+        }
+        throw providerRequestError(
+          "request-failed",
+          502,
+          `Server plugin ${pluginId} operation ${operation} failed: ${boundedErrorMessage(error)}`,
+          error,
+        );
+      }
+
+      try {
+        return cloneBoundedPluginBackendJson(result, `Server plugin ${pluginId} operation ${operation} result`);
+      } catch (error) {
+        throw providerRequestError("invalid-result", 502, boundedErrorMessage(error), error);
+      }
+    }
+
+    const failedProbe = diagnostics.find((diagnostic) => diagnostic.pluginId === pluginId && diagnostic.code === "probe-failed");
+    if (failedProbe !== undefined) {
+      throw providerRequestError(
+        "resolution-failed",
+        502,
+        `Server plugin ${pluginId} owner resolution failed for operation ${operation}: ${boundedErrorMessage(failedProbe.message)}`,
+      );
+    }
+    throw providerRequestError(
+      "owner-mismatch",
+      409,
+      `Server plugin ${pluginId} does not own project ${project.id}`,
+    );
+  }
+
+  private async listRequestWorkspaces(
+    project: ProjectInput,
+    contribution: ServerPluginProviderContribution,
+    operation: string,
+    dispatchSignal: AbortSignal,
+  ): Promise<ValidatedProviderWorkspace[]> {
+    try {
+      const listed: unknown = await runBoundedProviderOperation(
+        contribution.pluginId,
+        "list",
+        this.providerTimeoutMs,
+        (signal) => contribution.provider.list(project, signal),
+        dispatchSignal,
+      );
+      return await validateProviderWorkspaces(project, contribution, listed, this.pathInspector);
+    } catch (error) {
+      if (error instanceof WorkspaceProviderTimeoutError) {
+        throw providerRequestError("resolution-timeout", 504, boundedErrorMessage(error), error);
+      }
+      throw providerRequestError(
+        "resolution-failed",
+        502,
+        `Server plugin ${contribution.pluginId} could not resolve workspaces for operation ${operation}: ${boundedErrorMessage(error)}`,
+        error,
+      );
+    }
+  }
+
   private async selectInTier(
     project: ProjectInput,
     tier: ProviderTier,
     diagnostics: WorkspaceProviderDiagnostic[],
+    dispatchSignal?: AbortSignal,
   ): Promise<TierSelection> {
     const candidates = this.contributions.filter(({ provider }) => (provider.fallback === true) === (tier === "fallback"));
     const claimants: ServerPluginProviderContribution[] = [];
@@ -158,6 +378,7 @@ export class WorkspaceProviderRegistry {
           "probe",
           this.providerTimeoutMs,
           (signal) => contribution.provider.probe(project, signal),
+          dispatchSignal,
         );
         if (!isProviderClaim(claim)) {
           throw new WorkspaceProviderContractError(`Workspace provider ${contribution.pluginId} returned an invalid probe result`);
@@ -203,12 +424,12 @@ export class WorkspaceProviderRegistry {
         this.providerTimeoutMs,
         (signal) => contribution.provider.list(project, signal),
       );
-      const workspaces = await validateProviderWorkspaces(project, contribution, listed, this.pathInspector);
+      const validated = await validateProviderWorkspaces(project, contribution, listed, this.pathInspector);
       return Object.freeze({
         status: "provider",
         projectId: project.id,
         ownerPluginId: contribution.pluginId,
-        workspaces: Object.freeze(workspaces),
+        workspaces: Object.freeze(validated.map(({ workspace }) => workspace)),
         diagnostics: Object.freeze([...diagnostics]),
       });
     } catch (error) {
@@ -233,14 +454,14 @@ async function validateProviderWorkspaces(
   contribution: ServerPluginProviderContribution,
   value: unknown,
   pathInspector: WorkspacePathInspector,
-): Promise<Workspace[]> {
+): Promise<ValidatedProviderWorkspace[]> {
   if (!Array.isArray(value)) {
     throw new WorkspaceProviderContractError(`Workspace provider ${contribution.pluginId} list result must be an array`);
   }
 
   const keys = new Set<string>();
   const paths = new Set<string>();
-  const workspaces: Workspace[] = [];
+  const workspaces: ValidatedProviderWorkspace[] = [];
   let mainCount = 0;
 
   for (const [index, rawWorkspace] of value.entries()) {
@@ -259,7 +480,9 @@ async function validateProviderWorkspaces(
     const metadata = candidate.publicMetadata === undefined
       ? undefined
       : cloneJsonObject(candidate.publicMetadata, `${label} publicMetadata`);
-    if (candidate.data !== undefined) validateJsonValue(candidate.data, `${label} data`);
+    const data = candidate.data === undefined
+      ? undefined
+      : cloneJsonValue(candidate.data, new Set<object>(), `${label} data`);
     const removal = candidate.removal === undefined ? undefined : parseRemoval(candidate.removal, `${label} removal`);
     const workspace: Workspace = {
       id: workspaceId(project.id, candidate.key),
@@ -281,7 +504,16 @@ async function validateProviderWorkspaces(
       },
       ...(removal === undefined ? {} : { removal }),
     };
-    workspaces.push(Object.freeze(workspace));
+    const providerWorkspace: ProviderWorkspace = Object.freeze({
+      key: candidate.key,
+      path,
+      label: candidate.label,
+      isMain: candidate.isMain,
+      ...(data === undefined ? {} : { data }),
+      ...(metadata === undefined ? {} : { publicMetadata: metadata }),
+      ...(removal === undefined ? {} : { removal }),
+    });
+    workspaces.push(Object.freeze({ workspace: Object.freeze(workspace), providerWorkspace }));
   }
 
   if (mainCount !== 1) {
@@ -376,19 +608,31 @@ async function runBoundedProviderOperation<T>(
   operation: ProviderOperation,
   timeoutMs: number,
   callback: (signal: AbortSignal) => T | Promise<T>,
+  parentSignal?: AbortSignal,
 ): Promise<T> {
   const controller = new AbortController();
+  const abortFromParent = (): void => {
+    if (parentSignal !== undefined) controller.abort(abortError(parentSignal));
+  };
+  if (parentSignal?.aborted === true) abortFromParent();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+
   const timeoutError = new WorkspaceProviderTimeoutError(`Workspace provider ${pluginId} ${operation} timed out after ${String(timeoutMs)}ms`);
   const timeout = setTimeout(() => { controller.abort(timeoutError); }, timeoutMs);
   timeout.unref();
-  const deadline = new Promise<never>((_resolve, rejectPromise) => {
-    controller.signal.addEventListener("abort", () => { rejectPromise(abortError(controller.signal)); }, { once: true });
-  });
-  const result = Promise.resolve().then(() => callback(controller.signal));
+  const deadline = controller.signal.aborted
+    ? Promise.reject(abortError(controller.signal))
+    : new Promise<never>((_resolve, rejectPromise) => {
+        controller.signal.addEventListener("abort", () => { rejectPromise(abortError(controller.signal)); }, { once: true });
+      });
+  const result = controller.signal.aborted
+    ? new Promise<T>(() => { /* parent deadline already won */ })
+    : Promise.resolve().then(() => callback(controller.signal));
   try {
     return await Promise.race([result, deadline]);
   } finally {
     clearTimeout(timeout);
+    parentSignal?.removeEventListener("abort", abortFromParent);
     if (!controller.signal.aborted) controller.abort(new DOMException("Workspace provider operation completed", "AbortError"));
   }
 }
@@ -411,7 +655,14 @@ function cloneJsonRecord(value: Record<string, unknown>, ancestors: Set<object>,
   if (ancestors.has(value)) throw new WorkspaceProviderContractError(`${label} must not contain cycles`);
   ancestors.add(value);
   const output: Record<string, JsonValue> = {};
-  for (const [key, child] of Object.entries(value)) output[key] = cloneJsonValue(child, ancestors, label);
+  for (const [key, child] of Object.entries(value)) {
+    Object.defineProperty(output, key, {
+      value: cloneJsonValue(child, ancestors, label),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
   ancestors.delete(value);
   Object.freeze(output);
   return output;
@@ -435,8 +686,39 @@ function cloneJsonValue(value: unknown, ancestors: Set<object>, label: string): 
   throw new WorkspaceProviderContractError(`${label} must contain only JSON values`);
 }
 
-function validateJsonValue(value: unknown, label: string): void {
-  cloneJsonValue(value, new Set<object>(), label);
+function parseRequestOperation(value: string): string {
+  try {
+    return requirePluginBackendOperation(value);
+  } catch (error) {
+    throw providerRequestError("invalid-operation", 400, boundedErrorMessage(error), error);
+  }
+}
+
+function parseRequestRevision(value: string, operation: string): string {
+  try {
+    return requirePluginBackendRevision(value);
+  } catch (error) {
+    throw providerRequestError(
+      "stale-plugin-revision",
+      409,
+      `Plugin backend revision is unavailable for operation ${operation}: ${boundedErrorMessage(error)}`,
+      error,
+    );
+  }
+}
+
+function providerRequestError(
+  code: WorkspaceProviderRequestErrorCode,
+  statusCode: number,
+  message: string,
+  cause?: unknown,
+): WorkspaceProviderRequestError {
+  return new WorkspaceProviderRequestError(code, statusCode, message, cause === undefined ? {} : { cause });
+}
+
+function boundedErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length <= 2_048 ? message : `${message.slice(0, 2_045)}...`;
 }
 
 function isProviderClaim(value: unknown): value is ProviderClaim {

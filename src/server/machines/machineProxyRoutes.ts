@@ -4,7 +4,7 @@ import type { PiWebAgentConfig } from "../../shared/apiTypes.js";
 import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, type FederatedHttpRouteSpec } from "../../shared/federatedRoutes.js";
 import { mergeSelectedMachineConfig, parsePiWebConfigResponseBody, parseSelectedMachineConfigRequest, selectedMachineConfigResponse } from "../configRoutes.js";
 import { bridgeSockets } from "../webSocketBridge.js";
-import { RemoteMachineRequestError, type MachineClient, type MachineJsonResponse, type MachineRequestOptions } from "./machineClient.js";
+import { DEFAULT_REMOTE_REQUEST_TIMEOUT_MS, RemoteMachineRequestError, type MachineClient, type MachineJsonResponse, type MachineRequestOptions } from "./machineClient.js";
 import { MachineService } from "./machineService.js";
 
 export const REMOTE_HTTP_ROUTES = FEDERATED_HTTP_ROUTES;
@@ -25,6 +25,7 @@ export function registerMachineProxyRoutes(app: FastifyInstance, machines = new 
     app.route<{ Params: { machineId: string }; Body: unknown }>({
       method: spec.method,
       url: `/api/machines/:machineId${spec.path}`,
+      ...("bodyLimit" in spec ? { bodyLimit: spec.bodyLimit } : {}),
       handler: (request, reply) => proxyHttpRequest(machines, spec, request.params.machineId, request.method, request.url, request.body, request.headers["content-type"], reply),
     });
   }
@@ -50,14 +51,22 @@ async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRou
     const remotePath = remoteApiPath(machineId, requestUrl);
     if (spec.path === "/config") return await proxySelectedMachineConfigRequest(client, machineId, method, remotePath, body, reply);
 
+    const startedAt = Date.now();
     const requestOptions = proxyRequestOptions(spec, body, contentType);
     const upstream = requestOptions === undefined
       ? await client.request(method, remotePath, body)
       : await client.request(method, remotePath, body, requestOptions);
+    const responseBody = upstream.body === undefined || spec.responseBodyLimit === undefined
+      ? upstream.body
+      : await readBoundedRemoteBody(
+          upstream.body,
+          spec.responseBodyLimit,
+          remainingResponseTimeout(startedAt, spec.timeoutMs),
+        );
     reply.code(upstream.statusCode);
     applySafeHeaders(reply, upstream.headers);
-    if (upstream.body === undefined) return await reply.send();
-    return await reply.send(upstream.body);
+    if (responseBody === undefined) return await reply.send();
+    return await reply.send(responseBody);
   } catch (error) {
     if (isSelectedMachineConfigRequestError(error)) return reply.code(400).send({ error: errorMessage(error) });
     return sendGatewayError(reply, machineId, error);
@@ -166,6 +175,73 @@ function applySafeHeaders(reply: FastifyReply, headers: Record<string, string | 
     if (!SAFE_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
     reply.header(name, value);
   }
+}
+
+function remainingResponseTimeout(startedAt: number, timeoutMs: number | undefined): number {
+  return Math.max(1, (timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS) - (Date.now() - startedAt));
+}
+
+function readBoundedRemoteBody(body: NodeJS.ReadableStream, maxBytes: number, timeoutMs: number): Promise<Buffer> {
+  return new Promise((resolve, rejectPromise) => {
+    const chunks: Buffer[] = [];
+    let byteLength = 0;
+    let settled = false;
+    const timeout = setTimeout(() => {
+      fail(new RemoteMachineRequestError("Remote machine response body timed out", 504));
+    }, timeoutMs);
+    timeout.unref();
+
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      body.removeListener("data", onData);
+      body.removeListener("end", onEnd);
+      body.removeListener("error", onError);
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        destroyReadable(body);
+      } catch {
+        // The bounded gateway error remains authoritative even if teardown fails.
+      }
+      rejectPromise(error);
+    };
+    const onData = (chunk: unknown): void => {
+      const buffer = typeof chunk === "string"
+        ? Buffer.from(chunk)
+        : chunk instanceof Uint8Array ? Buffer.from(chunk) : undefined;
+      if (buffer === undefined) {
+        fail(new RemoteMachineRequestError("Remote machine returned an invalid response body", 502));
+        return;
+      }
+      byteLength += buffer.byteLength;
+      if (byteLength > maxBytes) {
+        fail(new RemoteMachineRequestError(`Remote machine response exceeded the ${String(maxBytes)} byte limit`, 502));
+        return;
+      }
+      chunks.push(buffer);
+    };
+    const onEnd = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(Buffer.concat(chunks));
+    };
+    const onError = (error: unknown): void => {
+      fail(new RemoteMachineRequestError(errorMessage(error), 502));
+    };
+
+    body.on("data", onData);
+    body.once("end", onEnd);
+    body.once("error", onError);
+  });
+}
+
+function destroyReadable(body: NodeJS.ReadableStream): void {
+  const destroy: unknown = Reflect.get(body, "destroy");
+  if (typeof destroy === "function") Reflect.apply(destroy, body, []);
 }
 
 function isSelectedMachineConfigRequestError(error: unknown): boolean {
