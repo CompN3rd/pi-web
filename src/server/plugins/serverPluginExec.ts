@@ -5,7 +5,9 @@ import type {
 } from "../../server-plugin-api.js";
 
 const DEFAULT_EXEC_TIMEOUT_MS = 30_000;
-const DEFAULT_OUTPUT_LIMIT_BYTES = 1024 * 1024;
+// Git changes historically bounded command stdout at 2 MiB; keep that ceiling
+// available through the same public helper used by every server plugin.
+const DEFAULT_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
 const FORCE_KILL_GRACE_MS = 250;
 
 export interface ServerPluginExecFileOptions {

@@ -1,12 +1,82 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import type { GitDiffResponse, GitFileState, GitStatusFile, GitStatusResponse } from "../../shared/apiTypes.js";
-import { normalizeRelativePath } from "../workspaces/pathSafety.js";
-import { sanitizedGitEnv } from "./gitEnv.js";
+import { isAbsolute, join } from "node:path";
+import type {
+  JsonValue,
+  ProviderRequestContext,
+  ProviderResponse,
+  ServerPluginActivationContext,
+  ServerPluginExecFileResult,
+} from "@jmfederico/pi-web/server-plugin-api";
 
-const MAX_OUTPUT = 2 * 1024 * 1024;
+const GIT_COMMAND_TIMEOUT_MS = 10_000;
+const GIT_LOCAL_ENV_VARS = Object.freeze([
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+  "GIT_QUARANTINE_PATH",
+  "GIT_WORK_TREE",
+]);
+
+export const GIT_STATUS_OPERATION = "status";
+export const GIT_DIFF_OPERATION = "diff";
+
+export type GitFileState = "unmodified" | "modified" | "added" | "deleted" | "renamed" | "copied" | "untracked" | "ignored" | "conflicted";
+
+export interface GitStatusFile {
+  path: string;
+  oldPath?: string;
+  index: GitFileState;
+  workingTree: GitFileState;
+  submoduleFromCommit?: string;
+  submoduleToCommit?: string;
+}
+
+export interface GitStatusResponse {
+  isGitRepo: boolean;
+  hash: string;
+  branch?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  files: GitStatusFile[];
+  submodules: string[];
+}
+
+export interface GitDiffResponse {
+  path?: string;
+  staged: boolean;
+  hash: string;
+  diff: string;
+  truncated: boolean;
+}
+
+type RunGit = (cwd: string, args: readonly string[]) => Promise<GitCommandResult>;
+
+interface GitCommandResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+}
+
+/** Dispatch the Git-owned status/diff schema through the provider's public request seam. */
+export async function requestGitBackend(
+  activationContext: ServerPluginActivationContext,
+  request: ProviderRequestContext,
+): Promise<ProviderResponse> {
+  const runGit = createGitRunner(activationContext, request.signal);
+  if (request.operation === GIT_STATUS_OPERATION) {
+    requireStatusInput(request.input);
+    return statusProviderResponse(await gitStatusWithRunner(runGit, request.workspace.path));
+  }
+  if (request.operation === GIT_DIFF_OPERATION) {
+    return diffProviderResponse(await gitDiffWithRunner(runGit, request.workspace.path, parseDiffInput(request.input)));
+  }
+  throw new Error(`Unsupported Git workspace backend operation: ${request.operation}`);
+}
 
 /**
  * A submodule row parsed from the superproject status. `git status` reports a
@@ -35,11 +105,19 @@ interface ParsedStatus {
   submodules: SubmoduleRecord[];
 }
 
-export async function gitStatus(cwd: string): Promise<GitStatusResponse> {
+export async function gitStatus(
+  context: ServerPluginActivationContext,
+  cwd: string,
+  signal: AbortSignal,
+): Promise<GitStatusResponse> {
+  return gitStatusWithRunner(createGitRunner(context, signal), cwd);
+}
+
+async function gitStatusWithRunner(runGit: RunGit, cwd: string): Promise<GitStatusResponse> {
   const result = await runGit(cwd, ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"]);
   if (result.code !== 0) return { isGitRepo: false, hash: hash(result.stdout + result.stderr), files: [], submodules: [] };
   const parsed = parseStatus(result.stdout, { deferSubmodules: true });
-  return expandSubmodules(cwd, parsed, result.stdout);
+  return expandSubmodules(runGit, cwd, parsed, result.stdout);
 }
 
 /**
@@ -49,11 +127,11 @@ export async function gitStatus(cwd: string): Promise<GitStatusResponse> {
  * entries under `<submodule>/<inner path>`. A plain `-dirty` pointer (commit
  * unchanged) is intentionally not surfaced as a pointer entry.
  */
-async function expandSubmodules(cwd: string, parsed: ParsedStatus, topRaw: string): Promise<GitStatusResponse> {
+async function expandSubmodules(runGit: RunGit, cwd: string, parsed: ParsedStatus, topRaw: string): Promise<GitStatusResponse> {
   // Fan out concurrently — one `git status` per dirty submodule plus one
   // `git rev-parse` per unstaged pointer move — then concatenate in input
   // order so the file list and hash are identical to a serial pass.
-  const expanded = await Promise.all(parsed.submodules.map(async (sub) => ({ path: sub.path, ...(await expandSubmodule(cwd, sub)) })));
+  const expanded = await Promise.all(parsed.submodules.map(async (sub) => ({ path: sub.path, ...(await expandSubmodule(runGit, cwd, sub)) })));
 
   const files: GitStatusFile[] = [...parsed.files];
   const dirtySubmodulePaths: string[] = [];
@@ -77,7 +155,7 @@ async function expandSubmodules(cwd: string, parsed: ParsedStatus, topRaw: strin
 }
 
 /** Expand one dirty submodule: the pointer entry first, then its inner files. */
-async function expandSubmodule(cwd: string, sub: SubmoduleRecord): Promise<{ files: GitStatusFile[]; extraForHash: string }> {
+async function expandSubmodule(runGit: RunGit, cwd: string, sub: SubmoduleRecord): Promise<{ files: GitStatusFile[]; extraForHash: string }> {
   const files: GitStatusFile[] = [];
   let extraForHash = "";
   if (sub.commitChanged) {
@@ -86,7 +164,7 @@ async function expandSubmodule(cwd: string, sub: SubmoduleRecord): Promise<{ fil
       index: sub.index,
       workingTree: sub.workingTree,
       submoduleFromCommit: displayFromCommit(sub.headOid),
-      submoduleToCommit: short(await resolveSubmoduleToCommit(cwd, sub)),
+      submoduleToCommit: short(await resolveSubmoduleToCommit(runGit, cwd, sub)),
     });
   }
   if (sub.hasModifiedContent || sub.hasUntrackedContent) {
@@ -107,7 +185,7 @@ async function expandSubmodule(cwd: string, sub: SubmoduleRecord): Promise<{ fil
   return { files, extraForHash };
 }
 
-async function resolveSubmoduleToCommit(cwd: string, sub: SubmoduleRecord): Promise<string> {
+async function resolveSubmoduleToCommit(runGit: RunGit, cwd: string, sub: SubmoduleRecord): Promise<string> {
   // Staged pointer moves already expose the new commit as the index OID; an
   // unstaged move only records the old OID, so read the submodule's HEAD.
   if (sub.indexOid !== sub.headOid) return sub.indexOid;
@@ -116,14 +194,23 @@ async function resolveSubmoduleToCommit(cwd: string, sub: SubmoduleRecord): Prom
   return head.code === 0 && resolved !== "" ? resolved : sub.indexOid;
 }
 
-export async function gitDiff(cwd: string, options: { path?: string; staged?: boolean }): Promise<GitDiffResponse> {
+export async function gitDiff(
+  context: ServerPluginActivationContext,
+  cwd: string,
+  options: { path?: string; staged?: boolean },
+  signal: AbortSignal,
+): Promise<GitDiffResponse> {
+  return gitDiffWithRunner(createGitRunner(context, signal), cwd, options);
+}
+
+async function gitDiffWithRunner(runGit: RunGit, cwd: string, options: { path?: string; staged?: boolean }): Promise<GitDiffResponse> {
   const staged = options.staged === true;
   let path: string | undefined;
   if (options.path !== undefined && options.path !== "") path = normalizeRelativePath(options.path);
 
   if (path !== undefined) {
-    const owner = await submoduleForPath(cwd, path);
-    if (owner !== undefined) return submoduleDiff(cwd, owner, path, staged);
+    const owner = await submoduleForPath(runGit, cwd, path);
+    if (owner !== undefined) return submoduleDiff(runGit, cwd, owner, path, staged);
   }
 
   const args = ["diff", "--no-ext-diff", "--color=never"];
@@ -132,7 +219,7 @@ export async function gitDiff(cwd: string, options: { path?: string; staged?: bo
 
   const result = await runGit(cwd, args);
   if (result.code !== 0) throw new Error(result.stderr.trim() || "git diff failed");
-  if (!staged && path !== undefined && result.stdout === "" && await isUntracked(cwd, path)) {
+  if (!staged && path !== undefined && result.stdout === "" && await isUntracked(runGit, cwd, path)) {
     const untracked = await runGit(cwd, ["diff", "--no-ext-diff", "--color=never", "--no-index", "/dev/null", "--", path]);
     if (untracked.code !== 0 && untracked.code !== 1) throw new Error(untracked.stderr.trim() || "git diff failed");
     return { path, staged, hash: hash(untracked.stdout), diff: untracked.stdout, truncated: untracked.truncated };
@@ -146,7 +233,7 @@ export async function gitDiff(cwd: string, options: { path?: string; staged?: bo
  * The response path stays the full superproject-relative path so the viewer and
  * the selected row line up.
  */
-async function submoduleDiff(cwd: string, owner: string, path: string, staged: boolean): Promise<GitDiffResponse> {
+async function submoduleDiff(runGit: RunGit, cwd: string, owner: string, path: string, staged: boolean): Promise<GitDiffResponse> {
   const subCwd = join(cwd, owner);
   const rel = normalizeRelativePath(path.slice(owner.length + 1));
 
@@ -156,7 +243,7 @@ async function submoduleDiff(cwd: string, owner: string, path: string, staged: b
 
   const result = await runGit(subCwd, args);
   if (result.code !== 0) throw new Error(result.stderr.trim() || "git diff failed");
-  if (!staged && result.stdout === "" && await isUntracked(subCwd, rel)) {
+  if (!staged && result.stdout === "" && await isUntracked(runGit, subCwd, rel)) {
     const untracked = await runGit(subCwd, ["diff", "--no-ext-diff", "--color=never", "--no-index", "/dev/null", "--", rel]);
     if (untracked.code !== 0 && untracked.code !== 1) throw new Error(untracked.stderr.trim() || "git diff failed");
     return { path, staged, hash: hash(untracked.stdout), diff: untracked.stdout, truncated: untracked.truncated };
@@ -164,13 +251,13 @@ async function submoduleDiff(cwd: string, owner: string, path: string, staged: b
   return { path, staged, hash: hash(result.stdout), diff: result.stdout, truncated: result.truncated };
 }
 
-async function isUntracked(cwd: string, path: string): Promise<boolean> {
+async function isUntracked(runGit: RunGit, cwd: string, path: string): Promise<boolean> {
   const result = await runGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z", "--", path]);
   return result.code === 0 && result.stdout.split("\0").includes(path);
 }
 
 /** Configured direct-submodule paths (depth 1), read from `.gitmodules`. */
-async function configuredSubmodulePaths(cwd: string): Promise<string[]> {
+async function configuredSubmodulePaths(runGit: RunGit, cwd: string): Promise<string[]> {
   // `-z` emits `<key>\n<value>\0` records; keys may themselves contain spaces
   // (`submodule.my sub.path`), so splitting lines at the first space mangles
   // paths with spaces in them.
@@ -187,13 +274,11 @@ async function configuredSubmodulePaths(cwd: string): Promise<string[]> {
 }
 
 /** The submodule that strictly contains `path`, if any (longest match wins). */
-async function submoduleForPath(cwd: string, path: string): Promise<string | undefined> {
-  // Cheap bail-outs before spawning `git config`: a path strictly inside a
-  // submodule always contains `/`, and without `.gitmodules` there are no
-  // configured submodules to look up (every diff call used to pay this spawn).
+async function submoduleForPath(runGit: RunGit, cwd: string, path: string): Promise<string | undefined> {
+  // A path strictly inside a submodule always contains `/`. Let Git inspect
+  // `.gitmodules` so the plugin performs no direct filesystem I/O.
   if (!path.includes("/")) return undefined;
-  if (!existsSync(join(cwd, ".gitmodules"))) return undefined;
-  const subs = await configuredSubmodulePaths(cwd);
+  const subs = await configuredSubmodulePaths(runGit, cwd);
   let best: string | undefined;
   for (const sub of subs) {
     if (sub !== "" && path.startsWith(`${sub}/`) && (best === undefined || sub.length > best.length)) best = sub;
@@ -293,19 +378,83 @@ function hash(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
 
-async function runGit(cwd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string; truncated: boolean }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { cwd, env: sanitizedGitEnv(), stdio: ["ignore", "pipe", "pipe"] });
-    const timer = setTimeout(() => { child.kill("SIGKILL"); }, 10000);
-    let stdout = Buffer.alloc(0);
-    let stderr = Buffer.alloc(0);
-    let truncated = false;
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (stdout.length + chunk.length > MAX_OUTPUT) truncated = true;
-      if (stdout.length < MAX_OUTPUT) stdout = Buffer.concat([stdout, chunk]).subarray(0, MAX_OUTPUT);
-    });
-    child.stderr.on("data", (chunk: Buffer) => { stderr = Buffer.concat([stderr, chunk]).subarray(0, 64 * 1024); });
-    child.on("error", (error) => { clearTimeout(timer); reject(error); });
-    child.on("close", (code) => { clearTimeout(timer); resolve({ code: code ?? 1, stdout: stdout.toString("utf8"), stderr: stderr.toString("utf8"), truncated }); });
-  });
+function statusProviderResponse(status: GitStatusResponse): ProviderResponse {
+  return {
+    isGitRepo: status.isGitRepo,
+    hash: status.hash,
+    ...(status.branch === undefined ? {} : { branch: status.branch }),
+    ...(status.upstream === undefined ? {} : { upstream: status.upstream }),
+    ...(status.ahead === undefined ? {} : { ahead: status.ahead }),
+    ...(status.behind === undefined ? {} : { behind: status.behind }),
+    files: status.files.map((file) => ({
+      path: file.path,
+      ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+      index: file.index,
+      workingTree: file.workingTree,
+      ...(file.submoduleFromCommit === undefined ? {} : { submoduleFromCommit: file.submoduleFromCommit }),
+      ...(file.submoduleToCommit === undefined ? {} : { submoduleToCommit: file.submoduleToCommit }),
+    })),
+    submodules: status.submodules,
+  };
+}
+
+function diffProviderResponse(diff: GitDiffResponse): ProviderResponse {
+  return {
+    ...(diff.path === undefined ? {} : { path: diff.path }),
+    staged: diff.staged,
+    hash: diff.hash,
+    diff: diff.diff,
+    truncated: diff.truncated,
+  };
+}
+
+function createGitRunner(context: ServerPluginActivationContext, signal: AbortSignal): RunGit {
+  return async (cwd, args) => commandResult(await context.execFile({
+    file: "git",
+    args,
+    cwd,
+    unsetEnv: GIT_LOCAL_ENV_VARS,
+    timeoutMs: GIT_COMMAND_TIMEOUT_MS,
+    signal,
+  }));
+}
+
+function commandResult(result: ServerPluginExecFileResult): GitCommandResult {
+  return {
+    code: result.exitCode ?? 1,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    truncated: result.stdoutTruncated,
+  };
+}
+
+function requireStatusInput(input: JsonValue): void {
+  if (input !== null) throw new Error("Git status input must be null");
+}
+
+function parseDiffInput(input: JsonValue): { path?: string; staged?: boolean } {
+  if (!isRecord(input)) throw new Error("Git diff input must be an object");
+  const unsupported = Object.keys(input).find((key) => key !== "path" && key !== "staged");
+  if (unsupported !== undefined) throw new Error(`Git diff input contains an unsupported field: ${unsupported}`);
+  const path = input["path"];
+  const staged = input["staged"];
+  if (path !== undefined && typeof path !== "string") throw new Error("Git diff input path must be a string");
+  if (staged !== undefined && typeof staged !== "boolean") throw new Error("Git diff input staged must be a boolean");
+  return {
+    ...(path === undefined ? {} : { path }),
+    ...(staged === undefined ? {} : { staged }),
+  };
+}
+
+function normalizeRelativePath(input: string | undefined): string {
+  const value = input ?? "";
+  if (value === "" || value === ".") return "";
+  if (isAbsolute(value)) throw new Error("Absolute paths are not allowed");
+  const parts = value.split(/[\\/]+/u).filter((part) => part !== "" && part !== ".");
+  if (parts.some((part) => part === "..")) throw new Error("Path traversal is not allowed");
+  return parts.join("/");
+}
+
+function isRecord(value: JsonValue): value is Readonly<Record<string, JsonValue>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { gitDiff, gitStatus } from "./gitService.js";
+import type { ServerPluginActivationContext } from "@jmfederico/pi-web/server-plugin-api";
+import { createServerPluginExecFile } from "../../src/server/plugins/serverPluginExec.js";
+import { gitDiff as requestGitDiff, gitStatus as requestGitStatus } from "./git-backend.js";
 
 // Isolate from any global/system git config and force a deterministic identity;
 // `protocol.file.allow` is required for `submodule add` from a local path.
@@ -18,8 +20,31 @@ const GIT_ENV = Object.fromEntries([
   ["GIT_TERMINAL_PROMPT", "0"],
 ]);
 
+const backendContext: ServerPluginActivationContext = {
+  apiVersion: 1,
+  pluginId: "git",
+  packageRoot: "pi-web-plugins/git",
+  logger: {
+    debug() { /* no-op */ },
+    info() { /* no-op */ },
+    warn() { /* no-op */ },
+    error() { /* no-op */ },
+  },
+  settings: {},
+  execFile: createServerPluginExecFile({ env: GIT_ENV }),
+  signal: new AbortController().signal,
+};
+
 const created: string[] = [];
 afterAll(() => { for (const dir of created) rmSync(dir, { recursive: true, force: true }); });
+
+function gitStatus(cwd: string) {
+  return requestGitStatus(backendContext, cwd, new AbortController().signal);
+}
+
+function gitDiff(cwd: string, options: { path?: string; staged?: boolean }) {
+  return requestGitDiff(backendContext, cwd, options, new AbortController().signal);
+}
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", [...GIT_FLAGS, ...args], { cwd, encoding: "utf8", env: GIT_ENV });
@@ -71,6 +96,39 @@ function createSpacedPathFixture(): { dir: string } {
   git(sup, ["commit", "-m", "init"]);
   return { dir: sup };
 }
+
+describe("Git changes backend", () => {
+  it("preserves staged, unstaged, and untracked file behavior", async () => {
+    const { dir } = createFixture();
+    writeFileSync(join(dir, "root.txt"), "root\nstaged\n");
+    git(dir, ["add", "root.txt"]);
+    writeFileSync(join(dir, "root.txt"), "root\nstaged\nunstaged\n");
+    writeFileSync(join(dir, "untracked.txt"), "new\n");
+
+    const status = await gitStatus(dir);
+    expect(status.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "root.txt", index: "modified", workingTree: "modified" }),
+      expect.objectContaining({ path: "untracked.txt", index: "untracked", workingTree: "untracked" }),
+    ]));
+
+    const [staged, unstaged, untracked] = await Promise.all([
+      gitDiff(dir, { path: "root.txt", staged: true }),
+      gitDiff(dir, { path: "root.txt" }),
+      gitDiff(dir, { path: "untracked.txt" }),
+    ]);
+    expect(staged.diff).toContain("+staged");
+    expect(staged.diff).not.toContain("+unstaged");
+    expect(unstaged.diff).toContain("+unstaged");
+    expect(untracked.diff).toContain("+new");
+  });
+
+  it("rejects absolute and traversing diff paths before invoking Git", async () => {
+    const { dir } = createFixture();
+
+    await expect(gitDiff(dir, { path: "/outside" })).rejects.toThrow("Absolute paths are not allowed");
+    await expect(gitDiff(dir, { path: "../outside" })).rejects.toThrow("Path traversal is not allowed");
+  });
+});
 
 describe("gitStatus with submodules", () => {
   it("surfaces a moved commit pointer with short SHAs and no inner files", async () => {

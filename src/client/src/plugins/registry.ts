@@ -16,12 +16,17 @@ type RegisteredPluginAction = Omit<PluginAction, "id"> & {
   sourcePluginId?: string;
 };
 
+interface RegisteredWorkspaceBackendBinding extends WorkspacePluginBinding {
+  machineId?: string;
+}
+
 export class PluginRegistry {
   private readonly actions: RegisteredPluginAction[] = [];
   private readonly workspacePanels: QualifiedWorkspacePanelContribution[] = [];
   private readonly workspaceLabels: QualifiedWorkspaceLabelContribution[] = [];
   private readonly themes: QualifiedThemeContribution[] = [];
   private readonly themePairs: QualifiedThemePairContribution[] = [];
+  private readonly workspaceBackendBindings: RegisteredWorkspaceBackendBinding[] = [];
   private readonly pluginIds = new Set<string>();
   private readonly gatewayPluginIds = new Set<string>();
   private readonly gatewayMachineSpecificPluginIds = new Set<string>();
@@ -41,6 +46,10 @@ export class PluginRegistry {
     if (apiVersion !== 1) throw new Error(`Unsupported plugin API version for ${id}: ${String(apiVersion)}`);
     const result = plugin.activate({ apiVersion: 1, pluginId: id, html, svg });
     const contributions = result.contributions;
+    this.workspaceBackendBindings.push({
+      ...workspacePluginBinding(id, registration.sourcePluginId, backendRevision),
+      ...(registration.machineId === undefined ? {} : { machineId: registration.machineId }),
+    });
     for (const action of contributions.actions ?? []) this.actions.push(this.qualifyAction(id, action, registration.machineId, registration.sourcePluginId));
     for (const panel of contributions.workspacePanels ?? []) this.workspacePanels.push(this.qualifyWorkspacePanel(id, panel, registration.machineId, registration.sourcePluginId, backendRevision));
     for (const contribution of contributions.workspaceLabels ?? []) this.workspaceLabels.push(this.qualifyWorkspaceLabelContribution(id, contribution, registration.machineId, registration.sourcePluginId, backendRevision));
@@ -56,6 +65,21 @@ export class PluginRegistry {
 
   shouldLoadRemotePlugin(sourcePluginId: string, machineSpecific = false): boolean {
     return !this.gatewayPluginIds.has(sourcePluginId) || this.gatewayMachineSpecificPluginIds.has(sourcePluginId) || machineSpecific;
+  }
+
+  /** Temporary core-adapter lookup; S8 moves the caller into the owning browser plugin context. */
+  getWorkspaceBackendBinding(sourcePluginId: string, machineId: string): WorkspacePluginBinding | undefined {
+    const active = this.workspaceBackendBindings.filter((binding) => binding.sourcePluginId === sourcePluginId
+      && this.isContributionActive(
+        binding.registrationPluginId,
+        binding.machineId,
+        machineId,
+        binding.machineId === undefined ? undefined : binding.sourcePluginId,
+      ));
+    const selected = active.find((binding) => binding.machineId === machineId)
+      ?? active.find((binding) => binding.machineId === undefined);
+    if (selected === undefined) return undefined;
+    return workspacePluginBinding(selected.registrationPluginId, selected.sourcePluginId, selected.backendRevision);
   }
 
   getActions(context: PluginRuntimeContext): QualifiedPluginAction[] {

@@ -3,6 +3,7 @@ import { isPiWebPluginId } from "../../shared/pluginIds.js";
 import {
   parsePluginBackendRequestEnvelope,
   PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
+  PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
   requirePluginBackendOperation,
   serializeBoundedPluginBackendJson,
   type PluginBackendRequestEnvelope,
@@ -80,7 +81,11 @@ export function registerPluginBackendRoutes(
           operation,
           input: envelope.input,
         });
-        const serialized = serializeBoundedPluginBackendJson(result, `Server plugin ${pluginId} operation ${operation} result`);
+        const serialized = serializeBoundedPluginBackendJson(
+          result,
+          `Server plugin ${pluginId} operation ${operation} result`,
+          PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
+        );
         return await reply.type("application/json; charset=utf-8").send(serialized);
       } catch (error) {
         return pluginBackendRequestFailed(reply, error, pluginId, operation);

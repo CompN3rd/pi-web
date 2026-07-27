@@ -11,14 +11,6 @@ function sessionCwd(session: SessionLookup): string | undefined {
   return typeof session === "string" ? undefined : session.cwd;
 }
 
-export function machineGitDiffPath(machineId: string, projectId: string, workspaceId: string, options?: { path?: string; staged?: boolean }): string {
-  const params = new URLSearchParams();
-  if (options?.path !== undefined) params.set("path", options.path);
-  if (options?.staged === true) params.set("staged", "true");
-  const query = params.toString();
-  return `api/machines/${encodeURIComponent(machineId)}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/git/diff${query ? `?${query}` : ""}`;
-}
-
 export function messagePath(session: SessionLookup, options?: { limit?: number; before?: number }, machineId = "local"): string {
   const params = new URLSearchParams();
   const cwd = sessionCwd(session);

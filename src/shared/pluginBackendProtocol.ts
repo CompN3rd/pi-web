@@ -1,11 +1,13 @@
 import type { JsonValue } from "./apiTypes.js";
 
-/** Maximum UTF-8 JSON payload accepted from or returned to a browser plugin. */
+/** Maximum UTF-8 JSON input accepted from a browser plugin. */
 export const PLUGIN_BACKEND_JSON_MAX_BYTES = 256 * 1024;
+/** Bounded result allowance demonstrated by Git's existing 2 MiB command-output limit. */
+export const PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES = 8 * 1024 * 1024;
 /** Envelope allowance for the active backend revision and JSON field names. */
 export const PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES = PLUGIN_BACKEND_JSON_MAX_BYTES + 4 * 1024;
 /** Allowance for an attributed error envelope around a bounded result. */
-export const PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES = PLUGIN_BACKEND_JSON_MAX_BYTES + 4 * 1024;
+export const PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES = PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES + 4 * 1024;
 /** Bounded provider callback deadline inside sessiond. */
 export const PLUGIN_BACKEND_REQUEST_TIMEOUT_MS = 10_000;
 /** End-to-end sessiond deadline, including owner re-resolution and validation. */
@@ -42,22 +44,34 @@ export function requirePluginBackendRevision(value: unknown): string {
 }
 
 /** Clone and freeze a runtime value after enforcing the JSON and byte contract. */
-export function cloneBoundedPluginBackendJson(value: unknown, label: string): JsonValue {
+export function cloneBoundedPluginBackendJson(
+  value: unknown,
+  label: string,
+  maxBytes = PLUGIN_BACKEND_JSON_MAX_BYTES,
+): JsonValue {
   const cloned = cloneJsonValue(value, new Set<object>(), label, 0);
   const serialized = JSON.stringify(cloned);
-  if (utf8ByteLength(serialized) > PLUGIN_BACKEND_JSON_MAX_BYTES) {
-    throw new Error(`${label} exceeds the ${String(PLUGIN_BACKEND_JSON_MAX_BYTES)} byte limit`);
+  if (utf8ByteLength(serialized) > maxBytes) {
+    throw new Error(`${label} exceeds the ${String(maxBytes)} byte limit`);
   }
   return cloned;
 }
 
-export function serializeBoundedPluginBackendJson(value: unknown, label: string): string {
-  return JSON.stringify(cloneBoundedPluginBackendJson(value, label));
+export function serializeBoundedPluginBackendJson(
+  value: unknown,
+  label: string,
+  maxBytes = PLUGIN_BACKEND_JSON_MAX_BYTES,
+): string {
+  return JSON.stringify(cloneBoundedPluginBackendJson(value, label, maxBytes));
 }
 
-export function parseBoundedPluginBackendJson(text: string, label: string): JsonValue {
-  if (utf8ByteLength(text) > PLUGIN_BACKEND_JSON_MAX_BYTES) {
-    throw new Error(`${label} exceeds the ${String(PLUGIN_BACKEND_JSON_MAX_BYTES)} byte limit`);
+export function parseBoundedPluginBackendJson(
+  text: string,
+  label: string,
+  maxBytes = PLUGIN_BACKEND_JSON_MAX_BYTES,
+): JsonValue {
+  if (utf8ByteLength(text) > maxBytes) {
+    throw new Error(`${label} exceeds the ${String(maxBytes)} byte limit`);
   }
   let value: unknown;
   try {
@@ -65,7 +79,7 @@ export function parseBoundedPluginBackendJson(text: string, label: string): Json
   } catch (error) {
     throw new Error(`${label} must be valid JSON`, { cause: error });
   }
-  return cloneBoundedPluginBackendJson(value, label);
+  return cloneBoundedPluginBackendJson(value, label, maxBytes);
 }
 
 export function parsePluginBackendRequestEnvelope(value: unknown): PluginBackendRequestEnvelope {

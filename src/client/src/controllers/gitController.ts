@@ -1,13 +1,27 @@
-import { api } from "../api";
+import type { Workspace } from "../api";
+import { parseGitDiffResponse, parseGitStatusResponse } from "../api/parsers";
 import { queryNamespace, setNamespacedQueryKey } from "../namespacedQueryArgs";
+import type { WorkspaceBackend } from "../plugins/types";
 import { selectedMachineId, type GetState, type SetState, type UpdateUrl } from "./types";
 
 const GIT_ROUTE_NAMESPACE = queryNamespace("core:workspace.git");
+const GIT_STATUS_OPERATION = "status";
+const GIT_DIFF_OPERATION = "diff";
+
+export type ResolveGitWorkspaceBackend = (
+  workspace: Workspace,
+  machineId: string,
+) => WorkspaceBackend | Promise<WorkspaceBackend>;
 
 export class GitController {
   private pollTimer: number | undefined;
 
-  constructor(private readonly getState: GetState, private readonly setState: SetState, private readonly updateUrl: UpdateUrl) {}
+  constructor(
+    private readonly getState: GetState,
+    private readonly setState: SetState,
+    private readonly updateUrl: UpdateUrl,
+    private readonly resolveBackend: ResolveGitWorkspaceBackend,
+  ) {}
 
   dispose(): void {
     if (this.pollTimer !== undefined) window.clearInterval(this.pollTimer);
@@ -15,11 +29,12 @@ export class GitController {
   }
 
   async refreshGit(): Promise<void> {
-    const project = this.getState().selectedProject;
-    const workspace = this.getState().selectedWorkspace;
-    if (project === undefined || workspace === undefined) return;
+    const state = this.getState();
+    const workspace = state.selectedWorkspace;
+    if (state.selectedProject === undefined || workspace === undefined) return;
     try {
-      const status = await api.gitStatus(project.id, workspace.id, selectedMachineId(this.getState()));
+      const backend = await this.resolveBackend(workspace, selectedMachineId(state));
+      const status = parseGitStatusResponse(await backend.request(GIT_STATUS_OPERATION, null));
       this.setState({ gitStatus: status, gitStale: false, error: "" });
       const selectedDiffPath = this.getState().selectedDiffPath;
       if (selectedDiffPath !== undefined) {
@@ -47,13 +62,14 @@ export class GitController {
   }
 
   async refreshDiff(path: string): Promise<void> {
-    const project = this.getState().selectedProject;
-    const workspace = this.getState().selectedWorkspace;
-    if (project === undefined || workspace === undefined) return;
+    const state = this.getState();
+    const workspace = state.selectedWorkspace;
+    if (state.selectedProject === undefined || workspace === undefined) return;
     try {
+      const backend = await this.resolveBackend(workspace, selectedMachineId(state));
       const [selectedDiff, selectedStagedDiff] = await Promise.all([
-        api.gitDiff(project.id, workspace.id, { path }, selectedMachineId(this.getState())),
-        api.gitDiff(project.id, workspace.id, { path, staged: true }, selectedMachineId(this.getState())),
+        backend.request(GIT_DIFF_OPERATION, { path }).then(parseGitDiffResponse),
+        backend.request(GIT_DIFF_OPERATION, { path, staged: true }).then(parseGitDiffResponse),
       ]);
       this.setState({ selectedDiff, selectedStagedDiff, error: "" });
     } catch (error) {

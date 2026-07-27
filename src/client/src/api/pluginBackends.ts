@@ -5,6 +5,7 @@ import {
   parseBoundedPluginBackendJson,
   PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
   PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES,
+  PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
   requirePluginBackendOperation,
   requirePluginBackendRevision,
   utf8ByteLength,
@@ -70,7 +71,7 @@ export async function requestPluginBackend(
   if (!response.ok) {
     throw new Error(pluginBackendErrorMessage(text) ?? `Plugin backend request returned HTTP ${String(response.status)}`);
   }
-  return parseBoundedPluginBackendJson(text, "Plugin backend response");
+  return parseBoundedPluginBackendJson(text, "Plugin backend response", PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES);
 }
 
 async function readBoundedResponseText(response: Response): Promise<string> {

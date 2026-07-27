@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Workspace } from "../../../shared/apiTypes";
 import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS, type FederatedHttpRouteSpec } from "../../../shared/federatedRoutes";
 import { PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES, PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES } from "../../../shared/pluginBackendProtocol";
-import { activityApi, configApi, filesApi, gitApi, piPackagesApi, piWebApi, pluginsApi, projectsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
+import { activityApi, configApi, filesApi, piPackagesApi, piWebApi, pluginsApi, projectsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 import { globalSessionEvents, realtimeEvents, sessionEvents, terminalSocket } from "./sockets";
 import { workspaceImagePreviewUrl } from "./urls";
 import { requestPluginBackend } from "./pluginBackends";
@@ -104,8 +104,6 @@ describe("federated route contract", () => {
       ignoreParseFailure(requestPluginBackend({ pluginId: "board-tools", backendRevision: "server-r1", machineId, projectId: "p 1", workspaceId: "w 1" }, "cards.summary", { includeClosed: false })),
       ignoreParseFailure(filesApi.files("/repo", "README", { kind: "tracked", mode: "file", machineId })),
       ignoreParseFailure(filesApi.files("/repo", "README", { kind: "tracked", mode: "file", projectId: "p 1", workspaceId: "w 1", machineId, workspaceScoped: true })),
-      ignoreParseFailure(gitApi.gitStatus("p 1", "w 1", machineId)),
-      ignoreParseFailure(gitApi.gitDiff("p 1", "w 1", { path: "README.md", staged: true }, machineId)),
       ignoreParseFailure(sessionsApi.sessions("/repo", machineId)),
       ignoreParseFailure(sessionsApi.unreadCatalog(machineId)),
       ignoreParseFailure(sessionsApi.acknowledgeUnread(session, "catalog-a", 7, machineId)),

@@ -14,6 +14,10 @@ import { createServerPluginExecFile } from "../../src/server/plugins/serverPlugi
 import type { ServerPluginProviderContribution } from "../../src/server/plugins/serverPluginRuntime.js";
 import { WorkspaceProviderRegistry } from "../../src/server/workspaces/workspaceProviderRegistry.js";
 import { WorkspaceService } from "../../src/server/workspaces/workspaceService.js";
+import {
+  GIT_DIFF_OPERATION,
+  GIT_STATUS_OPERATION,
+} from "./git-backend.js";
 import plugin, { parseGitWorktreeList } from "./server-plugin.js";
 
 const tempRoots: string[] = [];
@@ -95,6 +99,99 @@ describe("bundled Git workspace provider", () => {
     expect(workspaces.map(({ path }) => path)).not.toContain(gone);
     expect(workspaces.filter(({ isMain }) => isMain)).toHaveLength(1);
     expect(workspaces.find(({ isMain }) => isMain)).not.toHaveProperty("removal");
+  });
+
+  it("serves status and diff schemas through provider request using sanitized bounded commands", async () => {
+    const repository = await createRepository("changes repo");
+    await Promise.all([
+      writeFile(join(repository.path, "tracked.txt"), "tracked\nchanged\n", "utf8"),
+      writeFile(join(repository.path, "new file.txt"), "new\n", "utf8"),
+    ]);
+    const workspaceProvider = await providerFor(createServerPluginExecFile({
+      env: {
+        ...cleanGitEnvironment(),
+        GIT_DIR: "/missing/poisoned-git-dir",
+        GIT_WORK_TREE: "/missing/poisoned-work-tree",
+      },
+    }));
+    const input = project(repository.path);
+    const registry = new WorkspaceProviderRegistry({
+      contributions: [contribution("git", workspaceProvider)],
+      logger: { warn: vi.fn() },
+    });
+    const workspaceId = (await registry.resolve(input)).workspaces[0]?.id;
+    if (workspaceId === undefined) throw new Error("Expected Git workspace backend");
+
+    const status = await registry.request({
+      pluginId: "git",
+      moduleRevision: "1",
+      project: input,
+      workspaceId,
+      operation: GIT_STATUS_OPERATION,
+      input: null,
+    });
+    const diff = await registry.request({
+      pluginId: "git",
+      moduleRevision: "1",
+      project: input,
+      workspaceId,
+      operation: GIT_DIFF_OPERATION,
+      input: { path: "tracked.txt", staged: false },
+    });
+
+    const statusRecord = requireRecord(status);
+    expect(statusRecord).toMatchObject({ isGitRepo: true, submodules: [] });
+    expect(statusRecord["files"]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "tracked.txt", workingTree: "modified" }),
+      expect.objectContaining({ path: "new file.txt", workingTree: "untracked" }),
+    ]));
+    const diffRecord = requireRecord(diff);
+    expect(diffRecord).toMatchObject({ path: "tracked.txt", staged: false, truncated: false });
+    expect(diffRecord["diff"]).toContain("changed");
+  });
+
+  it("preserves the Git command timeout, environment sanitization, and diff truncation signal", async () => {
+    const execFile = vi.fn<ServerPluginActivationContext["execFile"]>(() => Promise.resolve(commandResult({
+      stdout: "diff --git a/tracked.txt b/tracked.txt\n",
+      stdoutTruncated: true,
+    })));
+    const workspaceProvider = await providerFor(execFile);
+    const request = workspaceProvider.request?.bind(workspaceProvider);
+    if (request === undefined) throw new Error("Expected Git workspace backend");
+    const signal = new AbortController().signal;
+
+    await expect(request({
+      project: project("/repo"),
+      workspace: providerWorkspace("root", "/repo", true),
+      operation: GIT_DIFF_OPERATION,
+      input: {},
+      signal,
+    })).resolves.toMatchObject({ staged: false, truncated: true });
+    expect(execFile).toHaveBeenCalledWith({
+      file: "git",
+      args: ["diff", "--no-ext-diff", "--color=never"],
+      cwd: "/repo",
+      unsetEnv: gitLocalEnvironmentKeys,
+      timeoutMs: 10_000,
+      signal,
+    });
+  });
+
+  it("rejects unknown operations and malformed private inputs before command execution", async () => {
+    const execFile = vi.fn<ServerPluginActivationContext["execFile"]>();
+    const workspaceProvider = await providerFor(execFile);
+    const request = workspaceProvider.request?.bind(workspaceProvider);
+    if (request === undefined) throw new Error("Expected Git workspace backend");
+    const context = {
+      project: project("/repo"),
+      workspace: providerWorkspace("root", "/repo", true),
+      signal: new AbortController().signal,
+    };
+
+    await expect(request({ ...context, operation: "history", input: null })).rejects.toThrow("Unsupported Git workspace backend operation");
+    await expect(request({ ...context, operation: GIT_STATUS_OPERATION, input: {} })).rejects.toThrow("status input must be null");
+    await expect(request({ ...context, operation: GIT_DIFF_OPERATION, input: { path: "/outside" } })).rejects.toThrow("Absolute paths are not allowed");
+    expect(execFile).not.toHaveBeenCalled();
   });
 
   it("performs live Git validation and builds the quoted native removal command", async () => {
@@ -199,8 +296,19 @@ describe("bundled Git workspace provider", () => {
       pathInspector: () => true,
     });
 
-    const resolution = await registry.resolve(project("/repo"));
+    const input = project("/repo");
+    const resolution = await registry.resolve(input);
+    const workspaceId = resolution.workspaces[0]?.id;
+    if (workspaceId === undefined) throw new Error("Expected primary workspace");
 
+    await expect(registry.request({
+      pluginId: "git",
+      moduleRevision: "1",
+      project: input,
+      workspaceId,
+      operation: GIT_STATUS_OPERATION,
+      input: null,
+    })).rejects.toMatchObject({ code: "owner-mismatch", statusCode: 409 });
     expect(resolution).toMatchObject({ status: "provider", ownerPluginId: "primary" });
     expect(execFile).not.toHaveBeenCalled();
   });
@@ -320,6 +428,15 @@ function contribution(pluginId: string, workspaceProvider: WorkspaceProvider): S
 
 function providerWorkspace(key: string, path: string, isMain: boolean): ProviderWorkspace {
   return { key, path, label: key, isMain };
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Expected record");
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function commandResult(overrides: Partial<ServerPluginExecFileResult> = {}): ServerPluginExecFileResult {

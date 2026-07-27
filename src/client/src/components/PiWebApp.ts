@@ -29,13 +29,13 @@ import { hasAuthoritativeSessionPersistence as runtimeHasAuthoritativeSessionPer
 import { SessionUnreadController } from "../sessionUnread";
 import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility, toggleSessionWarnings } from "../sessionWarningVisibility";
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
-import type { PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "../plugins/types";
+import type { PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceBackend, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "../plugins/types";
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins } from "../plugins/external";
 import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope } from "../plugins/registry";
-import { createPluginWorkspaceBackend } from "../plugins/workspaceBackend";
+import { createPluginWorkspaceBackend, createProviderWorkspaceBackend } from "../plugins/workspaceBackend";
 import { queryNamespace, readNamespacedString, setNamespacedQueryKey } from "../namespacedQueryArgs";
 import { AppShellController } from "../appShell/appShellController";
 import { BrowserResumeController } from "../appShell/browserResumeController";
@@ -198,6 +198,7 @@ export class PiWebApp extends LitElement {
     () => this.state,
     (patch) => { this.setState(patch); },
     () => { this.updateUrl(); },
+    (workspace, machineId) => this.workspaceBackendFor(workspace, machineId),
   );
   private readonly keyboard = new KeyboardShortcutDispatcher();
   private readonly realtime = new RealtimeSocket();
@@ -1707,6 +1708,13 @@ export class PiWebApp extends LitElement {
 
   private async loadExternalPlugins(): Promise<void> {
     await this.registerExternalPlugins("PI WEB plugins", () => loadExternalPlugins());
+  }
+
+  private async workspaceBackendFor(workspace: Workspace, machineId: string): Promise<WorkspaceBackend> {
+    await this.ensureGatewayPluginsLoaded();
+    const machine = this.state.selectedMachine;
+    if (machine?.id === machineId && machine.kind === "remote") await this.loadPluginsForMachine(machine);
+    return createProviderWorkspaceBackend(this.plugins, workspace, machineId);
   }
 
   private async loadPluginsForSelectedMachine(): Promise<void> {

@@ -4,12 +4,14 @@ import type {
   ProjectInput,
   ProviderClaim,
   ProviderRemoveContext,
+  ProviderRequestContext,
   ProviderWorkspace,
   ServerPluginActivationContext,
   ServerPluginExecFileResult,
   WorkspaceProvider,
   WorkspaceRemovePlan,
 } from "@jmfederico/pi-web/server-plugin-api";
+import { requestGitBackend } from "./git-backend.js";
 
 const GIT_LOCAL_ENV_VARS = Object.freeze([
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -103,6 +105,7 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
         };
       });
     },
+    request: (request: ProviderRequestContext) => requestGitBackend(context, request),
     async prepareRemove({ project, workspace, signal }: ProviderRemoveContext): Promise<WorkspaceRemovePlan> {
       const privatePath = gitPrivateWorktreePath(workspace);
       if (resolve(privatePath) !== workspace.path) {

@@ -3,6 +3,7 @@ import {
   cloneBoundedPluginBackendJson,
   parseBoundedPluginBackendJson,
   PLUGIN_BACKEND_JSON_MAX_BYTES,
+  PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
   serializeBoundedPluginBackendJson,
 } from "./pluginBackendProtocol.js";
 
@@ -25,6 +26,14 @@ describe("plugin backend JSON contract", () => {
     const exact = "x".repeat(PLUGIN_BACKEND_JSON_MAX_BYTES - 2);
     expect(cloneBoundedPluginBackendJson(exact, "fixture")).toBe(exact);
     expect(() => cloneBoundedPluginBackendJson(`${exact}x`, "fixture")).toThrow("byte limit");
+  });
+
+  it("keeps requests small while allowing the larger bounded result Git demonstrates", () => {
+    const result = "x".repeat(PLUGIN_BACKEND_JSON_MAX_BYTES);
+
+    expect(() => cloneBoundedPluginBackendJson(result, "request")).toThrow("byte limit");
+    expect(cloneBoundedPluginBackendJson(result, "result", PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES)).toBe(result);
+    expect(parseBoundedPluginBackendJson(JSON.stringify(result), "result", PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES)).toBe(result);
   });
 
   it("rejects inherited and non-JSON runtime objects rather than serializing them ambiguously", () => {

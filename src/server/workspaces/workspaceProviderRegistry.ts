@@ -19,6 +19,7 @@ import {
   cloneBoundedPluginBackendJson,
   PLUGIN_BACKEND_DISPATCH_TIMEOUT_MS,
   PLUGIN_BACKEND_REQUEST_TIMEOUT_MS,
+  PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
   requirePluginBackendOperation,
   requirePluginBackendRevision,
 } from "../../shared/pluginBackendProtocol.js";
@@ -452,7 +453,11 @@ export class WorkspaceProviderRegistry {
       }
 
       try {
-        return cloneBoundedPluginBackendJson(result, `Server plugin ${pluginId} operation ${operation} result`);
+        return cloneBoundedPluginBackendJson(
+          result,
+          `Server plugin ${pluginId} operation ${operation} result`,
+          PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
+        );
       } catch (error) {
         throw providerRequestError("invalid-result", 502, boundedErrorMessage(error), error);
       }

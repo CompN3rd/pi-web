@@ -16,8 +16,6 @@ import {
   parseFileContentResponse,
   parseFileSuggestion,
   parseFileTreeResponse,
-  parseGitDiffResponse,
-  parseGitStatusResponse,
   parseMachine,
   parseMachineHealth,
   parseMachineRuntime,
@@ -55,7 +53,7 @@ import {
   parseWorkspace,
   parseWorkspaceActivityResponse,
 } from "./parsers";
-import { machineGitDiffPath, messagePath } from "./urls";
+import { messagePath } from "./urls";
 
 const machinePrefix = (machineId = "local") => `api/machines/${encodeURIComponent(machineId)}`;
 
@@ -335,11 +333,6 @@ export const filesApi = {
   },
 };
 
-export const gitApi = {
-  gitStatus: (projectId: string, workspaceId: string, machineId = "local") => request(`${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/git/status`, parseGitStatusResponse),
-  gitDiff: (projectId: string, workspaceId: string, options?: { path?: string; staged?: boolean }, machineId = "local") => request(machineGitDiffPath(machineId, projectId, workspaceId, options), parseGitDiffResponse),
-};
-
 export const api = {
   ...piWebApi,
   ...machinesApi,
@@ -352,5 +345,4 @@ export const api = {
   ...sessionsApi,
   ...terminalsApi,
   ...filesApi,
-  ...gitApi,
 };

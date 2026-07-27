@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +30,26 @@ describe("bundled Git package metadata", () => {
     });
   });
 
+  it("keeps Git changes implementation and private routes out of host production code", async () => {
+    const violations: string[] = [];
+    for (const file of await productionTypeScriptFiles("src/server")) {
+      if (/(?:^|\/)(?:gitService|gitRoutes)\.ts$/u.test(file)) {
+        violations.push(`${file}: retains a host Git changes implementation`);
+      }
+      const source = await readFile(file, "utf8");
+      if (/from\s+["'][^"']*(?:gitService|gitRoutes)\.js["']/u.test(source)) {
+        violations.push(`${file}: imports a host Git changes implementation`);
+      }
+      if (/\/git\/(?:status|diff)/u.test(source)) violations.push(`${file}: declares a private Git changes route`);
+    }
+    const federatedRoutes = await readFile("src/shared/federatedRoutes.ts", "utf8");
+    if (/\/git\/(?:status|diff)/u.test(federatedRoutes)) {
+      violations.push("src/shared/federatedRoutes.ts: allowlists a private Git changes route");
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   it("leaves the kernel folder workspace when Git is disabled before import", async () => {
     const { catalog, root } = await gitCatalogFixture(false);
     const importer = vi.fn(() => Promise.reject(new Error("disabled Git module was imported")));
@@ -55,9 +75,33 @@ describe("bundled Git package metadata", () => {
       workspaces: [{ path: root, isMain: true }],
     });
     expect(resolution.workspaces[0]).not.toHaveProperty("provider");
+    await expect(registry.request({
+      pluginId: "git",
+      moduleRevision: "disabled-revision",
+      project: {
+        id: "project-1",
+        name: "Project",
+        path: root,
+        createdAt: "2026-07-27T00:00:00.000Z",
+      },
+      workspaceId: resolution.workspaces[0]?.id ?? "missing",
+      operation: "status",
+      input: null,
+    })).rejects.toMatchObject({ code: "inactive-plugin", statusCode: 409 });
+    expect(importer).not.toHaveBeenCalled();
     await runtime.stop();
   });
 });
+
+async function productionTypeScriptFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) files.push(...await productionTypeScriptFiles(path));
+    else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") && !entry.name.includes(".testSupport.")) files.push(path);
+  }
+  return files;
+}
 
 async function gitCatalogFixture(enabled: boolean): Promise<{ catalog: PiWebPluginCatalog; root: string }> {
   const root = await mkdtemp(join(tmpdir(), "pi-web-git-package-"));

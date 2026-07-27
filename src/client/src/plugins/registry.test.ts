@@ -607,6 +607,38 @@ describe("PluginRegistry", () => {
     ]);
   });
 
+  it("resolves temporary owner backend bindings to the selected machine revision", () => {
+    const registry = new PluginRegistry();
+    const emptyPlugin = { apiVersion: 1 as const, name: "Git", activate: () => ({ contributions: {} }) };
+    registry.register({
+      id: "git",
+      backendRevision: "local-r1",
+      machineSpecific: true,
+      plugin: emptyPlugin,
+    });
+    const remotePluginId = machineScopedPluginId("remote-1", "git");
+    registry.register({
+      id: remotePluginId,
+      sourcePluginId: "git",
+      machineId: "remote-1",
+      backendRevision: "remote-r2",
+      machineSpecific: true,
+      plugin: emptyPlugin,
+    });
+
+    expect(registry.getWorkspaceBackendBinding("git", "local")).toEqual({
+      registrationPluginId: "git",
+      sourcePluginId: "git",
+      backendRevision: "local-r1",
+    });
+    expect(registry.getWorkspaceBackendBinding("git", "remote-1")).toEqual({
+      registrationPluginId: remotePluginId,
+      sourcePluginId: "git",
+      backendRevision: "remote-r2",
+    });
+    expect(registry.getWorkspaceBackendBinding("missing", "remote-1")).toBeUndefined();
+  });
+
   it("prefers gateway plugins over remote plugins with the same source id", () => {
     const registry = new PluginRegistry();
     const remotePluginId = machineScopedPluginId("remote-1", "shared-tools");

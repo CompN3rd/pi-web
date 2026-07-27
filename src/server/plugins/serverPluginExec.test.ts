@@ -25,6 +25,19 @@ describe("server plugin execFile helper", () => {
     });
   });
 
+  it("retains the existing 2 MiB Git command-output ceiling by default", async () => {
+    const execFile = createServerPluginExecFile();
+
+    const result = await execFile({
+      file: process.execPath,
+      args: ["-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024 + 1))"],
+      signal: new AbortController().signal,
+    });
+
+    expect(result.stdout).toHaveLength(2 * 1024 * 1024);
+    expect(result.stdoutTruncated).toBe(true);
+  });
+
   it("merges environment overrides, removes requested host keys, and never expands a shell", async () => {
     const execFile = createServerPluginExecFile({ env: { BASE_VALUE: "base", REMOVE_ME: "host" } });
 
