@@ -44,14 +44,12 @@ export function writeRoute(route: AppRoute, options?: { replace?: boolean | unde
 
 function parseTool(value: string | null): QualifiedContributionId | undefined {
   if (value === "files") return "core:workspace.files";
-  if (value === "git") return "core:workspace.git";
   return isQualifiedId(value) ? value : undefined;
 }
 
 function parseView(value: string | null): "chat" | QualifiedContributionId | undefined {
   if (value === "chat") return "chat";
   if (value === "files") return "core:workspace.files";
-  if (value === "git") return "core:workspace.git";
   return isQualifiedId(value) ? value : undefined;
 }
 

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { GitStatusFile } from "./api";
+import type { GitStatusFile } from "./git-contract.js";
 import {
   buildGitFileTree,
   collectGitFileTreeDirectoryPaths,
   type GitFileTreeDirectoryNode,
   type GitFileTreeFileNode,
   type GitFileTreeNode,
-} from "./gitFileTree";
+} from "./gitFileTree.js";
 
 describe("buildGitFileTree", () => {
   it("returns an empty tree for no changes", () => {

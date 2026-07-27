@@ -8,7 +8,6 @@ import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/ca
 import { ActivityController } from "../controllers/activityController";
 import { AuthController } from "../controllers/authController";
 import { FileExplorerController } from "../controllers/fileExplorerController";
-import { GitController } from "../controllers/gitController";
 import { MachineController } from "../controllers/machineController";
 import { ProjectController } from "../controllers/projectController";
 import { ProjectActivityOwnershipCoordinator } from "../controllers/projectActivityOwnershipCoordinator";
@@ -29,13 +28,13 @@ import { hasAuthoritativeSessionPersistence as runtimeHasAuthoritativeSessionPer
 import { SessionUnreadController } from "../sessionUnread";
 import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility, toggleSessionWarnings } from "../sessionWarningVisibility";
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
-import type { PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceBackend, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "../plugins/types";
+import type { PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "../plugins/types";
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins } from "../plugins/external";
 import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope } from "../plugins/registry";
-import { createPluginWorkspaceBackend, createProviderWorkspaceBackend } from "../plugins/workspaceBackend";
+import { createPluginWorkspaceBackend } from "../plugins/workspaceBackend";
 import { queryNamespace, readNamespacedString, setNamespacedQueryKey } from "../namespacedQueryArgs";
 import { AppShellController } from "../appShell/appShellController";
 import { BrowserResumeController } from "../appShell/browserResumeController";
@@ -69,7 +68,7 @@ import "./WorkspacePanel";
 import type { WorkspacePanelEmptyState } from "./WorkspacePanel";
 import "./appShell/AppContextBar";
 import "./appShell/AppMobileMainTabs";
-import type { AppMobileMainTab, AppMobileMainTabIcon } from "./appShell/AppMobileMainTabs";
+import type { AppMobileMainTab } from "./appShell/AppMobileMainTabs";
 import { shouldShowMachinesSection, type AppNavigationPanel, type NavigationFocusTarget } from "./appShell/AppNavigationPanel";
 import "./appShell/AppPanelEdgeControl";
 import "./appShell/AppRefreshControl";
@@ -84,7 +83,6 @@ const THEME_AUTO_ON_VALUE = "auto:on";
 const THEME_AUTO_OFF_VALUE = "auto:off";
 const THEME_OPTION_PREFIX = "theme:";
 const FILES_ROUTE_NAMESPACE = queryNamespace("core:workspace.files");
-const GIT_ROUTE_NAMESPACE = queryNamespace("core:workspace.git");
 const TERMINAL_ROUTE_NAMESPACE = queryNamespace("core:workspace.terminal");
 const MIN_RESIZABLE_CHAT_WIDTH_PX = 320;
 const PANEL_EDGE_COLUMNS_WIDTH_PX = 2;
@@ -193,12 +191,6 @@ export class PiWebApp extends LitElement {
     () => this.state,
     (patch) => { this.setState(patch); },
     () => { this.updateUrl(); },
-  );
-  private readonly git = new GitController(
-    () => this.state,
-    (patch) => { this.setState(patch); },
-    () => { this.updateUrl(); },
-    (workspace, machineId) => this.workspaceBackendFor(workspace, machineId),
   );
   private readonly keyboard = new KeyboardShortcutDispatcher();
   private readonly realtime = new RealtimeSocket();
@@ -381,7 +373,6 @@ export class PiWebApp extends LitElement {
     this.notifications.dispose();
     this.realtime.close();
     this.closeMachineActivitySockets();
-    this.git.dispose();
     if (this.piWebStatusTimer !== undefined) window.clearInterval(this.piWebStatusTimer);
     this.piWebStatusTimer = undefined;
     this.clearScheduledPiWebStatusRefresh();
@@ -507,7 +498,6 @@ export class PiWebApp extends LitElement {
     const workspace = this.state.selectedWorkspace;
     const tool = this.state.mainView !== "chat" && this.state.mainView !== "navigation" ? this.state.mainView : this.state.workspaceTool;
     if (tool === "core:workspace.files") await this.files.refreshFiles();
-    else if (tool === "core:workspace.git") await this.git.refreshGit();
     else if (tool === "core:workspace.terminal" && workspace !== undefined) await this.refreshActiveTerminals(workspace);
   }
 
@@ -535,7 +525,6 @@ export class PiWebApp extends LitElement {
         workspaceTool: route.tool ?? this.state.workspaceTool,
         mainView: restoredMainView ?? route.view ?? this.defaultRouteView(),
         selectedFilePath: routeSurface.selectedFilePath,
-        selectedDiffPath: routeSurface.selectedDiffPath,
         selectedTerminalId: routeSurface.selectedTerminalId,
       });
       if (route.projectId === undefined || route.projectId === "") {
@@ -545,22 +534,20 @@ export class PiWebApp extends LitElement {
       if (this.routeMatchesCurrentSelection(route)) {
         if (routeSurface.selectedTerminalId !== undefined) this.rememberSelectedTerminal(routeSurface.selectedTerminalId);
         await this.refreshRestoredWorkspaceTool(route.tool, routeSurface.selectedFilePath);
-        this.git.updatePolling();
         if (updateUrl) this.updateUrl();
         return;
       }
       const project = this.state.projects.find((p) => p.id === route.projectId);
       if (!project) {
-        this.setState({ selectedFilePath: undefined, selectedDiffPath: undefined, selectedTerminalId: undefined });
+        this.setState({ selectedFilePath: undefined, selectedTerminalId: undefined });
         if (updateUrl) this.updateUrl();
         return;
       }
       await this.workspaces.selectProject(project, { workspaceId: route.workspaceId, sessionId: route.sessionId, updateUrl: false });
       if (!this.isCurrentRouteRestore(restoreSeq)) return;
-      this.setState({ selectedFilePath: routeSurface.selectedFilePath, selectedDiffPath: routeSurface.selectedDiffPath, selectedTerminalId: routeSurface.selectedTerminalId });
+      this.setState({ selectedFilePath: routeSurface.selectedFilePath, selectedTerminalId: routeSurface.selectedTerminalId });
       if (routeSurface.selectedTerminalId !== undefined) this.rememberSelectedTerminal(routeSurface.selectedTerminalId);
       await this.refreshRestoredWorkspaceTool(route.tool, routeSurface.selectedFilePath);
-      this.git.updatePolling();
       if (updateUrl) this.updateUrl();
     } finally {
       this.routeRestoreDepth = Math.max(0, this.routeRestoreDepth - 1);
@@ -577,7 +564,6 @@ export class PiWebApp extends LitElement {
     if (route.projectId === undefined || route.projectId === "") return emptyWorkspaceRouteSurface();
     return {
       selectedFilePath: readNamespacedString(FILES_ROUTE_NAMESPACE, "file"),
-      selectedDiffPath: readNamespacedString(GIT_ROUTE_NAMESPACE, "diff"),
       selectedTerminalId: readNamespacedString(TERMINAL_ROUTE_NAMESPACE, "terminal"),
     };
   }
@@ -591,7 +577,6 @@ export class PiWebApp extends LitElement {
   private replaceRouteAndClearWorkspaceQuery(route: AppRoute): void {
     writeRoute(route, { replace: true });
     setNamespacedQueryKey(FILES_ROUTE_NAMESPACE, "file", undefined, { replace: true });
-    setNamespacedQueryKey(GIT_ROUTE_NAMESPACE, "diff", undefined, { replace: true });
     setNamespacedQueryKey(TERMINAL_ROUTE_NAMESPACE, "terminal", undefined, { replace: true });
   }
 
@@ -725,7 +710,6 @@ export class PiWebApp extends LitElement {
   private async refreshRestoredWorkspaceTool(tool: QualifiedContributionId | undefined, selectedFilePath: string | undefined): Promise<void> {
     if (tool === "core:workspace.files") await this.files.refreshFiles();
     if (tool === "core:workspace.files" && selectedFilePath !== undefined) await this.files.restoreFile(selectedFilePath);
-    if (tool === "core:workspace.git") await this.git.refreshGit();
   }
 
   private async withChatScrollTransition(action: () => Promise<void>, shouldComplete: () => boolean = () => true) {
@@ -784,7 +768,6 @@ export class PiWebApp extends LitElement {
 
   private writeWorkspaceRouteSurfaceToUrl(surface: WorkspaceRouteSurface): void {
     setNamespacedQueryKey(FILES_ROUTE_NAMESPACE, "file", surface.selectedFilePath, { replace: true });
-    setNamespacedQueryKey(GIT_ROUTE_NAMESPACE, "diff", surface.selectedDiffPath, { replace: true });
     setNamespacedQueryKey(TERMINAL_ROUTE_NAMESPACE, "terminal", surface.selectedTerminalId, { replace: true });
   }
 
@@ -812,7 +795,6 @@ export class PiWebApp extends LitElement {
     this.setState({ workspaceTool: tool, mainView: tool });
     this.updateUrl();
     this.refreshSelectedWorkspaceTool(tool);
-    this.git.updatePolling();
   }
 
   private openTerminal(options?: { terminalId?: string | undefined }): void {
@@ -884,7 +866,6 @@ export class PiWebApp extends LitElement {
     }
     this.setState({ mainView: view });
     this.updateUrl();
-    this.git.updatePolling();
   }
 
   private openSettings(section: SettingsSection = "general"): void {
@@ -920,7 +901,6 @@ export class PiWebApp extends LitElement {
     void this.refreshActiveTerminals(next.selectedWorkspace);
     void this.refreshWorkspaceDeletionRuns();
     this.refreshSelectedWorkspaceTool(next.workspaceTool);
-    this.git.updatePolling();
   }
 
   private syncSessionUnreadMachines(): void {
@@ -1065,7 +1045,7 @@ export class PiWebApp extends LitElement {
     const wasActive = isActive(previous);
     const nowActive = isActive(next);
     if (wasActive && !nowActive) {
-      this.setState({ fileTreeStale: true, gitStale: true });
+      this.setState({ fileTreeStale: true });
       this.refreshSelectedWorkspaceTool(this.state.workspaceTool);
     }
   }
@@ -1081,13 +1061,11 @@ export class PiWebApp extends LitElement {
     this.activeTerminalIds.clear();
     this.sessionCleanupDialog = undefined;
     this.setState({ piWebStatus: undefined });
-    this.git.updatePolling();
     void this.loadPluginsForSelectedMachine();
   }
 
   private refreshSelectedWorkspaceTool(tool: QualifiedContributionId): void {
     if (tool === "core:workspace.files") void this.files.refreshFiles();
-    if (tool === "core:workspace.git") void this.git.refreshGit();
   }
 
   private renderWorkspacePanel() {
@@ -1481,7 +1459,7 @@ export class PiWebApp extends LitElement {
           }
         : {
             title: "Select a project",
-            body: "Choose a project from the sidebar, then select a workspace to inspect files, Git, or terminals.",
+            body: "Choose a project from the sidebar, then select a workspace to use its tools.",
           };
     }
     if (this.state.isLoadingWorkspaces) {
@@ -1498,7 +1476,7 @@ export class PiWebApp extends LitElement {
     }
     return {
       title: "Select a workspace",
-      body: `Choose a workspace in ${project.name} to inspect files, Git, or terminals.`,
+      body: `Choose a workspace in ${project.name} to use its tools.`,
     };
   }
 
@@ -1514,15 +1492,6 @@ export class PiWebApp extends LitElement {
     const workspace = this.state.selectedWorkspace;
     if (workspace === undefined) return undefined;
     return panel.badge?.(this.createWorkspacePanelContext(workspace));
-  }
-
-  private mobilePanelIcon(panel: QualifiedWorkspacePanelContribution): AppMobileMainTabIcon | undefined {
-    switch (panel.id) {
-      case "core:workspace.files": return "files";
-      case "core:workspace.git": return "git";
-      case "core:workspace.terminal": return "terminal";
-      default: return undefined;
-    }
   }
 
   private workspaceLabelItems(workspace: Workspace): WorkspaceLabelItem[] {
@@ -1593,11 +1562,6 @@ export class PiWebApp extends LitElement {
         selectedFilePath: this.state.selectedFilePath,
         selectedFileContent: this.state.selectedFileContent,
         fileTreeStale: this.state.fileTreeStale,
-        gitStatus: this.state.gitStatus,
-        selectedDiffPath: this.state.selectedDiffPath,
-        selectedDiff: this.state.selectedDiff,
-        selectedStagedDiff: this.state.selectedStagedDiff,
-        gitStale: this.state.gitStale,
         activeTerminalCount: this.state.activeTerminalCount,
         selectedTerminalId: this.state.selectedTerminalId,
         terminalAutoStart: this.terminalAutoStartWorkspaceId === workspace.id,
@@ -1608,8 +1572,6 @@ export class PiWebApp extends LitElement {
         onStartWorkspaceUpload: (files, options) => this.files.startWorkspaceUpload(files, options),
         onCancelWorkspaceUpload: (batchId) => { this.files.cancelWorkspaceUpload(batchId); },
         onClearWorkspaceUpload: (batchId) => { this.files.clearWorkspaceUpload(batchId); },
-        onRefreshGit: () => { void this.git.refreshGit(); },
-        onSelectDiff: (path: string) => { void this.git.selectDiff(path); },
         onSelectTerminal: (terminalId: string | undefined, options?: { replace?: boolean | undefined }) => { this.selectTerminal(terminalId, options); },
       }, createContext);
     };
@@ -1710,13 +1672,6 @@ export class PiWebApp extends LitElement {
     await this.registerExternalPlugins("PI WEB plugins", () => loadExternalPlugins());
   }
 
-  private async workspaceBackendFor(workspace: Workspace, machineId: string): Promise<WorkspaceBackend> {
-    await this.ensureGatewayPluginsLoaded();
-    const machine = this.state.selectedMachine;
-    if (machine?.id === machineId && machine.kind === "remote") await this.loadPluginsForMachine(machine);
-    return createProviderWorkspaceBackend(this.plugins, workspace, machineId);
-  }
-
   private async loadPluginsForSelectedMachine(): Promise<void> {
     const machine = this.state.selectedMachine;
     if (machine?.kind !== "remote") return;
@@ -1809,7 +1764,6 @@ export class PiWebApp extends LitElement {
       selectWorkspaceTool: (tool) => { this.openWorkspaceTool(tool); },
       openTerminal: (options) => { this.openTerminal(options); },
       refreshFiles: () => this.files.refreshFiles(),
-      refreshGit: () => this.git.refreshGit(),
       refreshAppData: () => this.refreshAppData(),
       checkForPiWebUpdates: () => this.piWebStatusController.checkForUpdates(),
       reloadPage: () => { this.hardReloadApp(); },
@@ -2195,7 +2149,7 @@ export class PiWebApp extends LitElement {
       },
       { id: "chat", label: "Chat", icon: "chat" },
       ...this.visibleWorkspacePanels().map((panel): AppMobileMainTab => {
-        const icon = panel.icon ?? this.mobilePanelIcon(panel);
+        const icon = panel.icon;
         return {
           id: panel.id,
           label: panel.title,

@@ -7,6 +7,17 @@ import type {
   ServerPluginActivationContext,
   ServerPluginExecFileResult,
 } from "@jmfederico/pi-web/server-plugin-api";
+import {
+  GIT_DIFF_OPERATION,
+  GIT_STATUS_OPERATION,
+  type GitDiffResponse,
+  type GitFileState,
+  type GitStatusFile,
+  type GitStatusResponse,
+} from "./git-contract.js";
+
+export { GIT_DIFF_OPERATION, GIT_STATUS_OPERATION } from "./git-contract.js";
+export type { GitDiffResponse, GitFileState, GitStatusFile, GitStatusResponse } from "./git-contract.js";
 
 const GIT_COMMAND_TIMEOUT_MS = 10_000;
 const GIT_LOCAL_ENV_VARS = Object.freeze([
@@ -19,39 +30,6 @@ const GIT_LOCAL_ENV_VARS = Object.freeze([
   "GIT_QUARANTINE_PATH",
   "GIT_WORK_TREE",
 ]);
-
-export const GIT_STATUS_OPERATION = "status";
-export const GIT_DIFF_OPERATION = "diff";
-
-export type GitFileState = "unmodified" | "modified" | "added" | "deleted" | "renamed" | "copied" | "untracked" | "ignored" | "conflicted";
-
-export interface GitStatusFile {
-  path: string;
-  oldPath?: string;
-  index: GitFileState;
-  workingTree: GitFileState;
-  submoduleFromCommit?: string;
-  submoduleToCommit?: string;
-}
-
-export interface GitStatusResponse {
-  isGitRepo: boolean;
-  hash: string;
-  branch?: string;
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  files: GitStatusFile[];
-  submodules: string[];
-}
-
-export interface GitDiffResponse {
-  path?: string;
-  staged: boolean;
-  hash: string;
-  diff: string;
-  truncated: boolean;
-}
 
 type RunGit = (cwd: string, args: readonly string[]) => Promise<GitCommandResult>;
 

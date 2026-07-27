@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { ASK_USER_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
+import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
 
 describe("API parsers", () => {
   it("preserves additive interactive API-key flow hints and defaults legacy options", () => {
@@ -611,29 +611,6 @@ describe("API parsers", () => {
   it("rejects invalid enum-like fields", () => {
     expect(() => parseSlashCommand({ name: "bad", source: "remote" })).toThrow("Invalid command source");
     expect(() => parseFileSuggestion({ path: "a", kind: "deleted" })).toThrow("Invalid file kind");
-    expect(() => parseGitStatusResponse({ isGitRepo: true, hash: "h", files: [{ path: "a", index: "weird", workingTree: "modified" }] })).toThrow("Invalid git file state");
-  });
-
-  it("parses submodule paths and pointer commit fields", () => {
-    const parsed = parseGitStatusResponse({
-      isGitRepo: true,
-      hash: "h",
-      branch: "main",
-      files: [
-        { path: "HARL", index: "unmodified", workingTree: "modified", submoduleFromCommit: "1111111", submoduleToCommit: "2222222" },
-        { path: "HARL/inner.txt", index: "modified", workingTree: "modified" },
-      ],
-      submodules: ["HARL"],
-    });
-    expect(parsed.submodules).toEqual(["HARL"]);
-    expect(parsed.files[0]?.submoduleFromCommit).toBe("1111111");
-    expect(parsed.files[0]?.submoduleToCommit).toBe("2222222");
-    expect(parsed.files[1]?.submoduleFromCommit).toBeUndefined();
-  });
-
-  it("defaults submodules to an empty list when absent", () => {
-    const parsed = parseGitStatusResponse({ isGitRepo: true, hash: "h", files: [] });
-    expect(parsed.submodules).toEqual([]);
   });
 
   it("validates file content responses", () => {

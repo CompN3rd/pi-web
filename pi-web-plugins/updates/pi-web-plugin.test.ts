@@ -41,7 +41,6 @@ function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntim
     selectWorkspaceTool: noop,
     openTerminal: noop,
     refreshFiles: noop,
-    refreshGit: noop,
     refreshAppData: noop,
     reloadPage: noop,
     startSession: noop,

@@ -1,10 +1,12 @@
 import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
+import { createGitBrowserContributions } from "./git-panel.js";
 
-/** Browser contributions migrate into this bundled entry in a later slice. */
 const plugin: PiWebPlugin = {
   apiVersion: 1,
   name: "Git",
-  activate: () => ({ contributions: {} }),
+  activate: ({ pluginId, html, svg }) => ({
+    contributions: createGitBrowserContributions(pluginId, html, svg),
+  }),
 };
 
 export default plugin;

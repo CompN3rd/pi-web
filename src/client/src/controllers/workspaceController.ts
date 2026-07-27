@@ -90,7 +90,7 @@ export class WorkspaceController {
    * Deliberately never routes through `selectWorkspace`: that has no already-selected
    * guard, so re-picking the same workspace would still call `clearActiveSession()` and
    * `resetWorkspaceScopedState()`, closing the session socket and blanking chat, file
-   * tree, git status, and terminal selection. Callers run this on every browser resume,
+   * tree, plugin-owned panel state, and terminal selection. Callers run this on every browser resume,
    * so applying the list through `applyProjectWorkspaces` alone is the invariant.
    *
    * If the selected workspace disappeared, the selection is left alone: the user is

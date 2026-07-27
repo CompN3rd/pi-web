@@ -256,11 +256,6 @@ function workspacePanelContext(patch: Partial<WorkspacePanelContext> = {}): Work
     selectedFilePath: patch.selectedFilePath,
     selectedFileContent: patch.selectedFileContent,
     fileTreeStale: patch.fileTreeStale ?? false,
-    gitStatus: patch.gitStatus,
-    selectedDiffPath: patch.selectedDiffPath,
-    selectedDiff: patch.selectedDiff,
-    selectedStagedDiff: patch.selectedStagedDiff,
-    gitStale: patch.gitStale ?? false,
     activeTerminalCount: patch.activeTerminalCount ?? 0,
     selectedTerminalId: patch.selectedTerminalId,
     terminalAutoStart: patch.terminalAutoStart ?? false,
@@ -271,8 +266,6 @@ function workspacePanelContext(patch: Partial<WorkspacePanelContext> = {}): Work
     onStartWorkspaceUpload: patch.onStartWorkspaceUpload ?? vi.fn<WorkspacePanelContext["onStartWorkspaceUpload"]>(() => undefined),
     onCancelWorkspaceUpload: patch.onCancelWorkspaceUpload ?? vi.fn<WorkspacePanelContext["onCancelWorkspaceUpload"]>(),
     onClearWorkspaceUpload: patch.onClearWorkspaceUpload ?? vi.fn<WorkspacePanelContext["onClearWorkspaceUpload"]>(),
-    onRefreshGit: patch.onRefreshGit ?? vi.fn<WorkspacePanelContext["onRefreshGit"]>(),
-    onSelectDiff: patch.onSelectDiff ?? vi.fn<WorkspacePanelContext["onSelectDiff"]>(),
     onSelectTerminal: patch.onSelectTerminal ?? vi.fn<WorkspacePanelContext["onSelectTerminal"]>(),
   };
 }

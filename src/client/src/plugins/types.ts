@@ -1,6 +1,6 @@
 import type { TemplateResult } from "lit";
 import type { AppAction } from "../actions";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeEntry, GitDiffResponse, GitStatusResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, RunTerminalCommandInput, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeEntry, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, RunTerminalCommandInput, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { AppState } from "../appState";
 import type { SettingsSection } from "../settingsRoute";
 import type { LocalContributionId, PluginId, QualifiedContributionId } from "./ids";
@@ -124,7 +124,6 @@ export interface PluginRuntimeContext {
   selectWorkspaceTool: (tool: QualifiedContributionId) => void;
   openTerminal: (options?: { terminalId?: string | undefined }) => void;
   refreshFiles: () => void | Promise<void>;
-  refreshGit: () => void | Promise<void>;
   refreshAppData: () => void | Promise<void>;
   checkForPiWebUpdates?: () => void | Promise<void>;
   reloadPage: () => void;
@@ -168,11 +167,6 @@ export interface WorkspacePanelContext extends WorkspaceContext {
   selectedFilePath: string | undefined;
   selectedFileContent: FileContentResponse | undefined;
   fileTreeStale: boolean;
-  gitStatus: GitStatusResponse | undefined;
-  selectedDiffPath: string | undefined;
-  selectedDiff: GitDiffResponse | undefined;
-  selectedStagedDiff: GitDiffResponse | undefined;
-  gitStale: boolean;
   activeTerminalCount: number;
   selectedTerminalId: string | undefined;
   terminalAutoStart: boolean;
@@ -183,8 +177,6 @@ export interface WorkspacePanelContext extends WorkspaceContext {
   onStartWorkspaceUpload: (files: readonly File[], options: { destinationFolder: string; createDirs?: boolean; overwrite?: boolean; selectUploadedFile?: boolean }) => { batchId: string; done: Promise<void> } | undefined;
   onCancelWorkspaceUpload: (batchId: string) => void;
   onClearWorkspaceUpload: (batchId: string) => void;
-  onRefreshGit: () => void;
-  onSelectDiff: (path: string) => void;
   onSelectTerminal: (terminalId: string | undefined, options?: { replace?: boolean | undefined }) => void;
 }
 

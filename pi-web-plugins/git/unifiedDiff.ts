@@ -1,5 +1,3 @@
-import { diffChars } from "diff";
-
 export type UnifiedDiffLineKind = "meta" | "hunk" | "context" | "add" | "remove" | "marker";
 
 export interface UnifiedDiffTextSpan {
@@ -31,6 +29,13 @@ const maxInlineLineLength = 5_000;
 const maxInlineBlockLines = 20;
 const minInlineSimilarity = 0.20;
 const minPairSimilarity = 0.25;
+const maxInlineMatrixCells = 250_000;
+
+interface CharacterChange {
+  value: string;
+  added?: boolean;
+  removed?: boolean;
+}
 
 export function parseUnifiedDiff(diff: string): UnifiedDiffLine[] {
   const parsedLines = parseUnifiedDiffLines(diff);
@@ -188,8 +193,8 @@ function computeInlineDiff(oldText: string, newText: string): InlineDiffResult |
   const added: UnifiedDiffTextSpan[] = [];
   for (const change of changes) {
     if (change.value === "") continue;
-    if (change.added) added.push({ text: change.value, changed: true });
-    else if (change.removed) removed.push({ text: change.value, changed: true });
+    if (change.added === true) added.push({ text: change.value, changed: true });
+    else if (change.removed === true) removed.push({ text: change.value, changed: true });
     else {
       removed.push({ text: change.value, changed: false });
       added.push({ text: change.value, changed: false });
@@ -206,11 +211,95 @@ function lineSimilarity(oldText: string, newText: string): number {
   return similarityFromChanges(diffChars(oldText, newText), oldText, newText);
 }
 
-function similarityFromChanges(changes: ReturnType<typeof diffChars>, oldText: string, newText: string): number {
+function similarityFromChanges(changes: CharacterChange[], oldText: string, newText: string): number {
   const maxLength = Math.max(oldText.length, newText.length);
   if (maxLength === 0) return 1;
-  const unchangedLength = changes.reduce((total, change) => change.added || change.removed ? total : total + change.value.length, 0);
+  const unchangedLength = changes.reduce((total, change) => change.added === true || change.removed === true ? total : total + change.value.length, 0);
   return unchangedLength / maxLength;
+}
+
+/**
+ * Character-level diff for inline highlights. Browser plugins are served as
+ * native modules, so this package keeps the bounded algorithm local instead of
+ * depending on an application-bundled bare module. Large, dissimilar middles
+ * intentionally fall back to whole-span changes rather than doing unbounded
+ * quadratic work.
+ */
+function diffChars(oldText: string, newText: string): CharacterChange[] {
+  if (oldText === newText) return oldText === "" ? [] : [{ value: oldText }];
+
+  let prefixLength = 0;
+  const sharedLength = Math.min(oldText.length, newText.length);
+  while (prefixLength < sharedLength && oldText[prefixLength] === newText[prefixLength]) prefixLength += 1;
+
+  let suffixLength = 0;
+  while (
+    suffixLength < sharedLength - prefixLength
+    && oldText[oldText.length - suffixLength - 1] === newText[newText.length - suffixLength - 1]
+  ) suffixLength += 1;
+
+  const oldMiddle = oldText.slice(prefixLength, oldText.length - suffixLength);
+  const newMiddle = newText.slice(prefixLength, newText.length - suffixLength);
+  const changes: CharacterChange[] = [];
+  appendCharacterChange(changes, oldText.slice(0, prefixLength));
+
+  if (oldMiddle.length * newMiddle.length > maxInlineMatrixCells) {
+    appendCharacterChange(changes, oldMiddle, "removed");
+    appendCharacterChange(changes, newMiddle, "added");
+  } else {
+    for (const change of diffMiddleCharacters(oldMiddle, newMiddle)) {
+      appendCharacterChange(changes, change.value, change.added === true ? "added" : change.removed === true ? "removed" : undefined);
+    }
+  }
+
+  appendCharacterChange(changes, oldText.slice(oldText.length - suffixLength));
+  return changes;
+}
+
+function diffMiddleCharacters(oldText: string, newText: string): CharacterChange[] {
+  if (oldText === "") return newText === "" ? [] : [{ value: newText, added: true }];
+  if (newText === "") return [{ value: oldText, removed: true }];
+
+  const width = newText.length + 1;
+  const matrix = new Uint32Array((oldText.length + 1) * width);
+  for (let oldIndex = oldText.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = newText.length - 1; newIndex >= 0; newIndex -= 1) {
+      const offset = oldIndex * width + newIndex;
+      matrix[offset] = oldText[oldIndex] === newText[newIndex]
+        ? (matrix[(oldIndex + 1) * width + newIndex + 1] ?? 0) + 1
+        : Math.max(matrix[(oldIndex + 1) * width + newIndex] ?? 0, matrix[oldIndex * width + newIndex + 1] ?? 0);
+    }
+  }
+
+  const changes: CharacterChange[] = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+  while (oldIndex < oldText.length || newIndex < newText.length) {
+    if (oldIndex < oldText.length && newIndex < newText.length && oldText[oldIndex] === newText[newIndex]) {
+      appendCharacterChange(changes, oldText[oldIndex] ?? "");
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (newIndex >= newText.length || (oldIndex < oldText.length && (matrix[(oldIndex + 1) * width + newIndex] ?? 0) >= (matrix[oldIndex * width + newIndex + 1] ?? 0))) {
+      appendCharacterChange(changes, oldText[oldIndex] ?? "", "removed");
+      oldIndex += 1;
+    } else {
+      appendCharacterChange(changes, newText[newIndex] ?? "", "added");
+      newIndex += 1;
+    }
+  }
+  return changes;
+}
+
+function appendCharacterChange(changes: CharacterChange[], value: string, kind?: "added" | "removed"): void {
+  if (value === "") return;
+  const previous = changes[changes.length - 1];
+  const added = kind === "added";
+  const removed = kind === "removed";
+  if (previous !== undefined && previous.added === (added || undefined) && previous.removed === (removed || undefined)) {
+    previous.value += value;
+    return;
+  }
+  changes.push({ value, ...(added ? { added: true } : {}), ...(removed ? { removed: true } : {}) });
 }
 
 function mergeAdjacentSpans(spans: UnifiedDiffTextSpan[]): UnifiedDiffTextSpan[] {

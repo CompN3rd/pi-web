@@ -46,7 +46,6 @@ function createContext(statePatch: Partial<AppState> = {}) {
     selectWorkspaceTool: vi.fn((tool: AppState["workspaceTool"]) => { calls.push(`selectWorkspaceTool:${tool}`); }),
     openTerminal: vi.fn((options?: { terminalId?: string | undefined }) => { calls.push(`openTerminal:${options?.terminalId ?? ""}`); }),
     refreshFiles: vi.fn(() => { calls.push("refreshFiles"); }),
-    refreshGit: vi.fn(() => { calls.push("refreshGit"); }),
     refreshAppData: vi.fn(() => { calls.push("refreshAppData"); }),
     reloadPage: vi.fn(() => { calls.push("reloadPage"); }),
     deleteWorkspace: vi.fn(() => { calls.push("deleteWorkspace"); }),
@@ -65,7 +64,7 @@ describe("PluginRegistry", () => {
     registry.register({ id: "core", plugin: corePlugin });
 
     expect(registry.getActions(createContext().context).some((action) => action.id === "core:actions.show")).toBe(true);
-    expect(registry.getWorkspacePanels().map((panel) => panel.id)).toEqual(["core:workspace.files", "core:workspace.git", "core:workspace.terminal"]);
+    expect(registry.getWorkspacePanels().map((panel) => panel.id)).toEqual(["core:workspace.files", "core:workspace.terminal"]);
   });
 
   it("provides html and svg helpers to plugin activation and callbacks", () => {
@@ -330,18 +329,19 @@ describe("PluginRegistry", () => {
     expect(calls).toEqual(["openModelPicker", "openThinkingLevelPicker"]);
   });
 
-  it("routes refresh current to the active core workspace panel", () => {
+  it("routes refresh current only to the active core Files panel", () => {
     const registry = new PluginRegistry();
     registry.register({ id: "core", plugin: corePlugin });
     const { context, calls } = createContext({
       selectedWorkspace: testWorkspace(),
-      workspaceTool: "core:workspace.git",
+      workspaceTool: "core:workspace.files",
     });
     const action = registry.getActions(context).find((candidate) => candidate.id === "core:workspace.refresh-current");
 
     if (action !== undefined) void action.run();
 
-    expect(calls).toEqual(["refreshGit"]);
+    expect(action?.enabled).toBe(true);
+    expect(calls).toEqual(["refreshFiles"]);
   });
 
   it("routes app reload and settings actions through the runtime context", () => {
@@ -382,10 +382,8 @@ describe("PluginRegistry", () => {
       ["core:settings.open", "mod+,"],
       ["core:view.chat", "mod+1"],
       ["core:view.files", "mod+2"],
-      ["core:view.git", "mod+3"],
       ["core:view.terminal", "mod+4"],
       ["core:workspace.refresh-files", "mod+shift+f"],
-      ["core:workspace.refresh-git", "mod+shift+g"],
       ["core:workspace.refresh-current", "mod+shift+r"],
       ["core:session.start", "mod+enter"],
       ["core:session.stop", "mod+."],
@@ -607,38 +605,6 @@ describe("PluginRegistry", () => {
     ]);
   });
 
-  it("resolves temporary owner backend bindings to the selected machine revision", () => {
-    const registry = new PluginRegistry();
-    const emptyPlugin = { apiVersion: 1 as const, name: "Git", activate: () => ({ contributions: {} }) };
-    registry.register({
-      id: "git",
-      backendRevision: "local-r1",
-      machineSpecific: true,
-      plugin: emptyPlugin,
-    });
-    const remotePluginId = machineScopedPluginId("remote-1", "git");
-    registry.register({
-      id: remotePluginId,
-      sourcePluginId: "git",
-      machineId: "remote-1",
-      backendRevision: "remote-r2",
-      machineSpecific: true,
-      plugin: emptyPlugin,
-    });
-
-    expect(registry.getWorkspaceBackendBinding("git", "local")).toEqual({
-      registrationPluginId: "git",
-      sourcePluginId: "git",
-      backendRevision: "local-r1",
-    });
-    expect(registry.getWorkspaceBackendBinding("git", "remote-1")).toEqual({
-      registrationPluginId: remotePluginId,
-      sourcePluginId: "git",
-      backendRevision: "remote-r2",
-    });
-    expect(registry.getWorkspaceBackendBinding("missing", "remote-1")).toBeUndefined();
-  });
-
   it("prefers gateway plugins over remote plugins with the same source id", () => {
     const registry = new PluginRegistry();
     const remotePluginId = machineScopedPluginId("remote-1", "shared-tools");
@@ -821,11 +787,6 @@ function createWorkspacePanelContext(machineId: string, prompt: WorkspacePanelCo
     selectedFilePath: undefined,
     selectedFileContent: undefined,
     fileTreeStale: false,
-    gitStatus: undefined,
-    selectedDiffPath: undefined,
-    selectedDiff: undefined,
-    selectedStagedDiff: undefined,
-    gitStale: false,
     activeTerminalCount: 0,
     selectedTerminalId: undefined,
     terminalAutoStart: false,
@@ -836,8 +797,6 @@ function createWorkspacePanelContext(machineId: string, prompt: WorkspacePanelCo
     onStartWorkspaceUpload: vi.fn(),
     onCancelWorkspaceUpload: vi.fn(),
     onClearWorkspaceUpload: vi.fn(),
-    onRefreshGit: vi.fn(),
-    onSelectDiff: vi.fn(),
     onSelectTerminal: vi.fn(),
   };
 }

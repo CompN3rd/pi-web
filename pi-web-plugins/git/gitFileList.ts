@@ -1,5 +1,5 @@
-import type { GitStatusFile } from "./api";
-import { pointerName, segmentName } from "./gitFileShared";
+import type { GitStatusFile } from "./git-contract.js";
+import { pointerName, segmentName } from "./gitFileShared.js";
 
 /** A changed file inside a submodule, shown flat in list view. `path` is the
  * full superproject-relative path (the diff key); `relativePath` is shown in

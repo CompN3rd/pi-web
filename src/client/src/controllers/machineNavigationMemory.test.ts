@@ -74,7 +74,6 @@ describe("machineNavigationSnapshotFromState", () => {
       workspaceTool: "core:workspace.files",
       mainView: "core:workspace.files",
       selectedFilePath: "src/main.ts",
-      selectedDiffPath: "README.md",
       selectedTerminalId: "terminal-1",
     };
 
@@ -87,7 +86,6 @@ describe("machineNavigationSnapshotFromState", () => {
       view: "core:workspace.files",
       surface: {
         selectedFilePath: "src/main.ts",
-        selectedDiffPath: "README.md",
         selectedTerminalId: "terminal-1",
       },
     });
@@ -97,13 +95,11 @@ describe("machineNavigationSnapshotFromState", () => {
     const state: AppState = {
       ...initialAppState(),
       selectedFilePath: "src/main.ts",
-      selectedDiffPath: "README.md",
       selectedTerminalId: "terminal-1",
     };
 
     expect(machineNavigationSnapshotFromState(state).surface).toEqual({
       selectedFilePath: undefined,
-      selectedDiffPath: undefined,
       selectedTerminalId: undefined,
     });
   });
@@ -116,7 +112,7 @@ describe("routeFromMachineNavigationSnapshot", () => {
       projectId: "project",
       workspaceId: "workspace",
       sessionId: "session",
-      tool: "core:workspace.git",
+      tool: "git:workspace.git",
       view: "navigation",
       surface: {},
     })).toEqual({
@@ -124,7 +120,7 @@ describe("routeFromMachineNavigationSnapshot", () => {
       projectId: "project",
       workspaceId: "workspace",
       sessionId: "session",
-      tool: "core:workspace.git",
+      tool: "git:workspace.git",
       view: undefined,
     });
   });

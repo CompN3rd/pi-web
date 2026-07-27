@@ -1,4 +1,4 @@
-import type { GitStatusFile } from "./api";
+import type { GitStatusFile } from "./git-contract.js";
 
 /**
  * Display label for a submodule commit-pointer row: the `<old> → <new>`

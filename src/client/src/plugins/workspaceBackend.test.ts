@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Workspace } from "../api";
-import {
-  createProviderWorkspaceBackend,
-  type PluginBackendRequester,
-  type WorkspaceBackendBindingResolver,
-} from "./workspaceBackend";
+import { createPluginWorkspaceBackend, type PluginBackendRequester } from "./workspaceBackend";
 
 const workspace: Workspace = {
   id: "workspace one",
@@ -20,17 +16,14 @@ const workspace: Workspace = {
   },
 };
 
-describe("temporary provider workspace backend adapter", () => {
-  it("binds the current owner and selected machine to the generic request helper", async () => {
-    const bindings: WorkspaceBackendBindingResolver = {
-      getWorkspaceBackendBinding: () => ({
-        registrationPluginId: "machine.remote.changes.owner",
-        sourcePluginId: "changes.owner",
-        backendRevision: "remote-r2",
-      }),
-    };
+describe("plugin workspace backend", () => {
+  it("binds the contribution source and revision to its workspace and machine", async () => {
     const request = vi.fn<PluginBackendRequester>(() => Promise.resolve({ files: [] }));
-    const backend = createProviderWorkspaceBackend(bindings, workspace, "remote one", request);
+    const backend = createPluginWorkspaceBackend({
+      registrationPluginId: "machine.remote.changes.owner",
+      sourcePluginId: "changes.owner",
+      backendRevision: "remote-r2",
+    }, workspace, "remote one", request);
 
     await expect(backend.request("status", null)).resolves.toEqual({ files: [] });
     expect(request).toHaveBeenCalledWith({
@@ -42,25 +35,12 @@ describe("temporary provider workspace backend adapter", () => {
     }, "status", null);
   });
 
-  it("returns explicit capability errors instead of falling back to private routes", () => {
-    const noBindings: WorkspaceBackendBindingResolver = { getWorkspaceBackendBinding: () => undefined };
+  it("returns an explicit mixed-version error when the browser module has no server revision", async () => {
+    const backend = createPluginWorkspaceBackend({
+      registrationPluginId: "changes.owner",
+      sourcePluginId: "changes.owner",
+    }, workspace, "remote-1");
 
-    expect(() => createProviderWorkspaceBackend(noBindings, workspaceWithoutProvider(), "remote-1"))
-      .toThrow("restart or upgrade the selected machine");
-    expect(() => createProviderWorkspaceBackend(noBindings, {
-      ...workspace,
-      provider: { pluginId: "changes.owner", capabilities: { request: false, remove: false } },
-    }, "remote-1")).toThrow("does not expose backend requests");
-    expect(() => createProviderWorkspaceBackend(noBindings, workspace, "remote-1"))
-      .toThrow("browser backend is unavailable");
-    expect(() => createProviderWorkspaceBackend({
-      getWorkspaceBackendBinding: () => ({ registrationPluginId: "changes.owner", sourcePluginId: "changes.owner" }),
-    }, workspace, "remote-1")).toThrow("backend revision is unavailable");
+    await expect(backend.request("status", null)).rejects.toThrow("does not declare a server backend");
   });
 });
-
-function workspaceWithoutProvider(): Workspace {
-  const copy: Workspace = { ...workspace };
-  Reflect.deleteProperty(copy, "provider");
-  return copy;
-}

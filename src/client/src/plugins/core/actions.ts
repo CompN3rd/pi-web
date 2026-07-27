@@ -112,14 +112,6 @@ export function createCoreActions(): PluginAction[] {
       run: (context) => { context.selectMainView("core:workspace.files"); },
     },
     {
-      id: "view.git",
-      title: "Go to Git",
-      shortcut: "mod+3",
-      group: "Navigation",
-      enabled: hasGitWorkspace,
-      run: (context) => { context.selectMainView("core:workspace.git"); },
-    },
-    {
       id: "view.terminal",
       title: "Go to Terminal",
       shortcut: "mod+4",
@@ -136,20 +128,12 @@ export function createCoreActions(): PluginAction[] {
       run: (context) => context.refreshFiles(),
     },
     {
-      id: "workspace.refresh-git",
-      title: "Refresh Git",
-      shortcut: "mod+shift+g",
-      group: "Workspace",
-      enabled: hasGitWorkspace,
-      run: (context) => context.refreshGit(),
-    },
-    {
       id: "workspace.refresh-current",
       title: "Refresh Current Panel",
       shortcut: "mod+shift+r",
       group: "Workspace",
-      enabled: hasWorkspace,
-      run: (context) => context.state.workspaceTool === "core:workspace.git" && context.state.selectedWorkspace?.isGitRepo === true ? context.refreshGit() : context.refreshFiles(),
+      enabled: hasCurrentFilesPanel,
+      run: (context) => context.refreshFiles(),
     },
     {
       id: "workspace.delete",
@@ -223,8 +207,8 @@ function hasWorkspace(context: { state: AppState }): boolean {
   return context.state.selectedWorkspace !== undefined;
 }
 
-function hasGitWorkspace(context: { state: AppState }): boolean {
-  return context.state.selectedWorkspace?.isGitRepo === true;
+function hasCurrentFilesPanel(context: { state: AppState }): boolean {
+  return context.state.selectedWorkspace !== undefined && context.state.workspaceTool === "core:workspace.files";
 }
 
 function hasDeletableWorkspace(context: { state: AppState }): boolean {

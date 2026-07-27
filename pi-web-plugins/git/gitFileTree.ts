@@ -1,5 +1,5 @@
-import type { GitStatusFile } from "./api";
-import { pointerName, segmentName } from "./gitFileShared";
+import type { GitStatusFile } from "./git-contract.js";
+import { pointerName, segmentName } from "./gitFileShared.js";
 
 /**
  * A changed file placed at a leaf of the Git file tree. `path` is the full

@@ -103,7 +103,6 @@ export interface PluginRuntimeContext {
   selectWorkspaceTool: (tool: QualifiedContributionId) => void;
   openTerminal: (options?: { terminalId?: string | undefined }) => void;
   refreshFiles: () => void | Promise<void>;
-  refreshGit: () => void | Promise<void>;
   refreshAppData: () => void | Promise<void>;
   /** Force a fresh PI WEB release check on the selected machine. Optional for compatibility with older hosts. */
   checkForPiWebUpdates?: () => void | Promise<void>;

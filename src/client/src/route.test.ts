@@ -34,14 +34,14 @@ function installWindow(href: string): { pushed: string[]; replaced: string[] } {
 
 describe("route helpers", () => {
   it("reads only supported route fields from the current URL", () => {
-    installWindow("http://localhost/app?machine=remote&project=p1&workspace=w1&session=s1&tool=git&view=files&core.workspace.files--file=src%2Fmain.ts&core.workspace.git--diff=README.md");
+    installWindow("http://localhost/app?machine=remote&project=p1&workspace=w1&session=s1&tool=git%3Aworkspace.git&view=files&core.workspace.files--file=src%2Fmain.ts&git.workspace.git--diff=README.md");
 
     expect(readRoute()).toEqual({
       machineId: "remote",
       projectId: "p1",
       workspaceId: "w1",
       sessionId: "s1",
-      tool: "core:workspace.git",
+      tool: "git:workspace.git",
       view: "core:workspace.files",
     });
   });
@@ -70,9 +70,9 @@ describe("route helpers", () => {
   });
 
   it("does not write history when the route is unchanged", () => {
-    const { pushed, replaced } = installWindow("http://localhost/app?project=p1&tool=core%3Aworkspace.git");
+    const { pushed, replaced } = installWindow("http://localhost/app?project=p1&tool=git%3Aworkspace.git");
 
-    writeRoute({ machineId: undefined, projectId: "p1", workspaceId: undefined, sessionId: undefined, tool: "core:workspace.git", view: undefined });
+    writeRoute({ machineId: undefined, projectId: "p1", workspaceId: undefined, sessionId: undefined, tool: "git:workspace.git", view: undefined });
 
     expect(pushed).toEqual([]);
     expect(replaced).toEqual([]);

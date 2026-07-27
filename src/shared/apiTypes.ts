@@ -871,42 +871,6 @@ export interface MoveWorkspaceFileResponse {
   modifiedAt: string;
 }
 
-export type GitFileState = "unmodified" | "modified" | "added" | "deleted" | "renamed" | "copied" | "untracked" | "ignored" | "conflicted";
-
-export interface GitStatusFile {
-  path: string;
-  oldPath?: string;
-  index: GitFileState;
-  workingTree: GitFileState;
-  // Set only on a submodule commit-pointer entry (path equals the submodule's
-  // superproject-relative path). Short SHAs of the recorded and current commit.
-  submoduleFromCommit?: string;
-  submoduleToCommit?: string;
-}
-
-export interface GitStatusResponse {
-  isGitRepo: boolean;
-  hash: string;
-  branch?: string;
-  upstream?: string;
-  ahead?: number;
-  behind?: number;
-  files: GitStatusFile[];
-  // Superproject-relative paths of submodules that carry a change. Files inside
-  // a submodule appear in `files` under `<submodule>/<inner path>`; the client
-  // uses this list to group and label them and to distinguish a submodule root
-  // from an ordinary directory with the same name.
-  submodules: string[];
-}
-
-export interface GitDiffResponse {
-  path?: string;
-  staged: boolean;
-  hash: string;
-  diff: string;
-  truncated: boolean;
-}
-
 export interface TerminalInfo {
   id: string;
   cwd: string;

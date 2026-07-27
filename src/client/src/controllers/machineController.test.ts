@@ -58,7 +58,6 @@ describe("MachineController", () => {
       selectedSession: session,
       fileTree: [{ name: "index.ts", path: "src/index.ts", type: "file" }],
       selectedFilePath: "src/index.ts",
-      gitStatus: { isGitRepo: true, hash: "abc123", branch: "main", files: [{ path: "src/index.ts", index: "modified", workingTree: "modified" }], submodules: [] },
       activeTerminalCount: 2,
       error: "stale error",
     };
@@ -87,7 +86,6 @@ describe("MachineController", () => {
     expect(state.selectedSession).toBeUndefined();
     expect(state.fileTree).toEqual([]);
     expect(state.selectedFilePath).toBeUndefined();
-    expect(state.gitStatus).toBeUndefined();
     expect(state.activeTerminalCount).toBe(0);
     expect(state.error).toBe("");
     expect(projects.loadProjects).toHaveBeenCalledOnce();

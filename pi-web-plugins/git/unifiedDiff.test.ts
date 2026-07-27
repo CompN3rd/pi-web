@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseUnifiedDiff, type UnifiedDiffLine, type UnifiedDiffLineKind } from "./unifiedDiff";
+import { parseUnifiedDiff, type UnifiedDiffLine, type UnifiedDiffLineKind } from "./unifiedDiff.js";
 
 describe("parseUnifiedDiff", () => {
   it("computes inline spans for paired removed and added lines", () => {

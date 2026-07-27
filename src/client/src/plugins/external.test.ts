@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import gitPlugin from "../../../../pi-web-plugins/git/pi-web-plugin.js";
+import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { loadExternalPlugins, resolvePluginModuleUrl } from "./external";
+import { PluginRegistry } from "./registry";
 
 beforeEach(() => {
   vi.stubGlobal("document", { baseURI: "https://pi.example.test/" });
@@ -34,6 +37,29 @@ describe("external plugin manifests", () => {
     expect(fetchMock).toHaveBeenCalledWith(manifestUrl, { cache: "no-store" });
     expect(moduleLoader).toHaveBeenCalledWith("https://pi.example.test/test/ai/pi-web-plugins/info/pi-web-plugin.js?v=1");
     expect(registrations).toMatchObject([{ id: "info", backendRevision: "server-r1", machineSpecific: false, plugin: { apiVersion: 1, name: "Info" } }]);
+  });
+
+  it("loads the bundled Git browser entry through the same remote manifest and registry path", async () => {
+    const manifestUrl = "https://pi.example.test/api/machines/remote-1/pi-web-plugins/manifest.json";
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      plugins: [{ id: "git", module: "./git/pi-web-plugin.js?v=git-r1", backendRevision: "git-server-r1", machineSpecific: true }],
+    })))));
+    const moduleLoader = vi.fn(() => Promise.resolve({ default: gitPlugin }));
+
+    const registrations = await loadExternalPlugins(manifestUrl, { machineId: "remote-1", moduleLoader });
+    const registry = new PluginRegistry();
+    for (const registration of registrations) registry.register(registration);
+    const registrationPluginId = machineScopedPluginId("remote-1", "git");
+
+    expect(moduleLoader).toHaveBeenCalledWith("https://pi.example.test/api/machines/remote-1/pi-web-plugins/git/pi-web-plugin.js?v=git-r1");
+    expect(registrations).toMatchObject([{
+      id: registrationPluginId,
+      sourcePluginId: "git",
+      machineId: "remote-1",
+      backendRevision: "git-server-r1",
+      machineSpecific: true,
+    }]);
+    expect(registry.getWorkspacePanels().map((panel) => panel.id)).toEqual([`${registrationPluginId}:workspace.git`]);
   });
 
   it("treats root-style modules from existing manifests as application-root paths", () => {

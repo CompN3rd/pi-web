@@ -4,7 +4,7 @@ import {
   parseGitFileView,
   readGitFileView,
   writeGitFileView,
-} from "./gitFileViewPreference";
+} from "./gitFileViewPreference.js";
 
 describe("gitFileViewPreference", () => {
   it("parses stored values and defaults unknown/missing input to list", () => {

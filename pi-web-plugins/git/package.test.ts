@@ -50,6 +50,21 @@ describe("bundled Git package metadata", () => {
     expect(violations).toEqual([]);
   });
 
+  it("keeps Git UI registration, state, and provider policy out of the client host", async () => {
+    const violations: string[] = [];
+    for (const file of await productionTypeScriptFiles("src/client/src")) {
+      const source = await readFile(file, "utf8");
+      if (/(?:^|\/)(?:WorkspaceGitPanel|gitController|gitFile(?:Tree|List|Shared|ViewPreference))\.ts$/u.test(file)) {
+        violations.push(`${file}: retains a host Git UI implementation`);
+      }
+      if (source.includes("core:workspace.git")) violations.push(`${file}: retains the core Git panel id`);
+      if (source.includes("renderBuiltinTabIcon(\"git\")") || source.includes("renderBuiltinTabIcon('git')")) violations.push(`${file}: retains the host Git panel icon`);
+      if (/\.pluginId\s*===\s*["']git["']/u.test(source)) violations.push(`${file}: branches on the Git provider id`);
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   it("leaves the kernel folder workspace when Git is disabled before import", async () => {
     const { catalog, root } = await gitCatalogFixture(false);
     const importer = vi.fn(() => Promise.reject(new Error("disabled Git module was imported")));
