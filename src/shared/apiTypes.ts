@@ -111,7 +111,8 @@ export type PiWebPluginScope = "bundled" | "local" | "user" | "project";
 
 export interface PiWebPluginInfo {
   id: string;
-  module: string;
+  /** Browser module URL. Absent for a server-only plugin. */
+  module?: string;
   source: string;
   scope: PiWebPluginScope;
   machineSpecific: boolean;
@@ -194,15 +195,43 @@ export interface WorkspaceEffectiveConfig {
   uploads?: PiWebUploadsConfig;
 }
 
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+export interface WorkspaceProviderCapabilities {
+  request: boolean;
+  remove: boolean;
+}
+
+/** Public identity and opaque browser data for the plugin that owns a workspace. */
+export interface WorkspaceProviderMetadata {
+  pluginId: string;
+  capabilities: WorkspaceProviderCapabilities;
+  metadata?: JsonObject;
+}
+
+export interface WorkspaceRemovalPresentation {
+  actionLabel: string;
+  confirmation: string;
+}
+
 export interface Workspace {
   id: string;
   projectId: string;
   path: string;
   label: string;
+  /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
   branch?: string;
   isMain: boolean;
+  /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
   isGitRepo: boolean;
+  /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
   isGitWorktree: boolean;
+  provider?: WorkspaceProviderMetadata;
+  removal?: WorkspaceRemovalPresentation;
   /** Workspace-effective project/global settings needed by workspace UI features. */
   effectiveConfig?: WorkspaceEffectiveConfig;
 }

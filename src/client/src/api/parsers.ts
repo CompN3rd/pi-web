@@ -1,5 +1,5 @@
 import { ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type GitDiffResponse, type GitFileState, type GitStatusFile, type GitStatusResponse, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceActivity, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
-import type { PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot } from "../../../shared/apiTypes";
+import type { JsonValue, PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot } from "../../../shared/apiTypes";
 import { parseActiveAgentProfileDescriptor } from "../../../shared/activeAgentProfile";
 import { parseKnownPiWebCapabilities } from "../../../shared/capabilities";
 
@@ -143,8 +143,48 @@ export function parseWorkspace(value: unknown): Workspace {
     isMain: requireBoolean(record, "isMain"),
     isGitRepo: requireBoolean(record, "isGitRepo"),
     isGitWorktree: requireBoolean(record, "isGitWorktree"),
+    ...optionalField("provider", optionalWorkspaceProviderMetadata(record["provider"])),
+    ...optionalField("removal", optionalWorkspaceRemovalPresentation(record["removal"])),
     ...optionalField("effectiveConfig", optionalWorkspaceEffectiveConfig(record["effectiveConfig"])),
   };
+}
+
+function optionalWorkspaceProviderMetadata(value: unknown): Workspace["provider"] | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid workspace provider field");
+  const capabilities = value["capabilities"];
+  if (!isRecord(capabilities) || Array.isArray(capabilities)) throw new Error("Invalid workspace provider capabilities field");
+  const metadata = value["metadata"];
+  return {
+    pluginId: requireString(value, "pluginId"),
+    capabilities: {
+      request: requireBoolean(capabilities, "request"),
+      remove: requireBoolean(capabilities, "remove"),
+    },
+    ...optionalField("metadata", metadata === undefined ? undefined : parseJsonObject(metadata, "workspace provider metadata")),
+  };
+}
+
+function optionalWorkspaceRemovalPresentation(value: unknown): Workspace["removal"] | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid workspace removal field");
+  return {
+    actionLabel: requireString(value, "actionLabel"),
+    confirmation: requireString(value, "confirmation"),
+  };
+}
+
+function parseJsonObject(value: unknown, field: string): NonNullable<Workspace["provider"]>["metadata"] {
+  if (!isRecord(value) || Array.isArray(value)) throw new Error(`Invalid ${field} field`);
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, parseJsonValue(item, field)]));
+}
+
+function parseJsonValue(value: unknown, field: string): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map((item) => parseJsonValue(item, field));
+  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, parseJsonValue(item, field)]));
+  throw new Error(`Invalid ${field} field`);
 }
 
 function optionalWorkspaceEffectiveConfig(value: unknown): Workspace["effectiveConfig"] | undefined {
@@ -1254,7 +1294,7 @@ function parsePiWebPluginInfo(value: unknown): PiWebPluginInfo {
   const record = requireRecord(value);
   return {
     id: requireString(record, "id"),
-    module: requireString(record, "module"),
+    ...optionalField("module", optionalString(record, "module")),
     source: requireString(record, "source"),
     scope: parsePiWebPluginScope(record["scope"]),
     machineSpecific: parseOptionalBoolean(record["machineSpecific"], "machineSpecific") ?? false,

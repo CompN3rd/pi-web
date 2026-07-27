@@ -21,7 +21,8 @@
     "docs/config.md",
     "docs/assets",
     "plugin-api.d.ts",
-    "plugin-api/unstable.d.ts"
+    "plugin-api/unstable.d.ts",
+    "server-plugin-api.d.ts"
   ],
   "scripts": {
     "dev": "bash -c 'trap \"kill 0\" EXIT; npm run dev:sessiond & npm run dev:web & npm run dev:client & wait'",

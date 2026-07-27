@@ -98,6 +98,44 @@ describe("PiWebPluginService", () => {
     await expect(service.plugins()).resolves.toMatchObject({ plugins: [{ id: "updates", machineSpecific: true, enabled: true }] });
   });
 
+  it("keeps server-only entries out of browser manifests and assets while reporting their desired state", async () => {
+    await writePlugin(join(tempDir, "plugins", "server-only"), {
+      packageJson: { piWeb: { plugins: [{ id: "server-only", serverModule: "server.js" }] } },
+      files: { "server.js": "throw new Error('must not execute');" },
+    });
+    await writePlugin(join(tempDir, "plugins", "dual"), {
+      packageJson: { piWeb: { plugins: [{ id: "dual", module: "browser.js", serverModule: "server.js" }] } },
+      files: { "browser.js": "export default {};", "server.js": "throw new Error('must not execute');" },
+    });
+    const service = new PiWebPluginService({
+      roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }],
+      packageProvider: false,
+      configProvider: () => ({ plugins: { "server-only": { enabled: false } } }),
+    });
+
+    await expect(service.manifest()).resolves.toMatchObject({
+      plugins: [{ id: "dual", machineSpecific: true }],
+    });
+    const plugins = await service.plugins();
+    expect(plugins.plugins[0]).toMatchObject({ id: "dual", enabled: true, machineSpecific: true });
+    expect(plugins.plugins[0]?.module).toContain("/dual/browser.js?v=");
+    expect(plugins.plugins[1]).toEqual({ id: "server-only", source: "test", scope: "local", machineSpecific: false, enabled: false });
+    await expect(service.readAsset("server-only", "server.js")).resolves.toBeUndefined();
+    await expect(service.readAsset("dual", "browser.js")).resolves.toBeDefined();
+  });
+
+  it("encodes browser module path segments without changing revision query behavior", async () => {
+    await writePlugin(join(tempDir, "plugins", "encoded"), {
+      packageJson: { piWeb: { plugins: [{ id: "encoded", module: "dist/plugin file#1.js" }] } },
+      files: { "dist/plugin file#1.js": "export default {};" },
+    });
+    const service = new PiWebPluginService({ roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }], packageProvider: false });
+
+    const manifest = await service.manifest();
+
+    expect(manifest.plugins[0]?.module).toMatch(/^\/pi-web-plugins\/encoded\/dist\/plugin%20file%231\.js\?v=\d+$/u);
+  });
+
   it("adds Docker runtime hints to the Updates plugin module URL", async () => {
     process.env["PI_WEB_DOCKER_RUNTIME"] = "1";
     process.env["PI_WEB_DOCKER_MODE"] = "dev";

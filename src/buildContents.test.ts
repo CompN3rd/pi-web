@@ -28,6 +28,10 @@ describe("production build contents", () => {
       await mkdir(fixtureDist, { recursive: true });
       await Promise.all([
         copyFile(join(repoRoot, "package.json"), join(fixtureRoot, "package.json")),
+        copyFile(join(repoRoot, "plugin-api.d.ts"), join(fixtureRoot, "plugin-api.d.ts")),
+        copyFile(join(repoRoot, "server-plugin-api.d.ts"), join(fixtureRoot, "server-plugin-api.d.ts")),
+        writeFile(join(fixtureRoot, "dist", "plugin-api.d.ts"), "export {};\n", "utf8"),
+        writeFile(join(fixtureRoot, "dist", "server-plugin-api.d.ts"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.js"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.testSupport.js"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.testSupport.js.map"), "{}\n", "utf8"),
@@ -40,7 +44,13 @@ describe("production build contents", () => {
       const stdout = await execUtf8(process.execPath, [npmExecPath, "pack", "--dry-run", "--json", "--ignore-scripts"], fixtureRoot);
       const packagedFiles = packageFilePaths(stdout);
 
-      expect(packagedFiles).toContain("dist/server/app.js");
+      expect(packagedFiles).toEqual(expect.arrayContaining([
+        "dist/plugin-api.d.ts",
+        "dist/server-plugin-api.d.ts",
+        "dist/server/app.js",
+        "plugin-api.d.ts",
+        "server-plugin-api.d.ts",
+      ]));
       expect(packagedFiles.filter(isTestSupportPath)).toEqual([]);
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });

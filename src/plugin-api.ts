@@ -1,11 +1,14 @@
 import type { TemplateResult } from "lit";
-import type { FileContentResponse, MachineKind, PiWebStatusResponse, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, DeleteWorkspaceFileResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse } from "./shared/apiTypes.js";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/apiTypes.js";
 
 export type {
   FileContentMediaType,
   FileContentResponse,
   FileTreeEntry,
   FileTreeResponse,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
   MachineKind,
   PiWebComponentStatus,
   PiWebDockerMode,
@@ -21,6 +24,9 @@ export type {
   TerminalCommandRunFilter,
   TerminalCommandRunHandle,
   TerminalCommandRunStatus,
+  WorkspaceProviderCapabilities,
+  WorkspaceProviderMetadata,
+  WorkspaceRemovalPresentation,
   WriteWorkspaceFileOptions,
   WriteWorkspaceFileResponse,
   DeleteWorkspaceFileResponse,
@@ -124,10 +130,15 @@ export interface Workspace {
   projectId: string;
   path: string;
   label: string;
+  /** @deprecated Provider-neutral browser integrations should use provider metadata. */
   branch?: string;
   isMain: boolean;
+  /** @deprecated Git is not required by the workspace provider contract. */
   isGitRepo: boolean;
+  /** @deprecated Git is not required by the workspace provider contract. */
   isGitWorktree: boolean;
+  provider?: WorkspaceProviderMetadata;
+  removal?: WorkspaceRemovalPresentation;
 }
 
 export interface WorkspaceFiles {

@@ -21,6 +21,8 @@ const plugin: PiWebPlugin = {
         {
           id: "workspace.kind-label",
           order: 100,
+          // Browser plugin v1 keeps Git-shaped fields until the bundled Git UI migrates.
+          // eslint-disable-next-line @typescript-eslint/no-deprecated
           items: (context) => [{ type: "text", text: context.workspace.isGitRepo ? "git" : "folder", title: context.workspace.path }],
         },
       ],

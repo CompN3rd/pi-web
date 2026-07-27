@@ -191,11 +191,17 @@ describe("API parsers", () => {
     })).toThrow("Invalid PI WEB Docker mode");
   });
 
-  it("parses PI WEB plugin status responses", () => {
+  it("parses browser and server-only PI WEB plugin status responses", () => {
     expect(parsePiWebPluginsResponse({
-      plugins: [{ id: "info", module: "/pi-web-plugins/info/pi-web-plugin.js?v=1", source: "bundled", scope: "bundled", machineSpecific: true, enabled: false }],
+      plugins: [
+        { id: "info", module: "/pi-web-plugins/info/pi-web-plugin.js?v=1", source: "bundled", scope: "bundled", machineSpecific: true, enabled: false },
+        { id: "workspace-provider", source: "local", scope: "user", enabled: true },
+      ],
     })).toEqual({
-      plugins: [{ id: "info", module: "/pi-web-plugins/info/pi-web-plugin.js?v=1", source: "bundled", scope: "bundled", machineSpecific: true, enabled: false }],
+      plugins: [
+        { id: "info", module: "/pi-web-plugins/info/pi-web-plugin.js?v=1", source: "bundled", scope: "bundled", machineSpecific: true, enabled: false },
+        { id: "workspace-provider", source: "local", scope: "user", machineSpecific: false, enabled: true },
+      ],
     });
   });
 
@@ -510,7 +516,56 @@ describe("API parsers", () => {
     });
   });
 
-  it("accepts legacy workspace responses without effective config", () => {
+  it("parses generic workspace provider and removal metadata", () => {
+    expect(parseWorkspace({
+      id: "w1",
+      projectId: "p1",
+      path: "/repo/secondary",
+      label: "secondary",
+      isMain: false,
+      isGitRepo: false,
+      isGitWorktree: false,
+      provider: {
+        pluginId: "workspace-provider",
+        capabilities: { request: true, remove: true },
+        metadata: { changeId: "abc", nested: [1, true, null] },
+      },
+      removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?" },
+    })).toEqual({
+      id: "w1",
+      projectId: "p1",
+      path: "/repo/secondary",
+      label: "secondary",
+      isMain: false,
+      isGitRepo: false,
+      isGitWorktree: false,
+      provider: {
+        pluginId: "workspace-provider",
+        capabilities: { request: true, remove: true },
+        metadata: { changeId: "abc", nested: [1, true, null] },
+      },
+      removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?" },
+    });
+  });
+
+  it("rejects non-JSON workspace provider metadata", () => {
+    expect(() => parseWorkspace({
+      id: "w1",
+      projectId: "p1",
+      path: "/repo",
+      label: "main",
+      isMain: true,
+      isGitRepo: false,
+      isGitWorktree: false,
+      provider: {
+        pluginId: "workspace-provider",
+        capabilities: { request: false, remove: false },
+        metadata: { invalid: undefined },
+      },
+    })).toThrow("Invalid workspace provider metadata field");
+  });
+
+  it("accepts legacy workspace responses without provider or effective config", () => {
     expect(parseWorkspace({
       id: "w1",
       projectId: "p1",
