@@ -13,7 +13,6 @@ import type { Project } from "../../src/shared/apiTypes.js";
 import { createServerPluginExecFile } from "../../src/server/plugins/serverPluginExec.js";
 import type { ServerPluginProviderContribution } from "../../src/server/plugins/serverPluginRuntime.js";
 import { WorkspaceProviderRegistry } from "../../src/server/workspaces/workspaceProviderRegistry.js";
-import { WorkspaceService } from "../../src/server/workspaces/workspaceService.js";
 import {
   GIT_DIFF_OPERATION,
   GIT_STATUS_OPERATION,
@@ -224,18 +223,16 @@ describe("bundled Git workspace provider", () => {
     const input = project(projectPath);
     const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
 
-    const [workspaces, webWorkspaces] = await Promise.all([
-      workspaceProvider.list(input, new AbortController().signal),
-      new WorkspaceService().list(input),
-    ]);
+    const workspaces = await workspaceProvider.list(input, new AbortController().signal);
 
     expect(workspaces).toEqual([
       expect.objectContaining({ path: repository.path, isMain: true, label: "main" }),
       expect.objectContaining({ path: linked, isMain: false, label: "feature" }),
     ]);
-    expect(workspaces.map(({ path, label }) => ({ path, label }))).toEqual(
-      webWorkspaces.map(({ path, label }) => ({ path, label })),
-    );
+    expect(workspaces.map(({ path, label }) => ({ path, label }))).toEqual([
+      { path: repository.path, label: "main" },
+      { path: linked, label: "feature" },
+    ]);
   });
 
   it("claims a Git submodule as its own repository", async () => {
@@ -247,17 +244,14 @@ describe("bundled Git workspace provider", () => {
     commit(superproject.path, "add submodule");
     const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
     const input = project(submodulePath);
+    const submoduleWorkspacePath = resolve(submodulePath, runGit(submodulePath, ["rev-parse", "--git-common-dir"]).trim());
 
     await expect(workspaceProvider.probe(input, new AbortController().signal)).resolves.toBe("claim");
-    const [workspaces, webWorkspaces] = await Promise.all([
-      workspaceProvider.list(input, new AbortController().signal),
-      new WorkspaceService().list(input),
-    ]);
+    const workspaces = await workspaceProvider.list(input, new AbortController().signal);
 
     expect(workspaces).toHaveLength(1);
-    expect(workspaces[0]).toMatchObject({ path: webWorkspaces[0]?.path, isMain: true });
+    expect(workspaces[0]).toMatchObject({ path: submoduleWorkspacePath, isMain: true });
     expect(workspaces[0]?.publicMetadata).toMatchObject({ isGitRepo: true, isGitWorktree: true });
-    expect(workspaces.map(({ path }) => path)).toEqual(webWorkspaces.map(({ path }) => path));
   });
 
   it("stays resolvable through the host registry when a linked branch lacks the registered subdirectory", async () => {
@@ -273,13 +267,9 @@ describe("bundled Git workspace provider", () => {
       logger: { warn: vi.fn() },
     });
 
-    const [resolution, webWorkspaces] = await Promise.all([
-      registry.resolve(input),
-      new WorkspaceService().list(input),
-    ]);
+    const resolution = await registry.resolve(input);
 
     expect(resolution).toMatchObject({ status: "provider", ownerPluginId: "git" });
-    expect(resolution.workspaces.map(({ path }) => path)).toEqual(webWorkspaces.map(({ path }) => path));
     expect(resolution.workspaces.map(({ path }) => path)).toEqual([repository.path, linked]);
   });
 

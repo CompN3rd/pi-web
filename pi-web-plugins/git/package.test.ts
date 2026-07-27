@@ -30,15 +30,15 @@ describe("bundled Git package metadata", () => {
     });
   });
 
-  it("keeps Git changes implementation and private routes out of host production code", async () => {
+  it("keeps Git workspace and changes implementations out of host production code", async () => {
     const violations: string[] = [];
     for (const file of await productionTypeScriptFiles("src/server")) {
-      if (/(?:^|\/)(?:gitService|gitRoutes)\.ts$/u.test(file)) {
-        violations.push(`${file}: retains a host Git changes implementation`);
+      if (/(?:^|\/)(?:gitService|gitRoutes|gitWorktreeDiscovery|workspaceService)\.ts$/u.test(file)) {
+        violations.push(`${file}: retains a host Git workspace or changes implementation`);
       }
       const source = await readFile(file, "utf8");
-      if (/from\s+["'][^"']*(?:gitService|gitRoutes)\.js["']/u.test(source)) {
-        violations.push(`${file}: imports a host Git changes implementation`);
+      if (/from\s+["'][^"']*(?:gitService|gitRoutes|gitWorktreeDiscovery|workspaceService)\.js["']/u.test(source)) {
+        violations.push(`${file}: imports a host Git workspace or changes implementation`);
       }
       if (/\/git\/(?:status|diff)/u.test(source)) violations.push(`${file}: declares a private Git changes route`);
     }
