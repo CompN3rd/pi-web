@@ -605,6 +605,56 @@ describe("PluginRegistry", () => {
     ]);
   });
 
+  it("pairs machine-specific gateway and remote contributions with their own active backend revisions", () => {
+    const registry = new PluginRegistry();
+    const remotePluginId = machineScopedPluginId("remote-1", "pair-tools");
+    const pairedPlugin = (name: string) => ({
+      apiVersion: 1 as const,
+      name,
+      activate: () => ({
+        contributions: {
+          workspacePanels: [{
+            id: "workspace.pair",
+            title: name,
+            render: (context: WorkspacePanelContext) => {
+              void context.backend.request("pair.check", null);
+              return html`<p>${name}</p>`;
+            },
+          }],
+        },
+      }),
+    });
+    registry.register({ id: "pair-tools", machineSpecific: true, backendRevision: "gateway-r1", plugin: pairedPlugin("Gateway pair") });
+    registry.register({
+      id: remotePluginId,
+      machineId: "remote-1",
+      sourcePluginId: "pair-tools",
+      machineSpecific: true,
+      backendRevision: "remote-r2",
+      plugin: pairedPlugin("Remote pair"),
+    });
+    const requests: PluginBackendRequestTarget[] = [];
+
+    for (const machineId of ["local", "remote-1"]) {
+      const base = createWorkspacePanelContext(machineId);
+      const context = installWorkspacePanelScope(base, (binding) => ({
+        ...base,
+        backend: createPluginWorkspaceBackend(binding, base.workspace, machineId, (target) => {
+          requests.push(target);
+          return Promise.resolve(null);
+        }),
+      }));
+      const visible = registry.getWorkspacePanels().filter((panel) => panel.visible?.(context) !== false);
+      expect(visible).toHaveLength(1);
+      visible[0]?.render(context);
+    }
+
+    expect(requests).toEqual([
+      { pluginId: "pair-tools", backendRevision: "gateway-r1", machineId: "local", projectId: "p1", workspaceId: "w1" },
+      { pluginId: "pair-tools", backendRevision: "remote-r2", machineId: "remote-1", projectId: "p1", workspaceId: "w1" },
+    ]);
+  });
+
   it("prefers gateway plugins over remote plugins with the same source id", () => {
     const registry = new PluginRegistry();
     const remotePluginId = machineScopedPluginId("remote-1", "shared-tools");

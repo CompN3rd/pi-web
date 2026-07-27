@@ -603,7 +603,22 @@ function piWebConfigResponse(config: PiWebConfigValues) {
 }
 
 function piWebPluginsResponse() {
-  return { plugins: [{ id: "info", module: "/pi-web-plugins/info/plugin.js", source: "test", scope: "local", machineSpecific: false, enabled: true }] };
+  return {
+    lifecycleVersion: 1,
+    plugins: [{ id: "info", module: "/pi-web-plugins/info/plugin.js", source: "test", scope: "local", machineSpecific: false, enabled: true, discovered: true, conflict: false }],
+    diagnostics: [],
+    serverRuntime: {
+      status: "available",
+      desiredSafeStart: "off",
+      restartRequired: false,
+      recovery: {
+        showSafeStart: "pi-web plugins safe-start show",
+        bundledOnly: "pi-web plugins safe-start set bundled-only --restart",
+        noServerPlugins: "pi-web plugins safe-start set none --restart",
+        clearSafeStart: "pi-web plugins safe-start clear --restart",
+      },
+    },
+  };
 }
 
 function jsonResponse(value: unknown): Response {

@@ -191,18 +191,91 @@ describe("API parsers", () => {
     })).toThrow("Invalid PI WEB Docker mode");
   });
 
-  it("parses browser and server-only PI WEB plugin status responses", () => {
-    expect(parsePiWebPluginsResponse({
+  it("parses desired and active PI WEB plugin lifecycle responses", () => {
+    const recovery = {
+      showSafeStart: "pi-web plugins safe-start show",
+      bundledOnly: "pi-web plugins safe-start set bundled-only --restart",
+      noServerPlugins: "pi-web plugins safe-start set none --restart",
+      clearSafeStart: "pi-web plugins safe-start clear --restart",
+    };
+    const response = {
+      lifecycleVersion: 1,
       plugins: [
-        { id: "info", module: "/pi-web-plugins/info/pi-web-plugin.js?v=1", source: "bundled", scope: "bundled", machineSpecific: true, enabled: false },
-        { id: "workspace-provider", source: "local", scope: "user", enabled: true },
+        {
+          id: "info",
+          module: "/pi-web-plugins/info/pi-web-plugin.js?v=1",
+          source: "bundled",
+          scope: "bundled",
+          machineSpecific: true,
+          enabled: false,
+          discovered: true,
+          conflict: true,
+          server: {
+            state: "active",
+            desiredRevision: "2",
+            activeRevision: "1",
+            health: { status: "degraded", message: "tool unavailable" },
+            staleRevision: true,
+            restartRequired: true,
+            disableCommand: "pi-web plugins disable info --restart",
+          },
+        },
+        { id: "workspace-provider", source: "local", scope: "user", enabled: true, discovered: false, conflict: false },
       ],
-    })).toEqual({
-      plugins: [
-        { id: "info", module: "/pi-web-plugins/info/pi-web-plugin.js?v=1", source: "bundled", scope: "bundled", machineSpecific: true, enabled: false },
-        { id: "workspace-provider", source: "local", scope: "user", machineSpecific: false, enabled: true },
-      ],
+      diagnostics: [{ kind: "conflict", snapshot: "desired", source: "local", message: "Duplicate id", pluginId: "info" }],
+      serverRuntime: { status: "available", safeStart: "bundled-only", desiredSafeStart: "off", restartRequired: true, recovery },
+    };
+
+    expect(parsePiWebPluginsResponse(response)).toEqual({
+      ...response,
+      plugins: [response.plugins[0], { ...response.plugins[1], machineSpecific: false }],
     });
+  });
+
+  it("marks legacy plugin-list responses as lifecycle-incompatible without losing browser plugins", () => {
+    const parsed = parsePiWebPluginsResponse({
+      plugins: [{ id: "info", module: "/pi-web-plugins/info/pi-web-plugin.js?v=1", source: "bundled", scope: "bundled", enabled: true }],
+    });
+
+    expect(parsed.plugins).toEqual([expect.objectContaining({ id: "info", enabled: true, discovered: true, conflict: false })]);
+    expect(parsed.serverRuntime).toMatchObject({ status: "incompatible", restartRequired: false });
+    expect(parsed.serverRuntime.message).toContain("Update and restart PI WEB");
+  });
+
+  it("rejects malformed plugin lifecycle versions and recovery state", () => {
+    expect(() => parsePiWebPluginsResponse({ lifecycleVersion: 2, plugins: [], diagnostics: [], serverRuntime: {} }))
+      .toThrow("Unsupported PI WEB plugin lifecycle version");
+    expect(() => parsePiWebPluginsResponse({
+      lifecycleVersion: 1,
+      plugins: [],
+      diagnostics: [],
+      serverRuntime: {
+        status: "available",
+        desiredSafeStart: "future",
+        restartRequired: false,
+        recovery: {
+          showSafeStart: "show",
+          bundledOnly: "bundled",
+          noServerPlugins: "none",
+          clearSafeStart: "clear",
+        },
+      },
+    })).toThrow("Invalid desired PI WEB server-plugin safe-start state");
+    expect(() => parsePiWebPluginsResponse({
+      lifecycleVersion: 1,
+      plugins: [],
+      diagnostics: [],
+      serverRuntime: {
+        status: "available",
+        restartRequired: false,
+        recovery: {
+          showSafeStart: "pi-web plugins safe-start show --token secret",
+          bundledOnly: "pi-web plugins safe-start set bundled-only --restart",
+          noServerPlugins: "pi-web plugins safe-start set none --restart",
+          clearSafeStart: "pi-web plugins safe-start clear --restart",
+        },
+      },
+    })).toThrow("Invalid PI WEB server plugin recovery commands");
   });
 
   it("accepts legacy array message pages and paged message responses", () => {

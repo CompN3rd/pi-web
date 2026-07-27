@@ -4,6 +4,9 @@ import type {
   ServerPluginHealthInspection,
   ServerPluginRuntimeRecord,
 } from "../plugins/serverPluginRuntime.js";
+import type { PiWebPluginCatalogDiagnostic } from "../piWebPluginCatalog.js";
+
+export const WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION = 1;
 
 /** Web-side port for sessiond's authoritative, live workspace catalog. */
 export interface WorkspaceCatalog {
@@ -11,25 +14,34 @@ export interface WorkspaceCatalog {
   resolve(projectId: string, workspaceId: string): Promise<Workspace>;
 }
 
-/** Immutable startup snapshot used to reconcile desired plugins in a later UI slice. */
+/** Immutable sessiond startup snapshot used to reconcile desired web plugins. */
 export interface WorkspaceProviderRuntimeSnapshot {
+  protocolVersion: typeof WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION;
   safeStart?: ServerPluginSafeStart;
   records: readonly ServerPluginRuntimeRecord[];
   health: readonly ServerPluginHealthInspection[];
+  diagnostics: readonly PiWebPluginCatalogDiagnostic[];
+}
+
+export interface WorkspaceProviderRuntimeReader {
+  providerRuntime(): Promise<WorkspaceProviderRuntimeSnapshot>;
 }
 
 export function createWorkspaceProviderRuntimeSnapshot(
   records: readonly ServerPluginRuntimeRecord[],
   health: readonly ServerPluginHealthInspection[],
   safeStart?: ServerPluginSafeStart,
+  diagnostics: readonly PiWebPluginCatalogDiagnostic[] = [],
 ): WorkspaceProviderRuntimeSnapshot {
   return Object.freeze({
+    protocolVersion: WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION,
     ...(safeStart === undefined ? {} : { safeStart }),
     records: Object.freeze(records.map((record) => Object.freeze({ ...record }))),
     health: Object.freeze(health.map((inspection) => Object.freeze({
       ...inspection,
       health: Object.freeze({ ...inspection.health }),
     }))),
+    diagnostics: Object.freeze(diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic }))),
   });
 }
 

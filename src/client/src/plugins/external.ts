@@ -58,23 +58,45 @@ async function importPluginModule(moduleUrl: string): Promise<unknown> {
 async function fetchPluginManifest(manifestUrl: string): Promise<PluginManifest | undefined> {
   const response = await fetch(manifestUrl, { cache: "no-store" });
   if (response.status === 404) return undefined;
-  if (!response.ok) throw new Error(`Failed to load plugin manifest: ${response.statusText}`);
+  if (!response.ok) throw new Error(await pluginManifestResponseError(response));
   return parseManifest(await response.json());
 }
 
 function parseManifest(value: unknown): PluginManifest {
   if (!isRecord(value) || !Array.isArray(value["plugins"])) throw new Error("Invalid plugin manifest");
-  return {
-    plugins: value["plugins"].map((entry) => {
-      if (!isRecord(entry) || typeof entry["id"] !== "string" || entry["id"] === "" || typeof entry["module"] !== "string" || entry["module"] === "") throw new Error("Invalid plugin manifest entry");
-      return {
-        id: entry["id"],
-        module: entry["module"],
-        ...(parseBackendRevision(entry["backendRevision"])),
-        machineSpecific: parseMachineSpecific(entry["machineSpecific"]),
-      };
-    }),
-  };
+  const plugins = value["plugins"].map((entry) => {
+    if (!isRecord(entry) || typeof entry["id"] !== "string" || entry["id"] === "" || typeof entry["module"] !== "string" || entry["module"] === "") throw new Error("Invalid plugin manifest entry");
+    return {
+      id: entry["id"],
+      module: entry["module"],
+      ...(parseBackendRevision(entry["backendRevision"])),
+      machineSpecific: parseMachineSpecific(entry["machineSpecific"]),
+    };
+  });
+  const ids = new Set<string>();
+  for (const plugin of plugins) {
+    if (ids.has(plugin.id)) throw new Error(`Duplicate plugin manifest id: ${plugin.id}`);
+    ids.add(plugin.id);
+  }
+  return { plugins };
+}
+
+async function pluginManifestResponseError(response: Response): Promise<string> {
+  let detail: string | undefined;
+  try {
+    const value: unknown = await response.json();
+    if (isRecord(value)) {
+      const error = value["error"];
+      const responseDetail = value["detail"];
+      detail = typeof responseDetail === "string"
+        ? `${typeof error === "string" ? `${error}: ` : ""}${responseDetail}`
+        : typeof error === "string" ? error : undefined;
+    }
+  } catch {
+    // Status metadata remains a useful bounded error when the body is not JSON.
+  }
+  const status = `${String(response.status)}${response.statusText === "" ? "" : ` ${response.statusText}`}`;
+  return `Failed to load plugin manifest (${status})${detail === undefined ? "" : `: ${detail}`}`;
 }
 
 function parseBackendRevision(value: unknown): { backendRevision?: string } {

@@ -52,16 +52,21 @@ describe("SessionDaemonWorkspaceCatalog", () => {
 
   it("parses the immutable provider runtime and startup-health snapshot", async () => {
     const request = vi.fn<SessionDaemonRequestClient["request"]>(() => Promise.resolve(jsonResponse({
+      protocolVersion: 1,
       safeStart: "bundled-only",
       records: [{
         pluginId: "git",
         source: "bundled",
         scope: "bundled",
         moduleRevision: "sha256:abc",
+        browserRevision: "sha256:browser",
+        settingsRevision: "sha256:settings",
+        machineSpecific: true,
         state: "active",
         name: "Git",
       }],
       health: [{ pluginId: "git", health: { status: "degraded", message: "Git is old", details: { version: 1, nested: ["ok", { ready: true }] } } }],
+      diagnostics: [{ code: "duplicate-id", source: "local", message: "Duplicate PI WEB plugin id: git", pluginId: "git" }],
     })));
     const catalog = new SessionDaemonWorkspaceCatalog({ request });
 
@@ -69,9 +74,11 @@ describe("SessionDaemonWorkspaceCatalog", () => {
 
     expect(request).toHaveBeenCalledWith("GET", "/workspace-catalog/provider-runtime");
     expect(snapshot).toEqual({
+      protocolVersion: 1,
       safeStart: "bundled-only",
-      records: [{ pluginId: "git", source: "bundled", scope: "bundled", moduleRevision: "sha256:abc", state: "active", name: "Git" }],
+      records: [{ pluginId: "git", source: "bundled", scope: "bundled", moduleRevision: "sha256:abc", browserRevision: "sha256:browser", settingsRevision: "sha256:settings", machineSpecific: true, state: "active", name: "Git" }],
       health: [{ pluginId: "git", health: { status: "degraded", message: "Git is old", details: { version: 1, nested: ["ok", { ready: true }] } } }],
+      diagnostics: [{ code: "duplicate-id", source: "local", message: "Duplicate PI WEB plugin id: git", pluginId: "git" }],
     });
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.records)).toBe(true);
@@ -91,6 +98,17 @@ describe("SessionDaemonWorkspaceCatalog", () => {
 
     await expect(mismatched.resolve("project a", "w/1")).rejects.toBeInstanceOf(WorkspaceCatalogProtocolError);
     await expect(relative.list("project a")).rejects.toThrow("path must be absolute");
+  });
+
+  it("rejects a pre-lifecycle provider snapshot as an explicit mixed-version protocol error", async () => {
+    const oldDaemon = new SessionDaemonWorkspaceCatalog({
+      request: () => Promise.resolve(jsonResponse({ records: [], health: [] })),
+    });
+
+    const error: unknown = await oldDaemon.providerRuntime().catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(WorkspaceCatalogProtocolError);
+    if (!(error instanceof Error)) throw new Error("Expected provider runtime protocol error");
+    expect(error.message).toContain("provider runtime protocol is unsupported");
   });
 
   it("distinguishes daemon unavailability, upstream failures, and invalid JSON for route status mapping", async () => {

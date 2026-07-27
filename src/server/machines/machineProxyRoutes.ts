@@ -63,6 +63,14 @@ async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRou
           spec.responseBodyLimit,
           remainingResponseTimeout(startedAt, spec.timeoutMs),
         );
+    if (isUnknownRemotePluginBackendRoute(spec, method, remotePath, upstream.statusCode, responseBody)) {
+      return await reply.code(409).send({
+        error: "Remote machine plugin lifecycle is incompatible",
+        code: "plugin-lifecycle-incompatible",
+        machineId,
+        detail: "The remote machine does not support workspace provider backend requests. Update and restart PI WEB on the remote machine.",
+      });
+    }
     reply.code(upstream.statusCode);
     applySafeHeaders(reply, upstream.headers);
     if (responseBody === undefined) return await reply.send();
@@ -159,6 +167,28 @@ function proxyRequestOptions(spec: Pick<FederatedHttpRouteSpec, "timeoutMs">, bo
     if (value !== undefined && value !== "") options.contentType = value;
   }
   return Object.keys(options).length === 0 ? undefined : options;
+}
+
+function isUnknownRemotePluginBackendRoute(
+  spec: FederatedHttpRouteSpec,
+  method: string,
+  remotePath: string,
+  statusCode: number,
+  body: NodeJS.ReadableStream | Buffer | undefined,
+): boolean {
+  if (!spec.path.startsWith("/plugin-backends/") || statusCode !== 404 || !(body instanceof Buffer)) return false;
+  try {
+    const value: unknown = JSON.parse(body.toString("utf8"));
+    if (!isRecord(value) || value["statusCode"] !== 404 || value["error"] !== "Not Found") return false;
+    const message = value["message"];
+    const queryIndex = remotePath.indexOf("?");
+    const requestPath = queryIndex === -1 ? remotePath : remotePath.slice(0, queryIndex);
+    if (typeof message !== "string") return false;
+    const routePrefix = `Route ${method.toUpperCase()}:`;
+    return message === `${routePrefix}${requestPath} not found` || message === `${routePrefix}${remotePath} not found`;
+  } catch {
+    return false;
+  }
 }
 
 function isRawProxyBody(body: unknown): boolean {

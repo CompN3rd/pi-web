@@ -15,6 +15,7 @@ export interface SelectedMachineSettingsSupport {
 }
 
 export type AgentProfileSettingsSupport = SelectedMachineSettingsSupport;
+export type PluginLifecycleSupport = SelectedMachineSettingsSupport;
 
 export function settingsMachineTarget(machine: Pick<Machine, "id" | "name" | "kind"> | undefined): SettingsMachineTarget {
   if (machine !== undefined) return { id: machine.id, name: machine.name, kind: machine.kind };
@@ -30,6 +31,13 @@ export function selectedMachineSettingsSupport(target: SettingsMachineTarget, ru
   if (runtime?.ok !== true) return { state: "unknown" };
   if (supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.selectedMachineSettings)) return { state: "supported" };
   return { state: "unsupported", message: selectedMachineSettingsUnavailableMessage(target) };
+}
+
+export function pluginLifecycleSupport(target: SettingsMachineTarget, runtime: Pick<MachineRuntime, "ok" | "capabilities"> | undefined): PluginLifecycleSupport {
+  if (target.kind === "local") return { state: "supported" };
+  if (runtime?.ok !== true) return { state: "unknown" };
+  if (supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.pluginLifecycle)) return { state: "supported" };
+  return { state: "unsupported", message: pluginLifecycleUnavailableMessage(target) };
 }
 
 export function agentProfileSettingsSupport(target: SettingsMachineTarget, runtime: Pick<MachineRuntime, "ok" | "capabilities"> | undefined): AgentProfileSettingsSupport {
@@ -61,6 +69,10 @@ export function isAgentProfileSettingsSupported(support: AgentProfileSettingsSup
 
 export function selectedMachineSettingsUnavailableMessage(target: SettingsMachineTarget): string {
   return `Selected-machine settings are not available on ${target.name}. Update and restart PI WEB on that machine, then try again.`;
+}
+
+export function pluginLifecycleUnavailableMessage(target: SettingsMachineTarget): string {
+  return `Plugin lifecycle diagnostics are not available on ${target.name}. Update and restart PI WEB on that machine before loading server-backed plugins.`;
 }
 
 export function friendlySelectedMachineSettingsErrorMessage(message: string, target: SettingsMachineTarget): string {

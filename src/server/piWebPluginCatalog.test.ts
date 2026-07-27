@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PiWebPluginCatalog, type PiPackageProvider } from "./piWebPluginCatalog.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES, PiWebPluginCatalog, type PiPackageProvider } from "./piWebPluginCatalog.js";
 
 let tempDir: string;
 
@@ -44,7 +44,80 @@ describe("PiWebPluginCatalog", () => {
       enabled: false,
       settings: { color: "blue" },
     });
-    expect(plugin?.browserModule?.revision).toMatch(/^\d+$/u);
+    expect(plugin?.browserModule?.revision).toMatch(/^sha256:[a-f\d]{64}$/u);
+    expect(plugin?.settingsRevision).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  });
+
+  it("uses package content revisions even when browser asset timestamps are preserved", async () => {
+    const pluginRoot = join(tempDir, "plugins", "content-revision");
+    const browserPath = join(pluginRoot, "browser.js");
+    await writePlugin(pluginRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "content-revision", module: "browser.js" }] } },
+      files: { "browser.js": "export const value = 'one';" },
+    });
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "fixture", scope: "local" }],
+      packageProvider: false,
+    });
+    const firstRevision = (await catalog.snapshot()).plugins[0]?.browserModule?.revision;
+    const originalStat = await stat(browserPath);
+
+    await writeFile(browserPath, "export const value = 'two';");
+    await utimes(browserPath, originalStat.atime, originalStat.mtime);
+
+    const secondRevision = (await catalog.snapshot()).plugins[0]?.browserModule?.revision;
+    expect(firstRevision).toMatch(/^sha256:[a-f\d]{64}$/u);
+    expect(secondRevision).toMatch(/^sha256:[a-f\d]{64}$/u);
+    expect(secondRevision).not.toBe(firstRevision);
+  });
+
+  it("ignores excluded package metadata while bounding the serveable artifact", async () => {
+    const pluginRoot = join(tempDir, "plugins", "bounded");
+    await writePlugin(pluginRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "bounded", module: "browser.js" }] } },
+      files: { "browser.js": "export default {};", ".git/objects/transient": "one" },
+    });
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "fixture", scope: "local" }],
+      packageProvider: false,
+    });
+    const firstRevision = (await catalog.snapshot()).plugins[0]?.browserModule?.revision;
+
+    await writeFile(join(pluginRoot, ".git", "objects", "transient"), "two");
+
+    expect((await catalog.snapshot()).plugins[0]?.browserModule?.revision).toBe(firstRevision);
+    const largePath = join(pluginRoot, "large.bin");
+    await writeFile(largePath, "");
+    await truncate(largePath, PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES + 1);
+    const oversized = await catalog.snapshot();
+    expect(oversized.plugins).toEqual([]);
+    expect(oversized.diagnostics).toHaveLength(1);
+    expect(oversized.diagnostics[0]?.code).toBe("invalid-package");
+    expect(oversized.diagnostics[0]?.message).toContain("byte artifact limit");
+  });
+
+  it("fingerprints server settings canonically without exposing their values", async () => {
+    await writePlugin(join(tempDir, "plugins", "configured"), {
+      packageJson: { piWeb: { plugins: [{ id: "configured", serverModule: "server.js" }] } },
+      files: { "server.js": "export default {};" },
+    });
+    let settings: Record<string, unknown> = { token: "secret-a", nested: { z: true, a: 1 } };
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "fixture", scope: "local" }],
+      packageProvider: false,
+      configProvider: () => ({ plugins: { configured: { settings } } }),
+    });
+
+    const first = (await catalog.snapshot()).plugins[0]?.settingsRevision;
+    settings = { nested: { a: 1, z: true }, token: "secret-a" };
+    const reordered = (await catalog.snapshot()).plugins[0]?.settingsRevision;
+    settings = { nested: { a: 1, z: true }, token: "secret-b" };
+    const changed = (await catalog.snapshot()).plugins[0]?.settingsRevision;
+
+    expect(first).toBe(reordered);
+    expect(changed).not.toBe(first);
+    expect(first).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(first).not.toContain("secret-a");
   });
 
   it("discovers server-only and dual-entry modules without executing them", async () => {
@@ -73,14 +146,14 @@ describe("PiWebPluginCatalog", () => {
       browserModule: { path: "browser.js" },
       serverModule: { path: "server.js" },
     });
-    expect(plugins[0]?.browserModule?.revision).toMatch(/^\d+$/u);
-    expect(plugins[0]?.serverModule?.revision).toMatch(/^\d+$/u);
+    expect(plugins[0]?.browserModule?.revision).toMatch(/^sha256:[a-f\d]{64}$/u);
+    expect(plugins[0]?.serverModule?.revision).toMatch(/^sha256:[a-f\d]{64}$/u);
     expect(plugins[1]).toMatchObject({
       id: "server-only",
       machineSpecific: false,
       serverModule: { path: "server-plugin.js" },
     });
-    expect(plugins[1]?.serverModule?.revision).toMatch(/^\d+$/u);
+    expect(plugins[1]?.serverModule?.revision).toMatch(/^sha256:[a-f\d]{64}$/u);
     expect(plugins[1]?.browserModule).toBeUndefined();
   });
 
@@ -153,8 +226,41 @@ describe("PiWebPluginCatalog", () => {
     expect(snapshot.plugins[0]).toMatchObject({ id: "duplicate", source: "first" });
     expect(snapshot.plugins[0]?.serverModule).toBeDefined();
     expect(snapshot.plugins[0]?.browserModule).toBeUndefined();
-    expect(snapshot.diagnostics).toEqual([{ source: "second", message: "Duplicate PI WEB plugin id: duplicate" }]);
+    expect(snapshot.diagnostics).toEqual([{
+      code: "duplicate-id",
+      source: "second",
+      message: "Duplicate PI WEB plugin id: duplicate",
+      pluginId: "duplicate",
+    }]);
     await expect(catalog.browserPlugin("duplicate")).resolves.toBeUndefined();
+  });
+
+  it("limits bundled-only discovery before consulting external package providers", async () => {
+    const bundledRoot = join(tempDir, "bundled");
+    const localRoot = join(tempDir, "local");
+    await writePlugin(join(bundledRoot, "bundled-provider"), {
+      packageJson: { piWeb: { plugins: [{ id: "bundled-provider", serverModule: "server.js" }] } },
+      files: { "server.js": "export default {};" },
+    });
+    await writePlugin(join(localRoot, "local-provider"), {
+      packageJson: { piWeb: { plugins: [{ id: "local-provider", serverModule: "server.js" }] } },
+      files: { "server.js": "export default {};" },
+    });
+    const listPackages = vi.fn<PiPackageProvider["listPackages"]>(() => {
+      throw new Error("external package discovery must not run");
+    });
+    const catalog = new PiWebPluginCatalog({
+      roots: [
+        { path: bundledRoot, source: "bundled", scope: "bundled" },
+        { path: localRoot, source: "local", scope: "local" },
+      ],
+      packageProvider: { listPackages, getInstalledPath: () => undefined },
+    });
+
+    const snapshot = await catalog.snapshot({ scope: "bundled" });
+
+    expect(snapshot.plugins.map(({ id }) => id)).toEqual(["bundled-provider"]);
+    expect(listPackages).not.toHaveBeenCalled();
   });
 
   it("preserves configured Pi-package source and scope for server entries", async () => {

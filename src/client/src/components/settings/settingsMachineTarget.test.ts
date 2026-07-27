@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Machine, MachineRuntime } from "../../api";
 import { PI_WEB_CAPABILITIES } from "../../../../shared/capabilities";
-import { agentProfileSettingsSupport, friendlySelectedMachineSettingsErrorMessage, isAgentProfileSettingsSupported, isSelectedMachineSettingsUnsupported, selectedMachineSettingsSupport, selectedMachineSettingsSupportKey, selectedMachineSettingsUnavailableMessage, settingsMachineTarget, settingsMachineTargetLabel } from "./settingsMachineTarget";
+import { agentProfileSettingsSupport, friendlySelectedMachineSettingsErrorMessage, isAgentProfileSettingsSupported, isSelectedMachineSettingsUnsupported, pluginLifecycleSupport, pluginLifecycleUnavailableMessage, selectedMachineSettingsSupport, selectedMachineSettingsSupportKey, selectedMachineSettingsUnavailableMessage, settingsMachineTarget, settingsMachineTargetLabel } from "./settingsMachineTarget";
 
 const remoteMachine: Machine = {
   id: "remote-a",
@@ -37,6 +37,18 @@ describe("selected-machine settings target helpers", () => {
     expect(isSelectedMachineSettingsUnsupported(unsupported)).toBe(true);
     expect(unsupported.message).toBe(selectedMachineSettingsUnavailableMessage(target));
     expect(selectedMachineSettingsSupportKey(unsupported)).toBe(`unsupported:${selectedMachineSettingsUnavailableMessage(target)}`);
+  });
+
+  it("negotiates remote plugin lifecycle support independently from config editing", () => {
+    const target = settingsMachineTarget(remoteMachine);
+
+    expect(pluginLifecycleSupport({ id: "local", name: "local", kind: "local" }, undefined)).toEqual({ state: "supported" });
+    expect(pluginLifecycleSupport(target, undefined)).toEqual({ state: "unknown" });
+    expect(pluginLifecycleSupport(target, { ok: true, capabilities: [PI_WEB_CAPABILITIES.pluginLifecycle] })).toEqual({ state: "supported" });
+    expect(pluginLifecycleSupport(target, { ok: true, capabilities: [PI_WEB_CAPABILITIES.selectedMachineSettings] })).toEqual({
+      state: "unsupported",
+      message: pluginLifecycleUnavailableMessage(target),
+    });
   });
 
   it("gates remote agent profile edits on their granular capability", () => {

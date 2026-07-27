@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { createHash, type Hash } from "node:crypto";
+import { existsSync, type Dirent } from "node:fs";
+import { open, opendir, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -29,7 +30,7 @@ export interface PiWebPluginCatalogModule {
   path: string;
   /** Canonical file path, already checked to remain inside packageRoot. */
   filePath: string;
-  /** Filesystem revision used to pair browser and server startup snapshots. */
+  /** Content revision used to pair browser and server startup snapshots. */
   revision: string;
 }
 
@@ -46,16 +47,32 @@ export interface PiWebPluginPackageEntry {
 export interface PiWebPluginCatalogEntry extends PiWebPluginPackageEntry {
   enabled: boolean;
   settings: Readonly<PiWebPluginSettings>;
+  /** Non-secret fingerprint of server settings captured by sessiond at startup. */
+  settingsRevision: string;
 }
 
+export type PiWebPluginCatalogDiagnosticCode = "invalid-package" | "duplicate-id";
+
 export interface PiWebPluginCatalogDiagnostic {
+  code: PiWebPluginCatalogDiagnosticCode;
   source: string;
   message: string;
+  pluginId?: string;
 }
 
 export interface PiWebPluginCatalogSnapshot {
   plugins: PiWebPluginCatalogEntry[];
   diagnostics: PiWebPluginCatalogDiagnostic[];
+}
+
+export interface PiWebPluginCatalogSnapshotOptions {
+  scope?: PiWebPluginScope;
+}
+
+export interface PiWebPluginPackageArtifact {
+  revision: string;
+  files: ReadonlyMap<string, Buffer>;
+  byteLength: number;
 }
 
 export interface PiWebPluginCatalogOptions {
@@ -79,7 +96,11 @@ interface PiWebPluginMetadataEntry {
   machineSpecific: boolean;
 }
 
-type ReportDiagnostic = (source: string, error: unknown) => void;
+type ReportDiagnostic = (
+  source: string,
+  error: unknown,
+  details?: { code?: PiWebPluginCatalogDiagnosticCode; pluginId?: string },
+) => void;
 
 export class DefaultPiPackageProvider implements PiPackageProvider {
   constructor(
@@ -105,8 +126,8 @@ export class DefaultPiPackageProvider implements PiPackageProvider {
 }
 
 /**
- * Process-neutral package discovery shared by browser serving and the future
- * session-daemon activator. Catalog reads never import or execute plugin code.
+ * Process-neutral package discovery shared by browser serving and sessiond's
+ * startup activator. Catalog reads never import or execute plugin code.
  */
 export class PiWebPluginCatalog {
   private readonly roots: LocalPluginRoot[];
@@ -131,10 +152,10 @@ export class PiWebPluginCatalog {
     this.warningSink = options.warningSink ?? ((message) => { console.warn(message); });
   }
 
-  async snapshot(): Promise<PiWebPluginCatalogSnapshot> {
+  async snapshot(options: PiWebPluginCatalogSnapshotOptions = {}): Promise<PiWebPluginCatalogSnapshot> {
     const config = await this.configProvider();
     const diagnostics: PiWebPluginCatalogDiagnostic[] = [];
-    const plugins = await this.discoverPlugins(this.reporter(diagnostics));
+    const plugins = await this.discoverPlugins(this.reporter(diagnostics), options.scope);
     return {
       plugins: plugins.map((plugin) => applyDesiredState(plugin, config)),
       diagnostics,
@@ -162,19 +183,26 @@ export class PiWebPluginCatalog {
   }
 
   private reporter(diagnostics: PiWebPluginCatalogDiagnostic[]): ReportDiagnostic {
-    return (source, error) => {
+    return (source, error, details = {}) => {
       const message = error instanceof Error ? error.message : String(error);
-      diagnostics.push({ source, message });
+      diagnostics.push({
+        code: details.code ?? "invalid-package",
+        source,
+        message,
+        ...(details.pluginId === undefined ? {} : { pluginId: details.pluginId }),
+      });
       this.warningSink(`Skipping PI WEB plugin from ${source}: ${message}`);
     };
   }
 
-  private async discoverPlugins(report: ReportDiagnostic): Promise<PiWebPluginPackageEntry[]> {
+  private async discoverPlugins(report: ReportDiagnostic, scope: PiWebPluginScope | undefined): Promise<PiWebPluginPackageEntry[]> {
     const records = new Map<string, PiWebPluginPackageEntry>();
-    for (const plugin of await this.discoverLocalPlugins(report)) addUnique(records, plugin, report);
-    const packageProvider = await this.currentPackageProvider();
+    for (const plugin of await this.discoverLocalPlugins(report, scope)) addUnique(records, plugin, report);
+    const packageProvider = scope === "bundled" ? undefined : await this.currentPackageProvider();
     if (packageProvider !== undefined) {
-      for (const plugin of await this.discoverPiPackagePlugins(packageProvider, report)) addUnique(records, plugin, report);
+      for (const plugin of await this.discoverPiPackagePlugins(packageProvider, report)) {
+        if (scope === undefined || plugin.scope === scope) addUnique(records, plugin, report);
+      }
     }
     return [...records.values()].sort((left, right) => left.id.localeCompare(right.id));
   }
@@ -191,9 +219,11 @@ export class PiWebPluginCatalog {
     throw new Error("Pi package plugin discovery requires an explicit active agent directory");
   }
 
-  private async discoverLocalPlugins(report: ReportDiagnostic): Promise<PiWebPluginPackageEntry[]> {
+  private async discoverLocalPlugins(report: ReportDiagnostic, scope?: PiWebPluginScope): Promise<PiWebPluginPackageEntry[]> {
     const plugins: PiWebPluginPackageEntry[] = [];
-    for (const root of this.roots) plugins.push(...await discoverLocalRoot(root, report));
+    for (const root of this.roots) {
+      if (scope === undefined || root.scope === scope) plugins.push(...await discoverLocalRoot(root, report));
+    }
     return plugins;
   }
 
@@ -266,10 +296,11 @@ async function discoverPackageRoot(root: string, configuredPackage: ConfiguredPi
 
 async function discoverPluginEntries(root: string, config: PiWebPackageConfig): Promise<Omit<PiWebPluginPackageEntry, "source" | "scope">[]> {
   const packageRoot = await realpath(root);
+  const revision = await computePiWebPluginPackageRevision(packageRoot);
   const plugins: Omit<PiWebPluginPackageEntry, "source" | "scope">[] = [];
   for (const entry of config.plugins) {
-    const browserModule = entry.module === undefined ? undefined : await discoverModule(packageRoot, entry.id, "browser", entry.module);
-    const serverModule = entry.serverModule === undefined ? undefined : await discoverModule(packageRoot, entry.id, "server", entry.serverModule);
+    const browserModule = entry.module === undefined ? undefined : await discoverModule(packageRoot, entry.id, "browser", entry.module, revision);
+    const serverModule = entry.serverModule === undefined ? undefined : await discoverModule(packageRoot, entry.id, "server", entry.serverModule, revision);
     plugins.push({
       id: entry.id,
       packageRoot,
@@ -281,7 +312,7 @@ async function discoverPluginEntries(root: string, config: PiWebPackageConfig): 
   return plugins;
 }
 
-async function discoverModule(packageRoot: string, pluginId: string, kind: "browser" | "server", path: string): Promise<PiWebPluginCatalogModule> {
+async function discoverModule(packageRoot: string, pluginId: string, kind: "browser" | "server", path: string, revision: string): Promise<PiWebPluginCatalogModule> {
   if (!isSafeRelativeModulePath(path)) throw new Error(`Unsafe PI WEB plugin ${kind} module path for ${pluginId}: ${path}`);
   const candidate = resolve(packageRoot, path);
   const [entryStat, filePath] = await Promise.all([
@@ -290,7 +321,127 @@ async function discoverModule(packageRoot: string, pluginId: string, kind: "brow
   ]);
   if (entryStat?.isFile() !== true || filePath === undefined) throw new Error(`PI WEB plugin ${kind} module not found for ${pluginId}: ${path}`);
   if (!isWithin(packageRoot, filePath)) throw new Error(`PI WEB plugin ${kind} module escapes its package for ${pluginId}: ${path}`);
-  return { path, filePath, revision: String(Math.floor(entryStat.mtimeMs)) };
+  return { path, filePath, revision };
+}
+
+export const PI_WEB_PLUGIN_ARTIFACT_MAX_ENTRIES = 4_096;
+export const PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES = 16 * 1024 * 1024;
+const EXCLUDED_ARTIFACT_DIRECTORIES = new Set([".git", "node_modules"]);
+
+interface PackageHashState {
+  entries: number;
+  byteLength: number;
+  files?: Map<string, Buffer>;
+}
+
+export async function computePiWebPluginPackageRevision(packageRoot: string): Promise<string> {
+  return (await scanPiWebPluginPackage(packageRoot)).revision;
+}
+
+export async function readPiWebPluginPackageArtifact(packageRoot: string): Promise<PiWebPluginPackageArtifact> {
+  const files = new Map<string, Buffer>();
+  const result = await scanPiWebPluginPackage(packageRoot, files);
+  return { ...result, files };
+}
+
+async function scanPiWebPluginPackage(
+  packageRoot: string,
+  files?: Map<string, Buffer>,
+): Promise<{ revision: string; byteLength: number }> {
+  const canonicalRoot = await realpath(packageRoot);
+  const hash = createHash("sha256");
+  const state: PackageHashState = { entries: 0, byteLength: 0, ...(files === undefined ? {} : { files }) };
+  await hashPackageDirectory(hash, canonicalRoot, canonicalRoot, "", new Set<string>(), state);
+  return { revision: `sha256:${hash.digest("hex")}`, byteLength: state.byteLength };
+}
+
+async function hashPackageDirectory(
+  hash: Hash,
+  packageRoot: string,
+  directory: string,
+  logicalDirectory: string,
+  ancestors: Set<string>,
+  state: PackageHashState,
+): Promise<void> {
+  const canonicalDirectory = await realpath(directory);
+  if (!isWithin(packageRoot, canonicalDirectory) || ancestors.has(canonicalDirectory)) return;
+  const nextAncestors = new Set(ancestors).add(canonicalDirectory);
+  const entries = await boundedDirectoryEntries(directory, state);
+
+  for (const entry of entries) {
+    const logicalPath = logicalDirectory === "" ? entry.name : `${logicalDirectory}/${entry.name}`;
+    const candidate = join(directory, entry.name);
+    const canonicalPath = await realpath(candidate).catch(() => undefined);
+    if (canonicalPath === undefined || !isWithin(packageRoot, canonicalPath)) {
+      updatePackageHash(hash, "unavailable", logicalPath);
+      continue;
+    }
+    const candidateStat = await stat(candidate).catch(() => undefined);
+    if (candidateStat?.isDirectory() === true) {
+      if (EXCLUDED_ARTIFACT_DIRECTORIES.has(entry.name)) {
+        updatePackageHash(hash, "excluded-directory", logicalPath);
+        continue;
+      }
+      updatePackageHash(hash, "directory", logicalPath, relative(packageRoot, canonicalPath));
+      await hashPackageDirectory(hash, packageRoot, candidate, logicalPath, nextAncestors, state);
+      continue;
+    }
+    if (candidateStat?.isFile() === true) {
+      const remainingBytes = PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES - state.byteLength;
+      const content = await readBoundedPackageFile(candidate, remainingBytes);
+      state.byteLength += content.byteLength;
+      state.files?.set(logicalPath, content);
+      updatePackageHash(hash, "file", logicalPath, relative(packageRoot, canonicalPath), content);
+      continue;
+    }
+    updatePackageHash(hash, "other", logicalPath);
+  }
+}
+
+async function boundedDirectoryEntries(directory: string, state: PackageHashState): Promise<Dirent[]> {
+  const entries: Dirent[] = [];
+  const handle = await opendir(directory);
+  for await (const entry of handle) {
+    state.entries += 1;
+    if (state.entries > PI_WEB_PLUGIN_ARTIFACT_MAX_ENTRIES) {
+      throw new Error(`PI WEB plugin package exceeds the ${String(PI_WEB_PLUGIN_ARTIFACT_MAX_ENTRIES)} artifact entry limit`);
+    }
+    entries.push(entry);
+  }
+  return entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+}
+
+async function readBoundedPackageFile(filePath: string, remainingBytes: number): Promise<Buffer> {
+  const handle = await open(filePath, "r");
+  const chunks: Buffer[] = [];
+  let byteLength = 0;
+  try {
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let bytesRead: number;
+    do {
+      ({ bytesRead } = await handle.read(buffer, 0, buffer.byteLength));
+      if (bytesRead > 0) {
+        byteLength += bytesRead;
+        if (byteLength > remainingBytes) {
+          throw new Error(`PI WEB plugin package exceeds the ${String(PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES)} byte artifact limit`);
+        }
+        chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+      }
+    } while (bytesRead > 0);
+  } finally {
+    await handle.close();
+  }
+  return Buffer.concat(chunks, byteLength);
+}
+
+function updatePackageHash(hash: Hash, ...values: (string | Buffer)[]): void {
+  for (const value of values) {
+    const content = typeof value === "string" ? Buffer.from(value) : value;
+    hash.update(String(content.byteLength));
+    hash.update(":");
+    hash.update(content);
+    hash.update(";");
+  }
 }
 
 async function readPiWebPackageConfig(root: string): Promise<PiWebPackageConfig | undefined> {
@@ -351,16 +502,33 @@ function parseMachineSpecific(value: unknown, packagePath: string, pluginId: str
 
 function applyDesiredState(plugin: PiWebPluginPackageEntry, config: PiWebConfig): PiWebPluginCatalogEntry {
   const pluginConfig = config.plugins?.[plugin.id];
+  const settings = { ...(pluginConfig?.settings ?? {}) };
   return {
     ...plugin,
     enabled: pluginConfig?.enabled !== false,
-    settings: { ...(pluginConfig?.settings ?? {}) },
+    settings,
+    settingsRevision: pluginSettingsRevision(settings),
   };
+}
+
+function pluginSettingsRevision(settings: Readonly<PiWebPluginSettings>): string {
+  const canonical = JSON.stringify(canonicalJson(settings));
+  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalJson(value[key])]),
+  );
 }
 
 function addUnique(records: Map<string, PiWebPluginPackageEntry>, plugin: PiWebPluginPackageEntry, report: ReportDiagnostic): void {
   if (records.has(plugin.id)) {
-    report(plugin.source, `Duplicate PI WEB plugin id: ${plugin.id}`);
+    report(plugin.source, `Duplicate PI WEB plugin id: ${plugin.id}`, { code: "duplicate-id", pluginId: plugin.id });
     return;
   }
   records.set(plugin.id, plugin);
@@ -368,7 +536,7 @@ function addUnique(records: Map<string, PiWebPluginPackageEntry>, plugin: PiWebP
 
 function isSafeRelativeModulePath(path: string): boolean {
   if (path === "" || path.includes("\\") || hasControlCharacter(path) || isAbsolute(path) || win32.isAbsolute(path)) return false;
-  return path.split("/").every((segment) => segment !== "..");
+  return path.split("/").every((segment) => segment !== ".." && !EXCLUDED_ARTIFACT_DIRECTORIES.has(segment));
 }
 
 function hasControlCharacter(value: string): boolean {

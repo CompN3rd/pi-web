@@ -118,8 +118,22 @@ export function registerAppTestHooks(): void {
       config: fakeConfigService(),
       piPackages: fakePiPackageService(),
       piWebPlugins: {
-        manifest: () => Promise.resolve({ plugins: [{ id: "fake", module: "/pi-web-plugins/fake/plugin.js?v=1", source: "test", scope: "local", machineSpecific: false }] }),
-        plugins: () => Promise.resolve({ plugins: [{ id: "fake", module: "/pi-web-plugins/fake/plugin.js?v=1", source: "test", scope: "local", machineSpecific: false, enabled: true }] }),
+        manifest: () => Promise.resolve({ lifecycleVersion: 1, plugins: [{ id: "fake", module: "/pi-web-plugins/fake/plugin.js?v=1", source: "test", scope: "local", machineSpecific: false }] }),
+        plugins: () => Promise.resolve({
+          lifecycleVersion: 1,
+          plugins: [{ id: "fake", module: "/pi-web-plugins/fake/plugin.js?v=1", source: "test", scope: "local", machineSpecific: false, enabled: true, discovered: true, conflict: false }],
+          diagnostics: [],
+          serverRuntime: {
+            status: "available",
+            restartRequired: false,
+            recovery: {
+              showSafeStart: "pi-web plugins safe-start show",
+              bundledOnly: "pi-web plugins safe-start set bundled-only --restart",
+              noServerPlugins: "pi-web plugins safe-start set none --restart",
+              clearSafeStart: "pi-web plugins safe-start clear --restart",
+            },
+          },
+        }),
         readAsset: fakePiWebPluginAsset,
       },
       clientDist: false,

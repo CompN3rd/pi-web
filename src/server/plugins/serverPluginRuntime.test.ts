@@ -48,7 +48,7 @@ describe("server plugin runtime", () => {
       entry("omega"),
       entry("bad-start"),
       entry("bad-import"),
-      entry("alpha"),
+      entry("alpha", { browserRevision: "browser-7" }),
       entry("bad-api"),
       entry("bad-activate"),
     ]);
@@ -60,7 +60,7 @@ describe("server plugin runtime", () => {
     expect(imported).toEqual(["alpha", "bad-activate", "bad-api", "bad-import", "bad-start", "omega"]);
     expect(events).toEqual(["start:alpha", "start:bad-start", "rollback:bad-start", "start:omega"]);
     expect(runtime.healthRecords()).toEqual([
-      expect.objectContaining({ pluginId: "alpha", state: "active", name: "Alpha" }),
+      expect.objectContaining({ pluginId: "alpha", state: "active", name: "Alpha", browserRevision: "browser-7", settingsRevision: "settings-1", machineSpecific: true }),
       expect.objectContaining({ pluginId: "bad-activate", state: "failed", phase: "activate", message: "activate exploded" }),
       expect.objectContaining({ pluginId: "bad-api", state: "incompatible", phase: "validate", message: "Unsupported server plugin API version: 2" }),
       expect.objectContaining({ pluginId: "bad-import", state: "failed", phase: "import", message: "import exploded" }),
@@ -112,15 +112,17 @@ describe("server plugin runtime", () => {
     ]);
 
     imported.splice(0);
+    const noneCatalog = { snapshot: vi.fn(() => Promise.resolve(snapshot)) };
     const none = await createServerPluginRuntime({
-      catalog: { snapshot: () => Promise.resolve(snapshot) },
+      catalog: noneCatalog,
       safeStart: "none",
       importer,
       logger: testLogger(),
     });
 
     expect(imported).toEqual([]);
-    expect(none.healthRecords().every((record) => record.state === "disabled")).toBe(true);
+    expect(noneCatalog.snapshot).not.toHaveBeenCalled();
+    expect(none.healthRecords()).toEqual([]);
   });
 
   it("aborts an uncooperative lifecycle phase at its deadline and continues activation", async () => {
@@ -310,17 +312,19 @@ describe("server plugin runtime", () => {
 
 function entry(
   id: string,
-  options: { scope?: PiWebPluginScope; enabled?: boolean; settings?: Record<string, unknown> } = {},
+  options: { scope?: PiWebPluginScope; enabled?: boolean; settings?: Record<string, unknown>; browserRevision?: string } = {},
 ): PiWebPluginCatalogEntry {
   return {
     id,
     packageRoot: `/plugins/${id}`,
+    ...(options.browserRevision === undefined ? {} : { browserModule: { path: "browser.js", filePath: `/plugins/${id}/browser.js`, revision: options.browserRevision } }),
     serverModule: { path: "server.js", filePath: `/plugins/${id}/server.js`, revision: "1" },
     source: options.scope === "bundled" ? "bundled" : "fixture",
     scope: options.scope ?? "local",
-    machineSpecific: false,
+    machineSpecific: options.browserRevision !== undefined,
     enabled: options.enabled ?? true,
     settings: options.settings ?? {},
+    settingsRevision: "settings-1",
   };
 }
 

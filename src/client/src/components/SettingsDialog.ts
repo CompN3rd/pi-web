@@ -11,7 +11,7 @@ import "./settings/SettingsShortcutsPanel";
 import { friendlyPiPackageErrorMessage, isPiPackageManagementUnsupported, piPackageManagementSupport, piPackageManagementSupportKey, piPackageMutationFollowUpMessage, piPackageTargetLabel, shouldRefreshGatewayPluginsAfterPiPackageMutation, type PiPackageManagementSupport, type PiPackageOperationState, type PiPackageTargetContext } from "./settings/piPackageSettings";
 import { loadGatewaySettingsData, loadPiPackagesData } from "./settings/settingsDataLoading";
 import { mergeSelectedMachineAccessConfig } from "./settings/settingsMachineAccessConfig";
-import { agentProfileSettingsSupport, friendlySelectedMachineSettingsErrorMessage, isAgentProfileSettingsSupported, isSelectedMachineSettingsUnsupported, selectedMachineSettingsSupport, selectedMachineSettingsSupportKey, settingsMachineTarget, settingsMachineTargetLabel, type AgentProfileSettingsSupport, type SelectedMachineSettingsSupport, type SettingsMachineTarget } from "./settings/settingsMachineTarget";
+import { agentProfileSettingsSupport, friendlySelectedMachineSettingsErrorMessage, isAgentProfileSettingsSupported, isSelectedMachineSettingsUnsupported, pluginLifecycleSupport, selectedMachineSettingsSupport, selectedMachineSettingsSupportKey, settingsMachineTarget, settingsMachineTargetLabel, type AgentProfileSettingsSupport, type PluginLifecycleSupport, type SelectedMachineSettingsSupport, type SettingsMachineTarget } from "./settings/settingsMachineTarget";
 import { mergeSelectedMachinePluginConfig, pluginEnabledConfigPatch } from "./settings/settingsPluginConfig";
 import { mergeSelectedMachineSessiondConfig } from "./settings/settingsSessiondConfig";
 
@@ -92,6 +92,9 @@ export class SettingsDialog extends LitElement {
       if (this.isConnected) void this.loadAccessConfigForTarget(currentTarget);
       this.resetSessiondStateForTargetChange();
       if (this.isConnected) void this.loadSessiondConfigForTarget(currentTarget);
+      this.resetPluginStateForTargetChange();
+      if (this.isConnected) void this.loadPluginsForTarget(currentTarget);
+    } else if (this.pluginLifecycleSupportNeedsReload(changed.get("machineRuntime"), currentTarget)) {
       this.resetPluginStateForTargetChange();
       if (this.isConnected) void this.loadPluginsForTarget(currentTarget);
     }
@@ -186,6 +189,7 @@ export class SettingsDialog extends LitElement {
           .pluginsResponse=${this.selectedPluginsResponse}
           .loading=${this.pluginLoading}
           .saving=${this.saving}
+          .recoveryCommandsSupported=${this.pluginLifecycleSupport().state === "supported"}
           .error=${this.pluginError}
           .savedMessage=${this.savedMessage}
           .targetLabel=${settingsMachineTargetLabel(this.settingsTarget())}
@@ -314,6 +318,21 @@ export class SettingsDialog extends LitElement {
     this.pluginLoading = true;
     this.pluginError = "";
     try {
+      const lifecycleSupport = this.pluginLifecycleSupport(target);
+      if (isSelectedMachineSettingsUnsupported(lifecycleSupport)) {
+        try {
+          const config = await configApi.config(target.id);
+          if (!this.isCurrentPluginLoad(requestSeq, target)) return;
+          this.selectedPluginConfigResponse = config;
+          this.selectedPluginsResponse = undefined;
+          this.pluginError = lifecycleSupport.message ?? `Plugin lifecycle diagnostics are not available on ${settingsMachineTargetLabel(target)}.`;
+        } catch (error) {
+          if (!this.isCurrentPluginLoad(requestSeq, target)) return;
+          this.pluginError = `Failed to load PI WEB plugin config from ${settingsMachineTargetLabel(target)}: ${friendlySelectedMachineSettingsErrorMessage(errorMessage(error), target)}; ${lifecycleSupport.message ?? "plugin lifecycle diagnostics are unsupported"}`;
+        }
+        return;
+      }
+
       const [config, plugins] = await Promise.allSettled([configApi.config(target.id), pluginsApi.plugins(target.id)]);
       if (!this.isCurrentPluginLoad(requestSeq, target)) return;
 
@@ -354,6 +373,7 @@ export class SettingsDialog extends LitElement {
       this.pluginError = support.message ?? `Selected-machine settings are not available on ${settingsMachineTargetLabel(target)}.`;
       return;
     }
+    const lifecycleSupport = this.pluginLifecycleSupport(target);
     if (this.selectedPluginConfigResponse === undefined) {
       this.pluginError = `Plugin config is not loaded for ${settingsMachineTargetLabel(target)}. Reload before changing plugin enablement.`;
       return;
@@ -370,7 +390,13 @@ export class SettingsDialog extends LitElement {
         this.configResponse = mergeSelectedMachinePluginConfig(this.configResponse, response);
         this.onConfigSaved?.(this.configResponse.effectiveConfig);
       }
-      const pluginRefreshError = await this.refreshPluginsForTarget(target);
+      let pluginRefreshError: string | undefined;
+      if (isSelectedMachineSettingsUnsupported(lifecycleSupport)) {
+        this.selectedPluginsResponse = undefined;
+        pluginRefreshError = lifecycleSupport.message ?? `Plugin lifecycle diagnostics are not available on ${settingsMachineTargetLabel(target)}.`;
+      } else {
+        pluginRefreshError = await this.refreshPluginsForTarget(target);
+      }
       if (!this.isCurrentSettingsTarget(target)) return;
       if (pluginRefreshError !== undefined) this.pluginError = pluginRefreshError;
       this.showSavedMessage();
@@ -525,6 +551,7 @@ export class SettingsDialog extends LitElement {
       if (this.isCurrentSettingsTarget(target)) this.selectedPluginsResponse = response;
       return undefined;
     } catch (error) {
+      if (this.isCurrentSettingsTarget(target)) this.selectedPluginsResponse = undefined;
       return `Config saved, but failed to refresh PI WEB plugins from ${settingsMachineTargetLabel(target)}: ${friendlySelectedMachineSettingsErrorMessage(errorMessage(error), target)}`;
     }
   }
@@ -545,9 +572,19 @@ export class SettingsDialog extends LitElement {
     return agentProfileSettingsSupport(target, this.machineRuntime);
   }
 
+  private pluginLifecycleSupport(target = this.settingsTarget()): PluginLifecycleSupport {
+    return pluginLifecycleSupport(target, this.machineRuntime);
+  }
+
   private selectedMachineSettingsSupportNeedsReload(previousRuntime: MachineRuntime | undefined, target: SettingsMachineTarget): boolean {
     const previousSupport = selectedMachineSettingsSupport(target, previousRuntime);
     const currentSupport = this.selectedMachineSettingsSupport(target);
+    return selectedMachineSettingsSupportKey(previousSupport) !== selectedMachineSettingsSupportKey(currentSupport);
+  }
+
+  private pluginLifecycleSupportNeedsReload(previousRuntime: MachineRuntime | undefined, target: SettingsMachineTarget): boolean {
+    const previousSupport = pluginLifecycleSupport(target, previousRuntime);
+    const currentSupport = this.pluginLifecycleSupport(target);
     return selectedMachineSettingsSupportKey(previousSupport) !== selectedMachineSettingsSupportKey(currentSupport);
   }
 

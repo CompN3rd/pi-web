@@ -47,6 +47,7 @@ describe("server plugin runtime child-process fixtures", () => {
         machineSpecific: false,
         enabled: true,
         settings: {},
+        settingsRevision: "settings-1",
       });
     }
 
@@ -114,23 +115,13 @@ describe("server plugin runtime child-process fixtures", () => {
       writeFileSync(${JSON.stringify(markerPath)}, "imported");
       process.exit(97);
     `, "utf8");
-    const entry = {
-      id: "bundled-poison",
-      packageRoot: pluginRoot,
-      serverModule: { path: "server.mjs", filePath: modulePath, revision: "1" },
-      source: "bundled",
-      scope: "bundled",
-      machineSpecific: false,
-      enabled: true,
-      settings: {},
-    };
     const runnerPath = join(root, "runner.mjs");
     const runtimeUrl = pathToFileURL(resolve("src/server/plugins/serverPluginRuntime.ts")).href;
     await writeFile(runnerPath, `
       import { createServerPluginRuntime } from ${JSON.stringify(runtimeUrl)};
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
       const runtime = await createServerPluginRuntime({
-        catalog: { snapshot: async () => ({ plugins: [${JSON.stringify(entry)}], diagnostics: [] }) },
+        catalog: { snapshot: async () => { throw new Error("safe start must bypass catalog discovery"); } },
         safeStart: "none",
         logger,
       });
@@ -143,11 +134,7 @@ describe("server plugin runtime child-process fixtures", () => {
     });
     const records: unknown = JSON.parse(result.stdout);
 
-    expect(records).toMatchObject([{
-      pluginId: "bundled-poison",
-      state: "disabled",
-      message: "disabled by no-server-plugin safe start",
-    }]);
+    expect(records).toEqual([]);
     expect(existsSync(markerPath)).toBe(false);
   });
 });

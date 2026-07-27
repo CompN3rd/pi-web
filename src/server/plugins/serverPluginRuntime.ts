@@ -32,6 +32,9 @@ export interface ServerPluginRuntimeRecord {
   source: string;
   scope: PiWebPluginScope;
   moduleRevision: string;
+  browserRevision?: string;
+  settingsRevision: string;
+  machineSpecific: boolean;
   state: ServerPluginRuntimeState;
   name?: string;
   phase?: ServerPluginLifecyclePhase;
@@ -91,7 +94,10 @@ const DEFAULT_LIFECYCLE_TIMEOUT_MS = 10_000;
 export async function createServerPluginRuntime(
   options: CreateServerPluginRuntimeOptions,
 ): Promise<ServerPluginRuntime> {
-  const snapshot = await options.catalog.snapshot();
+  if (options.safeStart === "none") {
+    return await ServerPluginRuntime.activate({ plugins: [], diagnostics: [] }, options);
+  }
+  const snapshot = await options.catalog.snapshot(options.safeStart === "bundled-only" ? { scope: "bundled" } : undefined);
   return await ServerPluginRuntime.activate(snapshot, options);
 }
 
@@ -322,6 +328,9 @@ function recordFor(
     source: entry.source,
     scope: entry.scope,
     moduleRevision: requireServerModule(entry).revision,
+    ...(entry.browserModule === undefined ? {} : { browserRevision: entry.browserModule.revision }),
+    settingsRevision: entry.settingsRevision,
+    machineSpecific: entry.machineSpecific,
     state: status.state,
     ...(status.name === undefined ? {} : { name: status.name }),
     ...(status.phase === undefined ? {} : { phase: status.phase }),

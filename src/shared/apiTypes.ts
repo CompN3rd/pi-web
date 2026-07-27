@@ -16,6 +16,7 @@ export const PI_WEB_CAPABILITIES = {
   piPackagesManage: "piPackages.manage",
   selectedMachineSettings: "settings.selectedMachine",
   agentProfileConfig: "settings.agentProfile",
+  pluginLifecycle: "plugins.lifecycle",
 } as const;
 
 export type PiWebCapability = typeof PI_WEB_CAPABILITIES[keyof typeof PI_WEB_CAPABILITIES];
@@ -109,18 +110,77 @@ export interface PiWebConfigValues {
 
 export type PiWebPluginScope = "bundled" | "local" | "user" | "project";
 
+export const PI_WEB_PLUGIN_LIFECYCLE_VERSION = 1;
+
+export type PiWebPluginServerState = "active" | "failed" | "incompatible" | "disabled" | "missing" | "unknown";
+export type PiWebPluginLifecyclePhase = "import" | "activate" | "validate" | "start" | "health" | "stop";
+export type PiWebPluginHealthStatus = "healthy" | "degraded" | "unhealthy";
+export type PiWebPluginRuntimeStatus = "available" | "unavailable" | "incompatible";
+export type PiWebPluginSafeStart = "bundled-only" | "none";
+
+export interface PiWebPluginServerInfo {
+  state: PiWebPluginServerState;
+  desiredRevision?: string;
+  activeRevision?: string;
+  phase?: PiWebPluginLifecyclePhase;
+  message?: string;
+  health?: {
+    status: PiWebPluginHealthStatus;
+    message?: string;
+  };
+  staleRevision: boolean;
+  restartRequired: boolean;
+  /** Exact offline command; plugin ids are restricted to shell-safe bare ids. */
+  disableCommand: string;
+}
+
 export interface PiWebPluginInfo {
   id: string;
-  /** Browser module URL. Absent for a server-only plugin. */
+  /** Browser module URL for the currently discovered package, if any. */
   module?: string;
   source: string;
   scope: PiWebPluginScope;
   machineSpecific: boolean;
+  /** Desired config state; the active server snapshot may intentionally differ. */
   enabled: boolean;
+  /** False when only the still-active sessiond snapshot knows this plugin. */
+  discovered: boolean;
+  /** A duplicate id was diagnosed in either the desired or active catalog. */
+  conflict: boolean;
+  server?: PiWebPluginServerInfo;
+}
+
+export interface PiWebPluginDiagnostic {
+  kind: "conflict" | "discovery";
+  snapshot: "desired" | "active";
+  source: string;
+  message: string;
+  pluginId?: string;
+}
+
+export interface PiWebPluginRecoveryCommands {
+  showSafeStart: string;
+  bundledOnly: string;
+  noServerPlugins: string;
+  clearSafeStart: string;
+}
+
+export interface PiWebPluginRuntimeInfo {
+  status: PiWebPluginRuntimeStatus;
+  /** Safe-start level active in sessiond; absence means sessiond started normally. */
+  safeStart?: PiWebPluginSafeStart;
+  /** Current offline recovery config, including explicit `off` when known. */
+  desiredSafeStart?: PiWebPluginSafeStart | "off";
+  restartRequired: boolean;
+  message?: string;
+  recovery: PiWebPluginRecoveryCommands;
 }
 
 export interface PiWebPluginsResponse {
+  lifecycleVersion: typeof PI_WEB_PLUGIN_LIFECYCLE_VERSION;
   plugins: PiWebPluginInfo[];
+  diagnostics: PiWebPluginDiagnostic[];
+  serverRuntime: PiWebPluginRuntimeInfo;
 }
 
 export type PiPackageScope = "user" | "project";

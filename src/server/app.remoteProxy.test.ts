@@ -118,6 +118,52 @@ describe("buildApp remote machine proxy routes", () => {
     );
   });
 
+  it("maps an old remote provider-backend route to an explicit lifecycle compatibility error", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    appTestContext.remoteClient = fakeRemoteClient({
+      request: vi.fn<MachineClient["request"]>(() => Promise.resolve({
+        statusCode: 404,
+        headers: { "content-type": "application/json" },
+        body: Readable.from([JSON.stringify({ statusCode: 404, error: "Not Found", message: "Route POST:/api/plugin-backends/tools/projects/p1/workspaces/w1/status not found" })]),
+      })),
+    });
+
+    const response = await appTestContext.app.inject({
+      method: "POST",
+      url: `/api/machines/${remote.id}/plugin-backends/tools/projects/p1/workspaces/w1/status`,
+      payload: { revision: "server-r1", input: null },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: "Remote machine plugin lifecycle is incompatible",
+      code: "plugin-lifecycle-incompatible",
+      machineId: remote.id,
+    });
+  });
+
+  it("preserves a provider backend's legitimate resource 404", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    appTestContext.remoteClient = fakeRemoteClient({
+      request: vi.fn<MachineClient["request"]>(() => Promise.resolve({
+        statusCode: 404,
+        headers: { "content-type": "application/json" },
+        body: Readable.from([JSON.stringify({ error: "Not Found", code: "workspace-resource-not-found", detail: "Card was removed" })]),
+      })),
+    });
+
+    const response = await appTestContext.app.inject({
+      method: "POST",
+      url: `/api/machines/${remote.id}/plugin-backends/tools/projects/p1/workspaces/w1/card.get`,
+      payload: { revision: "server-r1", input: { cardId: "gone" } },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "Not Found", code: "workspace-resource-not-found", detail: "Card was removed" });
+  });
+
   it("stops oversized federated plugin backend responses at the gateway", async () => {
     const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
     const remote = addResponse.json<{ id: string }>();

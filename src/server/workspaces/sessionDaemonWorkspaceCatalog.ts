@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import type { ServerPluginHealth } from "../../server-plugin-api.js";
 import type { ServerPluginSafeStart } from "../../serverPluginRecovery.js";
 import type { JsonObject, JsonValue, Workspace } from "../../shared/apiTypes.js";
+import { isPiWebPluginId } from "../../shared/pluginIds.js";
 import type { SessionDaemonRequestClient } from "../../sessiond/sessionDaemonClient.js";
 import type {
   ServerPluginHealthInspection,
@@ -9,10 +10,12 @@ import type {
   ServerPluginRuntimeRecord,
   ServerPluginRuntimeState,
 } from "../plugins/serverPluginRuntime.js";
+import type { PiWebPluginCatalogDiagnostic, PiWebPluginCatalogDiagnosticCode } from "../piWebPluginCatalog.js";
 import {
   WorkspaceCatalogProtocolError,
   WorkspaceCatalogRequestError,
   WorkspaceCatalogUnavailableError,
+  WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION,
   type WorkspaceCatalog,
   type WorkspaceProviderRuntimeSnapshot,
   withBrowserV1WorkspaceCompatibility,
@@ -124,7 +127,7 @@ function parseProvider(value: unknown, workspaceLabel: string): NonNullable<Work
   if (!isRecord(capabilities)) throw protocolError(`${label} capabilities must be an object`);
   const metadata = value["metadata"] === undefined ? undefined : parseJsonObject(value["metadata"], `${label} metadata`);
   return {
-    pluginId: requireString(value, "pluginId", label),
+    pluginId: requirePluginId(value, "pluginId", label),
     capabilities: {
       request: requireBoolean(capabilities, "request", `${label} capabilities`),
       remove: requireBoolean(capabilities, "remove", `${label} capabilities`),
@@ -144,13 +147,19 @@ function parseRemoval(value: unknown, workspaceLabel: string): NonNullable<Works
 
 function parseProviderRuntimeSnapshot(value: unknown): WorkspaceProviderRuntimeSnapshot {
   if (!isRecord(value)) throw protocolError("provider runtime response must be an object");
+  if (value["protocolVersion"] !== WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION) {
+    throw protocolError("provider runtime protocol is unsupported; restart or upgrade the session daemon");
+  }
   const safeStart = parseSafeStart(value["safeStart"]);
   const records = parseArray(value["records"], "provider runtime records", parseRuntimeRecord);
   const health = parseArray(value["health"], "provider runtime health", parseHealthInspection);
+  const diagnostics = parseArray(value["diagnostics"], "provider runtime diagnostics", parseCatalogDiagnostic);
   return Object.freeze({
+    protocolVersion: WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION,
     ...(safeStart === undefined ? {} : { safeStart }),
     records: Object.freeze(records),
     health: Object.freeze(health),
+    diagnostics: Object.freeze(diagnostics),
   });
 }
 
@@ -167,15 +176,33 @@ function parseRuntimeRecord(value: unknown, index: number): ServerPluginRuntimeR
   if (phase !== undefined && !isLifecyclePhase(phase)) throw protocolError(`${label} phase is invalid`);
   const name = optionalString(value, "name", label);
   const message = optionalString(value, "message", label);
+  const browserRevision = optionalString(value, "browserRevision", label);
   return Object.freeze({
-    pluginId: requireString(value, "pluginId", label),
+    pluginId: requirePluginId(value, "pluginId", label),
     source: requireString(value, "source", label),
     scope,
     moduleRevision: requireString(value, "moduleRevision", label),
+    ...(browserRevision === undefined ? {} : { browserRevision }),
+    settingsRevision: requireString(value, "settingsRevision", label),
+    machineSpecific: requireBoolean(value, "machineSpecific", label),
     state,
     ...(name === undefined ? {} : { name }),
     ...(phase === undefined ? {} : { phase }),
     ...(message === undefined ? {} : { message }),
+  });
+}
+
+function parseCatalogDiagnostic(value: unknown, index: number): PiWebPluginCatalogDiagnostic {
+  const label = `provider runtime diagnostic ${String(index + 1)}`;
+  if (!isRecord(value)) throw protocolError(`${label} must be an object`);
+  const code = value["code"];
+  if (!isCatalogDiagnosticCode(code)) throw protocolError(`${label} code is invalid`);
+  const pluginId = optionalPluginId(value, "pluginId", label);
+  return Object.freeze({
+    code,
+    source: requireString(value, "source", label),
+    message: requireString(value, "message", label),
+    ...(pluginId === undefined ? {} : { pluginId }),
   });
 }
 
@@ -186,7 +213,7 @@ function parseHealthInspection(value: unknown, index: number): ServerPluginHealt
   if (phase !== undefined && phase !== "health") throw protocolError(`${label} phase is invalid`);
   const error = optionalString(value, "error", label);
   return Object.freeze({
-    pluginId: requireString(value, "pluginId", label),
+    pluginId: requirePluginId(value, "pluginId", label),
     health: parseHealth(value["health"], label),
     ...(phase === undefined ? {} : { phase }),
     ...(error === undefined ? {} : { error }),
@@ -254,6 +281,18 @@ function optionalString(record: Record<string, unknown>, field: string, label: s
   return value;
 }
 
+function requirePluginId(record: Record<string, unknown>, field: string, label: string): string {
+  const value = requireString(record, field, label);
+  if (!isPiWebPluginId(value)) throw protocolError(`${label} ${field} is invalid`);
+  return value;
+}
+
+function optionalPluginId(record: Record<string, unknown>, field: string, label: string): string | undefined {
+  const value = optionalString(record, field, label);
+  if (value !== undefined && !isPiWebPluginId(value)) throw protocolError(`${label} ${field} is invalid`);
+  return value;
+}
+
 function requireBoolean(record: Record<string, unknown>, field: string, label: string): boolean {
   const value = record[field];
   if (typeof value !== "boolean") throw protocolError(`${label} ${field} must be a boolean`);
@@ -266,6 +305,10 @@ function isRuntimeState(value: unknown): value is ServerPluginRuntimeState {
 
 function isLifecyclePhase(value: unknown): value is ServerPluginLifecyclePhase {
   return value === "import" || value === "activate" || value === "validate" || value === "start" || value === "health" || value === "stop";
+}
+
+function isCatalogDiagnosticCode(value: unknown): value is PiWebPluginCatalogDiagnosticCode {
+  return value === "invalid-package" || value === "duplicate-id";
 }
 
 function encodedId(value: string, label: string): string {

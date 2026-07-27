@@ -68,7 +68,21 @@ export function configResponse(config: PiWebConfigValues): PiWebConfigResponse {
 }
 
 export function pluginsResponse(plugins: PiWebPluginInfo[]): PiWebPluginsResponse {
-  return { plugins };
+  return {
+    lifecycleVersion: 1,
+    plugins,
+    diagnostics: [],
+    serverRuntime: {
+      status: "available",
+      restartRequired: false,
+      recovery: {
+        showSafeStart: "pi-web plugins safe-start show",
+        bundledOnly: "pi-web plugins safe-start set bundled-only --restart",
+        noServerPlugins: "pi-web plugins safe-start set none --restart",
+        clearSafeStart: "pi-web plugins safe-start clear --restart",
+      },
+    },
+  };
 }
 
 export function pluginInfo(id: string, enabled: boolean): PiWebPluginInfo {
@@ -79,6 +93,8 @@ export function pluginInfo(id: string, enabled: boolean): PiWebPluginInfo {
     scope: "local",
     machineSpecific: false,
     enabled,
+    discovered: true,
+    conflict: false,
   };
 }
 

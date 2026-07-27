@@ -42,6 +42,7 @@ describe("external plugin manifests", () => {
   it("loads the bundled Git browser entry through the same remote manifest and registry path", async () => {
     const manifestUrl = "https://pi.example.test/api/machines/remote-1/pi-web-plugins/manifest.json";
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      lifecycleVersion: 1,
       plugins: [{ id: "git", module: "./git/pi-web-plugin.js?v=git-r1", backendRevision: "git-server-r1", machineSpecific: true }],
     })))));
     const moduleLoader = vi.fn(() => Promise.resolve({ default: gitPlugin }));
@@ -60,6 +61,30 @@ describe("external plugin manifests", () => {
       machineSpecific: true,
     }]);
     expect(registry.getWorkspacePanels().map((panel) => panel.id)).toEqual([`${registrationPluginId}:workspace.git`]);
+  });
+
+  it("rejects duplicate manifest ids before importing either module", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      plugins: [
+        { id: "duplicate", module: "./duplicate/one.js" },
+        { id: "duplicate", module: "./duplicate/two.js" },
+      ],
+    })))));
+    const moduleLoader = vi.fn(() => Promise.resolve({ default: { apiVersion: 1, name: "Duplicate", activate: () => ({ contributions: {} }) } }));
+
+    await expect(loadExternalPlugins(undefined, { moduleLoader })).rejects.toThrow("Duplicate plugin manifest id: duplicate");
+    expect(moduleLoader).not.toHaveBeenCalled();
+  });
+
+  it("preserves structured gateway lifecycle errors", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      error: "Remote machine plugin lifecycle is incompatible",
+      detail: "Update and restart PI WEB on the remote machine.",
+    }), { status: 409, statusText: "Conflict" }))));
+
+    await expect(loadExternalPlugins("api/machines/remote-1/pi-web-plugins/manifest.json")).rejects.toThrow(
+      "Failed to load plugin manifest (409 Conflict): Remote machine plugin lifecycle is incompatible: Update and restart PI WEB on the remote machine.",
+    );
   });
 
   it("treats root-style modules from existing manifests as application-root paths", () => {

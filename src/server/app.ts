@@ -17,6 +17,7 @@ import { loadEffectiveProjectUploadsConfig } from "./workspaces/projectPiWebConf
 import { normalizeRequestCwd } from "./workingDirectory.js";
 import { listDirectorySuggestions } from "./projects/directorySuggestions.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
+import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
 import { registerSessionProxyRoutes, type SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
 import { registerWorkspaceExplorerRoutes } from "./workspaceExplorerRoutes.js";
 import { registerTerminalProxyRoutes } from "./terminalProxyRoutes.js";
@@ -135,6 +136,20 @@ async function readEffectiveConfig(config: Pick<PiWebConfigService, "read">) {
   return (await config.read()).effectiveConfig;
 }
 
+async function desiredPluginAgentDir(
+  profiles: ActiveAgentProfileProvider,
+  config: Pick<PiWebConfigService, "read">,
+): Promise<string> {
+  try {
+    return (await requireActiveAgentProfile(profiles)).dir;
+  } catch (error) {
+    if (!(error instanceof ActiveAgentProfileAccessError)) throw error;
+    const desiredDir = (await config.read()).effectiveConfig.agent?.dir;
+    if (desiredDir === undefined || desiredDir === "") throw error;
+    return desiredDir;
+  }
+}
+
 function invalidatePiWebStatusOnWrite(config: PiWebConfigService, statusCache: Pick<PiWebStatusCache, "invalidate">): PiWebConfigService {
   return {
     read: () => config.read(),
@@ -170,11 +185,14 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   const configService = deps.config ?? createFilePiWebConfigService();
   const readConfig = () => readEffectiveConfig(configService);
   const sessionDaemon = deps.sessionDaemon ?? new SessionDaemonClient();
-  const workspaces = deps.workspaceCatalog ?? new SessionDaemonWorkspaceCatalog(sessionDaemon);
+  const daemonWorkspaces = new SessionDaemonWorkspaceCatalog(sessionDaemon);
+  const workspaces = deps.workspaceCatalog ?? daemonWorkspaces;
   const agentProfileProvider = deps.agentProfileProvider ?? new SessionDaemonActiveAgentProfileProvider(sessionDaemon);
   const piWebPlugins = deps.piWebPlugins ?? new PiWebPluginService({
     configProvider: readConfig,
-    agentDirProvider: async () => (await requireActiveAgentProfile(agentProfileProvider)).dir,
+    agentDirProvider: () => desiredPluginAgentDir(agentProfileProvider, configService),
+    runtimeProvider: daemonWorkspaces,
+    recoveryProvider: () => loadServerPluginRecoveryConfig(),
   });
   const piPackages = deps.piPackages ?? createActiveProfilePiPackageService(agentProfileProvider);
   const piWebStatusCache = deps.piWebStatusCache ?? createPiWebStatusCache(
@@ -197,7 +215,11 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
     if (await proxyMachinePluginAsset(machines, request.params.pluginId, request.params["*"], request.url, reply)) return;
 
     return withProfileDependency(reply, async () => {
-      const asset = await piWebPlugins.readAsset(request.params.pluginId, request.params["*"]);
+      const asset = await piWebPlugins.readAsset(
+        request.params.pluginId,
+        request.params["*"],
+        new URL(request.url, "http://pi-web.local").searchParams.get("v") ?? undefined,
+      );
       if (asset === undefined) return reply.code(404).send({ error: "Plugin asset not found" });
       return reply.type(asset.contentType).send(asset.content);
     });

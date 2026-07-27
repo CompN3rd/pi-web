@@ -129,6 +129,7 @@ await runSessionDaemonStartup({
         serverPlugins.healthRecords(),
         providerHealth,
         serverPlugins.safeStartLevel(),
+        serverPlugins.catalogDiagnostics(),
       );
       const spawnTargets = config.spawnSessions
         ? new ProjectScopedSpawnTargetResolver({ projects, workspaces: workspaceProviders })

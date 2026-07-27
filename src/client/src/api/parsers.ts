@@ -1,7 +1,8 @@
-import { ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceActivity, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
+import { PI_WEB_PLUGIN_LIFECYCLE_VERSION, ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceActivity, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
 import type { JsonValue, PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot } from "../../../shared/apiTypes";
 import { parseActiveAgentProfileDescriptor } from "../../../shared/activeAgentProfile";
 import { parseKnownPiWebCapabilities } from "../../../shared/capabilities";
+import { PI_WEB_PLUGIN_RECOVERY_COMMANDS, pluginDisableRecoveryCommand } from "../../../shared/pluginRecoveryCommands";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -1255,19 +1256,133 @@ function parsePiPackageMutationAction(value: unknown): PiPackageMutationAction {
 
 export function parsePiWebPluginsResponse(value: unknown): PiWebPluginsResponse {
   const record = requireRecord(value);
-  return { plugins: arrayOf(parsePiWebPluginInfo)(record["plugins"]) };
+  const plugins = arrayOf(parsePiWebPluginInfo)(record["plugins"]);
+  if (record["lifecycleVersion"] === undefined) {
+    return {
+      lifecycleVersion: PI_WEB_PLUGIN_LIFECYCLE_VERSION,
+      plugins,
+      diagnostics: [],
+      serverRuntime: {
+        status: "incompatible",
+        restartRequired: false,
+        message: "PI WEB does not support plugin lifecycle diagnostics. Update and restart PI WEB, then try again.",
+        recovery: legacyPluginRecoveryCommands(),
+      },
+    };
+  }
+  if (record["lifecycleVersion"] !== PI_WEB_PLUGIN_LIFECYCLE_VERSION) throw new Error("Unsupported PI WEB plugin lifecycle version");
+  return {
+    lifecycleVersion: PI_WEB_PLUGIN_LIFECYCLE_VERSION,
+    plugins,
+    diagnostics: arrayOf(parsePiWebPluginDiagnostic)(record["diagnostics"]),
+    serverRuntime: parsePiWebPluginRuntimeInfo(record["serverRuntime"]),
+  };
 }
 
 function parsePiWebPluginInfo(value: unknown): PiWebPluginInfo {
   const record = requireRecord(value);
+  const id = requireString(record, "id");
+  const server = record["server"] === undefined ? undefined : parsePiWebPluginServerInfo(record["server"], id);
   return {
-    id: requireString(record, "id"),
+    id,
     ...optionalField("module", optionalString(record, "module")),
     source: requireString(record, "source"),
     scope: parsePiWebPluginScope(record["scope"]),
     machineSpecific: parseOptionalBoolean(record["machineSpecific"], "machineSpecific") ?? false,
     enabled: requireBoolean(record, "enabled"),
+    discovered: parseOptionalBoolean(record["discovered"], "discovered") ?? true,
+    conflict: parseOptionalBoolean(record["conflict"], "conflict") ?? false,
+    ...(server === undefined ? {} : { server }),
   };
+}
+
+function parsePiWebPluginServerInfo(value: unknown, pluginId: string): NonNullable<PiWebPluginInfo["server"]> {
+  const record = requireRecord(value);
+  const state = record["state"];
+  const phase = record["phase"];
+  if (state !== "active" && state !== "failed" && state !== "incompatible" && state !== "disabled" && state !== "missing" && state !== "unknown") {
+    throw new Error("Invalid PI WEB server plugin state");
+  }
+  if (phase !== undefined && phase !== "import" && phase !== "activate" && phase !== "validate" && phase !== "start" && phase !== "health" && phase !== "stop") {
+    throw new Error("Invalid PI WEB server plugin phase");
+  }
+  const health = record["health"] === undefined ? undefined : parsePiWebPluginHealth(record["health"]);
+  const disableCommand = requireString(record, "disableCommand");
+  if (disableCommand !== pluginDisableRecoveryCommand(pluginId)) throw new Error("Invalid PI WEB server plugin recovery command");
+  return {
+    state,
+    ...optionalField("desiredRevision", optionalString(record, "desiredRevision")),
+    ...optionalField("activeRevision", optionalString(record, "activeRevision")),
+    ...(phase === undefined ? {} : { phase }),
+    ...optionalField("message", optionalString(record, "message")),
+    ...(health === undefined ? {} : { health }),
+    staleRevision: requireBoolean(record, "staleRevision"),
+    restartRequired: requireBoolean(record, "restartRequired"),
+    disableCommand,
+  };
+}
+
+function parsePiWebPluginHealth(value: unknown): NonNullable<NonNullable<PiWebPluginInfo["server"]>["health"]> {
+  const record = requireRecord(value);
+  const status = record["status"];
+  if (status !== "healthy" && status !== "degraded" && status !== "unhealthy") throw new Error("Invalid PI WEB server plugin health status");
+  return { status, ...optionalField("message", optionalString(record, "message")) };
+}
+
+function parsePiWebPluginDiagnostic(value: unknown): PiWebPluginsResponse["diagnostics"][number] {
+  const record = requireRecord(value);
+  const kind = record["kind"];
+  const snapshot = record["snapshot"];
+  if (kind !== "conflict" && kind !== "discovery") throw new Error("Invalid PI WEB plugin diagnostic kind");
+  if (snapshot !== "desired" && snapshot !== "active") throw new Error("Invalid PI WEB plugin diagnostic snapshot");
+  return {
+    kind,
+    snapshot,
+    source: requireString(record, "source"),
+    message: requireString(record, "message"),
+    ...optionalField("pluginId", optionalString(record, "pluginId")),
+  };
+}
+
+function parsePiWebPluginRuntimeInfo(value: unknown): PiWebPluginsResponse["serverRuntime"] {
+  const record = requireRecord(value);
+  const status = record["status"];
+  const safeStart = record["safeStart"];
+  const desiredSafeStart = record["desiredSafeStart"];
+  if (status !== "available" && status !== "unavailable" && status !== "incompatible") throw new Error("Invalid PI WEB server-plugin runtime status");
+  if (safeStart !== undefined && safeStart !== "bundled-only" && safeStart !== "none") throw new Error("Invalid PI WEB server-plugin safe-start state");
+  if (desiredSafeStart !== undefined && desiredSafeStart !== "off" && desiredSafeStart !== "bundled-only" && desiredSafeStart !== "none") {
+    throw new Error("Invalid desired PI WEB server-plugin safe-start state");
+  }
+  return {
+    status,
+    ...(safeStart === undefined ? {} : { safeStart }),
+    ...(desiredSafeStart === undefined ? {} : { desiredSafeStart }),
+    restartRequired: requireBoolean(record, "restartRequired"),
+    ...optionalField("message", optionalString(record, "message")),
+    recovery: parsePiWebPluginRecoveryCommands(record["recovery"]),
+  };
+}
+
+function parsePiWebPluginRecoveryCommands(value: unknown): PiWebPluginsResponse["serverRuntime"]["recovery"] {
+  const record = requireRecord(value);
+  const commands = {
+    showSafeStart: requireString(record, "showSafeStart"),
+    bundledOnly: requireString(record, "bundledOnly"),
+    noServerPlugins: requireString(record, "noServerPlugins"),
+    clearSafeStart: requireString(record, "clearSafeStart"),
+  };
+  if (commands.showSafeStart !== PI_WEB_PLUGIN_RECOVERY_COMMANDS.showSafeStart
+    || commands.bundledOnly !== PI_WEB_PLUGIN_RECOVERY_COMMANDS.bundledOnly
+    || commands.noServerPlugins !== PI_WEB_PLUGIN_RECOVERY_COMMANDS.noServerPlugins
+    || commands.clearSafeStart !== PI_WEB_PLUGIN_RECOVERY_COMMANDS.clearSafeStart) {
+    throw new Error("Invalid PI WEB server plugin recovery commands");
+  }
+  return commands;
+}
+
+function legacyPluginRecoveryCommands(): PiWebPluginsResponse["serverRuntime"]["recovery"] {
+  return { ...PI_WEB_PLUGIN_RECOVERY_COMMANDS };
 }
 
 function parsePiWebPluginScope(value: unknown): PiWebPluginScope {
