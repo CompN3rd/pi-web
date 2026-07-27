@@ -38,7 +38,9 @@ import { runSessionDaemonStartup } from "./sessiond/sessionDaemonStartup.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
 import { registerWorkspaceCatalogRoutes } from "./sessiond/workspaceCatalogRoutes.js";
 import { registerPluginBackendRoutes } from "./sessiond/pluginBackendRoutes.js";
+import { registerWorkspaceRemovalRoutes } from "./sessiond/workspaceRemovalRoutes.js";
 import { createWorkspaceProviderRuntimeSnapshot } from "./workspaces/workspaceCatalog.js";
+import { WorkspaceRemovalService } from "./workspaces/workspaceRemovalService.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
 const serverPluginRecovery = loadServerPluginRecoveryConfig({ env: daemonEnvironment });
@@ -150,6 +152,7 @@ await runSessionDaemonStartup({
       }));
       auth.subscribe((change) => { sessions.applyAuthChange(change); });
       const terminals = new TerminalService(eventHub, workspaceActivity);
+      const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals);
       const runtimeComponent = Object.freeze({
         ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES),
         activeAgentProfile,
@@ -173,7 +176,7 @@ await runSessionDaemonStartup({
           onFailure: () => { process.exitCode = 1; },
         });
       };
-      return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, workspaceProviderRuntime, shutdown };
+      return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals, shutdown };
     } catch (error) {
       try {
         await serverPlugins.stop();
@@ -183,7 +186,7 @@ await runSessionDaemonStartup({
       throw error;
     }
   },
-  registerRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent, projects, workspaceProviders, workspaceProviderRuntime }) {
+  registerRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals }) {
     registerWorkspaceActivityRoutes(app, workspaceActivity);
     registerAuthRoutes(app, auth);
     registerSessionRoutes(app, sessions, eventHub);
@@ -196,6 +199,10 @@ await runSessionDaemonStartup({
     registerPluginBackendRoutes(app, {
       projects,
       backends: workspaceProviders,
+    });
+    registerWorkspaceRemovalRoutes(app, {
+      projects,
+      removals: workspaceRemovals,
     });
 
     app.get("/health", () => ({

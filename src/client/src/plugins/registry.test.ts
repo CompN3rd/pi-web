@@ -162,14 +162,22 @@ describe("PluginRegistry", () => {
     expect(active.find((action) => action.id === "core:view.terminal")?.enabled).toBe(true);
     expect(active.find((action) => action.id === "core:workspace.delete")?.enabled).toBe(false);
 
-    const deletable = registry.getActions(createContext({ selectedWorkspace: testWorkspace({ isMain: false, isGitWorktree: true }) }).context);
-    expect(deletable.find((action) => action.id === "core:workspace.delete")?.enabled).toBe(true);
+    const deletable = registry.getActions(createContext({ selectedWorkspace: testWorkspace({
+      isMain: false,
+      removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?" },
+    }) }).context);
+    const removalAction = deletable.find((action) => action.id === "core:workspace.delete");
+    expect(removalAction?.enabled).toBe(true);
+    expect(removalAction?.title).toBe("Remove Workspace");
   });
 
   it("routes workspace delete through the runtime context", () => {
     const registry = new PluginRegistry();
     registry.register({ id: "core", plugin: corePlugin });
-    const { context, calls } = createContext({ selectedWorkspace: testWorkspace({ isMain: false, isGitWorktree: true }) });
+    const { context, calls } = createContext({ selectedWorkspace: testWorkspace({
+      isMain: false,
+      removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?" },
+    }) });
     const action = registry.getActions(context).find((candidate) => candidate.id === "core:workspace.delete");
 
     if (action !== undefined) void action.run();

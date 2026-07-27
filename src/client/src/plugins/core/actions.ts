@@ -3,7 +3,7 @@ import { PI_WEB_CAPABILITIES, supportsPiWebCapability, type PiWebCapability } fr
 import type { AppState } from "../../appState";
 import { selectedMachineId } from "../../controllers/types";
 import { isArchivableSessionInfo, isTransientNewSessionInfo, sessionPersistenceOptionsForRuntime } from "../../sessionPersistence";
-import { isWorkspaceDeletionPending } from "../../workspaceDeletion";
+import { canDeleteWorkspace, isWorkspaceDeletionPending } from "../../workspaceDeletion";
 import type { PluginAction } from "../types";
 
 export function createCoreActions(): PluginAction[] {
@@ -153,8 +153,8 @@ export function createCoreActions(): PluginAction[] {
     },
     {
       id: "workspace.delete",
-      title: "Delete Workspace",
-      description: "Remove the selected Git worktree",
+      title: "Remove Workspace",
+      description: "Run the owning provider's workspace removal operation",
       group: "Workspace",
       enabled: hasDeletableWorkspace,
       run: (context) => context.deleteWorkspace(),
@@ -229,7 +229,7 @@ function hasGitWorkspace(context: { state: AppState }): boolean {
 
 function hasDeletableWorkspace(context: { state: AppState }): boolean {
   const workspace = context.state.selectedWorkspace;
-  return workspace !== undefined && workspace.isGitWorktree && !workspace.isMain && !isWorkspaceDeletionPending(context.state, workspace);
+  return canDeleteWorkspace(workspace) && !isWorkspaceDeletionPending(context.state, workspace);
 }
 
 function hasSelectableSession(context: { state: AppState }): boolean {

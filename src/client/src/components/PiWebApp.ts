@@ -15,7 +15,7 @@ import { ProjectActivityOwnershipCoordinator } from "../controllers/projectActiv
 import { PiWebStatusController } from "../controllers/piWebStatusController";
 import { SessionController } from "../controllers/sessionController";
 import { SessionNotificationController } from "../controllers/sessionNotificationController";
-import { WorkspaceController, canDeleteWorkspace } from "../controllers/workspaceController";
+import { WorkspaceController } from "../controllers/workspaceController";
 import { emptyMachineNavigationSnapshot, machineNavigationSnapshotFromState, routeFromMachineNavigationSnapshot, SessionStorageMachineNavigationMemory, type MachineNavigationSnapshot, type WorkspaceRouteSurface } from "../controllers/machineNavigationMemory";
 import { SessionStorageSessionSelectionMemory } from "../controllers/sessionSelection";
 import { SessionStorageTerminalSelectionMemory } from "../controllers/terminalSelection";
@@ -46,7 +46,7 @@ import { readRoute, writeRoute, type AppRoute } from "../route";
 import { readSettingsSection, writeSettingsSection, type SettingsSection } from "../settingsRoute";
 import { applyActiveShortcutPreferences } from "../shortcutPreferences";
 import { createTerminalCommandRunsRuntime } from "../runtime/terminalRuntime";
-import { isWorkspaceDeletionPending, isWorkspaceDeletionRunPending, latestWorkspaceDeletionRuns, pendingWorkspaceDeletionIds, targetWorkspaceIdForRun, workspaceDeletionRunFilter } from "../workspaceDeletion";
+import { canDeleteWorkspace, isWorkspaceDeletionPending, isWorkspaceDeletionRunPending, latestWorkspaceDeletionRuns, pendingWorkspaceDeletionIds, targetWorkspaceIdForRun, workspaceDeletionRunFilter, workspaceRemovalConfirmation } from "../workspaceDeletion";
 import "./MachineList";
 import "./ProjectList";
 import "./WorkspaceList";
@@ -1818,13 +1818,12 @@ export class PiWebApp extends LitElement {
   private async deleteWorkspace(workspace = this.state.selectedWorkspace): Promise<void> {
     if (workspace === undefined) return;
     if (!canDeleteWorkspace(workspace)) {
-      this.setState({ error: "Only secondary Git worktrees can be deleted" });
+      this.setState({ error: "Workspace removal is not available" });
       return;
     }
     if (isWorkspaceDeletionPending(this.state, workspace)) return;
-    const label = workspace.branch ?? workspace.label;
-    const confirmed = confirm(`Delete workspace ${label}?\n\nThis will run git worktree remove and delete:\n${workspace.path}\n\nThe Git branch will not be deleted.`);
-    if (!confirmed) return;
+    const confirmation = workspaceRemovalConfirmation(workspace);
+    if (confirmation === undefined || !confirm(confirmation)) return;
 
     const machineId = selectedMachineId(this.state);
     try {
@@ -1835,7 +1834,7 @@ export class PiWebApp extends LitElement {
       if (selectedMachineId(this.state) !== machineId) return;
       if (commandWorkspace !== undefined) void this.openRuntimeTerminal(machineId, commandWorkspace, { terminalId: run.terminalId });
     } catch (error) {
-      if (selectedMachineId(this.state) === machineId) this.setState({ error: `Failed to start workspace deletion: ${errorMessage(error)}` });
+      if (selectedMachineId(this.state) === machineId) this.setState({ error: `Failed to start workspace removal: ${errorMessage(error)}` });
     }
   }
 
@@ -1909,7 +1908,7 @@ export class PiWebApp extends LitElement {
     }
 
     if (run.status === "failed") {
-      this.setState({ error: "Workspace deletion failed. See terminal output." });
+      this.setState({ error: "Workspace removal failed. See terminal output." });
       this.updateWorkspaceDeletionPolling();
     }
   }

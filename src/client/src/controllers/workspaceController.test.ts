@@ -13,8 +13,17 @@ function project(id: string, path: string): Project {
   return { id, name: id, path, createdAt: "now" };
 }
 
-function workspace(projectId: string, path: string, options: { isMain?: boolean } = {}): Workspace {
-  return { id: path, projectId, path, label: path, isMain: options.isMain ?? false, isGitRepo: true, isGitWorktree: true };
+function workspace(projectId: string, path: string, options: { isMain?: boolean; removal?: Workspace["removal"] } = {}): Workspace {
+  return {
+    id: path,
+    projectId,
+    path,
+    label: path,
+    isMain: options.isMain ?? false,
+    isGitRepo: true,
+    isGitWorktree: true,
+    ...(options.removal === undefined ? {} : { removal: options.removal }),
+  };
 }
 
 function session(cwd: string, id = "s1"): SessionInfo {
@@ -244,6 +253,36 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     // Same workspace (same id/path), so the session must survive; only the stale label moves.
     expect(test.state().selectedWorkspace).toEqual(switched);
     expect(test.state().selectedWorkspace?.id).toBe(selected.id);
+    expect(test.state().selectedSession).toBeDefined();
+    expect(test.clearActiveSession).not.toHaveBeenCalled();
+  });
+
+  it("refreshes provider removal wording without resetting the selected session", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const selected = workspace(repo.id, "/repo-feature", {
+      removal: { actionLabel: "Disconnect", confirmation: "Disconnect old view?" },
+    });
+    const refreshed = {
+      ...selected,
+      removal: { actionLabel: "Detach view", confirmation: "Detach current view?" },
+    };
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        selectedProject: repo,
+        selectedWorkspace: selected,
+        workspaces: [main, selected],
+        workspacesByProjectId: { [repo.id]: [main, selected] },
+        selectedSession: session(selected.path),
+      },
+      vi.fn().mockResolvedValue([main, refreshed]),
+    );
+
+    await test.controller.refreshSelectedProjectTopology();
+
+    expect(test.state().selectedWorkspace).toEqual(refreshed);
     expect(test.state().selectedSession).toBeDefined();
     expect(test.clearActiveSession).not.toHaveBeenCalled();
   });

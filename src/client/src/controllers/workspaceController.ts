@@ -153,10 +153,6 @@ export class WorkspaceController {
   }
 }
 
-export function canDeleteWorkspace(workspace: Workspace | undefined): boolean {
-  return workspace !== undefined && workspace.isGitWorktree && !workspace.isMain;
-}
-
 function selectFallbackWorkspace(workspaces: Workspace[]): Workspace | undefined {
   return workspaces.find((workspace) => workspace.isMain) ?? workspaces[0];
 }
@@ -167,6 +163,8 @@ function sameWorkspaceMetadata(left: Workspace, right: Workspace): boolean {
     && left.branch === right.branch
     && left.isMain === right.isMain
     && left.isGitRepo === right.isGitRepo
-    && left.isGitWorktree === right.isGitWorktree;
+    && left.isGitWorktree === right.isGitWorktree
+    && left.removal?.actionLabel === right.removal?.actionLabel
+    && left.removal?.confirmation === right.removal?.confirmation;
 }
 

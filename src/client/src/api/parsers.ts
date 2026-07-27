@@ -169,8 +169,8 @@ function optionalWorkspaceRemovalPresentation(value: unknown): Workspace["remova
   if (value === undefined) return undefined;
   if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid workspace removal field");
   return {
-    actionLabel: requireString(value, "actionLabel"),
-    confirmation: requireString(value, "confirmation"),
+    actionLabel: requireNonEmptyString(value, "actionLabel"),
+    confirmation: requireNonEmptyString(value, "confirmation"),
   };
 }
 

@@ -79,6 +79,10 @@ describe("bundled Git workspace provider", () => {
         label: "feature/with-space",
         isMain: false,
         publicMetadata: { isGitRepo: true, isGitWorktree: true, branch: "feature/with-space" },
+        removal: {
+          actionLabel: "Delete workspace",
+          confirmation: `Delete workspace feature/with-space?\n\nThis will run git worktree remove and delete:\n${linked}\n\nThe Git branch will not be deleted.`,
+        },
       }),
       expect.objectContaining({
         key: detached,
@@ -90,6 +94,29 @@ describe("bundled Git workspace provider", () => {
     ]));
     expect(workspaces.map(({ path }) => path)).not.toContain(gone);
     expect(workspaces.filter(({ isMain }) => isMain)).toHaveLength(1);
+    expect(workspaces.find(({ isMain }) => isMain)).not.toHaveProperty("removal");
+  });
+
+  it("performs live Git validation and builds the quoted native removal command", async () => {
+    const repository = await createRepository("removal repo");
+    const linked = join(repository.parent, "feature's worktree");
+    runGit(repository.path, ["worktree", "add", "-b", "feature/remove", linked]);
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const input = project(repository.path);
+    const target = (await workspaceProvider.list(input, new AbortController().signal))
+      .find(({ path }) => path === linked);
+    if (target === undefined || workspaceProvider.prepareRemove === undefined) {
+      throw new Error("Expected removable Git worktree");
+    }
+
+    await expect(workspaceProvider.prepareRemove({
+      project: input,
+      workspace: target,
+      signal: new AbortController().signal,
+    })).resolves.toEqual({
+      title: "Delete workspace: feature/remove",
+      command: `git worktree remove '${linked.replaceAll("'", "'\\''")}'`,
+    });
   });
 
   it("keeps current raw worktree paths for a registered subdirectory", async () => {

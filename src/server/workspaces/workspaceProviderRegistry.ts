@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import type { ProjectInput, ProviderClaim, ProviderWorkspace } from "../../server-plugin-api.js";
+import type {
+  ProjectInput,
+  ProviderClaim,
+  ProviderWorkspace,
+  WorkspaceRemovePlan,
+} from "../../server-plugin-api.js";
 import type {
   JsonObject,
   JsonValue,
@@ -25,7 +30,7 @@ import type {
 const DEFAULT_PROVIDER_TIMEOUT_MS = PLUGIN_BACKEND_REQUEST_TIMEOUT_MS;
 
 type ProviderTier = "primary" | "fallback";
-type ProviderOperation = "probe" | "list" | "request";
+type ProviderOperation = "probe" | "list" | "request" | "prepareRemove";
 
 export type WorkspaceProviderDiagnosticCode = "probe-failed" | "claim-conflict" | "list-failed";
 
@@ -68,6 +73,39 @@ export interface WorkspaceProviderRequest {
   workspaceId: string;
   operation: string;
   input: unknown;
+}
+
+/** Current owner snapshot used by the host-owned workspace removal orchestrator. */
+export interface WorkspaceProviderRemovalTarget {
+  ownerPluginId: string;
+  target: Workspace;
+  workspaces: readonly Workspace[];
+  /** Invoke the current owner's bounded native validation and command planner. */
+  prepare(): Promise<WorkspaceRemovePlan>;
+}
+
+export type WorkspaceProviderRemovalErrorCode =
+  | "owner-conflict"
+  | "owner-unavailable"
+  | "workspace-not-found"
+  | "removal-unavailable"
+  | "resolution-failed"
+  | "resolution-timeout"
+  | "preparation-failed"
+  | "preparation-timeout"
+  | "invalid-plan";
+
+export class WorkspaceProviderRemovalError extends Error {
+  override name = "WorkspaceProviderRemovalError";
+
+  constructor(
+    readonly code: WorkspaceProviderRemovalErrorCode,
+    readonly statusCode: number,
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+  }
 }
 
 export type WorkspaceProviderRequestErrorCode =
@@ -215,6 +253,107 @@ export class WorkspaceProviderRegistry {
       }
       throw error;
     }
+  }
+
+  /** Re-resolve one live owner/target before host safety checks and provider planning. */
+  async resolveRemoval(project: Project, workspaceId: string): Promise<WorkspaceProviderRemovalTarget> {
+    const input = snapshotProject(project);
+    if (workspaceId === "") throw providerRemovalError("workspace-not-found", 404, "Workspace not found");
+    const diagnostics: WorkspaceProviderDiagnostic[] = [];
+
+    for (const tier of ["primary", "fallback"] as const) {
+      const selection = await this.selectInTier(input, tier, diagnostics);
+      if (selection.kind === "none") continue;
+      if (selection.kind === "conflict") {
+        throw providerRemovalError(
+          "owner-conflict",
+          409,
+          `Workspace owner conflict prevents removal: ${selection.pluginIds.join(", ")}`,
+        );
+      }
+
+      const contribution = selection.contribution;
+      let validated: ValidatedProviderWorkspace[];
+      try {
+        const listed: unknown = await runBoundedProviderOperation(
+          contribution.pluginId,
+          "list",
+          this.providerTimeoutMs,
+          (signal) => contribution.provider.list(input, signal),
+        );
+        validated = await validateProviderWorkspaces(input, contribution, listed, this.pathInspector);
+      } catch (error) {
+        if (error instanceof WorkspaceProviderTimeoutError) {
+          throw providerRemovalError("resolution-timeout", 504, boundedErrorMessage(error), error);
+        }
+        throw providerRemovalError(
+          "resolution-failed",
+          502,
+          `Server plugin ${contribution.pluginId} could not resolve workspaces for removal: ${boundedErrorMessage(error)}`,
+          error,
+        );
+      }
+
+      const current = validated.find(({ workspace }) => workspace.id === workspaceId);
+      if (current === undefined) {
+        throw providerRemovalError(
+          "workspace-not-found",
+          404,
+          `Workspace ${workspaceId} is stale or unavailable for removal`,
+        );
+      }
+      const callback = contribution.provider.prepareRemove?.bind(contribution.provider);
+      if (callback === undefined || current.workspace.removal === undefined) {
+        throw providerRemovalError(
+          "removal-unavailable",
+          409,
+          `Server plugin ${contribution.pluginId} does not advertise removal for workspace ${workspaceId}`,
+        );
+      }
+
+      const workspaces = Object.freeze(validated.map(({ workspace }) => workspace));
+      return Object.freeze({
+        ownerPluginId: contribution.pluginId,
+        target: current.workspace,
+        workspaces,
+        prepare: async () => {
+          let value: unknown;
+          try {
+            value = await runBoundedProviderOperation(
+              contribution.pluginId,
+              "prepareRemove",
+              this.providerTimeoutMs,
+              (signal) => callback(Object.freeze({
+                project: input,
+                workspace: current.providerWorkspace,
+                signal,
+              })),
+            );
+          } catch (error) {
+            if (error instanceof WorkspaceProviderTimeoutError) {
+              throw providerRemovalError("preparation-timeout", 504, boundedErrorMessage(error), error);
+            }
+            throw providerRemovalError(
+              "preparation-failed",
+              409,
+              `Server plugin ${contribution.pluginId} rejected workspace removal: ${boundedErrorMessage(error)}`,
+              error,
+            );
+          }
+          return parseWorkspaceRemovePlan(value, contribution.pluginId);
+        },
+      });
+    }
+
+    const failedProbe = diagnostics.find(({ code }) => code === "probe-failed");
+    if (failedProbe !== undefined) {
+      throw providerRemovalError(
+        "resolution-failed",
+        502,
+        `Workspace owner resolution failed before removal: ${boundedErrorMessage(failedProbe.message)}`,
+      );
+    }
+    throw providerRemovalError("owner-unavailable", 409, `No workspace provider currently owns project ${input.id}`);
   }
 
   private async dispatchRequest(request: WorkspaceProviderRequest, dispatchSignal: AbortSignal): Promise<JsonValue> {
@@ -484,6 +623,9 @@ async function validateProviderWorkspaces(
       ? undefined
       : cloneJsonValue(candidate.data, new Set<object>(), `${label} data`);
     const removal = candidate.removal === undefined ? undefined : parseRemoval(candidate.removal, `${label} removal`);
+    if (removal !== undefined && contribution.provider.prepareRemove === undefined) {
+      throw new WorkspaceProviderContractError(`${label} advertises removal without a prepareRemove capability`);
+    }
     const workspace: Workspace = {
       id: workspaceId(project.id, candidate.key),
       projectId: project.id,
@@ -714,6 +856,30 @@ function providerRequestError(
   cause?: unknown,
 ): WorkspaceProviderRequestError {
   return new WorkspaceProviderRequestError(code, statusCode, message, cause === undefined ? {} : { cause });
+}
+
+function providerRemovalError(
+  code: WorkspaceProviderRemovalErrorCode,
+  statusCode: number,
+  message: string,
+  cause?: unknown,
+): WorkspaceProviderRemovalError {
+  return new WorkspaceProviderRemovalError(code, statusCode, message, cause === undefined ? {} : { cause });
+}
+
+function parseWorkspaceRemovePlan(value: unknown, pluginId: string): WorkspaceRemovePlan {
+  if (!isRecord(value)) {
+    throw providerRemovalError("invalid-plan", 502, `Server plugin ${pluginId} returned an invalid workspace removal plan`);
+  }
+  const title = value["title"];
+  const command = value["command"];
+  if (typeof title !== "string" || title.trim() === "") {
+    throw providerRemovalError("invalid-plan", 502, `Server plugin ${pluginId} removal plan title must be a non-empty string`);
+  }
+  if (typeof command !== "string" || command.trim() === "") {
+    throw providerRemovalError("invalid-plan", 502, `Server plugin ${pluginId} removal plan command must be a non-empty string`);
+  }
+  return Object.freeze({ title, command });
 }
 
 function boundedErrorMessage(error: unknown): string {

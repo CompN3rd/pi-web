@@ -3,10 +3,12 @@ import type {
   PiWebServerPlugin,
   ProjectInput,
   ProviderClaim,
+  ProviderRemoveContext,
   ProviderWorkspace,
   ServerPluginActivationContext,
   ServerPluginExecFileResult,
   WorkspaceProvider,
+  WorkspaceRemovePlan,
 } from "@jmfederico/pi-web/server-plugin-api";
 
 const GIT_LOCAL_ENV_VARS = Object.freeze([
@@ -97,8 +99,29 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
             ...(worktree.branch === undefined ? {} : { branch: worktree.branch }),
             ...(worktree.detached === undefined ? {} : { detached: worktree.detached }),
           },
+          ...(isMain ? {} : { removal: gitRemovalPresentation(label, path) }),
         };
       });
+    },
+    async prepareRemove({ project, workspace, signal }: ProviderRemoveContext): Promise<WorkspaceRemovePlan> {
+      const privatePath = gitPrivateWorktreePath(workspace);
+      if (resolve(privatePath) !== workspace.path) {
+        throw new Error("Git workspace removal data no longer matches the current workspace path");
+      }
+      const listResult = await requireGit(
+        runGit(context, project.path, ["worktree", "list", "--porcelain", "-z"], signal),
+        "validate the Git worktree before removal",
+      );
+      const current = parseGitWorktreeList(listResult.stdout)
+        .find((worktree) => resolve(worktree.path) === workspace.path);
+      if (current === undefined || current.prunable === true) {
+        throw new Error("Git worktree is no longer available for removal");
+      }
+      if (current.bare === true) throw new Error("A bare Git workspace cannot be removed as a linked worktree");
+      return {
+        title: `Delete workspace: ${workspace.label}`,
+        command: `git worktree remove ${shellQuote(workspace.path)}`,
+      };
     },
   });
 }
@@ -131,6 +154,27 @@ function singleGitWorkspace(project: ProjectInput): ProviderWorkspace {
     data: { worktreePath: project.path },
     publicMetadata: { isGitRepo: true, isGitWorktree: false },
   };
+}
+
+function gitRemovalPresentation(label: string, path: string): NonNullable<ProviderWorkspace["removal"]> {
+  return {
+    actionLabel: "Delete workspace",
+    confirmation: `Delete workspace ${label}?\n\nThis will run git worktree remove and delete:\n${path}\n\nThe Git branch will not be deleted.`,
+  };
+}
+
+function gitPrivateWorktreePath(workspace: ProviderWorkspace): string {
+  const data = workspace.data;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new Error("Git workspace removal data is unavailable");
+  }
+  const path: unknown = Reflect.get(data, "worktreePath");
+  if (typeof path !== "string" || path === "") throw new Error("Git worktree path is unavailable for removal");
+  return path;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 async function runGit(

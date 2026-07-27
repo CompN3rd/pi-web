@@ -235,8 +235,8 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerGitRoutes(app, projects, workspaces, "/api/machines/local");
   registerTerminalProxyRoutes(app, projects, workspaces, sessionDaemon);
   registerTerminalProxyRoutes(app, projects, workspaces, sessionDaemon, "/api/machines/local");
-  registerWorkspaceDeletionRoutes(app, projects, workspaces, sessionDaemon);
-  registerWorkspaceDeletionRoutes(app, projects, workspaces, sessionDaemon, "/api/machines/local");
+  registerWorkspaceDeletionRoutes(app, sessionDaemon);
+  registerWorkspaceDeletionRoutes(app, sessionDaemon, "/api/machines/local");
 
   registerLocalFileSuggestionRoutes(app, projects, workspaces, "/api", { config: configService });
   registerLocalFileSuggestionRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });

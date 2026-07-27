@@ -548,6 +548,19 @@ describe("API parsers", () => {
     });
   });
 
+  it("rejects empty workspace removal wording", () => {
+    expect(() => parseWorkspace({
+      id: "w1",
+      projectId: "p1",
+      path: "/repo/secondary",
+      label: "secondary",
+      isMain: false,
+      isGitRepo: false,
+      isGitWorktree: false,
+      removal: { actionLabel: "", confirmation: "Remove secondary?" },
+    })).toThrow("Expected non-empty string field: actionLabel");
+  });
+
   it("rejects non-JSON workspace provider metadata", () => {
     expect(() => parseWorkspace({
       id: "w1",

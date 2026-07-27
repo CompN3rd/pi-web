@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JsonValue, ProviderRequestContext, ProviderWorkspace, WorkspaceProvider } from "../../server-plugin-api.js";
+import type { JsonValue, ProviderRemoveContext, ProviderRequestContext, ProviderWorkspace, WorkspaceProvider } from "../../server-plugin-api.js";
 import type { Project } from "../types.js";
 import type { ServerPluginProviderContribution } from "../plugins/serverPluginRuntime.js";
 import { ProjectScopedSpawnTargetResolver } from "../sessions/spawnTargetResolver.js";
@@ -261,6 +261,14 @@ describe("WorkspaceProviderRegistry", () => {
       value: [{ key: "root", path: "/repo", label: "root", isMain: true, data: { callback: () => undefined } }],
       message: "data must contain only JSON values",
     },
+    {
+      name: "removal presentation without planner capability",
+      value: [
+        workspace("root", "/repo", true),
+        workspace("secondary", "/linked", false, { removal: { actionLabel: "Detach", confirmation: "Detach it?" } }),
+      ],
+      message: "advertises removal without a prepareRemove capability",
+    },
   ])("rejects invalid provider workspace contracts: $name", async ({ value, message }) => {
     const invalidListProvider = provider({ probe: () => Promise.resolve("claim") });
     Object.defineProperty(invalidListProvider, "list", { value: () => Promise.resolve(value) });
@@ -478,6 +486,81 @@ describe("WorkspaceProviderRegistry", () => {
     await vi.advanceTimersByTimeAsync(25);
     await expectation;
 
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("re-resolves removal targets and contains stale, invalid, and timed-out provider plans", async () => {
+    let observedRemoveContext: ProviderRemoveContext | undefined;
+    const prepareRemove = vi.fn((context: ProviderRemoveContext) => {
+      observedRemoveContext = context;
+      return Promise.resolve({ title: "Detach view", command: "board detach view" });
+    });
+    const registry = registryFor([contribution("board", provider({
+      probe: () => Promise.resolve("claim"),
+      list: () => Promise.resolve([
+        workspace("main", "/repo", true),
+        workspace("view", "/view", false, {
+          data: { privateId: "view-1" },
+          removal: { actionLabel: "Disconnect", confirmation: "Disconnect view?" },
+        }),
+      ]),
+      prepareRemove,
+    }))]);
+    const workspaceId = (await registry.resolve(project)).workspaces.find(({ path }) => path === "/view")?.id;
+    if (workspaceId === undefined) throw new Error("Expected removable workspace");
+
+    const current = await registry.resolveRemoval(project, workspaceId);
+    await expect(current.prepare()).resolves.toEqual({ title: "Detach view", command: "board detach view" });
+    expect(current).toMatchObject({ ownerPluginId: "board", target: { id: workspaceId, path: "/view" } });
+    expect(prepareRemove).toHaveBeenCalledOnce();
+    expect(observedRemoveContext).toMatchObject({
+      workspace: { path: "/view", data: { privateId: "view-1" } },
+    });
+    expect(observedRemoveContext?.signal).toBeInstanceOf(AbortSignal);
+    await expect(registry.resolveRemoval(project, "stale-id"))
+      .rejects.toMatchObject({ code: "workspace-not-found", statusCode: 404 });
+    const conflict = registryFor([
+      contribution("one", provider({ probe: () => Promise.resolve("claim") })),
+      contribution("two", provider({ probe: () => Promise.resolve("claim") })),
+    ]);
+    await expect(conflict.resolveRemoval(project, workspaceId))
+      .rejects.toMatchObject({ code: "owner-conflict", statusCode: 409 });
+
+    const invalidProvider = provider({
+      probe: () => Promise.resolve("claim"),
+      list: () => Promise.resolve([
+        workspace("main", "/repo", true),
+        workspace("view", "/view", false, { removal: { actionLabel: "Disconnect", confirmation: "Disconnect?" } }),
+      ]),
+      prepareRemove: () => Promise.resolve({ title: "valid", command: "valid" }),
+    });
+    Object.defineProperty(invalidProvider, "prepareRemove", { value: () => Promise.resolve({ title: "", command: "ignored" }) });
+    const invalidRegistry = registryFor([contribution("invalid", invalidProvider)]);
+    const invalidId = (await invalidRegistry.resolve(project)).workspaces.find(({ path }) => path === "/view")?.id;
+    if (invalidId === undefined) throw new Error("Expected invalid-plan workspace");
+    const invalidTarget = await invalidRegistry.resolveRemoval(project, invalidId);
+    await expect(invalidTarget.prepare()).rejects.toMatchObject({ code: "invalid-plan", statusCode: 502 });
+
+    vi.useFakeTimers();
+    let observedSignal: AbortSignal | undefined;
+    const hangingRegistry = registryFor([contribution("hanging", provider({
+      probe: () => Promise.resolve("claim"),
+      list: () => Promise.resolve([
+        workspace("main", "/repo", true),
+        workspace("view", "/view", false, { removal: { actionLabel: "Disconnect", confirmation: "Disconnect?" } }),
+      ]),
+      prepareRemove: ({ signal }) => new Promise((_resolve, rejectPromise) => {
+        observedSignal = signal;
+        signal.addEventListener("abort", () => { rejectPromise(new Error("planner aborted")); }, { once: true });
+      }),
+    }))], { providerTimeoutMs: 25 });
+    const hangingId = (await hangingRegistry.resolve(project)).workspaces.find(({ path }) => path === "/view")?.id;
+    if (hangingId === undefined) throw new Error("Expected hanging-plan workspace");
+    const hangingTarget = await hangingRegistry.resolveRemoval(project, hangingId);
+    const pending = hangingTarget.prepare();
+    const expectation = expect(pending).rejects.toMatchObject({ code: "preparation-timeout", statusCode: 504 });
+    await vi.advanceTimersByTimeAsync(25);
+    await expectation;
     expect(observedSignal?.aborted).toBe(true);
   });
 
