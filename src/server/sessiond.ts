@@ -26,10 +26,16 @@ import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
 import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled } from "../config.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
+import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
+import { PiWebPluginCatalog } from "./piWebPluginCatalog.js";
+import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
+import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
+import { runSessionDaemonShutdown } from "./sessiond/sessionDaemonShutdown.js";
 import { runSessionDaemonStartup } from "./sessiond/sessionDaemonStartup.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
+const serverPluginRecovery = loadServerPluginRecoveryConfig({ env: daemonEnvironment });
 const { config } = effectivePiWebConfig({ env: daemonEnvironment });
 const activeAgentProfile = createActiveAgentProfileDescriptor({
   command: config.agent.command,
@@ -38,63 +44,127 @@ const activeAgentProfile = createActiveAgentProfileDescriptor({
 });
 const app = Fastify({ logger: true, bodyLimit: maxUploadBytes(daemonEnvironment, config) });
 await app.register(fastifyWebsocket);
+let serverQuiescing = false;
+app.addHook("onRequest", (_request, reply, done) => {
+  if (!serverQuiescing) {
+    done();
+    return;
+  }
+  void reply.code(503).send({ error: "Session daemon is shutting down" });
+});
+const serverPluginCatalog = new PiWebPluginCatalog({
+  cwd: process.cwd(),
+  agentDir: activeAgentProfile.dir,
+  configProvider: () => config,
+  warningSink: (message) => { app.log.warn({ component: "server-plugins" }, message); },
+});
+
+let runtimeShutdown: (() => Promise<void>) | undefined;
+let pendingShutdownSignal: NodeJS.Signals | undefined;
+let shutdownStarted = false;
+async function requestShutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shutdownStarted) return;
+  if (runtimeShutdown === undefined) {
+    pendingShutdownSignal = signal;
+    return;
+  }
+  shutdownStarted = true;
+  app.log.info({ signal }, "shutting down session daemon");
+  await runtimeShutdown();
+}
+process.once("SIGINT", (signal) => { void requestShutdown(signal); });
+process.once("SIGTERM", (signal) => { void requestShutdown(signal); });
 
 await runSessionDaemonStartup({
   logger: app.log,
   async createRuntime() {
-    const eventHub = new SessionEventHub();
-    const notificationStore = new SessionNotificationStore();
-    const unreadStore = new SessionUnreadStore({
-      persistence: new FileSessionUnreadPersistence(),
-      onPersistenceError(operation, error) {
-        app.log.error({ err: error, operation }, "session unread persistence failed");
-      },
-    });
-    await unreadStore.load();
-    const workspaceActivity = new WorkspaceActivityService(eventHub);
-    const auth = await AuthService.create({ agentDir: activeAgentProfile.dir, logger: app.log });
-    // Capture providers registered by global extensions while the runtime is
-    // still mutable, then freeze every later extension-provider mutation before
-    // any real session can load project resources.
-    await bootstrapAndFreezeGlobalExtensionProviders(auth.runtime, activeAgentProfile.dir, app.log);
-    // The shared model runtime is constructed offline so request paths never
-    // wait on provider-catalog fetches; this is the single bounded network
-    // refresher, and auth changes (login/logout) ask it for a prompt run. It
-    // stays fully inert when the operator asked for offline behavior.
-    const catalogRefresher = new ModelCatalogRefresher({
-      runtime: auth.runtime,
+    const serverPlugins = await createServerPluginRuntime({
+      catalog: serverPluginCatalog,
+      ...(serverPluginRecovery.safeStart === undefined ? {} : { safeStart: serverPluginRecovery.safeStart }),
       logger: app.log,
-      offline: offlineModeEnabled(daemonEnvironment),
+      execFile: createServerPluginExecFile({ env: daemonEnvironment }),
     });
-    catalogRefresher.start();
-    auth.subscribe(() => { catalogRefresher.requestRefresh(); });
-    const spawnTargets = config.spawnSessions
-      ? new ProjectScopedSpawnTargetResolver({ projects: new ProjectService(new ProjectStore()), workspaces: new WorkspaceService() })
-      : undefined;
-    const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
-      modelRuntime: auth.runtime,
-      agentDir: activeAgentProfile.dir,
-      workspaceActivity,
-      logger: app.log,
-      ...(spawnTargets === undefined ? {} : { spawnTargets }),
-      subsessionsEnabled: config.subsessions,
-      askUserEnabled: config.askUser,
-      notificationStore,
-      unreadStore,
-      catalogRefreshStatus: catalogRefresher,
-      sessionManager: createPiSessionManagerGateway({
+    try {
+      const eventHub = new SessionEventHub();
+      const notificationStore = new SessionNotificationStore();
+      const unreadStore = new SessionUnreadStore({
+        persistence: new FileSessionUnreadPersistence(),
+        onPersistenceError(operation, error) {
+          app.log.error({ err: error, operation }, "session unread persistence failed");
+        },
+      });
+      await unreadStore.load();
+      const workspaceActivity = new WorkspaceActivityService(eventHub);
+      const auth = await AuthService.create({ agentDir: activeAgentProfile.dir, logger: app.log });
+      // Capture providers registered by global extensions while the runtime is
+      // still mutable, then freeze every later extension-provider mutation before
+      // any real session can load project resources.
+      await bootstrapAndFreezeGlobalExtensionProviders(auth.runtime, activeAgentProfile.dir, app.log);
+      // The shared model runtime is constructed offline so request paths never
+      // wait on provider-catalog fetches; this is the single bounded network
+      // refresher, and auth changes (login/logout) ask it for a prompt run. It
+      // stays fully inert when the operator asked for offline behavior.
+      const catalogRefresher = new ModelCatalogRefresher({
+        runtime: auth.runtime,
+        logger: app.log,
+        offline: offlineModeEnabled(daemonEnvironment),
+      });
+      catalogRefresher.start();
+      auth.subscribe(() => { catalogRefresher.requestRefresh(); });
+      const spawnTargets = config.spawnSessions
+        ? new ProjectScopedSpawnTargetResolver({ projects: new ProjectService(new ProjectStore()), workspaces: new WorkspaceService() })
+        : undefined;
+      const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
+        modelRuntime: auth.runtime,
         agentDir: activeAgentProfile.dir,
-        env: daemonEnvironment,
-        sessionDirEnvKeys: activeAgentProfile.sessionDirEnvKeys,
-      }),
-    }));
-    auth.subscribe((change) => { sessions.applyAuthChange(change); });
-    const terminals = new TerminalService(eventHub, workspaceActivity);
-    const runtimeComponent = Object.freeze({
-      ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES),
-      activeAgentProfile,
-    });
-    return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher };
+        workspaceActivity,
+        logger: app.log,
+        ...(spawnTargets === undefined ? {} : { spawnTargets }),
+        subsessionsEnabled: config.subsessions,
+        askUserEnabled: config.askUser,
+        notificationStore,
+        unreadStore,
+        catalogRefreshStatus: catalogRefresher,
+        sessionManager: createPiSessionManagerGateway({
+          agentDir: activeAgentProfile.dir,
+          env: daemonEnvironment,
+          sessionDirEnvKeys: activeAgentProfile.sessionDirEnvKeys,
+        }),
+      }));
+      auth.subscribe((change) => { sessions.applyAuthChange(change); });
+      const terminals = new TerminalService(eventHub, workspaceActivity);
+      const runtimeComponent = Object.freeze({
+        ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES),
+        activeAgentProfile,
+      });
+      let disposed = false;
+      const shutdown = async (): Promise<void> => {
+        if (disposed) return;
+        disposed = true;
+        await runSessionDaemonShutdown({
+          logger: app.log,
+          dependencies: {
+            quiesceServer: () => { serverQuiescing = true; },
+            serverPlugins,
+            terminals,
+            catalogRefresher,
+            auth,
+            sessions,
+            unreadStore,
+            closeServer: () => app.close(),
+          },
+          onFailure: () => { process.exitCode = 1; },
+        });
+      };
+      return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, shutdown };
+    } catch (error) {
+      try {
+        await serverPlugins.stop();
+      } catch (disposeError) {
+        app.log.error({ err: disposeError }, "session daemon construction failed and server plugin disposal was incomplete");
+      }
+      throw error;
+    }
   },
   registerRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent }) {
     registerWorkspaceActivityRoutes(app, workspaceActivity);
@@ -117,30 +187,12 @@ await runSessionDaemonStartup({
 
     app.get("/runtime", () => runtimeComponent);
   },
-  async listen({ auth, sessions, terminals, unreadStore, catalogRefresher }) {
-    let shuttingDown = false;
-    async function shutdown(signal: NodeJS.Signals): Promise<void> {
-      if (shuttingDown) return;
-      shuttingDown = true;
-      app.log.info({ signal }, "shutting down session daemon");
-      const attempt = async (operation: string, run: () => void | Promise<void>): Promise<void> => {
-        try {
-          await run();
-        } catch (error: unknown) {
-          process.exitCode = 1;
-          app.log.error({ err: error, operation }, "session daemon shutdown operation failed");
-        }
-      };
-      await attempt("dispose terminals", () => { terminals.dispose(); });
-      await attempt("dispose catalog refresher", () => { catalogRefresher.dispose(); });
-      await attempt("dispose auth", () => { auth.dispose(); });
-      await attempt("dispose sessions", () => sessions.dispose());
-      await attempt("flush session unread state", () => unreadStore.flush());
-      await attempt("close server", () => app.close());
+  async listen({ shutdown }) {
+    runtimeShutdown = shutdown;
+    if (pendingShutdownSignal !== undefined) {
+      await requestShutdown(pendingShutdownSignal);
+      return;
     }
-
-    process.once("SIGINT", (signal) => { void shutdown(signal); });
-    process.once("SIGTERM", (signal) => { void shutdown(signal); });
 
     const portValue = daemonEnvironment["PI_WEB_SESSIOND_PORT"];
     const port = portValue !== undefined && portValue !== "" ? Number(portValue) : undefined;
@@ -156,4 +208,5 @@ await runSessionDaemonStartup({
       process.on("exit", () => void rm(path, { force: true }));
     }
   },
+  disposeRuntime: (runtime) => runtime.shutdown(),
 });

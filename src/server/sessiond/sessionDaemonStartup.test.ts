@@ -56,6 +56,48 @@ describe("session daemon archive migration startup", () => {
     );
   });
 
+  it.each(["routes", "listen"])("disposes an activated runtime when %s startup fails", async (failureStage) => {
+    const logger = createLogger();
+    const runtime = { ready: true };
+    const startupError = new Error(`${failureStage} failed`);
+    const disposeRuntime = vi.fn(() => Promise.resolve());
+
+    await expect(runSessionDaemonStartup({
+      logger,
+      migrateArchive: () => Promise.resolve({ status: "skipped", reason: "legacy-index-missing" }),
+      createRuntime: () => runtime,
+      registerRoutes() {
+        if (failureStage === "routes") throw startupError;
+      },
+      listen() {
+        return failureStage === "listen" ? Promise.reject(startupError) : Promise.resolve();
+      },
+      disposeRuntime,
+    })).rejects.toBe(startupError);
+
+    expect(disposeRuntime).toHaveBeenCalledWith(runtime);
+  });
+
+  it("preserves the startup failure and reports incomplete runtime disposal", async () => {
+    const logger = createLogger();
+    const startupError = new Error("listen failed");
+    const disposeError = new Error("dispose failed");
+
+    await expect(runSessionDaemonStartup({
+      logger,
+      migrateArchive: () => Promise.resolve({ status: "skipped", reason: "legacy-index-missing" }),
+      createRuntime: () => ({ ready: true }),
+      registerRoutes() { /* no-op fixture */ },
+      listen: () => Promise.reject(startupError),
+      disposeRuntime: () => Promise.reject(disposeError),
+    })).rejects.toBe(startupError);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: disposeError },
+      "session daemon startup failed and runtime disposal was incomplete",
+    );
+  });
+
   it("does not initialize archive consumers while a mutation-free eligibility check is pending", async () => {
     const logger = createLogger();
     const migration = deferred<LegacySessionArchiveMigrationResult>();

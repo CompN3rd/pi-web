@@ -15,6 +15,7 @@ export interface SessionDaemonStartupSteps<Runtime> {
   createRuntime(): Runtime | Promise<Runtime>;
   registerRoutes(runtime: Runtime): void;
   listen(runtime: Runtime): Promise<void>;
+  disposeRuntime?: (runtime: Runtime) => void | Promise<void>;
   migrateArchive?: () => Promise<LegacySessionArchiveMigrationResult>;
 }
 
@@ -37,9 +38,23 @@ export async function runSessionDaemonStartup<Runtime>(
   }
 
   const runtime = await steps.createRuntime();
-  steps.registerRoutes(runtime);
-  await steps.listen(runtime);
-  return runtime;
+  try {
+    steps.registerRoutes(runtime);
+    await steps.listen(runtime);
+    return runtime;
+  } catch (error) {
+    if (steps.disposeRuntime !== undefined) {
+      try {
+        await steps.disposeRuntime(runtime);
+      } catch (disposeError) {
+        steps.logger.error(
+          { err: disposeError },
+          "session daemon startup failed and runtime disposal was incomplete",
+        );
+      }
+    }
+    throw error;
+  }
 }
 
 function reportMigrationResult(
