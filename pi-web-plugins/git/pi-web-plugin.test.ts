@@ -2,7 +2,7 @@
 
 import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JsonValue, PluginRuntimeContext, Workspace, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { JsonValue, PluginRuntimeContext, Workspace, WorkspaceBackend, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { GIT_FILE_VIEW_STORAGE_KEY } from "./gitFileViewPreference.js";
 import plugin from "./pi-web-plugin.js";
 
@@ -57,6 +57,24 @@ describe("bundled Git browser plugin", () => {
 
     await refresh?.run(runtime);
     expect(backend.request).toHaveBeenCalledWith("status", null);
+
+    backend.request.mockClear();
+    await panel.onInvalidate?.(context);
+    expect(backend.request).toHaveBeenCalledWith("status", null);
+  });
+
+  it("uses the generic panel invalidation hook and reports an actionable error without a paired backend", async () => {
+    const panel = requiredPanel(activate("git"));
+    const context = panelContext(undefined);
+    expect(panel.visible?.(context)).toBe(true);
+
+    await panel.onInvalidate?.(context);
+    const container = document.createElement("div");
+    render(panel.render(context), container);
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Git workspace backend is unavailable. Update and restart PI WEB on this machine, then reload the browser.",
+    );
   });
 
   it("loads status and diffs through context.backend, preserves URL selection, views, grouping, and rich diff rendering", async () => {
@@ -182,7 +200,7 @@ function changedFile(path: string, patch: Record<string, JsonValue> = {}) {
   return { path, index: "unmodified", workingTree: "modified", ...patch };
 }
 
-function panelContext(request: WorkspacePanelContext["backend"]["request"], workspace = gitWorkspace): WorkspacePanelContext {
+function panelContext(request: WorkspaceBackend["request"] | undefined, workspace = gitWorkspace): WorkspacePanelContext {
   const noop = () => undefined;
   return {
     machine: { id: "local", name: "Local", kind: "local" },
@@ -194,7 +212,7 @@ function panelContext(request: WorkspacePanelContext["backend"]["request"], work
       deleteFile: () => Promise.reject(new Error("not implemented")),
       moveFile: () => Promise.reject(new Error("not implemented")),
     },
-    backend: { request },
+    ...(request === undefined ? {} : { backend: { request } }),
     host: { requestRender: noop },
     prompt: { insertText: noop, getText: () => "", getSelection: () => null },
     terminal: { open: noop, runCommand: () => Promise.reject(new Error("not implemented")) },
@@ -216,6 +234,7 @@ function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntim
     selectWorkspaceTool: noop,
     openTerminal: noop,
     refreshFiles: noop,
+    refreshGit: noop,
     refreshAppData: noop,
     reloadPage: noop,
     startSession: noop,

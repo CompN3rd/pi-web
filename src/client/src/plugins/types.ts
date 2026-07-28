@@ -75,7 +75,7 @@ export interface WorkspaceContext {
   workspace: Workspace;
   state: AppState;
   files: WorkspaceFiles;
-  backend: WorkspaceBackend;
+  backend?: WorkspaceBackend;
   host: WorkspaceHost;
 }
 
@@ -124,6 +124,8 @@ export interface PluginRuntimeContext {
   selectWorkspaceTool: (tool: QualifiedContributionId) => void;
   openTerminal: (options?: { terminalId?: string | undefined }) => void;
   refreshFiles: () => void | Promise<void>;
+  /** @deprecated Browser-v1 compatibility alias. Use `WorkspacePanelContribution.onInvalidate` for host-driven refreshes. */
+  refreshGit: () => void | Promise<void>;
   refreshAppData: () => void | Promise<void>;
   checkForPiWebUpdates?: () => void | Promise<void>;
   reloadPage: () => void;
@@ -189,6 +191,7 @@ export interface WorkspacePanelContribution {
   order?: number;
   visible?: (context: WorkspacePanelContext) => boolean;
   badge?: (context: WorkspacePanelContext) => string | number | TemplateResult | undefined;
+  onInvalidate?: (context: WorkspacePanelContext) => void | Promise<void>;
   render: (context: WorkspacePanelContext) => TemplateResult;
 }
 

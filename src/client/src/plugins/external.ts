@@ -20,12 +20,23 @@ export interface LoadExternalPluginsOptions {
   moduleLoader?: (moduleUrl: string) => Promise<unknown>;
 }
 
-export async function loadExternalPlugins(manifestUrl = "pi-web-plugins/manifest.json", options: LoadExternalPluginsOptions = {}): Promise<PiWebPluginRegistration[]> {
+export interface ExternalPluginLoadFailure {
+  entry: PluginManifestEntry;
+  error: unknown;
+}
+
+export interface ExternalPluginLoadResult {
+  registrations: PiWebPluginRegistration[];
+  failures: ExternalPluginLoadFailure[];
+}
+
+export async function loadExternalPlugins(manifestUrl = "pi-web-plugins/manifest.json", options: LoadExternalPluginsOptions = {}): Promise<ExternalPluginLoadResult> {
   const resolvedManifestUrl = resolveAppUrl(manifestUrl);
   const manifest = await fetchPluginManifest(resolvedManifestUrl);
-  if (manifest === undefined) return [];
+  if (manifest === undefined) return { registrations: [], failures: [] };
 
   const registrations: PiWebPluginRegistration[] = [];
+  const failures: ExternalPluginLoadFailure[] = [];
   for (const entry of manifest.plugins) {
     if (options.shouldLoadPlugin?.(entry) === false) continue;
     try {
@@ -40,10 +51,10 @@ export async function loadExternalPlugins(manifestUrl = "pi-web-plugins/manifest
         ...(options.machineId === undefined ? {} : { machineId: options.machineId, sourcePluginId: entry.id }),
       });
     } catch (error) {
-      console.warn(`Failed to load PI WEB plugin ${entry.module}`, error);
+      failures.push({ entry, error });
     }
   }
-  return registrations;
+  return { registrations, failures };
 }
 
 export function resolvePluginModuleUrl(moduleReference: string, manifestUrl: string, appUrlContext?: AppUrlContext): string {

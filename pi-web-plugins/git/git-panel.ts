@@ -1,5 +1,6 @@
 import type {
   HtmlTemplateTag,
+  JsonValue,
   PluginAction,
   PluginContributions,
   PluginRuntimeContext,
@@ -134,6 +135,11 @@ class GitUiController {
     void this.refresh(context);
   }
 
+  invalidate(context: WorkspacePanelContext): Promise<void> {
+    if (!this.isOwnedWorkspace(context.workspace)) return Promise.resolve();
+    return this.refresh(context);
+  }
+
   refreshWorkspace(workspace: Workspace | undefined): Promise<void> {
     if (workspace === undefined) return Promise.resolve();
     const state = this.states.get(workspaceKey(workspace));
@@ -149,7 +155,7 @@ class GitUiController {
     state.statusLoading = true;
     this.requestRender(state);
 
-    const request = context.backend.request(GIT_STATUS_OPERATION, null)
+    const request = requestGitBackend(context, GIT_STATUS_OPERATION, null)
       .then(parseGitStatusResponse)
       .then(async (status) => {
         state.status = status;
@@ -260,8 +266,8 @@ class GitUiController {
     this.requestRender(state);
     try {
       const [selectedDiff, selectedStagedDiff] = await Promise.all([
-        state.context.backend.request(GIT_DIFF_OPERATION, { path }).then(parseGitDiffResponse),
-        state.context.backend.request(GIT_DIFF_OPERATION, { path, staged: true }).then(parseGitDiffResponse),
+        requestGitBackend(state.context, GIT_DIFF_OPERATION, { path }).then(parseGitDiffResponse),
+        requestGitBackend(state.context, GIT_DIFF_OPERATION, { path, staged: true }).then(parseGitDiffResponse),
       ]);
       if (state.diffRequestSequence !== sequence || state.selectedDiffPath !== path) return;
       state.selectedDiff = selectedDiff;
@@ -337,8 +343,16 @@ function createGitPanel(
       controller.observe(context);
       return true;
     },
+    onInvalidate: (context) => controller.invalidate(context),
     render: (context) => renderGitPanel(html, controller, context),
   };
+}
+
+function requestGitBackend(context: WorkspacePanelContext, operation: string, input: JsonValue): Promise<JsonValue> {
+  if (context.backend === undefined || context.workspace.provider?.capabilities.request === false) {
+    return Promise.reject(new Error("Git workspace backend is unavailable. Update and restart PI WEB on this machine, then reload the browser."));
+  }
+  return context.backend.request(operation, input);
 }
 
 function renderGitPanel(html: HtmlTemplateTag, controller: GitUiController, context: WorkspacePanelContext) {

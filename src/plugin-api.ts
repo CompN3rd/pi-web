@@ -103,6 +103,8 @@ export interface PluginRuntimeContext {
   selectWorkspaceTool: (tool: QualifiedContributionId) => void;
   openTerminal: (options?: { terminalId?: string | undefined }) => void;
   refreshFiles: () => void | Promise<void>;
+  /** @deprecated Browser-v1 compatibility alias. Use `WorkspacePanelContribution.onInvalidate` for host-driven refreshes. */
+  refreshGit: () => void | Promise<void>;
   refreshAppData: () => void | Promise<void>;
   /** Force a fresh PI WEB release check on the selected machine. Optional for compatibility with older hosts. */
   checkForPiWebUpdates?: () => void | Promise<void>;
@@ -172,7 +174,8 @@ export interface WorkspaceContext {
   workspace: Workspace;
   state?: PluginRuntimeState;
   files: WorkspaceFiles;
-  backend: WorkspaceBackend;
+  /** Present only when this browser entry has a paired active server backend. */
+  backend?: WorkspaceBackend;
   host: WorkspaceHost;
 }
 
@@ -202,6 +205,8 @@ export interface WorkspacePanelContribution {
   order?: number;
   visible?: (context: WorkspacePanelContext) => boolean;
   badge?: (context: WorkspacePanelContext) => string | number | TemplateResult | undefined;
+  /** Called when the host invalidates workspace-panel data. */
+  onInvalidate?: (context: WorkspacePanelContext) => void | Promise<void>;
   render: (context: WorkspacePanelContext) => TemplateResult;
 }
 

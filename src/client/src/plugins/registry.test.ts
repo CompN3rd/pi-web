@@ -46,6 +46,7 @@ function createContext(statePatch: Partial<AppState> = {}) {
     selectWorkspaceTool: vi.fn((tool: AppState["workspaceTool"]) => { calls.push(`selectWorkspaceTool:${tool}`); }),
     openTerminal: vi.fn((options?: { terminalId?: string | undefined }) => { calls.push(`openTerminal:${options?.terminalId ?? ""}`); }),
     refreshFiles: vi.fn(() => { calls.push("refreshFiles"); }),
+    refreshGit: vi.fn(() => { calls.push("refreshGit"); }),
     refreshAppData: vi.fn(() => { calls.push("refreshAppData"); }),
     reloadPage: vi.fn(() => { calls.push("reloadPage"); }),
     deleteWorkspace: vi.fn(() => { calls.push("deleteWorkspace"); }),
@@ -146,6 +147,65 @@ describe("PluginRegistry", () => {
         },
       });
     }).toThrow("Duplicate contribution id: example:duplicate");
+  });
+
+  it("rolls back every contribution when registration fails and allows a clean retry", () => {
+    const registry = new PluginRegistry();
+    let fail = true;
+    const plugin = {
+      apiVersion: 1 as const,
+      name: "Retryable",
+      activate: () => ({
+        contributions: {
+          actions: fail
+            ? [
+                { id: "action", title: "Partial", run: () => undefined },
+                { id: "action", title: "Duplicate", run: () => undefined },
+              ]
+            : [{ id: "action", title: "Ready", run: () => undefined }],
+        },
+      }),
+    };
+
+    expect(() => { registry.register({ id: "retryable", plugin }); }).toThrow("Duplicate contribution id: retryable:action");
+    expect(registry.hasPlugin("retryable")).toBe(false);
+    expect(registry.getActions(createContext().context)).toEqual([]);
+    expect(registry.shouldLoadRemotePlugin("retryable")).toBe(true);
+
+    fail = false;
+    registry.register({ id: "retryable", plugin });
+
+    expect(registry.hasPlugin("retryable")).toBe(true);
+    expect(registry.getActions(createContext().context).map(({ id, title }) => ({ id, title }))).toEqual([
+      { id: "retryable:action", title: "Ready" },
+    ]);
+    expect(registry.shouldLoadRemotePlugin("retryable")).toBe(false);
+  });
+
+  it("isolates workspace-panel invalidation failures", async () => {
+    const registry = new PluginRegistry();
+    const invalidated = vi.fn();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    registry.register({
+      id: "example",
+      plugin: {
+        apiVersion: 1,
+        name: "Example",
+        activate: () => ({
+          contributions: {
+            workspacePanels: [
+              { id: "broken", title: "Broken", onInvalidate: () => { throw new Error("broken refresh"); }, render: () => html`<p>Broken</p>` },
+              { id: "healthy", title: "Healthy", onInvalidate: invalidated, render: () => html`<p>Healthy</p>` },
+            ],
+          },
+        }),
+      },
+    });
+
+    await registry.invalidateWorkspacePanels(createWorkspacePanelContext("local"));
+
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith("Failed to invalidate PI WEB plugin panel example:broken", expect.objectContaining({ message: "broken refresh" }));
   });
 
   it("evaluates core action enablement against runtime state", () => {
@@ -549,14 +609,14 @@ describe("PluginRegistry", () => {
                 id: "workspace.board",
                 title: "Board",
                 render: (context) => {
-                  void context.backend.request("cards.summary", { includeClosed: false });
+                  void requiredBackend(context.backend).request("cards.summary", { includeClosed: false });
                   return html`<p>Board</p>`;
                 },
               }],
               workspaceLabels: [{
                 id: "board-count",
                 items: (context) => {
-                  void context.backend.request("cards.count", null);
+                  void requiredBackend(context.backend).request("cards.count", null);
                   return [{ type: "text", text: "2 cards" }];
                 },
               }],
@@ -568,20 +628,20 @@ describe("PluginRegistry", () => {
     const panelBase = createWorkspacePanelContext("remote-1");
     const panelContext = installWorkspacePanelScope(panelBase, (binding) => ({
       ...panelBase,
-      backend: createPluginWorkspaceBackend(binding, panelBase.workspace, panelBase.machine.id, (target, operation, input) => {
+      backend: requiredBackend(createPluginWorkspaceBackend(binding, panelBase.workspace, panelBase.machine.id, (target, operation, input) => {
         observedBindings.push(binding);
         observedRequests.push({ target, operation, input });
         return Promise.resolve(null);
-      }),
+      })),
     }));
     const labelBase = createWorkspaceLabelContext("remote-1");
     const labelContext = installWorkspaceLabelScope(labelBase, (binding) => ({
       ...labelBase,
-      backend: createPluginWorkspaceBackend(binding, labelBase.workspace, labelBase.machine.id, (target, operation, input) => {
+      backend: requiredBackend(createPluginWorkspaceBackend(binding, labelBase.workspace, labelBase.machine.id, (target, operation, input) => {
         observedBindings.push(binding);
         observedRequests.push({ target, operation, input });
         return Promise.resolve(null);
-      }),
+      })),
     }));
 
     registry.getWorkspacePanels().find(({ localId }) => localId === "workspace.board")?.render(panelContext);
@@ -617,7 +677,7 @@ describe("PluginRegistry", () => {
             id: "workspace.pair",
             title: name,
             render: (context: WorkspacePanelContext) => {
-              void context.backend.request("pair.check", null);
+              void requiredBackend(context.backend).request("pair.check", null);
               return html`<p>${name}</p>`;
             },
           }],
@@ -639,10 +699,10 @@ describe("PluginRegistry", () => {
       const base = createWorkspacePanelContext(machineId);
       const context = installWorkspacePanelScope(base, (binding) => ({
         ...base,
-        backend: createPluginWorkspaceBackend(binding, base.workspace, machineId, (target) => {
+        backend: requiredBackend(createPluginWorkspaceBackend(binding, base.workspace, machineId, (target) => {
           requests.push(target);
           return Promise.resolve(null);
-        }),
+        })),
       }));
       const visible = registry.getWorkspacePanels().filter((panel) => panel.visible?.(context) !== false);
       expect(visible).toHaveLength(1);
@@ -849,6 +909,11 @@ function createWorkspacePanelContext(machineId: string, prompt: WorkspacePanelCo
     onClearWorkspaceUpload: vi.fn(),
     onSelectTerminal: vi.fn(),
   };
+}
+
+function requiredBackend(backend: WorkspacePanelContext["backend"]): NonNullable<WorkspacePanelContext["backend"]> {
+  if (backend === undefined) throw new Error("Expected a paired workspace backend");
+  return backend;
 }
 
 function testFileContent(path = "README.md"): FileContentResponse {

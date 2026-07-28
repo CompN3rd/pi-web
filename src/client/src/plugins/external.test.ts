@@ -17,7 +17,7 @@ describe("external plugin manifests", () => {
     const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 404 })));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(loadExternalPlugins()).resolves.toEqual([]);
+    await expect(loadExternalPlugins()).resolves.toEqual({ registrations: [], failures: [] });
 
     expect(fetchMock).toHaveBeenCalledWith("https://pi.example.test/pi-web-plugins/manifest.json", { cache: "no-store" });
   });
@@ -32,11 +32,12 @@ describe("external plugin manifests", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const registrations = await loadExternalPlugins(manifestUrl, { moduleLoader });
+    const result = await loadExternalPlugins(manifestUrl, { moduleLoader });
 
     expect(fetchMock).toHaveBeenCalledWith(manifestUrl, { cache: "no-store" });
     expect(moduleLoader).toHaveBeenCalledWith("https://pi.example.test/test/ai/pi-web-plugins/info/pi-web-plugin.js?v=1");
-    expect(registrations).toMatchObject([{ id: "info", backendRevision: "server-r1", machineSpecific: false, plugin: { apiVersion: 1, name: "Info" } }]);
+    expect(result.failures).toEqual([]);
+    expect(result.registrations).toMatchObject([{ id: "info", backendRevision: "server-r1", machineSpecific: false, plugin: { apiVersion: 1, name: "Info" } }]);
   });
 
   it("loads the bundled Git browser entry through the same remote manifest and registry path", async () => {
@@ -47,13 +48,14 @@ describe("external plugin manifests", () => {
     })))));
     const moduleLoader = vi.fn(() => Promise.resolve({ default: gitPlugin }));
 
-    const registrations = await loadExternalPlugins(manifestUrl, { machineId: "remote-1", moduleLoader });
+    const result = await loadExternalPlugins(manifestUrl, { machineId: "remote-1", moduleLoader });
     const registry = new PluginRegistry();
-    for (const registration of registrations) registry.register(registration);
+    for (const registration of result.registrations) registry.register(registration);
     const registrationPluginId = machineScopedPluginId("remote-1", "git");
 
     expect(moduleLoader).toHaveBeenCalledWith("https://pi.example.test/api/machines/remote-1/pi-web-plugins/git/pi-web-plugin.js?v=git-r1");
-    expect(registrations).toMatchObject([{
+    expect(result.failures).toEqual([]);
+    expect(result.registrations).toMatchObject([{
       id: registrationPluginId,
       sourcePluginId: "git",
       machineId: "remote-1",
@@ -61,6 +63,41 @@ describe("external plugin manifests", () => {
       machineSpecific: true,
     }]);
     expect(registry.getWorkspacePanels().map((panel) => panel.id)).toEqual([`${registrationPluginId}:workspace.git`]);
+  });
+
+  it("isolates module failures and lets a later load skip registrations that already succeeded", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      plugins: [
+        { id: "stable", module: "./stable/plugin.js" },
+        { id: "retry", module: "./retry/plugin.js" },
+      ],
+    })))));
+    let retryAttempts = 0;
+    const moduleLoader = vi.fn((moduleUrl: string) => {
+      const id = moduleUrl.includes("/retry/") ? "retry" : "stable";
+      if (id === "retry" && retryAttempts++ === 0) return Promise.reject(new Error("temporary module failure"));
+      return Promise.resolve({
+        default: { apiVersion: 1, name: id, activate: () => ({ contributions: {} }) },
+      });
+    });
+    const registry = new PluginRegistry();
+
+    const first = await loadExternalPlugins(undefined, { moduleLoader });
+    for (const registration of first.registrations) registry.register(registration);
+    const second = await loadExternalPlugins(undefined, {
+      moduleLoader,
+      shouldLoadPlugin: (entry) => !registry.hasPlugin(entry.id),
+    });
+
+    expect(first.registrations.map(({ id }) => id)).toEqual(["stable"]);
+    expect(first.failures).toMatchObject([{ entry: { id: "retry" }, error: new Error("temporary module failure") }]);
+    expect(second.failures).toEqual([]);
+    expect(second.registrations.map(({ id }) => id)).toEqual(["retry"]);
+    expect(moduleLoader.mock.calls.map(([moduleUrl]) => moduleUrl)).toEqual([
+      "https://pi.example.test/pi-web-plugins/stable/plugin.js",
+      "https://pi.example.test/pi-web-plugins/retry/plugin.js",
+      "https://pi.example.test/pi-web-plugins/retry/plugin.js",
+    ]);
   });
 
   it("rejects duplicate manifest ids before importing either module", async () => {

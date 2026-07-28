@@ -1,0 +1,194 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Workspace } from "../api";
+import { initialAppState } from "../appState";
+import { loadExternalPlugins, type PluginManifestEntry } from "../plugins/external";
+import { PluginRegistry } from "../plugins/registry";
+import type { PiWebPlugin, PluginRuntimeContext, WorkspacePanelContext } from "../plugins/types";
+import { PiWebApp } from "./PiWebApp";
+
+vi.mock("../plugins/external", () => ({ loadExternalPlugins: vi.fn() }));
+
+const workspace: Workspace = {
+  id: "workspace-1",
+  projectId: "project-1",
+  path: "/repo",
+  label: "main",
+  isMain: true,
+  isGitRepo: false,
+  isGitWorktree: false,
+};
+
+beforeEach(() => {
+  vi.mocked(loadExternalPlugins).mockReset();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("PiWebApp plugin host", () => {
+  it("backs the deprecated refreshGit runtime field with generic panel invalidation", async () => {
+    const app = createApp();
+    setAppState(app, { ...initialAppState(), selectedWorkspace: workspace, workspaces: [workspace] });
+    const invalidated = vi.fn<(context: WorkspacePanelContext) => void>();
+    appPluginRegistry(app).register({
+      id: "browser-only",
+      plugin: pluginWithPanel("Browser only", invalidated),
+    });
+
+    const context = createPluginRuntimeContext(app);
+    // This compatibility contract intentionally exercises the deprecated field.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    await context.refreshGit();
+
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(invalidated.mock.calls[0]?.[0].workspace).toBe(workspace);
+    expect(invalidated.mock.calls[0]?.[0].backend).toBeUndefined();
+  });
+
+  it("keeps successful registrations while making an incomplete gateway load retryable", async () => {
+    const app = createApp();
+    stubPluginLoadRendering(app);
+    const stableEntry = manifestEntry("stable");
+    const retryEntry = manifestEntry("retry");
+    const transientFailure = new Error("temporary module failure");
+    let attempt = 0;
+    vi.mocked(loadExternalPlugins).mockImplementation((_manifestUrl, options = {}) => {
+      attempt += 1;
+      if (attempt === 1) {
+        return Promise.resolve({
+          registrations: [{ id: "stable", machineSpecific: false, plugin: emptyPlugin("Stable") }],
+          failures: [{ entry: retryEntry, error: transientFailure }],
+        });
+      }
+      expect(options.shouldLoadPlugin?.(stableEntry)).toBe(false);
+      return Promise.resolve({
+        registrations: [{ id: "retry", machineSpecific: false, plugin: emptyPlugin("Retry") }],
+        failures: [],
+      });
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await ensureGatewayPluginsLoaded(app);
+
+    expect(appPluginRegistry(app).hasPlugin("stable")).toBe(true);
+    expect(appPluginRegistry(app).hasPlugin("retry")).toBe(false);
+    expect(Reflect.get(app, "gatewayPluginLoadPromise")).toBeUndefined();
+
+    await ensureGatewayPluginsLoaded(app);
+
+    expect(loadExternalPlugins).toHaveBeenCalledTimes(2);
+    expect(appPluginRegistry(app).hasPlugin("stable")).toBe(true);
+    expect(appPluginRegistry(app).hasPlugin("retry")).toBe(true);
+    expect(warning).toHaveBeenCalledWith(
+      "Failed to load PI WEB plugin retry (./retry/plugin.js)",
+      transientFailure,
+    );
+  });
+
+  it("retries a plugin whose activation failed without retaining partial contributions", async () => {
+    const app = createApp();
+    stubPluginLoadRendering(app);
+    let activationAttempts = 0;
+    const retryable: PiWebPlugin = {
+      apiVersion: 1,
+      name: "Retryable",
+      activate: () => {
+        activationAttempts += 1;
+        if (activationAttempts === 1) {
+          return {
+            contributions: {
+              actions: [
+                { id: "action", title: "Partial", run: () => undefined },
+                { id: "action", title: "Duplicate", run: () => undefined },
+              ],
+            },
+          };
+        }
+        return { contributions: { actions: [{ id: "action", title: "Ready", run: () => undefined }] } };
+      },
+    };
+    vi.mocked(loadExternalPlugins).mockResolvedValue({
+      registrations: [{ id: "retryable", machineSpecific: false, plugin: retryable }],
+      failures: [],
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await ensureGatewayPluginsLoaded(app);
+    expect(appPluginRegistry(app).hasPlugin("retryable")).toBe(false);
+    expect(Reflect.get(app, "gatewayPluginLoadPromise")).toBeUndefined();
+
+    await ensureGatewayPluginsLoaded(app);
+
+    expect(activationAttempts).toBe(2);
+    expect(appPluginRegistry(app).hasPlugin("retryable")).toBe(true);
+    expect(appPluginRegistry(app).getActions(createPluginRuntimeContext(app)).filter(({ pluginId }) => pluginId === "retryable").map(({ title }) => title)).toEqual(["Ready"]);
+  });
+});
+
+function createApp(): PiWebApp {
+  const storage = {
+    getItem: () => null,
+    setItem: () => undefined,
+    removeItem: () => undefined,
+  };
+  vi.stubGlobal("window", { location: { search: "" }, localStorage: storage });
+  return new PiWebApp();
+}
+
+function setAppState(app: PiWebApp, state: ReturnType<typeof initialAppState>): void {
+  if (!Reflect.set(app, "state", state)) throw new Error("Could not set PiWebApp state");
+}
+
+function appPluginRegistry(app: PiWebApp): PluginRegistry {
+  const registry: unknown = Reflect.get(app, "plugins");
+  if (!(registry instanceof PluginRegistry)) throw new Error("PiWebApp PluginRegistry was unavailable");
+  return registry;
+}
+
+function createPluginRuntimeContext(app: PiWebApp): PluginRuntimeContext {
+  const createContext: unknown = Reflect.get(app, "createPluginRuntimeContext");
+  if (typeof createContext !== "function") throw new Error("PiWebApp plugin runtime context factory was unavailable");
+  const context: unknown = Reflect.apply(createContext, app, []);
+  if (!isPluginRuntimeContext(context)) throw new Error("PiWebApp returned an invalid plugin runtime context");
+  return context;
+}
+
+async function ensureGatewayPluginsLoaded(app: PiWebApp): Promise<void> {
+  const ensure: unknown = Reflect.get(app, "ensureGatewayPluginsLoaded");
+  if (typeof ensure !== "function") throw new Error("PiWebApp gateway plugin loader was unavailable");
+  const result: unknown = Reflect.apply(ensure, app, []);
+  if (!(result instanceof Promise)) throw new Error("PiWebApp gateway plugin loader did not return a promise");
+  await result;
+}
+
+function isPluginRuntimeContext(value: unknown): value is PluginRuntimeContext {
+  if (typeof value !== "object" || value === null) return false;
+  return "refreshGit" in value && typeof value.refreshGit === "function";
+}
+
+function stubPluginLoadRendering(app: PiWebApp): void {
+  if (!Reflect.set(app, "applyPreferredTheme", () => undefined)) throw new Error("Could not stub theme application");
+  if (!Reflect.set(app, "requestUpdate", () => undefined)) throw new Error("Could not stub Lit update scheduling");
+}
+
+function pluginWithPanel(name: string, onInvalidate: (context: WorkspacePanelContext) => void): PiWebPlugin {
+  return {
+    apiVersion: 1,
+    name,
+    activate: ({ html }) => ({
+      contributions: {
+        workspacePanels: [{ id: "workspace.panel", title: name, onInvalidate, render: () => html`<p>${name}</p>` }],
+      },
+    }),
+  };
+}
+
+function emptyPlugin(name: string): PiWebPlugin {
+  return { apiVersion: 1, name, activate: () => ({ contributions: {} }) };
+}
+
+function manifestEntry(id: string): PluginManifestEntry {
+  return { id, module: `./${id}/plugin.js`, machineSpecific: false };
+}

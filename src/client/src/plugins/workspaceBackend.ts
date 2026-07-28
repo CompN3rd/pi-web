@@ -13,19 +13,16 @@ export function createPluginWorkspaceBackend(
   workspace: Pick<Workspace, "id" | "projectId">,
   machineId: string,
   request: PluginBackendRequester = requestPluginBackend,
-): WorkspaceBackend {
+): WorkspaceBackend | undefined {
+  const backendRevision = binding.backendRevision;
+  if (backendRevision === undefined) return undefined;
   return {
-    request: (operation, input) => {
-      if (binding.backendRevision === undefined) {
-        return Promise.reject(new Error(`PI WEB plugin ${binding.sourcePluginId} does not declare a server backend`));
-      }
-      return request({
-        pluginId: binding.sourcePluginId,
-        backendRevision: binding.backendRevision,
-        machineId,
-        projectId: workspace.projectId,
-        workspaceId: workspace.id,
-      }, operation, input);
-    },
+    request: (operation, input) => request({
+      pluginId: binding.sourcePluginId,
+      backendRevision,
+      machineId,
+      projectId: workspace.projectId,
+      workspaceId: workspace.id,
+    }, operation, input),
   };
 }

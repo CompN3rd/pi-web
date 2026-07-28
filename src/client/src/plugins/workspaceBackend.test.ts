@@ -24,6 +24,7 @@ describe("plugin workspace backend", () => {
       sourcePluginId: "changes.owner",
       backendRevision: "remote-r2",
     }, workspace, "remote one", request);
+    if (backend === undefined) throw new Error("Expected a paired workspace backend");
 
     await expect(backend.request("status", null)).resolves.toEqual({ files: [] });
     expect(request).toHaveBeenCalledWith({
@@ -35,12 +36,12 @@ describe("plugin workspace backend", () => {
     }, "status", null);
   });
 
-  it("returns an explicit mixed-version error when the browser module has no server revision", async () => {
+  it("omits the optional backend when the browser module has no paired server revision", () => {
     const backend = createPluginWorkspaceBackend({
       registrationPluginId: "changes.owner",
       sourcePluginId: "changes.owner",
     }, workspace, "remote-1");
 
-    await expect(backend.request("status", null)).rejects.toThrow("does not declare a server backend");
+    expect(backend).toBeUndefined();
   });
 });

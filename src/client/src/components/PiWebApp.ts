@@ -5,6 +5,7 @@ import type { AppAction } from "../actions";
 import { initialAppState, type AppState } from "../appState";
 import { isSessionActive } from "../../../shared/activity";
 import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
+import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { ActivityController } from "../controllers/activityController";
 import { AuthController } from "../controllers/authController";
 import { FileExplorerController } from "../controllers/fileExplorerController";
@@ -28,11 +29,11 @@ import { hasAuthoritativeSessionPersistence as runtimeHasAuthoritativeSessionPer
 import { SessionUnreadController } from "../sessionUnread";
 import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility, toggleSessionWarnings } from "../sessionWarningVisibility";
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
-import type { PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "../plugins/types";
+import type { PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "../plugins/types";
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
-import { loadExternalPlugins } from "../plugins/external";
+import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
 import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope } from "../plugins/registry";
 import { createPluginWorkspaceBackend } from "../plugins/workspaceBackend";
 import { queryNamespace, readNamespacedString, setNamespacedQueryKey } from "../namespacedQueryArgs";
@@ -1500,14 +1501,17 @@ export class PiWebApp extends LitElement {
 
   private createWorkspaceLabelContext(workspace: Workspace): WorkspaceLabelContext {
     const machine = pluginMachineFromState(this.state);
-    const createContext = (binding: WorkspacePluginBinding): WorkspaceLabelContext => installWorkspaceLabelScope({
-      machine,
-      workspace,
-      state: this.state,
-      files: this.createWorkspaceFiles(workspace, machine.id),
-      backend: createPluginWorkspaceBackend(binding, workspace, machine.id),
-      host: this.createWorkspaceHost(),
-    }, createContext);
+    const createContext = (binding: WorkspacePluginBinding): WorkspaceLabelContext => {
+      const backend = createPluginWorkspaceBackend(binding, workspace, machine.id);
+      return installWorkspaceLabelScope({
+        machine,
+        workspace,
+        state: this.state,
+        files: this.createWorkspaceFiles(workspace, machine.id),
+        ...(backend === undefined ? {} : { backend }),
+        host: this.createWorkspaceHost(),
+      }, createContext);
+    };
     return createContext(coreWorkspacePluginBinding());
   }
 
@@ -1543,12 +1547,13 @@ export class PiWebApp extends LitElement {
     const machineId = machine.id;
     const createContext = (binding: WorkspacePluginBinding): WorkspacePanelContext => {
       const terminalCommandRuns = this.terminalCommandRunsForOrigin(binding.registrationPluginId, machineId);
+      const backend = createPluginWorkspaceBackend(binding, workspace, machineId);
       return installWorkspacePanelScope({
         machine,
         workspace,
         state: this.state,
         files: this.createWorkspaceFiles(workspace, machineId),
-        backend: createPluginWorkspaceBackend(binding, workspace, machineId),
+        ...(backend === undefined ? {} : { backend }),
         prompt: this.createPromptEditor(),
         terminal: {
           open: (options) => { void this.openRuntimeTerminal(machineId, workspace, options); },
@@ -1576,6 +1581,12 @@ export class PiWebApp extends LitElement {
       }, createContext);
     };
     return createContext(coreWorkspacePluginBinding());
+  }
+
+  private invalidateWorkspacePanels(): Promise<void> {
+    const workspace = this.state.selectedWorkspace;
+    if (workspace === undefined) return Promise.resolve();
+    return this.plugins.invalidateWorkspacePanels(this.createWorkspacePanelContext(workspace));
   }
 
   private getActions(): AppAction[] {
@@ -1664,12 +1675,19 @@ export class PiWebApp extends LitElement {
   }
 
   private ensureGatewayPluginsLoaded(): Promise<void> {
-    this.gatewayPluginLoadPromise ??= this.loadExternalPlugins();
-    return this.gatewayPluginLoadPromise;
+    const existing = this.gatewayPluginLoadPromise;
+    if (existing !== undefined) return existing;
+    const load = this.loadExternalPlugins().then((complete) => {
+      if (!complete && this.gatewayPluginLoadPromise === load) this.gatewayPluginLoadPromise = undefined;
+    });
+    this.gatewayPluginLoadPromise = load;
+    return load;
   }
 
-  private async loadExternalPlugins(): Promise<void> {
-    await this.registerExternalPlugins("PI WEB plugins", () => loadExternalPlugins());
+  private loadExternalPlugins(): Promise<boolean> {
+    return this.registerExternalPlugins("PI WEB plugins", () => loadExternalPlugins("pi-web-plugins/manifest.json", {
+      shouldLoadPlugin: (entry) => !this.plugins.hasPlugin(entry.id),
+    }));
   }
 
   private async loadPluginsForSelectedMachine(): Promise<void> {
@@ -1691,7 +1709,8 @@ export class PiWebApp extends LitElement {
 
     const load = this.registerExternalPlugins(`PI WEB plugins from ${machine.name}`, () => loadExternalPlugins(`api/machines/${encodeURIComponent(machine.id)}/pi-web-plugins/manifest.json`, {
       machineId: machine.id,
-      shouldLoadPlugin: (entry) => this.plugins.shouldLoadRemotePlugin(entry.id, entry.machineSpecific),
+      shouldLoadPlugin: (entry) => !this.plugins.hasPlugin(machineScopedPluginId(machine.id, entry.id))
+        && this.plugins.shouldLoadRemotePlugin(entry.id, entry.machineSpecific),
     }))
       .then((loaded) => { if (loaded) this.loadedMachinePluginIds.add(machine.id); })
       .finally(() => { this.machinePluginLoadPromises.delete(machine.id); });
@@ -1699,19 +1718,25 @@ export class PiWebApp extends LitElement {
     await load;
   }
 
-  private async registerExternalPlugins(label: string, load: () => Promise<PiWebPluginRegistration[]>): Promise<boolean> {
+  private async registerExternalPlugins(label: string, load: () => Promise<ExternalPluginLoadResult>): Promise<boolean> {
     try {
-      const registrations = await load();
-      for (const registration of registrations) {
+      const result = await load();
+      let complete = result.failures.length === 0;
+      for (const failure of result.failures) {
+        console.warn(`Failed to load PI WEB plugin ${failure.entry.id} (${failure.entry.module})`, failure.error);
+      }
+      for (const registration of result.registrations) {
+        if (this.plugins.hasPlugin(registration.id)) continue;
         try {
           this.plugins.register(registration);
         } catch (error) {
+          complete = false;
           console.warn(`Failed to register PI WEB plugin ${registration.id}`, error);
         }
       }
       this.applyPreferredTheme(false);
       this.requestUpdate();
-      return true;
+      return complete;
     } catch (error) {
       console.warn(`Failed to load ${label}`, error);
       return false;
@@ -1769,6 +1794,7 @@ export class PiWebApp extends LitElement {
       selectWorkspaceTool: (tool) => { this.openWorkspaceTool(tool); },
       openTerminal: (options) => { this.openTerminal(options); },
       refreshFiles: () => this.files.refreshFiles(),
+      refreshGit: () => this.invalidateWorkspacePanels(),
       refreshAppData: () => this.refreshAppData(),
       checkForPiWebUpdates: () => this.piWebStatusController.checkForUpdates(),
       reloadPage: () => { this.hardReloadApp(); },

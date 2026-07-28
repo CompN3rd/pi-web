@@ -23,6 +23,7 @@ export class PluginRegistry {
   private readonly themes: QualifiedThemeContribution[] = [];
   private readonly themePairs: QualifiedThemePairContribution[] = [];
   private readonly pluginIds = new Set<string>();
+  private readonly registeringPluginIds = new Set<string>();
   private readonly gatewayPluginIds = new Set<string>();
   private readonly gatewayMachineSpecificPluginIds = new Set<string>();
   private readonly remoteMachineSpecificPluginIds = new Map<string, Set<string>>();
@@ -33,25 +34,45 @@ export class PluginRegistry {
     this.validatePluginId(id);
     const machineSpecific = this.parseMachineSpecific(id, registration.machineSpecific);
     const backendRevision = this.parseBackendRevision(id, registration.backendRevision);
-    if (this.pluginIds.has(id)) throw new Error(`Duplicate plugin id: ${id}`);
+    if (this.pluginIds.has(id) || this.registeringPluginIds.has(id)) throw new Error(`Duplicate plugin id: ${id}`);
     if (this.isRemoteDuplicateHiddenByGateway(registration.sourcePluginId, registration.machineId, machineSpecific)) return;
-    this.pluginIds.add(id);
 
-    const apiVersion: unknown = plugin.apiVersion;
-    if (apiVersion !== 1) throw new Error(`Unsupported plugin API version for ${id}: ${String(apiVersion)}`);
-    const result = plugin.activate({ apiVersion: 1, pluginId: id, html, svg });
-    const contributions = result.contributions;
-    for (const action of contributions.actions ?? []) this.actions.push(this.qualifyAction(id, action, registration.machineId, registration.sourcePluginId));
-    for (const panel of contributions.workspacePanels ?? []) this.workspacePanels.push(this.qualifyWorkspacePanel(id, panel, registration.machineId, registration.sourcePluginId, backendRevision));
-    for (const contribution of contributions.workspaceLabels ?? []) this.workspaceLabels.push(this.qualifyWorkspaceLabelContribution(id, contribution, registration.machineId, registration.sourcePluginId, backendRevision));
-    if (registration.machineId === undefined) {
-      for (const theme of contributions.themes ?? []) this.themes.push(this.qualifyTheme(id, theme));
-      for (const pair of contributions.themePairs ?? []) this.themePairs.push(this.qualifyThemePair(id, pair));
-      this.gatewayPluginIds.add(id);
-      if (machineSpecific) this.gatewayMachineSpecificPluginIds.add(id);
-    } else if (registration.sourcePluginId !== undefined && machineSpecific) {
-      addMappedSetValue(this.remoteMachineSpecificPluginIds, registration.sourcePluginId, registration.machineId);
+    this.registeringPluginIds.add(id);
+    try {
+      const apiVersion: unknown = plugin.apiVersion;
+      if (apiVersion !== 1) throw new Error(`Unsupported plugin API version for ${id}: ${String(apiVersion)}`);
+      const contributions = plugin.activate({ apiVersion: 1, pluginId: id, html, svg }).contributions;
+      const contributionIds = new Set<QualifiedContributionId>();
+      const actions = (contributions.actions ?? []).map((action) => this.qualifyAction(id, action, registration.machineId, registration.sourcePluginId, contributionIds));
+      const workspacePanels = (contributions.workspacePanels ?? []).map((panel) => this.qualifyWorkspacePanel(id, panel, registration.machineId, registration.sourcePluginId, backendRevision, contributionIds));
+      const workspaceLabels = (contributions.workspaceLabels ?? []).map((contribution) => this.qualifyWorkspaceLabelContribution(id, contribution, registration.machineId, registration.sourcePluginId, backendRevision, contributionIds));
+      const themes = registration.machineId === undefined
+        ? (contributions.themes ?? []).map((theme) => this.qualifyTheme(id, theme, contributionIds))
+        : [];
+      const themePairs = registration.machineId === undefined
+        ? (contributions.themePairs ?? []).map((pair) => this.qualifyThemePair(id, pair, contributionIds))
+        : [];
+
+      this.pluginIds.add(id);
+      for (const contributionId of contributionIds) this.contributionIds.add(contributionId);
+      this.actions.push(...actions);
+      this.workspacePanels.push(...workspacePanels);
+      this.workspaceLabels.push(...workspaceLabels);
+      this.themes.push(...themes);
+      this.themePairs.push(...themePairs);
+      if (registration.machineId === undefined) {
+        this.gatewayPluginIds.add(id);
+        if (machineSpecific) this.gatewayMachineSpecificPluginIds.add(id);
+      } else if (registration.sourcePluginId !== undefined && machineSpecific) {
+        addMappedSetValue(this.remoteMachineSpecificPluginIds, registration.sourcePluginId, registration.machineId);
+      }
+    } finally {
+      this.registeringPluginIds.delete(id);
     }
+  }
+
+  hasPlugin(pluginId: string): boolean {
+    return this.pluginIds.has(pluginId);
   }
 
   shouldLoadRemotePlugin(sourcePluginId: string, machineSpecific = false): boolean {
@@ -85,6 +106,17 @@ export class PluginRegistry {
     return [...this.workspacePanels].sort((left, right) => (left.order ?? 1000) - (right.order ?? 1000) || left.title.localeCompare(right.title));
   }
 
+  async invalidateWorkspacePanels(context: WorkspacePanelContext): Promise<void> {
+    await Promise.all(this.workspacePanels.map(async (panel) => {
+      if (panel.onInvalidate === undefined) return;
+      try {
+        await panel.onInvalidate(context);
+      } catch (error) {
+        console.warn(`Failed to invalidate PI WEB plugin panel ${panel.id}`, error);
+      }
+    }));
+  }
+
   getThemes(): QualifiedThemeContribution[] {
     return [...this.themes].sort((left, right) => (left.order ?? 1000) - (right.order ?? 1000) || left.name.localeCompare(right.name));
   }
@@ -102,8 +134,14 @@ export class PluginRegistry {
       });
   }
 
-  private qualifyAction(pluginId: string, action: PluginAction, machineId: string | undefined, sourcePluginId: string | undefined): RegisteredPluginAction {
-    const id = this.qualify(pluginId, action.id);
+  private qualifyAction(
+    pluginId: string,
+    action: PluginAction,
+    machineId: string | undefined,
+    sourcePluginId: string | undefined,
+    contributionIds: Set<QualifiedContributionId>,
+  ): RegisteredPluginAction {
+    const id = this.qualify(pluginId, action.id, contributionIds);
     return { ...action, id, pluginId, localId: action.id, ...(machineId === undefined ? {} : { machineId }), ...(sourcePluginId === undefined ? {} : { sourcePluginId }) };
   }
 
@@ -113,10 +151,12 @@ export class PluginRegistry {
     machineId: string | undefined,
     sourcePluginId: string | undefined,
     backendRevision: string | undefined,
+    contributionIds: Set<QualifiedContributionId>,
   ): QualifiedWorkspacePanelContribution {
-    const id = this.qualify(pluginId, panel.id);
+    const id = this.qualify(pluginId, panel.id, contributionIds);
     const badge = panel.badge;
     const visible = panel.visible;
+    const onInvalidate = panel.onInvalidate;
     const binding = workspacePluginBinding(pluginId, sourcePluginId, backendRevision);
     return {
       ...panel,
@@ -126,6 +166,7 @@ export class PluginRegistry {
       ...(machineId === undefined ? {} : { machineId }),
       visible: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(workspacePanelContextFor(context, binding)) ?? true),
       ...(badge === undefined ? {} : { badge: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? badge(workspacePanelContextFor(context, binding)) : undefined }),
+      ...(onInvalidate === undefined ? {} : { onInvalidate: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? onInvalidate(workspacePanelContextFor(context, binding)) : undefined }),
       render: (context: WorkspacePanelContext) => panel.render(workspacePanelContextFor(context, binding)),
     };
   }
@@ -136,8 +177,9 @@ export class PluginRegistry {
     machineId: string | undefined,
     sourcePluginId: string | undefined,
     backendRevision: string | undefined,
+    contributionIds: Set<QualifiedContributionId>,
   ): QualifiedWorkspaceLabelContribution {
-    const id = this.qualify(pluginId, contribution.id);
+    const id = this.qualify(pluginId, contribution.id, contributionIds);
     const visible = contribution.visible;
     const items = contribution.items;
     const binding = workspacePluginBinding(pluginId, sourcePluginId, backendRevision);
@@ -152,13 +194,13 @@ export class PluginRegistry {
     };
   }
 
-  private qualifyTheme(pluginId: string, theme: ThemeContribution): QualifiedThemeContribution {
-    const id = this.qualify(pluginId, theme.id);
+  private qualifyTheme(pluginId: string, theme: ThemeContribution, contributionIds: Set<QualifiedContributionId>): QualifiedThemeContribution {
+    const id = this.qualify(pluginId, theme.id, contributionIds);
     return { ...theme, id, pluginId, localId: theme.id };
   }
 
-  private qualifyThemePair(pluginId: string, pair: ThemePairContribution): QualifiedThemePairContribution {
-    const id = this.qualify(pluginId, pair.id);
+  private qualifyThemePair(pluginId: string, pair: ThemePairContribution, contributionIds: Set<QualifiedContributionId>): QualifiedThemePairContribution {
+    const id = this.qualify(pluginId, pair.id, contributionIds);
     return {
       ...pair,
       id,
@@ -169,11 +211,11 @@ export class PluginRegistry {
     };
   }
 
-  private qualify(pluginId: string, localId: string): QualifiedContributionId {
+  private qualify(pluginId: string, localId: string, contributionIds: Set<QualifiedContributionId>): QualifiedContributionId {
     this.validateLocalId(localId);
     const qualified: QualifiedContributionId = `${pluginId}:${localId}`;
-    if (this.contributionIds.has(qualified)) throw new Error(`Duplicate contribution id: ${qualified}`);
-    this.contributionIds.add(qualified);
+    if (this.contributionIds.has(qualified) || contributionIds.has(qualified)) throw new Error(`Duplicate contribution id: ${qualified}`);
+    contributionIds.add(qualified);
     return qualified;
   }
 
