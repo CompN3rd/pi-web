@@ -255,9 +255,17 @@ PI WEB gateway you opened
               </p>
               <p>
                 Versioned lifecycle manifests pair remote browser/server package source, scope, settings fingerprint, and
-                revisions. If the target is old, unavailable, uses an unsupported lifecycle version, lacks the backend
-                route, or has stale active code, PI WEB reports an explicit compatibility/unavailable state and withholds
-                server-backed UI instead of falling back to a gateway plugin or unpaired revision.
+                revisions. If the target is unavailable, uses an unsupported lifecycle version, lacks the backend route,
+                or has stale active code, a current gateway reports an explicit compatibility/unavailable state instead
+                of falling back to gateway code or an unpaired revision.
+              </p>
+              <p>
+                Mixed-version plugin/provider operation is unsupported in either upgrade order. A newer gateway rejects
+                an older target's entire remote plugin manifest when it lacks the lifecycle contract, so even browser-only
+                remote contributions and that target's Git panel are unavailable. An older gateway still calls legacy
+                core Git routes removed by an updated target, so remote Git status/diff returns <code>404</code>. Upgrade
+                gateway and target together, restart their updated web/API processes and the target session daemon, then
+                reload the gateway page. Other Fleet features use their own capability negotiation.
               </p>
               <div class="callout warning">
                 Run offline disable and safe-start commands directly on the affected target machine. A manual restart of
@@ -266,8 +274,9 @@ PI WEB gateway you opened
               </div>
               <p>
                 Browser and server plugin entries are trusted code. A server entry runs in-process with the target
-                sessiond's user permissions and is not crash-isolated. Only federate machines whose installed PI WEB
-                plugin packages you trust.
+                sessiond's user permissions, shares its event loop, and is not crash-isolated. CPU-bound, blocking, or
+                deadlocked plugin code can stall that target's sessions, terminals, and health endpoints. Only federate
+                machines whose installed PI WEB plugin packages you trust.
               </p>
               <p><a href="plugins#remote-machine-plugins">Read the remote machine plugin and recovery notes →</a></p>
             </section>
@@ -296,7 +305,7 @@ PI WEB gateway you opened
                 <li>Use <strong>Actions → Refresh Selected Machine</strong> to re-check health.</li>
                 <li>Make sure the remote URL is reachable from the gateway server.</li>
                 <li>Open the remote PI WEB directly to verify it is running and to complete model-provider login flows.</li>
-                <li>For plugin lifecycle/backend compatibility errors, update PI WEB on the target, manually restart its session daemon, then reload the gateway page.</li>
+                <li>For plugin lifecycle/backend compatibility errors, upgrade the gateway and target together, restart the updated web/API processes, manually restart the target session daemon, then reload the gateway page.</li>
                 <li>Check <code>pi-web logs</code> on both gateway and target for proxy, plugin activation, health, conflict, or revision diagnostics.</li>
                 <li>Use the target's offline <code>pi-web plugins disable</code> or <code>safe-start</code> commands when sessiond cannot start normally.</li>
               </ul>

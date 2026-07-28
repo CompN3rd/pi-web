@@ -311,6 +311,8 @@ Sessiond is the single workspace authority and resolves one immutable server-plu
 
 For machine federation, the panel targets the selected machine. Remote desired state is saved in that target's config and active state comes from that target's sessiond through the gateway. If selected-machine settings, the versioned plugin lifecycle, the remote manifest, or provider backend routes are unavailable/incompatible, PI WEB reports an explicit unsupported or compatibility error and does not silently use gateway config/code.
 
+Mixed-version plugin/provider operation is not supported in either upgrade order. A newer gateway rejects an older target's whole remote plugin manifest, including browser-only contributions, when the target lacks the current lifecycle contract; its Git panel is therefore unavailable. An older gateway still calls legacy core Git routes removed by an updated target, so remote Git status/diff returns `404`. Upgrade gateway and target together, restart their updated web/API processes and the target session daemon, then reload the browser. Other selected-machine settings and features keep their own capability negotiation.
+
 Apply changes in this order:
 
 1. Install or update the package on the target machine.
@@ -332,9 +334,11 @@ pi-web plugins safe-start set none --restart
 pi-web plugins safe-start clear --restart
 ```
 
-`disable` persists `plugins.<id>.enabled: false`. Safe-start state is stored under `serverPlugins.safeStart`: `bundled-only` filters external server packages before discovery/import, while `none` imports no server plugins and retains the kernel project-folder workspace. `clear` restores ordinary configured discovery on the next start. `--restart` performs a restart only for a recognized safe installed-service plan; otherwise it prints manual instructions.
+`disable` persists `plugins.<id>.enabled: false`. Safe-start state is stored under `serverPlugins.safeStart`: `bundled-only` filters external server packages before discovery/import, while `none` imports no server plugins and retains the kernel project-folder workspace. `clear` restores ordinary configured discovery on the next start. An unsupported `serverPlugins.safeStart` shape or value in otherwise valid JSON fails closed as effective `none`; use `safe-start show`, then `set` or `clear`, to repair it offline.
 
-Ordinary import/activation/start/health failures are quarantined when possible, but server plugins are trusted in-process code and not crash-isolated. Either safe level can recover from external or bundled code that prevents normal startup. Setting, clearing, or disabling takes effect for server code only after sessiond restarts, and that restart may interrupt active sessions/runtime ownership.
+`--restart` performs a restart only for a recognized safe installed-service plan; otherwise it prints manual instructions. The config mutation is durable before PI WEB attempts the restart. If the service-manager command itself fails, restart sessiond manually.
+
+Ordinary import/activation/start/health failures are quarantined when possible, but server plugins are trusted in-process code, share sessiond's event loop, and are not crash-isolated. `bundled-only` bypasses external plugin failures; `none` is the emergency level that also bypasses bundled server plugins. Setting, clearing, or disabling takes effect for server code only after sessiond restarts, and that restart may interrupt active sessions/runtime ownership.
 
 ### Shortcut config
 

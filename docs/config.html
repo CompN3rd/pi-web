@@ -886,6 +886,14 @@
                 unavailable. In Fleet, desired and active state both come from the selected target; incompatible settings,
                 lifecycle, manifest, or backend support never silently falls back to the gateway.
               </p>
+              <p>
+                Mixed-version plugin/provider operation is unsupported in either upgrade order. A newer gateway rejects
+                an older target's entire remote plugin manifest, including browser-only contributions, when the target
+                lacks the lifecycle contract; its Git panel is unavailable. An older gateway still calls legacy core Git
+                routes removed by an updated target, so remote Git status/diff returns <code>404</code>. Upgrade gateway
+                and target together, restart their updated web/API processes and the target session daemon, then reload
+                the browser. Other selected-machine features keep their own capability negotiation.
+              </p>
               <ol>
                 <li>Install or update the package on the target machine.</li>
                 <li>Save desired enablement/settings.</li>
@@ -917,11 +925,22 @@
 <span class="prompt">$</span> pi-web plugins safe-start clear --restart</code></pre>
               </div>
               <p>
+                <code>disable</code> persists <code>plugins.&lt;id&gt;.enabled: false</code> while preserving unrelated config.
                 Safe-start state lives at <code>serverPlugins.safeStart</code>. <code>bundled-only</code> filters external
                 server packages before discovery/import. <code>none</code> imports no server plugins and retains the
-                kernel folder workspace. <code>clear</code> restores ordinary configured discovery on the next start.
+                kernel folder workspace. <code>clear</code> restores ordinary configured discovery on the next start. An
+                unsupported safe-start shape or value in otherwise valid JSON fails closed as effective <code>none</code>;
+                use <code>show</code>, then <code>set</code> or <code>clear</code>, to repair it offline.
+              </p>
+              <p>
                 <code>--restart</code> acts only for a recognized safe installation; otherwise it prints manual guidance.
-                Any restart can interrupt active sessions/runtime ownership.
+                Config is durable before the restart attempt, so restart sessiond manually if that attempt fails. Any
+                restart can interrupt active sessions/runtime ownership.
+              </p>
+              <p>
+                Ordinary catchable failures are quarantined, but server plugins are trusted in-process code, share
+                sessiond's event loop, and are not crash-isolated. <code>bundled-only</code> bypasses external plugin
+                failures; <code>none</code> also bypasses bundled server plugins.
               </p>
             </section>
 

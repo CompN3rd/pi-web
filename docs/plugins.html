@@ -231,8 +231,10 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
               <p>
                 The bundled <strong>Git</strong> plugin is the production dual-entry example. Its browser and server
                 entries import only public package declarations and package-local code; Git receives no private route or
-                service. Every metadata entry needs an id plus <code>module</code>, <code>serverModule</code>, or both.
-                Dual entries default to <code>machineSpecific: true</code> and cannot set it false.
+                service. Every metadata entry needs an id plus <code>module</code>, <code>serverModule</code>, or both. A
+                <code>.js</code> server entry is Node ESM, so the package must declare <code>"type": "module"</code> (or
+                emit <code>.mjs</code>). Browser-only and server-only entries default to
+                <code>machineSpecific: false</code>; dual entries default to <code>true</code> and cannot set it false.
               </p>
               <div class="code-card">
                 <div class="copy-row">
@@ -240,6 +242,7 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                   <button class="copy-button" data-copy="#dual-entry-metadata">Copy</button>
                 </div>
                 <pre id="dual-entry-metadata"><code>{
+  "type": "module",
   "piWeb": {
     "plugins": [{
       "id": "workspaces",
@@ -275,7 +278,9 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
                 A server module default-exports <code>{ apiVersion: 1, name, activate }</code>. Activation may return
                 cooperative <code>start</code>, <code>stop</code>, and <code>health</code> callbacks plus at most one
                 provider. Ordinary failures are attributed and quarantined; successful entries stop in reverse order,
-                and server code is never hot-reloaded.
+                and server code is never hot-reloaded. Optional health is inspected once while sessiond builds its
+                startup authority: unhealthy providers are excluded, degraded providers remain eligible, and the result
+                is fixed until restart.
               </p>
               <p>
                 A provider returns stable workspace keys, accessible absolute directories, labels, exactly one main
@@ -284,9 +289,12 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
                 current-workspace, terminal, deadline, and JSON validation.
               </p>
               <p>
-                Paired panels and labels call <code>context.backend.request(operation, input)</code>. PI WEB binds the
-                request to the original plugin id, active backend revision, selected machine, project, and workspace, and
-                carries it through federation. Plugins should never construct PI WEB backend or machine API URLs.
+                Panels and labels receive optional <code>context.backend</code> only when their browser entry has a
+                paired active server backend. PI WEB binds <code>backend.request(operation, input)</code> to the original
+                plugin id, active backend revision, selected machine, project, and workspace, and carries it through
+                federation. Plugins should never construct PI WEB backend or machine API URLs. Panels can implement
+                <code>onInvalidate</code> and actions can call <code>refreshWorkspacePanels()</code>; the deprecated
+                <code>refreshGit()</code>, route aliases, and shortcut aliases exist only for browser-v1 migrations.
               </p>
               <div class="callout">
                 PI WEB ships only bundled Git as a production provider. Third parties own replacement integrations such
@@ -459,10 +467,12 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
 <span class="prompt">$</span> pi-web plugins safe-start clear --restart</code></pre>
               </div>
               <ul>
+                <li><code>disable</code> persists <code>plugins.&lt;id&gt;.enabled: false</code> while preserving unrelated config.</li>
                 <li><code>bundled-only</code> filters discovery before external server packages are considered.</li>
                 <li><code>none</code> imports no server plugins; the kernel folder workspace remains available.</li>
                 <li><code>clear</code> restores ordinary configured discovery on the next start.</li>
-                <li><code>--restart</code> acts automatically only for a recognized safe installation; otherwise PI WEB prints manual guidance.</li>
+                <li>An unsupported <code>serverPlugins.safeStart</code> shape or value fails closed as effective <code>none</code>; use <code>show</code>, then <code>set</code> or <code>clear</code>, to repair it offline.</li>
+                <li><code>--restart</code> acts automatically only for a recognized safe installation; otherwise PI WEB prints manual guidance. Config is durable before the restart attempt, so restart manually if that attempt fails.</li>
               </ul>
               <p>
                 Ordinary plugin failures are attributed and quarantined when the host can catch them. Safe start remains
@@ -483,13 +493,20 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
                 <li>Server-backed browser code is served only for an exact active package/source/scope/settings/revision pairing.</li>
                 <li><code>machineSpecific</code> decides whether a browser-only gateway copy is portable; dual entries are always machine-specific.</li>
                 <li>Remote theme contributions remain ignored because themes are app-wide.</li>
-                <li>Missing/unsupported lifecycle versions and old backend routes produce explicit compatibility errors instead of gateway fallback.</li>
+                <li>A current gateway reports missing/unsupported lifecycle or backend capabilities explicitly instead of falling back to gateway code.</li>
               </ul>
+              <p>
+                Mixed-version provider/plugin operation is not supported in either upgrade order. A newer gateway rejects
+                an older target's entire remote plugin manifest when it lacks the lifecycle contract, so that target's
+                browser-only contributions and Git panel are unavailable. An older gateway still calls legacy core Git
+                routes removed by an updated target, so remote Git status/diff returns <code>404</code>. Upgrade the
+                gateway and target together, restart their updated web/API processes and the target session daemon, then
+                reload the gateway page. Other machine features use their own capability negotiation.
+              </p>
               <p>
                 Select the remote machine in <strong>Settings → PI WEB plugins</strong> to edit desired state when it
                 advertises selected-machine settings and lifecycle support. Restart that remote session daemon for a
-                server-backed change, then reload the gateway page. Compatibility errors require updating and restarting
-                PI WEB on the target so its web/API and sessiond agree.
+                server-backed change, then reload the gateway page.
               </p>
               <p>
                 Current manifests publish leading application-root module references. The browser keeps them inside the
@@ -539,7 +556,7 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
               <h2>Develop and debug</h2>
               <ul>
                 <li>Keep the source folder outside <code>~/.pi-web/plugins</code> and symlink it in.</li>
-                <li>Build entry JavaScript at the exact package-relative paths declared in metadata.</li>
+                <li>Build entry JavaScript at the exact package-relative paths declared in metadata; declare <code>"type": "module"</code> for a <code>.js</code> server entry or emit <code>.mjs</code>.</li>
                 <li>After browser-only edits, reload or hard-reload the tab and check its console.</li>
                 <li>After server edits, restart sessiond, reload the tab, and inspect <code>pi-web logs</code>.</li>
                 <li>Use <strong>Settings → PI WEB plugins</strong> for desired/active, health, conflict, and revision diagnostics.</li>
@@ -562,14 +579,15 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
               <p>
                 Plugins are not sandboxed. Browser entries can use browser APIs, read/write workspace files through
                 helpers, start terminal commands, and render arbitrary UI. Server entries execute in-process inside
-                sessiond with the service user's filesystem, environment, and process permissions. Install only packages
-                you trust.
+                sessiond with the service user's filesystem, environment, and process permissions, and share sessiond's
+                event loop. Install only packages you trust.
               </p>
               <p>
                 Ordinary import/lifecycle/health failures are quarantined when PI WEB can catch them, but server plugins
-                are not crash-isolated. Abort signals and deadlines are cooperative and cannot preempt blocking or
-                hostile code. This is a stability boundary, not a security boundary; offline disable and both safe-start
-                levels are the recovery path.
+                are not crash-isolated. A CPU-bound, blocking, or deadlocked callback can stall sessions, terminals, and
+                health endpoints. Abort signals and deadlines bound only cooperative asynchronous code and cannot preempt
+                code that ignores them. This is a stability boundary, not a security boundary; offline disable and both
+                safe-start levels are the recovery path.
               </p>
             </section>
           </div>
