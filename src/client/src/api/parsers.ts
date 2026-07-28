@@ -172,6 +172,7 @@ function optionalWorkspaceRemovalPresentation(value: unknown): Workspace["remova
   return {
     actionLabel: requireNonEmptyString(value, "actionLabel"),
     confirmation: requireNonEmptyString(value, "confirmation"),
+    precondition: requireNonEmptyString(value, "precondition"),
   };
 }
 

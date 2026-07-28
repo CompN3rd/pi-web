@@ -603,7 +603,7 @@ describe("API parsers", () => {
         capabilities: { request: true, remove: true },
         metadata: { changeId: "abc", nested: [1, true, null] },
       },
-      removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?" },
+      removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
     })).toEqual({
       id: "w1",
       projectId: "p1",
@@ -617,8 +617,21 @@ describe("API parsers", () => {
         capabilities: { request: true, remove: true },
         metadata: { changeId: "abc", nested: [1, true, null] },
       },
-      removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?" },
+      removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
     });
+  });
+
+  it("rejects removal metadata without a host-issued precondition", () => {
+    expect(() => parseWorkspace({
+      id: "w1",
+      projectId: "p1",
+      path: "/repo/secondary",
+      label: "secondary",
+      isMain: false,
+      isGitRepo: false,
+      isGitWorktree: false,
+      removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?" },
+    })).toThrow("Expected string field: precondition");
   });
 
   it("rejects empty workspace removal wording", () => {
@@ -630,7 +643,7 @@ describe("API parsers", () => {
       isMain: false,
       isGitRepo: false,
       isGitWorktree: false,
-      removal: { actionLabel: "", confirmation: "Remove secondary?" },
+      removal: { actionLabel: "", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
     })).toThrow("Expected non-empty string field: actionLabel");
   });
 

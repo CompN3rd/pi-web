@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 import type { PiWebAgentConfig } from "../../shared/apiTypes.js";
 import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, type FederatedHttpRouteSpec } from "../../shared/federatedRoutes.js";
 import { mergeSelectedMachineConfig, parsePiWebConfigResponseBody, parseSelectedMachineConfigRequest, selectedMachineConfigResponse } from "../configRoutes.js";
+import { requestCancellation } from "../requestCancellation.js";
 import { bridgeSockets } from "../webSocketBridge.js";
 import { DEFAULT_REMOTE_REQUEST_TIMEOUT_MS, RemoteMachineRequestError, type MachineClient, type MachineJsonResponse, type MachineRequestOptions } from "./machineClient.js";
 import { MachineService } from "./machineService.js";
@@ -26,7 +27,26 @@ export function registerMachineProxyRoutes(app: FastifyInstance, machines = new 
       method: spec.method,
       url: `/api/machines/:machineId${spec.path}`,
       ...("bodyLimit" in spec ? { bodyLimit: spec.bodyLimit } : {}),
-      handler: (request, reply) => proxyHttpRequest(machines, spec, request.params.machineId, request.method, request.url, request.body, request.headers["content-type"], reply),
+      handler: async (request, reply) => {
+        const cancellation = "propagateCancellation" in spec
+          ? requestCancellation(request, reply)
+          : undefined;
+        try {
+          return await proxyHttpRequest(
+            machines,
+            spec,
+            request.params.machineId,
+            request.method,
+            request.url,
+            request.body,
+            request.headers["content-type"],
+            reply,
+            cancellation?.signal,
+          );
+        } finally {
+          cancellation?.dispose();
+        }
+      },
     });
   }
 
@@ -37,7 +57,17 @@ export function registerMachineProxyRoutes(app: FastifyInstance, machines = new 
   }
 }
 
-async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRouteSpec, machineId: string, method: string, requestUrl: string, body: unknown, contentType: string | string[] | undefined, reply: FastifyReply): Promise<FastifyReply> {
+async function proxyHttpRequest(
+  machines: MachineService,
+  spec: FederatedHttpRouteSpec,
+  machineId: string,
+  method: string,
+  requestUrl: string,
+  body: unknown,
+  contentType: string | string[] | undefined,
+  reply: FastifyReply,
+  signal?: AbortSignal,
+): Promise<FastifyReply> {
   if (machineId === "local") {
     return reply.code(501).send({ error: "Local machine route is not registered for this endpoint" });
   }
@@ -52,7 +82,7 @@ async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRou
     if (spec.path === "/config") return await proxySelectedMachineConfigRequest(client, machineId, method, remotePath, body, reply);
 
     const startedAt = Date.now();
-    const requestOptions = proxyRequestOptions(spec, body, contentType);
+    const requestOptions = proxyRequestOptions(spec, body, contentType, signal);
     const upstream = requestOptions === undefined
       ? await client.request(method, remotePath, body)
       : await client.request(method, remotePath, body, requestOptions);
@@ -159,9 +189,15 @@ function remoteApiPath(machineId: string, requestUrl: string): string {
   return `/api${compatPath}`;
 }
 
-function proxyRequestOptions(spec: Pick<FederatedHttpRouteSpec, "timeoutMs">, body: unknown, contentType: string | string[] | undefined): MachineRequestOptions | undefined {
+function proxyRequestOptions(
+  spec: Pick<FederatedHttpRouteSpec, "timeoutMs" | "propagateCancellation">,
+  body: unknown,
+  contentType: string | string[] | undefined,
+  signal?: AbortSignal,
+): MachineRequestOptions | undefined {
   const options: MachineRequestOptions = {};
   if (spec.timeoutMs !== undefined) options.timeoutMs = spec.timeoutMs;
+  if (spec.propagateCancellation === true && signal !== undefined) options.signal = signal;
   if (isRawProxyBody(body)) {
     const value = firstHeaderValue(contentType);
     if (value !== undefined && value !== "") options.contentType = value;

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Workspace } from "../../../shared/apiTypes";
-import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS, type FederatedHttpRouteSpec } from "../../../shared/federatedRoutes";
+import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS, WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS, type FederatedHttpRouteSpec } from "../../../shared/federatedRoutes";
 import { PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES, PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES } from "../../../shared/pluginBackendProtocol";
 import { activityApi, configApi, filesApi, piPackagesApi, piWebApi, pluginsApi, projectsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 import { globalSessionEvents, realtimeEvents, sessionEvents, terminalSocket } from "./sockets";
@@ -64,6 +64,15 @@ describe("federated route contract", () => {
     expect(FEDERATED_WEBSOCKET_ROUTES.some((path) => path.includes("tree"))).toBe(false);
   });
 
+  it("gives workspace removal a bounded cancellable federation hop", () => {
+    expect(FEDERATED_HTTP_ROUTES.find((route) => route.path === "/projects/:projectId/workspaces/:workspaceId")).toEqual({
+      method: "DELETE",
+      path: "/projects/:projectId/workspaces/:workspaceId",
+      timeoutMs: WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS,
+      propagateCancellation: true,
+    });
+  });
+
   it("allowlists exactly one bounded workspace provider backend route", () => {
     expect(FEDERATED_HTTP_ROUTES.filter((route) => route.path.includes("plugin-backends"))).toEqual([{
       method: "POST",
@@ -95,7 +104,7 @@ describe("federated route contract", () => {
       ignoreParseFailure(projectsApi.closeProject("p 1", machineId)),
       ignoreParseFailure(projectsApi.projectDirectories("/r", machineId)),
       ignoreParseFailure(workspacesApi.workspaces("p 1", machineId)),
-      ignoreParseFailure(workspacesApi.deleteWorkspace("p 1", "w 1", machineId)),
+      ignoreParseFailure(workspacesApi.deleteWorkspace("p 1", "w 1", "v1.confirmed", machineId)),
       ignoreParseFailure(workspacesApi.workspaceTree("p 1", "w 1", "src", machineId)),
       ignoreParseFailure(workspacesApi.workspaceFile("p 1", "w 1", "README.md", machineId)),
       ignoreParseFailure(workspacesApi.writeWorkspaceFile("p 1", "w 1", "README.md", "hello", { overwrite: false }, machineId)),

@@ -61,19 +61,31 @@ describe("WorkspaceRemovalService", () => {
     const target = resolution.workspaces.find(({ path }) => path === "/board-views/roadmap");
     const commandWorkspace = resolution.workspaces.find(({ isMain }) => isMain);
     if (target === undefined || commandWorkspace === undefined) throw new Error("Expected neutral removable workspace");
-    expect(target.removal).toEqual({
+    expect(target.removal).toMatchObject({
       actionLabel: "Disconnect view",
       confirmation: "Disconnect the Roadmap view without deleting board files?",
     });
+    expect(target.removal?.precondition).toMatch(/^v1\.[A-Za-z0-9_-]{43}$/u);
     const terminals = terminalHost(calls);
     const removals = new WorkspaceRemovalService(registry, terminals);
 
-    const run = await removals.remove(project, target.id);
+    const run = await removals.remove(project, target.id, removalPrecondition(target));
 
     expect(calls).toEqual(["probe", "list", "probe", "list", "prepare", "close", "run"]);
     expect(preparedContext).toMatchObject({
       project: { id: project.id, path: project.path },
-      workspace: { path: "/board-views/roadmap", data: { viewId: "private-roadmap" } },
+      workspace: {
+        path: "/board-views/roadmap",
+        data: { viewId: "private-roadmap" },
+        removal: {
+          actionLabel: "Disconnect view",
+          confirmation: "Disconnect the Roadmap view without deleting board files?",
+        },
+      },
+    });
+    expect(preparedContext?.workspace.removal).toEqual({
+      actionLabel: "Disconnect view",
+      confirmation: "Disconnect the Roadmap view without deleting board files?",
     });
     expect(preparedContext?.signal.aborted).toBe(true);
     expect(terminals.closedCwds).toEqual(["/board-views/roadmap"]);
@@ -136,7 +148,7 @@ describe("WorkspaceRemovalService", () => {
       prepare,
     }), terminals);
 
-    await expect(removals.remove(input, target.id)).rejects.toThrow(message);
+    await expect(removals.remove(input, target.id, removalPrecondition(target))).rejects.toThrow(message);
 
     expect(prepare).not.toHaveBeenCalled();
     expect(terminals.closedCwds).toEqual([]);
@@ -154,7 +166,7 @@ describe("WorkspaceRemovalService", () => {
       prepare,
     }), terminals);
 
-    await expect(wrongOwner.remove(project, target.id)).rejects.toThrow("owner is no longer current");
+    await expect(wrongOwner.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("owner is no longer current");
 
     const noCommand = new WorkspaceRemovalService(removalProvider({
       ownerPluginId: "neutral",
@@ -162,7 +174,7 @@ describe("WorkspaceRemovalService", () => {
       workspaces: [target, { ...hostWorkspace("foreign", "/foreign", true), projectId: "other-project" }],
       prepare,
     }), terminals);
-    await expect(noCommand.remove(project, target.id)).rejects.toThrow("non-target command workspace is required");
+    await expect(noCommand.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("non-target command workspace is required");
 
     expect(prepare).not.toHaveBeenCalled();
     expect(terminals.closedCwds).toEqual([]);
@@ -179,10 +191,126 @@ describe("WorkspaceRemovalService", () => {
       prepare: () => Promise.reject(new Error("workspace has unsubmitted changes")),
     }), terminals);
 
-    await expect(removals.remove(project, target.id)).rejects.toThrow("workspace has unsubmitted changes");
+    await expect(removals.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("workspace has unsubmitted changes");
 
     expect(terminals.closedCwds).toEqual([]);
     expect(terminals.runOptions).toEqual([]);
+  });
+
+  it("rejects a stale host-issued confirmation before provider or terminal side effects", async () => {
+    const target = hostWorkspace("target", "/linked", false);
+    const prepare = vi.fn(() => Promise.resolve({ title: "Remove", command: "neutral remove" }));
+    const terminals = terminalHost();
+    const resolveRemoval = vi.fn(() => Promise.resolve({
+      ownerPluginId: "neutral",
+      target,
+      workspaces: [hostWorkspace("main", "/repo", true), target],
+      prepare,
+    }));
+    const removals = new WorkspaceRemovalService({ resolveRemoval }, terminals);
+
+    await expect(removals.remove(project, target.id, "stale-confirmation")).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Workspace removal confirmation is stale; review the current workspace and confirm again",
+    });
+
+    expect(resolveRemoval).toHaveBeenCalledOnce();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(terminals.closedCwds).toEqual([]);
+    expect(terminals.runOptions).toEqual([]);
+  });
+
+  it("single-flights matching confirmations and keeps the operation alive for a remaining waiter", async () => {
+    const target = hostWorkspace("target", "/linked", false);
+    const prepare = vi.fn(() => Promise.resolve({ title: "Remove", command: "neutral remove" }));
+    const current: WorkspaceProviderRemovalTarget = {
+      ownerPluginId: "neutral",
+      target,
+      workspaces: [hostWorkspace("main", "/repo", true), target],
+      prepare,
+    };
+    let releaseResolution: ((value: WorkspaceProviderRemovalTarget) => void) | undefined;
+    let operationSignal: AbortSignal | undefined;
+    const resolveRemoval = vi.fn((_project: Project, _workspaceId: string, signal: AbortSignal) => {
+      operationSignal = signal;
+      return new Promise<WorkspaceProviderRemovalTarget>((resolvePromise) => {
+        releaseResolution = resolvePromise;
+      });
+    });
+    const terminals = terminalHost();
+    const removals = new WorkspaceRemovalService({ resolveRemoval }, terminals);
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+
+    const first = removals.remove(project, target.id, removalPrecondition(target), firstController.signal);
+    const second = removals.remove(project, target.id, removalPrecondition(target), secondController.signal);
+    await vi.waitFor(() => { expect(resolveRemoval).toHaveBeenCalledOnce(); });
+    await expect(removals.remove(project, target.id, "another-confirmation")).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Workspace removal is already in progress with a different confirmation",
+    });
+
+    const firstExpectation = expect(first).rejects.toMatchObject({ name: "AbortError" });
+    firstController.abort(new DOMException("First caller left", "AbortError"));
+    await firstExpectation;
+    expect(operationSignal?.aborted).toBe(false);
+
+    releaseResolution?.(current);
+    await expect(second).resolves.toMatchObject({ id: "run-1", command: "neutral remove" });
+
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(terminals.closedCwds).toEqual(["/linked"]);
+    expect(terminals.runOptions).toHaveLength(1);
+  });
+
+  it("uses one aggregate deadline across resolution and planning and guards late completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const target = hostWorkspace("target", "/linked", false);
+      let operationSignal: AbortSignal | undefined;
+      let releasePlan: ((value: { title: string; command: string }) => void) | undefined;
+      const prepare = vi.fn(() => new Promise<{ title: string; command: string }>((resolvePromise) => {
+        releasePlan = resolvePromise;
+      }));
+      const resolveRemoval = vi.fn((_project: Project, _workspaceId: string, signal: AbortSignal) => {
+        operationSignal = signal;
+        return new Promise<WorkspaceProviderRemovalTarget>((resolvePromise) => {
+          setTimeout(() => {
+            resolvePromise({
+              ownerPluginId: "neutral",
+              target,
+              workspaces: [hostWorkspace("main", "/repo", true), target],
+              prepare,
+            });
+          }, 20);
+        });
+      });
+      const terminals = terminalHost();
+      const removals = new WorkspaceRemovalService({ resolveRemoval }, terminals, { timeoutMs: 25 });
+
+      const pending = removals.remove(project, target.id, removalPrecondition(target));
+      const expectation = expect(pending).rejects.toMatchObject({
+        statusCode: 504,
+        message: "Workspace removal timed out after 25ms",
+      });
+      await vi.advanceTimersByTimeAsync(20);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(operationSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5);
+      await expectation;
+      expect(operationSignal?.aborted).toBe(true);
+      expect(terminals.closedCwds).toEqual([]);
+      expect(terminals.runOptions).toEqual([]);
+
+      releasePlan?.({ title: "Too late", command: "must not run" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(terminals.closedCwds).toEqual([]);
+      expect(terminals.runOptions).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("closes target terminals before command creation and never starts after cleanup failure", async () => {
@@ -196,7 +324,7 @@ describe("WorkspaceRemovalService", () => {
       prepare: () => { calls.push("prepare"); return Promise.resolve({ title: "Remove", command: "neutral remove" }); },
     }), terminals);
 
-    await expect(removals.remove(project, target.id)).rejects.toThrow("Failed to close workspace terminals: cleanup failed");
+    await expect(removals.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("Failed to close workspace terminals: cleanup failed");
 
     expect(calls).toEqual(["prepare", "close"]);
     expect(terminals.runOptions).toEqual([]);
@@ -242,12 +370,22 @@ function hostWorkspace(id: string, path: string, isMain: boolean): Workspace {
     isGitRepo: false,
     isGitWorktree: false,
     provider: { pluginId: "neutral", capabilities: { request: false, remove: true } },
-    removal: { actionLabel: "Disconnect", confirmation: "Disconnect this workspace?" },
+    removal: {
+      actionLabel: "Disconnect",
+      confirmation: "Disconnect this workspace?",
+      precondition: `removal-${id}`,
+    },
   };
 }
 
 function removalProvider(target: WorkspaceProviderRemovalTarget): WorkspaceRemovalProvider {
   return { resolveRemoval: () => Promise.resolve(target) };
+}
+
+function removalPrecondition(workspace: Workspace): string {
+  const precondition = workspace.removal?.precondition;
+  if (precondition === undefined) throw new Error("Expected removal precondition");
+  return precondition;
 }
 
 function terminalHost(calls: string[] = [], closeFailure?: Error): WorkspaceRemovalTerminalHost & {

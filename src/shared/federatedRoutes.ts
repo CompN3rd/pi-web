@@ -3,8 +3,10 @@ import {
   PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
   PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES,
 } from "./pluginBackendProtocol.js";
+import { WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS } from "./workspaceRemovalProtocol.js";
 
 export { PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS } from "./pluginBackendProtocol.js";
+export { WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS } from "./workspaceRemovalProtocol.js";
 
 export type FederatedHttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -17,6 +19,8 @@ export interface FederatedHttpRouteSpec {
   timeoutMs?: number;
   bodyLimit?: number;
   responseBodyLimit?: number;
+  /** Propagate an inbound disconnect through the remote request. */
+  propagateCancellation?: boolean;
 }
 
 export const FEDERATED_HTTP_ROUTES = [
@@ -40,7 +44,12 @@ export const FEDERATED_HTTP_ROUTES = [
     bodyLimit: PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
     responseBodyLimit: PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES,
   },
-  { method: "DELETE", path: "/projects/:projectId/workspaces/:workspaceId" },
+  {
+    method: "DELETE",
+    path: "/projects/:projectId/workspaces/:workspaceId",
+    timeoutMs: WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS,
+    propagateCancellation: true,
+  },
   { method: "GET", path: "/projects/:projectId/workspaces/:workspaceId/tree" },
   { method: "GET", path: "/projects/:projectId/workspaces/:workspaceId/file" },
   { method: "PUT", path: "/projects/:projectId/workspaces/:workspaceId/file" },

@@ -1789,12 +1789,18 @@ export class PiWebApp extends LitElement {
       return;
     }
     if (isWorkspaceDeletionPending(this.state, workspace)) return;
+    const removal = workspace.removal;
     const confirmation = workspaceRemovalConfirmation(workspace);
-    if (confirmation === undefined || !confirm(confirmation)) return;
+    if (removal === undefined || confirmation === undefined || !confirm(confirmation)) return;
 
     const machineId = selectedMachineId(this.state);
     try {
-      const run = await workspacesApi.deleteWorkspace(workspace.projectId, workspace.id, machineId);
+      const run = await workspacesApi.deleteWorkspace(
+        workspace.projectId,
+        workspace.id,
+        removal.precondition,
+        machineId,
+      );
       if (selectedMachineId(this.state) !== machineId) return;
       this.recordWorkspaceDeletionRun(run, machineId);
       const commandWorkspace = await this.workspaceForCommandRun(run);

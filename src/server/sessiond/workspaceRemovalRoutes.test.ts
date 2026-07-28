@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalCommandRun } from "../../shared/apiTypes.js";
 import type { Project } from "../types.js";
 import { WorkspaceRemovalError } from "../workspaces/workspaceRemovalService.js";
-import { registerWorkspaceRemovalRoutes } from "./workspaceRemovalRoutes.js";
+import {
+  registerWorkspaceRemovalRoutes,
+  type WorkspaceRemover,
+} from "./workspaceRemovalRoutes.js";
 
 const project: Project = {
   id: "project one",
@@ -37,17 +40,22 @@ afterEach(async () => {
 
 describe("session daemon workspace removal routes", () => {
   it("resolves the registered project and returns the host-owned command run", async () => {
-    const remove = vi.fn(() => Promise.resolve(run));
+    const remove = vi.fn<WorkspaceRemover["remove"]>(() => Promise.resolve(run));
     registerWorkspaceRemovalRoutes(app, { projects: projectReader(), removals: { remove } });
 
     const response = await app.inject({
       method: "DELETE",
       url: "/workspace-removals/projects/project%20one/workspaces/linked",
+      payload: { precondition: "v1.confirmed" },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.json<TerminalCommandRun>()).toEqual(run);
-    expect(remove).toHaveBeenCalledWith(project, "linked");
+    expect(remove).toHaveBeenCalledTimes(1);
+    const call = remove.mock.calls[0];
+    expect(call?.slice(0, 3)).toEqual([project, "linked", "v1.confirmed"]);
+    expect(call?.[3]).toBeInstanceOf(AbortSignal);
+    expect(call?.[3].aborted).toBe(false);
   });
 
   it("serializes project, safety, and unexpected failures without a stack", async () => {
@@ -56,9 +64,10 @@ describe("session daemon workspace removal routes", () => {
       .mockRejectedValueOnce(new Error("unexpected failure"));
     registerWorkspaceRemovalRoutes(app, { projects: projectReader(), removals: { remove } });
 
-    const missing = await app.inject({ method: "DELETE", url: "/workspace-removals/projects/missing/workspaces/linked" });
-    const rejected = await app.inject({ method: "DELETE", url: "/workspace-removals/projects/project%20one/workspaces/linked" });
-    const failed = await app.inject({ method: "DELETE", url: "/workspace-removals/projects/project%20one/workspaces/linked" });
+    const payload = { precondition: "v1.confirmed" };
+    const missing = await app.inject({ method: "DELETE", url: "/workspace-removals/projects/missing/workspaces/linked", payload });
+    const rejected = await app.inject({ method: "DELETE", url: "/workspace-removals/projects/project%20one/workspaces/linked", payload });
+    const failed = await app.inject({ method: "DELETE", url: "/workspace-removals/projects/project%20one/workspaces/linked", payload });
 
     expect(missing.statusCode).toBe(404);
     expect(missing.json()).toEqual({ error: "Project not found" });
@@ -67,6 +76,23 @@ describe("session daemon workspace removal routes", () => {
     expect(failed.statusCode).toBe(500);
     expect(failed.json()).toEqual({ error: "unexpected failure" });
     expect(failed.body).not.toContain("stack");
+  });
+
+  it("rejects an absent confirmation precondition before project or removal work", async () => {
+    const requireProject = vi.fn(projectReader().requireProject);
+    const remove = vi.fn(() => Promise.resolve(run));
+    registerWorkspaceRemovalRoutes(app, { projects: { requireProject }, removals: { remove } });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/workspace-removals/projects/project%20one/workspaces/linked",
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toContain("precondition");
+    expect(requireProject).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
   });
 });
 

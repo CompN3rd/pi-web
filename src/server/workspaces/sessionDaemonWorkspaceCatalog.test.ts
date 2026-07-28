@@ -18,13 +18,18 @@ const providerWorkspace = {
   isGitWorktree: false,
   provider: {
     pluginId: "replacement",
-    capabilities: { request: false, remove: false },
+    capabilities: { request: false, remove: true },
     metadata: {
       isGitRepo: true,
       isGitWorktree: true,
       branch: "feature/one",
       detached: false,
     },
+  },
+  removal: {
+    actionLabel: "Disconnect view",
+    confirmation: "Disconnect this view?",
+    precondition: "v1.confirmed",
   },
 };
 
@@ -46,6 +51,7 @@ describe("SessionDaemonWorkspaceCatalog", () => {
       isGitRepo: true,
       isGitWorktree: true,
       provider: { pluginId: "replacement", metadata: { detached: false } },
+      removal: { precondition: "v1.confirmed" },
     });
     expect(resolved).toMatchObject(listed[0] ?? {});
   });
@@ -95,9 +101,19 @@ describe("SessionDaemonWorkspaceCatalog", () => {
     const relative = new SessionDaemonWorkspaceCatalog({
       request: () => Promise.resolve(jsonResponse({ status: "provider", workspaces: [{ ...providerWorkspace, path: "relative" }] })),
     });
+    const missingPrecondition = new SessionDaemonWorkspaceCatalog({
+      request: () => Promise.resolve(jsonResponse({
+        status: "provider",
+        workspaces: [{
+          ...providerWorkspace,
+          removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?" },
+        }],
+      })),
+    });
 
     await expect(mismatched.resolve("project a", "w/1")).rejects.toBeInstanceOf(WorkspaceCatalogProtocolError);
     await expect(relative.list("project a")).rejects.toThrow("path must be absolute");
+    await expect(missingPrecondition.list("project a")).rejects.toThrow("removal precondition must be a non-empty string");
   });
 
   it("rejects a pre-lifecycle provider snapshot as an explicit mixed-version protocol error", async () => {

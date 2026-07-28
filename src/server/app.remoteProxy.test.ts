@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { RemoteMachineRequestError, type MachineClient } from "./machines/machineClient.js";
-import { PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS } from "../shared/federatedRoutes.js";
+import { PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS, WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS } from "../shared/federatedRoutes.js";
 import { PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES } from "../shared/pluginBackendProtocol.js";
 import { appTestContext, fakeRemoteClient, registerAppTestHooks } from "./app.testSupport.js";
 
@@ -268,7 +268,7 @@ describe("buildApp remote machine proxy routes", () => {
   it("proxies remote terminal command-run and continue routes", async () => {
     const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
     const remote = addResponse.json<{ id: string }>();
-    const request = vi.fn((method: string, path: string) => Promise.resolve({
+    const request = vi.fn<MachineClient["request"]>((method, path) => Promise.resolve({
       statusCode: 200,
       headers: { "content-type": "application/json" },
       body: Readable.from([JSON.stringify({ method, path })]),
@@ -276,7 +276,12 @@ describe("buildApp remote machine proxy routes", () => {
     appTestContext.remoteClient = fakeRemoteClient({ request });
 
     const createBody = { origin: "core", title: "Build", command: "npm test", metadata: { "pi.operation": "test" } };
-    const deleteWorkspaceResponse = await appTestContext.app.inject({ method: "DELETE", url: `/api/machines/${remote.id}/projects/p1/workspaces/w1` });
+    const deleteBody = { precondition: "v1.confirmed" };
+    const deleteWorkspaceResponse = await appTestContext.app.inject({
+      method: "DELETE",
+      url: `/api/machines/${remote.id}/projects/p1/workspaces/w1`,
+      payload: deleteBody,
+    });
     const createResponse = await appTestContext.app.inject({ method: "POST", url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/terminal-command-runs`, payload: createBody });
     const listResponse = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/terminal-command-runs?projectId=p1&statuses=running` });
     const getResponse = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/terminal-command-runs/run1` });
@@ -291,6 +296,15 @@ describe("buildApp remote machine proxy routes", () => {
     expect(cancelResponse.json()).toEqual({ method: "POST", path: "/api/terminal-command-runs/run1/cancel" });
     expect(closeWorkspaceTerminalsResponse.json()).toEqual({ method: "DELETE", path: "/api/projects/p1/workspaces/w1/terminals" });
     expect(continueResponse.json()).toEqual({ method: "POST", path: "/api/projects/p1/workspaces/w1/terminals/t1/continue" });
+    const deletionRequest = request.mock.calls.find((call) => call[0] === "DELETE");
+    expect(deletionRequest?.slice(0, 3)).toEqual([
+      "DELETE",
+      "/api/projects/p1/workspaces/w1",
+      deleteBody,
+    ]);
+    expect(deletionRequest?.[3]?.timeoutMs).toBe(WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS);
+    expect(deletionRequest?.[3]?.signal).toBeInstanceOf(AbortSignal);
+    expect(deletionRequest?.[3]?.signal?.aborted).toBe(false);
     expect(request).toHaveBeenCalledWith("POST", "/api/projects/p1/workspaces/w1/terminal-command-runs", createBody);
   });
 

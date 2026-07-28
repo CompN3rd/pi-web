@@ -61,11 +61,65 @@ describe("WorkspaceProviderRegistry", () => {
       expect.objectContaining({
         projectId: project.id,
         path: "/linked",
-        removal: { actionLabel: "Remove", confirmation: "Remove linked?" },
       }),
     ]);
+    const linked = resolution.workspaces.find(({ path }) => path === "/linked");
+    expect(linked?.removal).toMatchObject({
+      actionLabel: "Remove",
+      confirmation: "Remove linked?",
+    });
+    expect(linked?.removal?.precondition).toMatch(/^v1\.[A-Za-z0-9_-]{43}$/u);
     expect(resolution.workspaces[0]?.id).not.toBe(resolution.workspaces[1]?.id);
     expect(Object.isFrozen(resolution.workspaces[0]?.provider?.metadata)).toBe(true);
+  });
+
+  it("keeps workspace ids stable while opaque removal preconditions bind owner snapshot drift", async () => {
+    const resolveTarget = async (
+      pluginId: string,
+      moduleRevision: string,
+      path: string,
+      confirmation: string,
+    ): Promise<{ id: string; precondition: string }> => {
+      const registry = registryFor([contribution(pluginId, provider({
+        probe: () => Promise.resolve("claim"),
+        list: () => Promise.resolve([
+          workspace("main", "/repo", true),
+          workspace("secondary", path, false, {
+            removal: { actionLabel: "Remove", confirmation },
+          }),
+        ]),
+        prepareRemove: () => Promise.resolve({ title: "Remove", command: "tool remove" }),
+      }), moduleRevision)]);
+      const target = (await registry.resolve(project)).workspaces.find(({ isMain }) => !isMain);
+      if (target?.removal === undefined) throw new Error("Expected removable workspace");
+      return { id: target.id, precondition: target.removal.precondition };
+    };
+
+    const baseline = await resolveTarget("primary", "revision-1", "/linked", "Remove linked?");
+    const same = await resolveTarget("primary", "revision-1", "/linked", "Remove linked?");
+    const ownerChanged = await resolveTarget("replacement", "revision-1", "/linked", "Remove linked?");
+    const revisionChanged = await resolveTarget("primary", "revision-2", "/linked", "Remove linked?");
+    const pathChanged = await resolveTarget("primary", "revision-1", "/moved", "Remove linked?");
+    const wordingChanged = await resolveTarget("primary", "revision-1", "/linked", "Disconnect linked?");
+
+    expect(same).toEqual(baseline);
+    expect(new Set([
+      baseline.id,
+      ownerChanged.id,
+      revisionChanged.id,
+      pathChanged.id,
+      wordingChanged.id,
+    ])).toEqual(new Set([baseline.id]));
+    expect(new Set([
+      baseline.precondition,
+      ownerChanged.precondition,
+      revisionChanged.precondition,
+      pathChanged.precondition,
+      wordingChanged.precondition,
+    ]).size).toBe(5);
+    expect(baseline.precondition).toMatch(/^v1\.[A-Za-z0-9_-]{43}$/u);
+    expect(baseline.precondition).not.toContain("primary");
+    expect(baseline.precondition).not.toContain("/linked");
   });
 
   it("excludes unhealthy providers from arbitration while retaining degraded providers", async () => {
@@ -489,6 +543,65 @@ describe("WorkspaceProviderRegistry", () => {
     expect(observedSignal?.aborted).toBe(true);
   });
 
+  it("propagates caller cancellation through removal resolution and planning", async () => {
+    let mode: "ready" | "list" | "prepare" = "ready";
+    let listedSignal: AbortSignal | undefined;
+    let preparedSignal: AbortSignal | undefined;
+    const providerContribution = provider({
+      probe: () => Promise.resolve("claim"),
+      list: (_project, signal) => {
+        if (mode !== "list") {
+          return Promise.resolve([
+            workspace("main", "/repo", true),
+            workspace("view", "/view", false, {
+              removal: { actionLabel: "Disconnect", confirmation: "Disconnect view?" },
+            }),
+          ]);
+        }
+        listedSignal = signal;
+        return new Promise((_resolve, rejectPromise) => {
+          signal.addEventListener("abort", () => {
+            const reason: unknown = signal.reason;
+            rejectPromise(reason instanceof Error ? reason : new Error("List cancelled", { cause: reason }));
+          }, { once: true });
+        });
+      },
+      prepareRemove: ({ signal }) => {
+        if (mode !== "prepare") return Promise.resolve({ title: "Disconnect", command: "board disconnect" });
+        preparedSignal = signal;
+        return new Promise((_resolve, rejectPromise) => {
+          signal.addEventListener("abort", () => {
+            const reason: unknown = signal.reason;
+            rejectPromise(reason instanceof Error ? reason : new Error("Preparation cancelled", { cause: reason }));
+          }, { once: true });
+        });
+      },
+    });
+    const registry = registryFor([contribution("board", providerContribution)]);
+    const workspaceId = (await registry.resolve(project)).workspaces.find(({ path }) => path === "/view")?.id;
+    if (workspaceId === undefined) throw new Error("Expected removable workspace");
+
+    mode = "list";
+    const listController = new AbortController();
+    const pendingResolution = registry.resolveRemoval(project, workspaceId, listController.signal);
+    await vi.waitFor(() => { expect(listedSignal).toBeInstanceOf(AbortSignal); });
+    const resolutionExpectation = expect(pendingResolution).rejects.toMatchObject({ name: "AbortError" });
+    listController.abort(new DOMException("Removal request cancelled", "AbortError"));
+    await resolutionExpectation;
+    expect(listedSignal?.aborted).toBe(true);
+
+    mode = "ready";
+    const prepareController = new AbortController();
+    const current = await registry.resolveRemoval(project, workspaceId, prepareController.signal);
+    mode = "prepare";
+    const pendingPlan = current.prepare();
+    await vi.waitFor(() => { expect(preparedSignal).toBeInstanceOf(AbortSignal); });
+    const planExpectation = expect(pendingPlan).rejects.toMatchObject({ name: "AbortError" });
+    prepareController.abort(new DOMException("Removal request cancelled", "AbortError"));
+    await planExpectation;
+    expect(preparedSignal?.aborted).toBe(true);
+  });
+
   it("re-resolves removal targets and contains stale, invalid, and timed-out provider plans", async () => {
     let observedRemoveContext: ProviderRemoveContext | undefined;
     const prepareRemove = vi.fn((context: ProviderRemoveContext) => {
@@ -644,14 +757,18 @@ function registryFixture(
   };
 }
 
-function contribution(pluginId: string, workspaceProvider: WorkspaceProvider): ServerPluginProviderContribution {
+function contribution(
+  pluginId: string,
+  workspaceProvider: WorkspaceProvider,
+  moduleRevision = "1",
+): ServerPluginProviderContribution {
   return {
     pluginId,
     pluginName: pluginId,
     packageRoot: `/plugins/${pluginId}`,
     source: "test fixture",
     scope: "local",
-    moduleRevision: "1",
+    moduleRevision,
     provider: workspaceProvider,
   };
 }

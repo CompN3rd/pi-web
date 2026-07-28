@@ -142,6 +142,7 @@ function parseRemoval(value: unknown, workspaceLabel: string): NonNullable<Works
   return {
     actionLabel: requireString(value, "actionLabel", label),
     confirmation: requireString(value, "confirmation", label),
+    precondition: requireString(value, "precondition", label),
   };
 }
 

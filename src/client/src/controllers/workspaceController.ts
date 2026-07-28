@@ -165,6 +165,7 @@ function sameWorkspaceMetadata(left: Workspace, right: Workspace): boolean {
     && left.isGitRepo === right.isGitRepo
     && left.isGitWorktree === right.isGitWorktree
     && left.removal?.actionLabel === right.removal?.actionLabel
-    && left.removal?.confirmation === right.removal?.confirmation;
+    && left.removal?.confirmation === right.removal?.confirmation
+    && left.removal?.precondition === right.removal?.precondition;
 }
 

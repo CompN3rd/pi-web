@@ -5,6 +5,7 @@ import type {
   ProjectInput,
   ProviderClaim,
   ProviderWorkspace,
+  WorkspaceRemovalPresentation as ProviderWorkspaceRemovalPresentation,
   WorkspaceRemovePlan,
 } from "../../server-plugin-api.js";
 import type {
@@ -12,7 +13,7 @@ import type {
   JsonValue,
   Project,
   Workspace,
-  WorkspaceRemovalPresentation,
+  WorkspaceRemovalPresentation as PublicWorkspaceRemovalPresentation,
 } from "../../shared/apiTypes.js";
 import { isPiWebPluginId } from "../../shared/pluginIds.js";
 import {
@@ -257,13 +258,17 @@ export class WorkspaceProviderRegistry {
   }
 
   /** Re-resolve one live owner/target before host safety checks and provider planning. */
-  async resolveRemoval(project: Project, workspaceId: string): Promise<WorkspaceProviderRemovalTarget> {
+  async resolveRemoval(
+    project: Project,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceProviderRemovalTarget> {
     const input = snapshotProject(project);
     if (workspaceId === "") throw providerRemovalError("workspace-not-found", 404, "Workspace not found");
     const diagnostics: WorkspaceProviderDiagnostic[] = [];
 
     for (const tier of ["primary", "fallback"] as const) {
-      const selection = await this.selectInTier(input, tier, diagnostics);
+      const selection = await this.selectInTier(input, tier, diagnostics, signal);
       if (selection.kind === "none") continue;
       if (selection.kind === "conflict") {
         throw providerRemovalError(
@@ -280,10 +285,12 @@ export class WorkspaceProviderRegistry {
           contribution.pluginId,
           "list",
           this.providerTimeoutMs,
-          (signal) => contribution.provider.list(input, signal),
+          (operationSignal) => contribution.provider.list(input, operationSignal),
+          signal,
         );
-        validated = await validateProviderWorkspaces(input, contribution, listed, this.pathInspector);
+        validated = await validateProviderWorkspaces(input, contribution, listed, this.pathInspector, signal);
       } catch (error) {
+        if (signal?.aborted === true) throw abortError(signal);
         if (error instanceof WorkspaceProviderTimeoutError) {
           throw providerRemovalError("resolution-timeout", 504, boundedErrorMessage(error), error);
         }
@@ -324,13 +331,15 @@ export class WorkspaceProviderRegistry {
               contribution.pluginId,
               "prepareRemove",
               this.providerTimeoutMs,
-              (signal) => callback(Object.freeze({
+              (operationSignal) => callback(Object.freeze({
                 project: input,
                 workspace: current.providerWorkspace,
-                signal,
+                signal: operationSignal,
               })),
+              signal,
             );
           } catch (error) {
+            if (signal?.aborted === true) throw abortError(signal);
             if (error instanceof WorkspaceProviderTimeoutError) {
               throw providerRemovalError("preparation-timeout", 504, boundedErrorMessage(error), error);
             }
@@ -492,8 +501,9 @@ export class WorkspaceProviderRegistry {
         (signal) => contribution.provider.list(project, signal),
         dispatchSignal,
       );
-      return await validateProviderWorkspaces(project, contribution, listed, this.pathInspector);
+      return await validateProviderWorkspaces(project, contribution, listed, this.pathInspector, dispatchSignal);
     } catch (error) {
+      if (dispatchSignal.aborted) throw abortError(dispatchSignal);
       if (error instanceof WorkspaceProviderTimeoutError) {
         throw providerRequestError("resolution-timeout", 504, boundedErrorMessage(error), error);
       }
@@ -529,6 +539,7 @@ export class WorkspaceProviderRegistry {
         }
         if (claim === "claim") claimants.push(contribution);
       } catch (error) {
+        if (dispatchSignal?.aborted === true) throw abortError(dispatchSignal);
         const message = errorMessage(error);
         diagnostics.push(freezeDiagnostic({
           code: "probe-failed",
@@ -598,6 +609,7 @@ async function validateProviderWorkspaces(
   contribution: ServerPluginProviderContribution,
   value: unknown,
   pathInspector: WorkspacePathInspector,
+  signal?: AbortSignal,
 ): Promise<ValidatedProviderWorkspace[]> {
   if (!Array.isArray(value)) {
     throw new WorkspaceProviderContractError(`Workspace provider ${contribution.pluginId} list result must be an array`);
@@ -609,6 +621,7 @@ async function validateProviderWorkspaces(
   let mainCount = 0;
 
   for (const [index, rawWorkspace] of value.entries()) {
+    throwIfAborted(signal);
     const label = `Workspace provider ${contribution.pluginId} result ${String(index + 1)}`;
     const candidate = parseProviderWorkspace(rawWorkspace, label);
     if (keys.has(candidate.key)) throw new WorkspaceProviderContractError(`${label} has duplicate key: ${candidate.key}`);
@@ -618,6 +631,7 @@ async function validateProviderWorkspaces(
     if (paths.has(path)) throw new WorkspaceProviderContractError(`${label} has duplicate path: ${path}`);
     paths.add(path);
     if (!(await pathInspector(path))) throw new WorkspaceProviderContractError(`${label} path is not an accessible directory: ${path}`);
+    throwIfAborted(signal);
 
     if (candidate.isMain) mainCount += 1;
 
@@ -631,6 +645,9 @@ async function validateProviderWorkspaces(
     if (removal !== undefined && contribution.provider.prepareRemove === undefined) {
       throw new WorkspaceProviderContractError(`${label} advertises removal without a prepareRemove capability`);
     }
+    const publicRemoval = removal === undefined
+      ? undefined
+      : hostRemovalPresentation(project, contribution, candidate.key, path, removal);
     const workspace: Workspace = {
       id: workspaceId(project.id, candidate.key),
       projectId: project.id,
@@ -649,7 +666,7 @@ async function validateProviderWorkspaces(
         },
         ...(metadata === undefined ? {} : { metadata }),
       },
-      ...(removal === undefined ? {} : { removal }),
+      ...(publicRemoval === undefined ? {} : { removal: publicRemoval }),
     };
     const providerWorkspace: ProviderWorkspace = Object.freeze({
       key: candidate.key,
@@ -691,13 +708,32 @@ function parseProviderWorkspace(value: unknown, label: string): ParsedProviderWo
   };
 }
 
-function parseRemoval(value: unknown, label: string): WorkspaceRemovalPresentation {
+function parseRemoval(value: unknown, label: string): ProviderWorkspaceRemovalPresentation {
   if (!isRecord(value)) throw new WorkspaceProviderContractError(`${label} must be an object`);
   const actionLabel = value["actionLabel"];
   const confirmation = value["confirmation"];
   if (typeof actionLabel !== "string" || actionLabel === "") throw new WorkspaceProviderContractError(`${label} actionLabel must be a non-empty string`);
   if (typeof confirmation !== "string" || confirmation === "") throw new WorkspaceProviderContractError(`${label} confirmation must be a non-empty string`);
   return Object.freeze({ actionLabel, confirmation });
+}
+
+function hostRemovalPresentation(
+  project: ProjectInput,
+  contribution: ServerPluginProviderContribution,
+  providerKey: string,
+  path: string,
+  removal: ProviderWorkspaceRemovalPresentation,
+): PublicWorkspaceRemovalPresentation {
+  const digest = createHash("sha256").update(JSON.stringify([
+    contribution.pluginId,
+    contribution.moduleRevision,
+    project.id,
+    providerKey,
+    path,
+    removal.actionLabel,
+    removal.confirmation,
+  ])).digest("base64url");
+  return Object.freeze({ ...removal, precondition: `v1.${digest}` });
 }
 
 function snapshotProject(project: Project): ProjectInput {
@@ -899,6 +935,10 @@ function isProviderClaim(value: unknown): value is ProviderClaim {
 function abortError(signal: AbortSignal): Error {
   const reason: unknown = signal.reason;
   return reason instanceof Error ? reason : new Error("Workspace provider operation aborted", { cause: reason });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw abortError(signal);
 }
 
 function positiveInteger(value: number | undefined, fallback: number, key: string): number {

@@ -16,6 +16,7 @@ describe("workspace-list removal actions", () => {
       removal: {
         actionLabel: "Disconnect view",
         confirmation: "Disconnect this view without deleting files?",
+        precondition: "removal-v1",
       },
     });
     const legacyGitOnly = workspace("legacy", { isGitRepo: true, isGitWorktree: true });

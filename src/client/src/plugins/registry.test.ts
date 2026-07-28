@@ -163,7 +163,7 @@ describe("PluginRegistry", () => {
 
     const deletable = registry.getActions(createContext({ selectedWorkspace: testWorkspace({
       isMain: false,
-      removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?" },
+      removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?", precondition: "removal-v1" },
     }) }).context);
     const removalAction = deletable.find((action) => action.id === "core:workspace.delete");
     expect(removalAction?.enabled).toBe(true);
@@ -175,7 +175,7 @@ describe("PluginRegistry", () => {
     registry.register({ id: "core", plugin: corePlugin });
     const { context, calls } = createContext({ selectedWorkspace: testWorkspace({
       isMain: false,
-      removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?" },
+      removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?", precondition: "removal-v1" },
     }) });
     const action = registry.getActions(context).find((candidate) => candidate.id === "core:workspace.delete");
 

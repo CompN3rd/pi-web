@@ -13,6 +13,7 @@ const workspace: Workspace = {
   removal: {
     actionLabel: "Disconnect view",
     confirmation: "Disconnect this view without deleting files?",
+    precondition: "removal-v1",
   },
 };
 

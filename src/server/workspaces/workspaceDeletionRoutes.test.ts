@@ -47,15 +47,20 @@ describe("workspace deletion routes", () => {
     const response = await app.inject({
       method: "DELETE",
       url: "/api/projects/project%20one/workspaces/view%2Fone",
+      payload: { precondition: "v1.confirmed" },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("application/json");
     expect(response.json<TerminalCommandRun>()).toEqual(run);
-    expect(daemonRequests).toEqual([{
+    expect(daemonRequests).toHaveLength(1);
+    expect(daemonRequests[0]).toMatchObject({
       method: "DELETE",
       path: "/workspace-removals/projects/project%20one/workspaces/view%2Fone",
-    }]);
+      body: { precondition: "v1.confirmed" },
+    });
+    expect(daemonRequests[0]?.signal).toBeInstanceOf(AbortSignal);
+    expect(daemonRequests[0]?.signal?.aborted).toBe(false);
   });
 
   it("preserves attributable sessiond rejection status and body", async () => {
@@ -65,7 +70,11 @@ describe("workspace deletion routes", () => {
       body: JSON.stringify({ error: "Workspace owner is no longer current" }),
     };
 
-    const response = await app.inject({ method: "DELETE", url: "/api/projects/p1/workspaces/w1" });
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/projects/p1/workspaces/w1",
+      payload: { precondition: "v1.confirmed" },
+    });
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ error: "Workspace owner is no longer current" });
@@ -73,15 +82,28 @@ describe("workspace deletion routes", () => {
 
   it("contains daemon availability and protocol failures at the web boundary", async () => {
     daemonResponse = { statusCode: 200, headers: {}, body: "not json" };
-    const malformed = await app.inject({ method: "DELETE", url: "/api/projects/p1/workspaces/w1" });
+    const payload = { precondition: "v1.confirmed" };
+    const malformed = await app.inject({ method: "DELETE", url: "/api/projects/p1/workspaces/w1", payload });
 
     daemonFailure = new Error("socket unavailable");
-    const unavailable = await app.inject({ method: "DELETE", url: "/api/projects/p1/workspaces/w1" });
+    const unavailable = await app.inject({ method: "DELETE", url: "/api/projects/p1/workspaces/w1", payload });
 
     expect(malformed.statusCode).toBe(502);
     expect(malformed.json<{ error: string }>().error).toContain("Invalid session daemon workspace removal response");
     expect(unavailable.statusCode).toBe(502);
     expect(unavailable.json()).toEqual({ error: "Session daemon unavailable: socket unavailable" });
+  });
+
+  it("requires the host confirmation precondition before contacting sessiond", async () => {
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/projects/p1/workspaces/w1",
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toContain("precondition");
+    expect(daemonRequests).toEqual([]);
   });
 });
 
@@ -89,12 +111,18 @@ interface DaemonRequest {
   method: string;
   path: string;
   body?: unknown;
+  signal?: AbortSignal;
 }
 
 function fakeDaemon(): SessionProxyDaemon {
   return {
-    request: (method, path, body) => {
-      daemonRequests.push({ method, path, ...(body === undefined ? {} : { body }) });
+    request: (method, path, body, options) => {
+      daemonRequests.push({
+        method,
+        path,
+        ...(body === undefined ? {} : { body }),
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
+      });
       return daemonFailure === undefined ? Promise.resolve(daemonResponse) : Promise.reject(daemonFailure);
     },
     connectWebSocket: () => { throw new Error("WebSocket not configured for test"); },

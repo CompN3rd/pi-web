@@ -276,6 +276,12 @@ export interface WorkspaceProviderMetadata {
 export interface WorkspaceRemovalPresentation {
   actionLabel: string;
   confirmation: string;
+  /** Host-issued opaque token binding a removal confirmation to this exact owner snapshot. */
+  precondition: string;
+}
+
+export interface WorkspaceRemovalRequest {
+  precondition: string;
 }
 
 export interface Workspace {

@@ -257,15 +257,15 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     expect(test.clearActiveSession).not.toHaveBeenCalled();
   });
 
-  it("refreshes provider removal wording without resetting the selected session", async () => {
+  it("refreshes a changed removal precondition without resetting the selected session", async () => {
     const repo = project("p1", "/repo");
     const main = workspace(repo.id, repo.path, { isMain: true });
     const selected = workspace(repo.id, "/repo-feature", {
-      removal: { actionLabel: "Disconnect", confirmation: "Disconnect old view?" },
+      removal: { actionLabel: "Disconnect", confirmation: "Disconnect old view?", precondition: "old-removal" },
     });
     const refreshed = {
       ...selected,
-      removal: { actionLabel: "Detach view", confirmation: "Detach current view?" },
+      removal: { actionLabel: "Disconnect", confirmation: "Disconnect old view?", precondition: "current-removal" },
     };
     const test = harness(
       {
