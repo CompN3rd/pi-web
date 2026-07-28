@@ -73,6 +73,75 @@ describe("WorkspaceProviderRegistry", () => {
     expect(Object.isFrozen(resolution.workspaces[0]?.provider?.metadata)).toBe(true);
   });
 
+  it("coalesces only equivalent in-flight resolutions and never retains a completed result", async () => {
+    const firstBaselineList = deferred<ProviderWorkspace[]>();
+    let baselineLists = 0;
+    const probe = vi.fn(() => Promise.resolve<"claim">("claim"));
+    const list = vi.fn((input: { name: string }) => {
+      if (input.name !== project.name) return Promise.resolve([workspace("root", "/repo", true)]);
+      baselineLists += 1;
+      return baselineLists === 1
+        ? firstBaselineList.promise
+        : Promise.resolve([
+            workspace("root", "/repo", true),
+            workspace("fresh", "/fresh", false),
+          ]);
+    });
+    const registry = registryFor([contribution("owner", provider({ probe, list }))]);
+
+    const first = registry.resolve(project);
+    const equivalent = registry.resolve({ ...project });
+    await vi.waitFor(() => { expect(list).toHaveBeenCalledOnce(); });
+
+    const differentSnapshot = await registry.resolve({ ...project, name: "Renamed" });
+    expect(differentSnapshot.workspaces).toHaveLength(1);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledTimes(2);
+
+    firstBaselineList.resolve([workspace("root", "/repo", true)]);
+    const [firstResult, equivalentResult] = await Promise.all([first, equivalent]);
+    expect(firstResult).toBe(equivalentResult);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledTimes(2);
+
+    const fresh = await registry.resolve(project);
+    expect(fresh.workspaces.map(({ path }) => path)).toEqual(["/repo", "/fresh"]);
+    expect(probe).toHaveBeenCalledTimes(3);
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps removal resolution fresh and outside ordinary resolution coalescing", async () => {
+    const blockedList = deferred<ProviderWorkspace[]>();
+    const topology = [
+      workspace("root", "/repo", true),
+      workspace("view", "/view", false, {
+        removal: { actionLabel: "Disconnect", confirmation: "Disconnect view?" },
+      }),
+    ];
+    let listCalls = 0;
+    const registry = registryFor([contribution("owner", provider({
+      probe: () => Promise.resolve("claim"),
+      list: () => {
+        listCalls += 1;
+        return listCalls === 2 ? blockedList.promise : Promise.resolve(topology);
+      },
+      prepareRemove: () => Promise.resolve({ title: "Disconnect", command: "tool disconnect" }),
+    }))]);
+    const initial = await registry.resolve(project);
+    const workspaceId = initial.workspaces.find(({ path }) => path === "/view")?.id;
+    if (workspaceId === undefined) throw new Error("Expected removable workspace");
+
+    const pendingResolution = registry.resolve(project);
+    await vi.waitFor(() => { expect(listCalls).toBe(2); });
+    const removal = await registry.resolveRemoval(project, workspaceId);
+
+    expect(removal.target.id).toBe(workspaceId);
+    expect(listCalls).toBe(3);
+
+    blockedList.resolve(topology);
+    await pendingResolution;
+  });
+
   it("keeps workspace ids stable while opaque removal preconditions bind owner snapshot drift", async () => {
     const resolveTarget = async (
       pluginId: string,
@@ -789,6 +858,13 @@ function workspace(
   extras: Partial<ProviderWorkspace> = {},
 ): ProviderWorkspace {
   return { key, path, label: key, isMain, ...extras };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolveDeferred: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => { resolveDeferred = resolve; });
+  if (resolveDeferred === undefined) throw new Error("Deferred promise was not initialized");
+  return { promise, resolve: resolveDeferred };
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

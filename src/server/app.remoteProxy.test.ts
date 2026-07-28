@@ -202,17 +202,23 @@ describe("buildApp remote machine proxy routes", () => {
       isGitWorktree: false,
       effectiveConfig: { uploads: { defaultFolder: "remote-project-uploads" } },
     }];
+    const remoteResolution = {
+      status: "folder",
+      projectId: "p1",
+      workspaces: remoteWorkspaces,
+      diagnostics: [{ code: "probe-failed", message: "Optional provider unavailable", tier: "primary", pluginId: "optional" }],
+    };
     const request = vi.fn(() => Promise.resolve({
       statusCode: 200,
       headers: { "content-type": "application/json" },
-      body: Readable.from([JSON.stringify(remoteWorkspaces)]),
+      body: Readable.from([JSON.stringify(remoteResolution)]),
     }));
     appTestContext.remoteClient = fakeRemoteClient({ request });
 
     const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/projects/p1/workspaces` });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(remoteWorkspaces);
+    expect(response.json()).toEqual(remoteResolution);
     expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces", undefined);
   });
 

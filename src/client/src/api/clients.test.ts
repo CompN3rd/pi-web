@@ -418,13 +418,30 @@ describe("machine-scoped file suggestion API", () => {
 });
 
 describe("machine-scoped workspace API", () => {
-  it("keeps project ids in one encoded route segment when listing workspaces", async () => {
-    const fetchMock = stubJsonFetch([]);
+  it("keeps project ids in one encoded route segment and preserves provider diagnostics", async () => {
+    const projectId = "../p /?";
+    const listedWorkspace = { ...workspace, projectId };
+    const response = {
+      status: "degraded",
+      projectId,
+      ownerPluginId: "replacement",
+      workspaces: [listedWorkspace],
+      diagnostics: [{ code: "list-failed", message: "backend unavailable", tier: "primary", pluginId: "replacement" }],
+    };
+    const fetchMock = stubSequenceFetch([jsonResponse(response), jsonResponse(response)]);
 
-    await workspacesApi.workspaces("../p /?", "remote a");
+    const resolution = await workspacesApi.workspaceResolution(projectId, "remote a");
+    const listed = await workspacesApi.workspaces(projectId, "remote a");
 
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/projects/..%2Fp%20%2F%3F/workspaces");
+    expect(fetchCall(fetchMock, 1)[0]).toBe(fetchCall(fetchMock, 0)[0]);
+    expect(resolution).toMatchObject({
+      status: "degraded",
+      ownerPluginId: "replacement",
+      diagnostics: [{ code: "list-failed", pluginId: "replacement" }],
+    });
+    expect(listed).toEqual([listedWorkspace]);
   });
 });
 

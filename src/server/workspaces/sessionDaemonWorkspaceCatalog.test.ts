@@ -36,15 +36,23 @@ const providerWorkspace = {
 describe("SessionDaemonWorkspaceCatalog", () => {
   it("uses encoded daemon operations and applies browser-v1 compatibility without provider-id branching", async () => {
     const request = vi.fn<SessionDaemonRequestClient["request"]>((_method, path) => Promise.resolve(jsonResponse(
-      path.endsWith("/w%2F1") ? providerWorkspace : { status: "provider", workspaces: [providerWorkspace], diagnostics: [] },
+      path.endsWith("/w%2F1") ? providerWorkspace : providerResolution([providerWorkspace]),
     )));
     const catalog = new SessionDaemonWorkspaceCatalog({ request });
 
+    const resolution = await catalog.resolveProject("project a");
     const listed = await catalog.list("project a");
     const resolved = await catalog.resolve("project a", "w/1");
 
     expect(request).toHaveBeenNthCalledWith(1, "GET", "/workspace-catalog/projects/project%20a/workspaces");
-    expect(request).toHaveBeenNthCalledWith(2, "GET", "/workspace-catalog/projects/project%20a/workspaces/w%2F1");
+    expect(request).toHaveBeenNthCalledWith(2, "GET", "/workspace-catalog/projects/project%20a/workspaces");
+    expect(request).toHaveBeenNthCalledWith(3, "GET", "/workspace-catalog/projects/project%20a/workspaces/w%2F1");
+    expect(resolution).toMatchObject({
+      status: "provider",
+      projectId: "project a",
+      ownerPluginId: "replacement",
+      diagnostics: [{ code: "probe-failed", tier: "primary", pluginId: "passing-provider" }],
+    });
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({
       branch: "feature/one",
@@ -99,16 +107,13 @@ describe("SessionDaemonWorkspaceCatalog", () => {
       request: () => Promise.resolve(jsonResponse({ ...providerWorkspace, projectId: "another-project" })),
     });
     const relative = new SessionDaemonWorkspaceCatalog({
-      request: () => Promise.resolve(jsonResponse({ status: "provider", workspaces: [{ ...providerWorkspace, path: "relative" }] })),
+      request: () => Promise.resolve(jsonResponse(providerResolution([{ ...providerWorkspace, path: "relative" }]))),
     });
     const missingPrecondition = new SessionDaemonWorkspaceCatalog({
-      request: () => Promise.resolve(jsonResponse({
-        status: "provider",
-        workspaces: [{
-          ...providerWorkspace,
-          removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?" },
-        }],
-      })),
+      request: () => Promise.resolve(jsonResponse(providerResolution([{
+        ...providerWorkspace,
+        removal: { actionLabel: "Disconnect view", confirmation: "Disconnect this view?" },
+      }]))),
     });
 
     await expect(mismatched.resolve("project a", "w/1")).rejects.toBeInstanceOf(WorkspaceCatalogProtocolError);
@@ -173,6 +178,21 @@ describe("SessionDaemonWorkspaceCatalog", () => {
     expect(workspaceCatalogHttpStatus(oldDaemonError, 404)).toBe(502);
   });
 });
+
+function providerResolution(workspaces: unknown[]) {
+  return {
+    status: "provider",
+    projectId: "project a",
+    ownerPluginId: "replacement",
+    workspaces,
+    diagnostics: [{
+      code: "probe-failed",
+      message: "Passing provider probe failed",
+      tier: "primary",
+      pluginId: "passing-provider",
+    }],
+  };
+}
 
 function jsonResponse(value: unknown) {
   return {

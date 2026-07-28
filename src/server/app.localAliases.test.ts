@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Project, Workspace } from "./types.js";
+import type { Project, WorkspaceProviderResolution } from "./types.js";
 import { appTestContext, registerAppTestHooks } from "./app.testSupport.js";
 
 registerAppTestHooks();
@@ -19,7 +19,7 @@ describe("buildApp local machine aliases", () => {
     });
     const project = addResponse.json<Project>();
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/machines/local/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     const terminalResponse = await appTestContext.app.inject({
@@ -70,7 +70,7 @@ describe("buildApp local machine aliases", () => {
     });
     const project = addResponse.json<Project>();
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const staleWorkspace = workspacesResponse.json<Workspace[]>()[0];
+    const staleWorkspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (staleWorkspace === undefined) throw new Error("Expected workspace");
     appTestContext.workspaceCatalog.set(project.id, [{
       ...staleWorkspace,
@@ -105,6 +105,11 @@ describe("buildApp local machine aliases", () => {
 
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/machines/local/projects/${project.id}/workspaces` });
     expect(workspacesResponse.statusCode).toBe(200);
-    expect(workspacesResponse.json<Workspace[]>()).toEqual([expect.objectContaining({ projectId: project.id, path: appTestContext.projectDir })]);
+    expect(workspacesResponse.json<WorkspaceProviderResolution>()).toMatchObject({
+      status: "folder",
+      projectId: project.id,
+      diagnostics: [],
+      workspaces: [expect.objectContaining({ projectId: project.id, path: appTestContext.projectDir })],
+    });
   });
 });

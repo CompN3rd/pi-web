@@ -1,7 +1,16 @@
 import { isAbsolute } from "node:path";
 import type { ServerPluginHealth } from "../../server-plugin-api.js";
 import type { ServerPluginSafeStart } from "../../serverPluginRecovery.js";
-import type { JsonObject, JsonValue, Workspace } from "../../shared/apiTypes.js";
+import type {
+  JsonObject,
+  JsonValue,
+  Workspace,
+  WorkspaceProviderDiagnostic,
+  WorkspaceProviderDiagnosticCode,
+  WorkspaceProviderResolution,
+  WorkspaceProviderResolutionStatus,
+  WorkspaceProviderTier,
+} from "../../shared/apiTypes.js";
 import { isPiWebPluginId } from "../../shared/pluginIds.js";
 import type { SessionDaemonRequestClient } from "../../sessiond/sessionDaemonClient.js";
 import type {
@@ -27,10 +36,13 @@ const WORKSPACE_CATALOG_PATH = "/workspace-catalog";
 export class SessionDaemonWorkspaceCatalog implements WorkspaceCatalog {
   constructor(private readonly daemon: SessionDaemonRequestClient) {}
 
-  async list(projectId: string): Promise<Workspace[]> {
+  async resolveProject(projectId: string): Promise<WorkspaceProviderResolution> {
     const value = await this.requestJson(`${WORKSPACE_CATALOG_PATH}/projects/${encodedId(projectId, "project")}/workspaces`);
-    if (!isRecord(value)) throw protocolError("workspace list response must be an object");
-    return parseWorkspaceList(value["workspaces"], projectId).map(withBrowserV1WorkspaceCompatibility);
+    return parseWorkspaceProviderResolution(value, projectId);
+  }
+
+  async list(projectId: string): Promise<Workspace[]> {
+    return [...(await this.resolveProject(projectId)).workspaces];
   }
 
   async resolve(projectId: string, workspaceId: string): Promise<Workspace> {
@@ -79,6 +91,78 @@ export class SessionDaemonWorkspaceCatalog implements WorkspaceCatalog {
       throw new WorkspaceCatalogProtocolError("Session daemon workspace authority returned invalid JSON", { cause: error });
     }
   }
+}
+
+function parseWorkspaceProviderResolution(value: unknown, expectedProjectId: string): WorkspaceProviderResolution {
+  if (!isRecord(value)) throw protocolError("workspace resolution response must be an object");
+  const status = parseWorkspaceProviderResolutionStatus(value["status"]);
+  const projectId = requireString(value, "projectId", "workspace resolution response");
+  if (projectId !== expectedProjectId) throw protocolError("workspace resolution response did not match the requested project");
+  const ownerPluginId = optionalPluginId(value, "ownerPluginId", "workspace resolution response");
+  if (status === "provider" && ownerPluginId === undefined) {
+    throw protocolError("provider workspace resolution must identify its owner");
+  }
+  if (status === "folder" && ownerPluginId !== undefined) {
+    throw protocolError("folder workspace resolution must not identify a provider owner");
+  }
+
+  const workspaces = parseWorkspaceList(value["workspaces"], projectId)
+    .map(withBrowserV1WorkspaceCompatibility);
+  const diagnostics = parseArray(
+    value["diagnostics"],
+    "workspace provider diagnostics",
+    parseWorkspaceProviderDiagnostic,
+  );
+  return Object.freeze({
+    status,
+    projectId,
+    ...(ownerPluginId === undefined ? {} : { ownerPluginId }),
+    workspaces: Object.freeze(workspaces),
+    diagnostics: Object.freeze(diagnostics),
+  });
+}
+
+function parseWorkspaceProviderResolutionStatus(value: unknown): WorkspaceProviderResolutionStatus {
+  if (value === "provider" || value === "folder" || value === "degraded") return value;
+  throw protocolError("workspace resolution status is invalid");
+}
+
+function parseWorkspaceProviderDiagnostic(value: unknown, index: number): WorkspaceProviderDiagnostic {
+  const label = `workspace provider diagnostic ${String(index + 1)}`;
+  if (!isRecord(value)) throw protocolError(`${label} must be an object`);
+  const code = parseWorkspaceProviderDiagnosticCode(value["code"], label);
+  const tier = parseWorkspaceProviderTier(value["tier"], label);
+  const pluginId = optionalPluginId(value, "pluginId", label);
+  const pluginIds = value["pluginIds"] === undefined
+    ? undefined
+    : parsePluginIds(value["pluginIds"], `${label} pluginIds`);
+  return Object.freeze({
+    code,
+    message: requireString(value, "message", label),
+    tier,
+    ...(pluginId === undefined ? {} : { pluginId }),
+    ...(pluginIds === undefined ? {} : { pluginIds: Object.freeze(pluginIds) }),
+  });
+}
+
+function parseWorkspaceProviderDiagnosticCode(value: unknown, label: string): WorkspaceProviderDiagnosticCode {
+  if (value === "probe-failed" || value === "claim-conflict" || value === "list-failed") return value;
+  throw protocolError(`${label} code is invalid`);
+}
+
+function parseWorkspaceProviderTier(value: unknown, label: string): WorkspaceProviderTier {
+  if (value === "primary" || value === "fallback") return value;
+  throw protocolError(`${label} tier is invalid`);
+}
+
+function parsePluginIds(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) throw protocolError(`${label} must be an array`);
+  return value.map((pluginId, index) => {
+    if (typeof pluginId !== "string" || !isPiWebPluginId(pluginId)) {
+      throw protocolError(`${label} item ${String(index + 1)} is invalid`);
+    }
+    return pluginId;
+  });
 }
 
 function parseWorkspaceList(value: unknown, projectId: string): Workspace[] {

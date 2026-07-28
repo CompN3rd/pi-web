@@ -50,8 +50,8 @@ import {
   parseTerminalInfo,
   parseThinkingLevelsResponse,
   parseWriteWorkspaceFileResponse,
-  parseWorkspace,
   parseWorkspaceActivityResponse,
+  parseWorkspaceProviderResolution,
 } from "./parsers";
 import { messagePath } from "./urls";
 
@@ -170,8 +170,22 @@ export const projectsApi = {
   projectDirectories: (query: string, machineId = "local") => request(`${machinePrefix(machineId)}/project-directories?q=${encodeURIComponent(query)}`, arrayOf(parseFileSuggestion)),
 };
 
+function workspaceResolution(projectId: string, machineId = "local") {
+  return request(
+    `${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspaces`,
+    (value) => {
+      const resolution = parseWorkspaceProviderResolution(value);
+      if (resolution.projectId !== projectId) throw new Error("Workspace resolution did not match the requested project");
+      return resolution;
+    },
+  );
+}
+
 export const workspacesApi = {
-  workspaces: (projectId: string, machineId = "local") => request(`${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspaces`, arrayOf(parseWorkspace)),
+  workspaceResolution,
+  workspaces: async (projectId: string, machineId = "local") => [
+    ...(await workspaceResolution(projectId, machineId)).workspaces,
+  ],
   deleteWorkspace: (projectId: string, workspaceId: string, precondition: string, machineId = "local") => {
     const body: WorkspaceRemovalRequest = { precondition };
     return request(

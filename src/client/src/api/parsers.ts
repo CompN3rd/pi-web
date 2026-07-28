@@ -1,5 +1,5 @@
 import { PI_WEB_PLUGIN_LIFECYCLE_VERSION, ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceActivity, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
-import type { JsonValue, PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot } from "../../../shared/apiTypes";
+import type { JsonValue, PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot, WorkspaceProviderDiagnostic, WorkspaceProviderDiagnosticCode, WorkspaceProviderResolution, WorkspaceProviderResolutionStatus, WorkspaceProviderTier } from "../../../shared/apiTypes";
 import { parseActiveAgentProfileDescriptor } from "../../../shared/activeAgentProfile";
 import { parseKnownPiWebCapabilities } from "../../../shared/capabilities";
 import { PI_WEB_PLUGIN_RECOVERY_COMMANDS, pluginDisableRecoveryCommand } from "../../../shared/pluginRecoveryCommands";
@@ -148,6 +148,57 @@ export function parseWorkspace(value: unknown): Workspace {
     ...optionalField("removal", optionalWorkspaceRemovalPresentation(record["removal"])),
     ...optionalField("effectiveConfig", optionalWorkspaceEffectiveConfig(record["effectiveConfig"])),
   };
+}
+
+export function parseWorkspaceProviderResolution(value: unknown): WorkspaceProviderResolution {
+  const record = requireRecord(value);
+  const status = parseWorkspaceProviderResolutionStatus(record["status"]);
+  const projectId = requireString(record, "projectId");
+  const ownerPluginId = optionalString(record, "ownerPluginId");
+  if (status === "provider" && ownerPluginId === undefined) throw new Error("Provider workspace resolution is missing ownerPluginId");
+  if (status === "folder" && ownerPluginId !== undefined) throw new Error("Folder workspace resolution must not include ownerPluginId");
+
+  const workspaces = arrayOf(parseWorkspace)(record["workspaces"]);
+  if (workspaces.length === 0 || workspaces.some((workspace) => workspace.projectId !== projectId)) {
+    throw new Error("Workspace resolution contains invalid project workspaces");
+  }
+  return {
+    status,
+    projectId,
+    ...(ownerPluginId === undefined ? {} : { ownerPluginId }),
+    workspaces,
+    diagnostics: arrayOf(parseWorkspaceProviderDiagnostic)(record["diagnostics"]),
+  };
+}
+
+function parseWorkspaceProviderResolutionStatus(value: unknown): WorkspaceProviderResolutionStatus {
+  if (value === "provider" || value === "folder" || value === "degraded") return value;
+  throw new Error("Invalid workspace provider resolution status");
+}
+
+function parseWorkspaceProviderDiagnostic(value: unknown): WorkspaceProviderDiagnostic {
+  const record = requireRecord(value);
+  const pluginId = optionalString(record, "pluginId");
+  const pluginIds = record["pluginIds"] === undefined
+    ? undefined
+    : arrayOfString(record["pluginIds"], "pluginIds");
+  return {
+    code: parseWorkspaceProviderDiagnosticCode(record["code"]),
+    message: requireString(record, "message"),
+    tier: parseWorkspaceProviderTier(record["tier"]),
+    ...(pluginId === undefined ? {} : { pluginId }),
+    ...(pluginIds === undefined ? {} : { pluginIds }),
+  };
+}
+
+function parseWorkspaceProviderDiagnosticCode(value: unknown): WorkspaceProviderDiagnosticCode {
+  if (value === "probe-failed" || value === "claim-conflict" || value === "list-failed") return value;
+  throw new Error("Invalid workspace provider diagnostic code");
+}
+
+function parseWorkspaceProviderTier(value: unknown): WorkspaceProviderTier {
+  if (value === "primary" || value === "fallback") return value;
+  throw new Error("Invalid workspace provider diagnostic tier");
 }
 
 function optionalWorkspaceProviderMetadata(value: unknown): Workspace["provider"] | undefined {

@@ -15,7 +15,7 @@ import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
 import type { PiPackageService } from "./piPackageService.js";
 import type { SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
 import { PI_WEB_CAPABILITIES } from "../shared/capabilities.js";
-import type { ActiveAgentProfileDescriptor, PiPackageInfo, PiWebConfigResponse, PiWebConfigValues, Workspace } from "../shared/apiTypes.js";
+import type { ActiveAgentProfileDescriptor, PiPackageInfo, PiWebConfigResponse, PiWebConfigValues, Workspace, WorkspaceProviderResolution } from "../shared/apiTypes.js";
 import type { SessionDaemonAgentProfileResult } from "../sessiond/sessionDaemonClient.js";
 
 interface AppTestContext {
@@ -168,12 +168,52 @@ function fakePiWebPluginAsset(pluginId: string, assetPath: string): Promise<{ co
 
 export class AppTestWorkspaceCatalog implements WorkspaceCatalog {
   private readonly overrides = new Map<string, readonly Workspace[]>();
+  private readonly resolutionOverrides = new Map<string, WorkspaceProviderResolution>();
   private failure: Error | undefined;
 
   constructor(private readonly projects: ProjectService) {}
 
-  async list(projectId: string): Promise<Workspace[]> {
+  async resolveProject(projectId: string): Promise<WorkspaceProviderResolution> {
     if (this.failure !== undefined) throw this.failure;
+    const configuredResolution = this.resolutionOverrides.get(projectId);
+    if (configuredResolution !== undefined) return cloneWorkspaceResolution(configuredResolution);
+
+    const workspaces = await this.workspaceList(projectId);
+    const ownerPluginId = commonWorkspaceOwner(workspaces);
+    return {
+      status: ownerPluginId === undefined ? "folder" : "provider",
+      projectId,
+      ...(ownerPluginId === undefined ? {} : { ownerPluginId }),
+      workspaces,
+      diagnostics: [],
+    };
+  }
+
+  async list(projectId: string): Promise<Workspace[]> {
+    return [...(await this.resolveProject(projectId)).workspaces];
+  }
+
+  async resolve(projectId: string, workspaceId: string): Promise<Workspace> {
+    const workspace = (await this.list(projectId)).find((candidate) => candidate.id === workspaceId);
+    if (workspace === undefined) throw new Error("Workspace not found");
+    return workspace;
+  }
+
+  set(projectId: string, workspaces: readonly Workspace[]): void {
+    this.resolutionOverrides.delete(projectId);
+    this.overrides.set(projectId, workspaces.map((workspace) => ({ ...workspace })));
+  }
+
+  setResolution(resolution: WorkspaceProviderResolution): void {
+    this.overrides.delete(resolution.projectId);
+    this.resolutionOverrides.set(resolution.projectId, cloneWorkspaceResolution(resolution));
+  }
+
+  fail(error: Error): void {
+    this.failure = error;
+  }
+
+  private async workspaceList(projectId: string): Promise<Workspace[]> {
     const configured = this.overrides.get(projectId);
     if (configured !== undefined) return configured.map((workspace) => ({ ...workspace }));
     const project = await this.projects.requireProject(projectId);
@@ -187,20 +227,24 @@ export class AppTestWorkspaceCatalog implements WorkspaceCatalog {
       isGitWorktree: false,
     }];
   }
+}
 
-  async resolve(projectId: string, workspaceId: string): Promise<Workspace> {
-    const workspace = (await this.list(projectId)).find((candidate) => candidate.id === workspaceId);
-    if (workspace === undefined) throw new Error("Workspace not found");
-    return workspace;
-  }
+function commonWorkspaceOwner(workspaces: readonly Workspace[]): string | undefined {
+  const owner = workspaces[0]?.provider?.pluginId;
+  return owner !== undefined && workspaces.every((workspace) => workspace.provider?.pluginId === owner)
+    ? owner
+    : undefined;
+}
 
-  set(projectId: string, workspaces: readonly Workspace[]): void {
-    this.overrides.set(projectId, workspaces.map((workspace) => ({ ...workspace })));
-  }
-
-  fail(error: Error): void {
-    this.failure = error;
-  }
+function cloneWorkspaceResolution(resolution: WorkspaceProviderResolution): WorkspaceProviderResolution {
+  return {
+    ...resolution,
+    workspaces: resolution.workspaces.map((workspace) => ({ ...workspace })),
+    diagnostics: resolution.diagnostics.map((diagnostic) => ({
+      ...diagnostic,
+      ...(diagnostic.pluginIds === undefined ? {} : { pluginIds: [...diagnostic.pluginIds] }),
+    })),
+  };
 }
 
 export interface CapturedSessionDaemonRequest {

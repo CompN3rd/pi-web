@@ -1,6 +1,7 @@
 export type {
   Project,
   Workspace,
+  WorkspaceProviderResolution,
   SessionRef as ClientSessionRef,
   SessionInfo as ClientSession,
   ArchiveSessionsResponse as ClientArchiveSessionsResponse,

@@ -1,5 +1,5 @@
 import type { ServerPluginSafeStart } from "../../serverPluginRecovery.js";
-import type { Workspace } from "../../shared/apiTypes.js";
+import type { Workspace, WorkspaceProviderResolution } from "../../shared/apiTypes.js";
 import type {
   ServerPluginHealthInspection,
   ServerPluginRuntimeRecord,
@@ -10,6 +10,9 @@ export const WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION = 1;
 
 /** Web-side port for sessiond's authoritative, live workspace catalog. */
 export interface WorkspaceCatalog {
+  /** Preserve the daemon authority's provider-neutral ownership and diagnostics. */
+  resolveProject(projectId: string): Promise<WorkspaceProviderResolution>;
+  /** Explicit workspace-only adapter for filesystem/session consumers. */
   list(projectId: string): Promise<Workspace[]>;
   resolve(projectId: string, workspaceId: string): Promise<Workspace>;
 }

@@ -284,6 +284,27 @@ export interface WorkspaceRemovalRequest {
   precondition: string;
 }
 
+export type WorkspaceProviderResolutionStatus = "provider" | "folder" | "degraded";
+export type WorkspaceProviderTier = "primary" | "fallback";
+export type WorkspaceProviderDiagnosticCode = "probe-failed" | "claim-conflict" | "list-failed";
+
+export interface WorkspaceProviderDiagnostic {
+  code: WorkspaceProviderDiagnosticCode;
+  message: string;
+  tier: WorkspaceProviderTier;
+  pluginId?: string;
+  pluginIds?: readonly string[];
+}
+
+/** Provider-neutral result of resolving one project's current workspace owner. */
+export interface WorkspaceProviderResolution {
+  status: WorkspaceProviderResolutionStatus;
+  projectId: string;
+  ownerPluginId?: string;
+  workspaces: readonly Workspace[];
+  diagnostics: readonly WorkspaceProviderDiagnostic[];
+}
+
 export interface Workspace {
   id: string;
   projectId: string;

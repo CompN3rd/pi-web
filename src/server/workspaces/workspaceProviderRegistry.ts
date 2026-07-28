@@ -13,6 +13,9 @@ import type {
   JsonValue,
   Project,
   Workspace,
+  WorkspaceProviderDiagnostic,
+  WorkspaceProviderResolution,
+  WorkspaceProviderTier,
   WorkspaceRemovalPresentation as PublicWorkspaceRemovalPresentation,
 } from "../../shared/apiTypes.js";
 import { isPiWebPluginId } from "../../shared/pluginIds.js";
@@ -29,28 +32,16 @@ import type {
   ServerPluginProviderContribution,
 } from "../plugins/serverPluginRuntime.js";
 
+export type {
+  WorkspaceProviderDiagnostic,
+  WorkspaceProviderDiagnosticCode,
+  WorkspaceProviderResolution,
+} from "../../shared/apiTypes.js";
+
 const DEFAULT_PROVIDER_TIMEOUT_MS = PLUGIN_BACKEND_REQUEST_TIMEOUT_MS;
 
-type ProviderTier = "primary" | "fallback";
+type ProviderTier = WorkspaceProviderTier;
 type ProviderOperation = "probe" | "list" | "request" | "prepareRemove";
-
-export type WorkspaceProviderDiagnosticCode = "probe-failed" | "claim-conflict" | "list-failed";
-
-export interface WorkspaceProviderDiagnostic {
-  code: WorkspaceProviderDiagnosticCode;
-  message: string;
-  tier: ProviderTier;
-  pluginId?: string;
-  pluginIds?: readonly string[];
-}
-
-export interface WorkspaceProviderResolution {
-  status: "provider" | "folder" | "degraded";
-  projectId: string;
-  ownerPluginId?: string;
-  workspaces: readonly Workspace[];
-  diagnostics: readonly WorkspaceProviderDiagnostic[];
-}
 
 export interface WorkspaceProviderRegistryLogger {
   warn(details: Record<string, unknown>, message: string): void;
@@ -191,6 +182,7 @@ export class WorkspaceProviderRegistry {
   private readonly providerTimeoutMs: number;
   private readonly requestTimeoutMs: number;
   private readonly pathInspector: WorkspacePathInspector;
+  private readonly pendingResolutions = new Map<string, Promise<WorkspaceProviderResolution>>();
 
   constructor(private readonly options: WorkspaceProviderRegistryOptions) {
     this.contributions = Object.freeze([...options.contributions]
@@ -206,9 +198,27 @@ export class WorkspaceProviderRegistry {
     return [...resolution.workspaces];
   }
 
-  /** Resolve workspaces together with attributable diagnostics for host consumers. */
+  /**
+   * Resolve workspaces together with attributable diagnostics for host consumers.
+   * Only identical work already in flight is shared; the entry is removed before
+   * callers observe completion so ownership and topology are never cached.
+   */
   async resolve(project: Project): Promise<WorkspaceProviderResolution> {
     const input = snapshotProject(project);
+    const key = workspaceResolutionKey(input);
+    const existing = this.pendingResolutions.get(key);
+    if (existing !== undefined) return existing;
+
+    const pending = this.resolveSnapshot(input);
+    this.pendingResolutions.set(key, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.pendingResolutions.get(key) === pending) this.pendingResolutions.delete(key);
+    }
+  }
+
+  private async resolveSnapshot(input: ProjectInput): Promise<WorkspaceProviderResolution> {
     const diagnostics: WorkspaceProviderDiagnostic[] = [];
 
     for (const tier of ["primary", "fallback"] as const) {
@@ -734,6 +744,10 @@ function hostRemovalPresentation(
     removal.confirmation,
   ])).digest("base64url");
   return Object.freeze({ ...removal, precondition: `v1.${digest}` });
+}
+
+function workspaceResolutionKey(project: ProjectInput): string {
+  return JSON.stringify([project.id, project.name, project.path]);
 }
 
 function snapshotProject(project: Project): ProjectInput {

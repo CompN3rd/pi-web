@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { ASK_USER_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
+import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse, parseWorkspaceProviderResolution } from "./parsers";
 
 describe("API parsers", () => {
   it("preserves additive interactive API-key flow hints and defaults legacy options", () => {
@@ -619,6 +619,65 @@ describe("API parsers", () => {
       },
       removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
     });
+  });
+
+  it("parses provider-neutral workspace resolution ownership and diagnostics", () => {
+    expect(parseWorkspaceProviderResolution({
+      status: "degraded",
+      projectId: "p1",
+      ownerPluginId: "replacement",
+      workspaces: [{
+        id: "w1",
+        projectId: "p1",
+        path: "/repo",
+        label: "main",
+        isMain: true,
+        isGitRepo: false,
+        isGitWorktree: false,
+      }],
+      diagnostics: [{
+        code: "claim-conflict",
+        message: "Two primary providers claimed the project",
+        tier: "primary",
+        pluginIds: ["one", "two"],
+      }],
+    })).toEqual({
+      status: "degraded",
+      projectId: "p1",
+      ownerPluginId: "replacement",
+      workspaces: [expect.objectContaining({ id: "w1", projectId: "p1" })],
+      diagnostics: [{
+        code: "claim-conflict",
+        message: "Two primary providers claimed the project",
+        tier: "primary",
+        pluginIds: ["one", "two"],
+      }],
+    });
+  });
+
+  it("rejects malformed workspace resolution ownership and diagnostics", () => {
+    const workspace = {
+      id: "w1",
+      projectId: "p1",
+      path: "/repo",
+      label: "main",
+      isMain: true,
+      isGitRepo: false,
+      isGitWorktree: false,
+    };
+
+    expect(() => parseWorkspaceProviderResolution({
+      status: "provider",
+      projectId: "p1",
+      workspaces: [workspace],
+      diagnostics: [],
+    })).toThrow("missing ownerPluginId");
+    expect(() => parseWorkspaceProviderResolution({
+      status: "folder",
+      projectId: "p1",
+      workspaces: [workspace],
+      diagnostics: [{ code: "future", message: "bad", tier: "primary" }],
+    })).toThrow("diagnostic code");
   });
 
   it("rejects removal metadata without a host-issued precondition", () => {

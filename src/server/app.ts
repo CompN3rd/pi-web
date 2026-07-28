@@ -39,7 +39,7 @@ import { registerMachineRoutes } from "./machines/machineRoutes.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
 import { registerPluginBackendProxyRoutes } from "./plugins/pluginBackendProxyRoutes.js";
 import { proxyMachinePluginAsset, registerMachinePluginProxyRoutes } from "./machines/machinePluginProxyRoutes.js";
-import type { Project, Workspace } from "./types.js";
+import type { Project, Workspace, WorkspaceProviderResolution } from "./types.js";
 
 export interface AppDependencies {
   projects?: ProjectService;
@@ -92,19 +92,26 @@ function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectServi
   app.get<{ Params: { projectId: string } }>(`${prefix}/projects/:projectId/workspaces`, async (request, reply) => {
     try {
       const project = await projects.requireProject(request.params.projectId);
-      return await listWorkspacesWithEffectiveConfig(project, workspaces, options.config);
+      return await resolveWorkspacesWithEffectiveConfig(project, workspaces, options.config);
     } catch (error) {
       return sendWorkspaceRequestError(reply, error, 404);
     }
   });
 }
 
-async function listWorkspacesWithEffectiveConfig(project: Project, workspaces: WorkspaceCatalog, config?: Pick<PiWebConfigService, "read">): Promise<Workspace[]> {
-  const [workspaceList, effectiveConfig] = await Promise.all([
-    workspaces.list(project.id),
+async function resolveWorkspacesWithEffectiveConfig(
+  project: Project,
+  workspaces: WorkspaceCatalog,
+  config?: Pick<PiWebConfigService, "read">,
+): Promise<WorkspaceProviderResolution> {
+  const [resolution, effectiveConfig] = await Promise.all([
+    workspaces.resolveProject(project.id),
     workspaceEffectiveConfig(project.path, config),
   ]);
-  return workspaceList.map((workspace) => ({ ...workspace, effectiveConfig }));
+  return {
+    ...resolution,
+    workspaces: resolution.workspaces.map((workspace) => ({ ...workspace, effectiveConfig })),
+  };
 }
 
 async function workspaceEffectiveConfig(projectPath: string, config?: Pick<PiWebConfigService, "read">): Promise<NonNullable<Workspace["effectiveConfig"]>> {
