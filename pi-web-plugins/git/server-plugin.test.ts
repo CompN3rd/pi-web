@@ -100,6 +100,32 @@ describe("bundled Git workspace provider", () => {
     expect(workspaces.find(({ isMain }) => isMain)).not.toHaveProperty("removal");
   });
 
+  it("selects the registered checkout as main when linked worktrees use a bare backing repository", async () => {
+    const seed = await createRepository("bare seed");
+    const bare = join(seed.parent, "backing.git");
+    const checkout = join(seed.parent, "main checkout");
+    const linked = join(seed.parent, "feature checkout");
+    runGit(seed.parent, ["clone", "--bare", seed.path, bare]);
+    runGit(bare, ["worktree", "add", checkout, "main"]);
+    runGit(checkout, ["worktree", "add", "-b", "feature", linked]);
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const registry = new WorkspaceProviderRegistry({
+      contributions: [contribution("git", workspaceProvider)],
+      logger: { warn: vi.fn() },
+    });
+
+    const resolution = await registry.resolve(project(checkout));
+
+    expect(resolution).toMatchObject({ status: "provider", ownerPluginId: "git" });
+    expect(resolution.workspaces).toHaveLength(2);
+    expect(resolution.workspaces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: checkout, isMain: true, label: "main" }),
+      expect.objectContaining({ path: linked, isMain: false, label: "feature" }),
+    ]));
+    expect(resolution.workspaces.map(({ path }) => path)).not.toContain(bare);
+    expect(resolution.workspaces.filter(({ isMain }) => isMain)).toHaveLength(1);
+  });
+
   it("serves status and diff schemas through provider request using sanitized bounded commands", async () => {
     const repository = await createRepository("changes repo");
     await Promise.all([

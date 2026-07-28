@@ -71,16 +71,20 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
         runGit(context, project.path, ["worktree", "list", "--porcelain", "-z"], signal),
         "list Git worktrees",
       );
-      const selectable = parseGitWorktreeList(listResult.stdout)
+      const worktrees = parseGitWorktreeList(listResult.stdout)
+        .filter((worktree) => worktree.bare !== true)
         .map((worktree) => {
           const path = resolve(worktree.path);
-          // A submodule's worktree record points at its common storage under
-          // the superproject's .git/modules directory rather than at the
-          // checkout returned by --show-toplevel. Keep the existing public path
-          // behavior for this transition slice, but still identify one main.
-          const isMain = path === mainRoot || path === commonDirectory;
-          return { worktree: { ...worktree, path }, path, isMain };
-        })
+          return { worktree: { ...worktree, path }, path };
+        });
+      // Prefer the checkout Git identifies for the registered project. A
+      // submodule is the exception: its sole worktree record points at common
+      // storage under the superproject instead of at --show-toplevel.
+      const mainWorkspacePath = worktrees.some(({ path }) => path === mainRoot)
+        ? mainRoot
+        : commonDirectory;
+      const selectable = worktrees
+        .map(({ worktree, path }) => ({ worktree, path, isMain: path === mainWorkspacePath }))
         .filter(({ worktree, path, isMain }) => worktree.prunable !== true || isMain || path === project.path);
       if (selectable.length === 0) return [singleGitWorkspace(project)];
 

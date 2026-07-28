@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, renameSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { ServerPluginActivationContext } from "@jmfederico/pi-web/server-plugin-api";
+import type { ServerPluginActivationContext, ServerPluginExecFileResult } from "@jmfederico/pi-web/server-plugin-api";
 import { createServerPluginExecFile } from "../../src/server/plugins/serverPluginExec.js";
 import { gitDiff as requestGitDiff, gitStatus as requestGitStatus } from "./git-backend.js";
 
@@ -127,6 +127,28 @@ describe("Git changes backend", () => {
 
     await expect(gitDiff(dir, { path: "/outside" })).rejects.toThrow("Absolute paths are not allowed");
     await expect(gitDiff(dir, { path: "../outside" })).rejects.toThrow("Path traversal is not allowed");
+  });
+});
+
+describe("Git command failures", () => {
+  it("preserves a signaled status command as an error", async () => {
+    const context: ServerPluginActivationContext = {
+      ...backendContext,
+      execFile: () => Promise.resolve(commandResult({ exitCode: null, signal: "SIGKILL" })),
+    };
+
+    await expect(requestGitStatus(context, "/repo", new AbortController().signal))
+      .rejects.toThrow("ended from signal SIGKILL");
+  });
+
+  it("preserves a command timeout rejection as an error", async () => {
+    const timeout = Object.assign(new Error("Server plugin command timed out after 10ms"), { name: "TimeoutError" });
+    const context: ServerPluginActivationContext = {
+      ...backendContext,
+      execFile: () => Promise.reject(timeout),
+    };
+
+    await expect(requestGitStatus(context, "/repo", new AbortController().signal)).rejects.toBe(timeout);
   });
 });
 
@@ -302,4 +324,46 @@ describe("gitDiff routing into submodules", () => {
     expect(diff.path).toBe("HARL");
     expect(diff.diff).toContain("Subproject commit");
   });
+
+  it.skipIf(process.platform === "win32")("does not follow a gitlink checkout symlink outside the workspace", async () => {
+    const { dir } = createFixture();
+    const outside = join(dir, "..", "origin");
+    rmSync(join(dir, "HARL"), { recursive: true, force: true });
+    symlinkSync(outside, join(dir, "HARL"), "dir");
+    writeFileSync(join(outside, "a.txt"), "v2\noutside secret\n");
+
+    const diff = await gitDiff(dir, { path: "HARL/a.txt" });
+
+    expect(diff.diff).toBe("");
+    expect(diff.diff).not.toContain("outside secret");
+  });
+
+  it("does not treat a configured nested repository as a submodule without an index gitlink", async () => {
+    const { dir } = createFixture();
+    const nested = join(dir, "nested");
+    mkdirSync(nested);
+    git(nested, ["init", "-b", "main"]);
+    writeFileSync(join(nested, "inside.txt"), "tracked\n");
+    git(nested, ["add", "inside.txt"]);
+    git(nested, ["commit", "-m", "nested initial"]);
+    writeFileSync(join(nested, "inside.txt"), "tracked\nnested secret\n");
+    git(dir, ["config", "--file", ".gitmodules", "submodule.nested.path", "nested"]);
+
+    const diff = await gitDiff(dir, { path: "nested/inside.txt" });
+
+    expect(diff.diff).toBe("");
+    expect(diff.diff).not.toContain("nested secret");
+  });
 });
+
+function commandResult(overrides: Partial<ServerPluginExecFileResult> = {}): ServerPluginExecFileResult {
+  return {
+    exitCode: 0,
+    signal: null,
+    stdout: "",
+    stderr: "",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    ...overrides,
+  };
+}

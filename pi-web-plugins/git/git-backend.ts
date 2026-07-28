@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 import type {
   JsonValue,
   ProviderRequestContext,
@@ -38,6 +39,11 @@ interface GitCommandResult {
   stdout: string;
   stderr: string;
   truncated: boolean;
+}
+
+interface ValidatedSubmodule {
+  path: string;
+  cwd: string;
 }
 
 /** Dispatch the Git-owned status/diff schema through the provider's public request seam. */
@@ -109,7 +115,13 @@ async function expandSubmodules(runGit: RunGit, cwd: string, parsed: ParsedStatu
   // Fan out concurrently — one `git status` per dirty submodule plus one
   // `git rev-parse` per unstaged pointer move — then concatenate in input
   // order so the file list and hash are identical to a serial pass.
-  const expanded = await Promise.all(parsed.submodules.map(async (sub) => ({ path: sub.path, ...(await expandSubmodule(runGit, cwd, sub)) })));
+  const canonicalRoot = parsed.submodules.length === 0 ? undefined : await canonicalPath(cwd);
+  const expanded = await Promise.all(parsed.submodules.map(async (sub) => {
+    const location = canonicalRoot === undefined
+      ? undefined
+      : await validatedSubmodule(runGit, cwd, canonicalRoot, sub.path);
+    return { path: sub.path, ...(await expandSubmodule(runGit, sub, location)) };
+  }));
 
   const files: GitStatusFile[] = [...parsed.files];
   const dirtySubmodulePaths: string[] = [];
@@ -133,7 +145,11 @@ async function expandSubmodules(runGit: RunGit, cwd: string, parsed: ParsedStatu
 }
 
 /** Expand one dirty submodule: the pointer entry first, then its inner files. */
-async function expandSubmodule(runGit: RunGit, cwd: string, sub: SubmoduleRecord): Promise<{ files: GitStatusFile[]; extraForHash: string }> {
+async function expandSubmodule(
+  runGit: RunGit,
+  sub: SubmoduleRecord,
+  location: ValidatedSubmodule | undefined,
+): Promise<{ files: GitStatusFile[]; extraForHash: string }> {
   const files: GitStatusFile[] = [];
   let extraForHash = "";
   if (sub.commitChanged) {
@@ -142,11 +158,11 @@ async function expandSubmodule(runGit: RunGit, cwd: string, sub: SubmoduleRecord
       index: sub.index,
       workingTree: sub.workingTree,
       submoduleFromCommit: displayFromCommit(sub.headOid),
-      submoduleToCommit: short(await resolveSubmoduleToCommit(runGit, cwd, sub)),
+      submoduleToCommit: short(await resolveSubmoduleToCommit(runGit, location?.cwd, sub)),
     });
   }
-  if (sub.hasModifiedContent || sub.hasUntrackedContent) {
-    const inner = await runGit(join(cwd, sub.path), ["status", "--porcelain=v2", "--untracked-files=all", "-z"]);
+  if ((sub.hasModifiedContent || sub.hasUntrackedContent) && location !== undefined) {
+    const inner = await runGit(location.cwd, ["status", "--porcelain=v2", "--untracked-files=all", "-z"]);
     if (inner.code === 0) {
       extraForHash = `\0${sub.path}\0${inner.stdout}`;
       const innerFiles = parseStatus(inner.stdout, { deferSubmodules: false }).files;
@@ -163,11 +179,12 @@ async function expandSubmodule(runGit: RunGit, cwd: string, sub: SubmoduleRecord
   return { files, extraForHash };
 }
 
-async function resolveSubmoduleToCommit(runGit: RunGit, cwd: string, sub: SubmoduleRecord): Promise<string> {
+async function resolveSubmoduleToCommit(runGit: RunGit, cwd: string | undefined, sub: SubmoduleRecord): Promise<string> {
   // Staged pointer moves already expose the new commit as the index OID; an
-  // unstaged move only records the old OID, so read the submodule's HEAD.
-  if (sub.indexOid !== sub.headOid) return sub.indexOid;
-  const head = await runGit(join(cwd, sub.path), ["rev-parse", "HEAD"]);
+  // unstaged move only records the old OID, so read the validated submodule's
+  // HEAD. An unavailable checkout cannot safely supply a different pointer.
+  if (sub.indexOid !== sub.headOid || cwd === undefined) return sub.indexOid;
+  const head = await runGit(cwd, ["rev-parse", "HEAD"]);
   const resolved = head.stdout.trim();
   return head.code === 0 && resolved !== "" ? resolved : sub.indexOid;
 }
@@ -188,7 +205,7 @@ async function gitDiffWithRunner(runGit: RunGit, cwd: string, options: { path?: 
 
   if (path !== undefined) {
     const owner = await submoduleForPath(runGit, cwd, path);
-    if (owner !== undefined) return submoduleDiff(runGit, cwd, owner, path, staged);
+    if (owner !== undefined) return submoduleDiff(runGit, owner, path, staged);
   }
 
   const args = ["diff", "--no-ext-diff", "--color=never"];
@@ -211,9 +228,9 @@ async function gitDiffWithRunner(runGit: RunGit, cwd: string, options: { path?: 
  * The response path stays the full superproject-relative path so the viewer and
  * the selected row line up.
  */
-async function submoduleDiff(runGit: RunGit, cwd: string, owner: string, path: string, staged: boolean): Promise<GitDiffResponse> {
-  const subCwd = join(cwd, owner);
-  const rel = normalizeRelativePath(path.slice(owner.length + 1));
+async function submoduleDiff(runGit: RunGit, owner: ValidatedSubmodule, path: string, staged: boolean): Promise<GitDiffResponse> {
+  const subCwd = owner.cwd;
+  const rel = normalizeRelativePath(path.slice(owner.path.length + 1));
 
   const args = ["diff", "--no-ext-diff", "--color=never"];
   if (staged) args.push("--cached");
@@ -246,22 +263,75 @@ async function configuredSubmodulePaths(runGit: RunGit, cwd: string): Promise<st
     if (record === "") continue;
     const newlineAt = record.indexOf("\n");
     if (newlineAt === -1) continue;
-    paths.push(record.slice(newlineAt + 1));
+    try {
+      const path = normalizeRelativePath(record.slice(newlineAt + 1));
+      if (path !== "") paths.push(path);
+    } catch {
+      // A malformed repository path is not eligible for submodule routing.
+    }
   }
-  return paths;
+  return [...new Set(paths)];
 }
 
-/** The submodule that strictly contains `path`, if any (longest match wins). */
-async function submoduleForPath(runGit: RunGit, cwd: string, path: string): Promise<string | undefined> {
-  // A path strictly inside a submodule always contains `/`. Let Git inspect
-  // `.gitmodules` so the plugin performs no direct filesystem I/O.
+/** The validated gitlink that strictly contains `path`, if any (longest match wins). */
+async function submoduleForPath(runGit: RunGit, cwd: string, path: string): Promise<ValidatedSubmodule | undefined> {
   if (!path.includes("/")) return undefined;
-  const subs = await configuredSubmodulePaths(runGit, cwd);
-  let best: string | undefined;
-  for (const sub of subs) {
-    if (sub !== "" && path.startsWith(`${sub}/`) && (best === undefined || sub.length > best.length)) best = sub;
+  const candidates = (await configuredSubmodulePaths(runGit, cwd))
+    .filter((sub) => path.startsWith(`${sub}/`))
+    .sort((left, right) => right.length - left.length);
+  if (candidates.length === 0) return undefined;
+
+  const canonicalRoot = await canonicalPath(cwd);
+  if (canonicalRoot === undefined) return undefined;
+  for (const candidate of candidates) {
+    const validated = await validatedSubmodule(runGit, cwd, canonicalRoot, candidate);
+    if (validated !== undefined) return validated;
   }
-  return best;
+  return undefined;
+}
+
+/**
+ * Confirm that repository-controlled `.gitmodules` data names an index
+ * gitlink and that its checkout resolves strictly below the workspace root.
+ * Commands use the resolved checkout rather than following the configured
+ * path as a symlink.
+ */
+async function validatedSubmodule(
+  runGit: RunGit,
+  cwd: string,
+  canonicalRoot: string,
+  path: string,
+): Promise<ValidatedSubmodule | undefined> {
+  const index = await runGit(cwd, ["ls-files", "--stage", "-z", "--", path]);
+  if (index.code !== 0 || !hasGitlink(index.stdout, path)) return undefined;
+
+  const candidate = await canonicalPath(join(cwd, path));
+  if (candidate === undefined || !isStrictDescendant(canonicalRoot, candidate)) return undefined;
+  return { path, cwd: candidate };
+}
+
+function hasGitlink(raw: string, path: string): boolean {
+  return raw.split("\0").some((record) => {
+    const separator = record.indexOf("\t");
+    if (separator === -1 || record.slice(separator + 1) !== path) return false;
+    return record.slice(0, separator).split(" ")[0] === "160000";
+  });
+}
+
+async function canonicalPath(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function isStrictDescendant(root: string, candidate: string): boolean {
+  const relation = relative(root, candidate);
+  return relation !== ""
+    && relation !== ".."
+    && !relation.startsWith(`..${sep}`)
+    && !isAbsolute(relation);
 }
 
 function parseStatus(raw: string, options: { deferSubmodules: boolean }): ParsedStatus {
@@ -394,12 +464,15 @@ function createGitRunner(context: ServerPluginActivationContext, signal: AbortSi
     unsetEnv: GIT_LOCAL_ENV_VARS,
     timeoutMs: GIT_COMMAND_TIMEOUT_MS,
     signal,
-  }));
+  }), args);
 }
 
-function commandResult(result: ServerPluginExecFileResult): GitCommandResult {
+function commandResult(result: ServerPluginExecFileResult, args: readonly string[]): GitCommandResult {
+  const command = `git ${args.join(" ")}`;
+  if (result.signal !== null) throw new Error(`${command} ended from signal ${result.signal}`);
+  if (result.exitCode === null) throw new Error(`${command} ended without an exit code`);
   return {
-    code: result.exitCode ?? 1,
+    code: result.exitCode,
     stdout: result.stdout,
     stderr: result.stderr,
     truncated: result.stdoutTruncated,
