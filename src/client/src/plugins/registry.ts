@@ -4,6 +4,8 @@ import type { PiWebPluginRegistration, PluginAction, PluginRuntimeContext, Quali
 
 const idPattern = /^[a-z][a-z0-9.-]*$/u;
 const localIdPattern = /^[a-z][a-z0-9.-]*$/u;
+const qualifiedContributionIdPattern = /^[a-z][a-z0-9.-]*:[a-z][a-z0-9.-]*$/u;
+const routeAliasPattern = /^[a-z][a-z0-9.-]*(?::[a-z][a-z0-9.-]*)?$/u;
 const pluginRuntimeScopes = new WeakMap<PluginRuntimeContext, (pluginId: string) => PluginRuntimeContext>();
 const workspacePanelScopes = new WeakMap<WorkspacePanelContext, (binding: WorkspacePluginBinding) => WorkspacePanelContext>();
 const workspaceLabelScopes = new WeakMap<WorkspaceLabelContext, (binding: WorkspacePluginBinding) => WorkspaceLabelContext>();
@@ -95,6 +97,7 @@ export class PluginRegistry {
       };
       if (action.description !== undefined) qualified.description = action.description;
       if (action.shortcut !== undefined) qualified.shortcut = action.shortcut;
+      if (action.shortcutAliases !== undefined) qualified.shortcutAliases = [...action.shortcutAliases];
       if (action.group !== undefined) qualified.group = action.group;
       if (enabled !== undefined) qualified.enabled = enabled;
       if (disabledReason !== undefined && disabledReason !== "") qualified.disabledReason = disabledReason;
@@ -106,9 +109,19 @@ export class PluginRegistry {
     return [...this.workspacePanels].sort((left, right) => (left.order ?? 1000) - (right.order ?? 1000) || left.title.localeCompare(right.title));
   }
 
-  async invalidateWorkspacePanels(context: WorkspacePanelContext): Promise<void> {
+  resolveWorkspacePanelRouteId(value: string, selectedMachineId: string): QualifiedContributionId | undefined {
+    const activePanels = this.workspacePanels.filter((panel) => this.isContributionActive(panel.pluginId, panel.machineId, selectedMachineId, panel.sourcePluginId));
+    const exact = activePanels.find((panel) => panel.id === value);
+    if (exact !== undefined) return exact.id;
+    const aliases = activePanels.filter((panel) => panel.routeAliases?.includes(value) === true);
+    if (aliases.length === 1) return aliases[0]?.id;
+    if (aliases.length > 1) console.warn(`Ambiguous PI WEB workspace panel route: ${value}`);
+    return undefined;
+  }
+
+  async invalidateWorkspacePanels(context: WorkspacePanelContext, panelId?: QualifiedContributionId): Promise<void> {
     await Promise.all(this.workspacePanels.map(async (panel) => {
-      if (panel.onInvalidate === undefined) return;
+      if (panel.onInvalidate === undefined || (panelId !== undefined && panel.id !== panelId)) return;
       try {
         await panel.onInvalidate(context);
       } catch (error) {
@@ -142,7 +155,17 @@ export class PluginRegistry {
     contributionIds: Set<QualifiedContributionId>,
   ): RegisteredPluginAction {
     const id = this.qualify(pluginId, action.id, contributionIds);
-    return { ...action, id, pluginId, localId: action.id, ...(machineId === undefined ? {} : { machineId }), ...(sourcePluginId === undefined ? {} : { sourcePluginId }) };
+    const sourceId = `${sourcePluginId ?? pluginId}:${action.id}`;
+    const shortcutAliases = this.parseShortcutAliases(id, action.shortcutAliases, sourceId);
+    return {
+      ...action,
+      id,
+      pluginId,
+      localId: action.id,
+      ...(shortcutAliases.length === 0 ? {} : { shortcutAliases }),
+      ...(machineId === undefined ? {} : { machineId }),
+      ...(sourcePluginId === undefined ? {} : { sourcePluginId }),
+    };
   }
 
   private qualifyWorkspacePanel(
@@ -158,12 +181,16 @@ export class PluginRegistry {
     const visible = panel.visible;
     const onInvalidate = panel.onInvalidate;
     const binding = workspacePluginBinding(pluginId, sourcePluginId, backendRevision);
+    const sourceId = `${sourcePluginId ?? pluginId}:${panel.id}`;
+    const routeAliases = this.parseRouteAliases(id, panel.routeAliases, sourceId);
     return {
       ...panel,
       id,
       pluginId,
       localId: panel.id,
+      ...(routeAliases.length === 0 ? {} : { routeAliases }),
       ...(machineId === undefined ? {} : { machineId }),
+      ...(sourcePluginId === undefined ? {} : { sourcePluginId }),
       visible: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(workspacePanelContextFor(context, binding)) ?? true),
       ...(badge === undefined ? {} : { badge: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? badge(workspacePanelContextFor(context, binding)) : undefined }),
       ...(onInvalidate === undefined ? {} : { onInvalidate: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? onInvalidate(workspacePanelContextFor(context, binding)) : undefined }),
@@ -251,6 +278,21 @@ export class PluginRegistry {
     );
   }
 
+  private parseShortcutAliases(id: QualifiedContributionId, aliases: readonly string[] | undefined, sourceId: string): QualifiedContributionId[] {
+    const parsed = [...new Set([...(aliases ?? []), sourceId])].filter((alias) => alias !== id);
+    const invalid = parsed.find((alias) => !isQualifiedContributionId(alias));
+    if (invalid !== undefined) throw new Error(`Invalid shortcut alias for ${id}: ${invalid}`);
+    return parsed.filter(isQualifiedContributionId);
+  }
+
+  private parseRouteAliases(id: QualifiedContributionId, aliases: readonly string[] | undefined, sourceId: string): string[] {
+    const parsed = [...new Set([...(aliases ?? []), sourceId])].filter((alias) => alias !== id);
+    for (const alias of parsed) {
+      if (!routeAliasPattern.test(alias)) throw new Error(`Invalid workspace panel route alias for ${id}: ${alias}`);
+    }
+    return parsed;
+  }
+
   private validatePluginId(pluginId: string): void {
     if (!idPattern.test(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
   }
@@ -324,6 +366,10 @@ function addMappedSetValue(map: Map<string, Set<string>>, key: string, value: st
   const existing = map.get(key);
   if (existing === undefined) map.set(key, new Set([value]));
   else existing.add(value);
+}
+
+function isQualifiedContributionId(value: string): value is QualifiedContributionId {
+  return qualifiedContributionIdPattern.test(value);
 }
 
 function formatUnknownValue(value: unknown): string {

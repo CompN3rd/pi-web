@@ -61,6 +61,22 @@ describe("SessionStorageMachineNavigationMemory", () => {
     expect(memory.latest("local")?.surface.selectedFilePath).toBe("README.md");
     expect(memory.latest("remote")).toBeUndefined();
   });
+
+  it("retains qualified legacy panel ids for plugin route migration", () => {
+    const storage = memoryStorage({
+      "pi-web:machine-navigation:v1": JSON.stringify({ version: 1, entries: [["local", {
+        machineId: "local",
+        tool: "core:workspace.git",
+        view: "core:workspace.git",
+        surface: {},
+      }]] }),
+    });
+
+    const snapshot = new SessionStorageMachineNavigationMemory(storage).latest("local");
+
+    expect(snapshot?.tool).toBe("core:workspace.git");
+    expect(snapshot?.view).toBe("core:workspace.git");
+  });
 });
 
 describe("machineNavigationSnapshotFromState", () => {

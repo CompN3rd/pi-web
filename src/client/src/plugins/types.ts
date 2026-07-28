@@ -124,7 +124,9 @@ export interface PluginRuntimeContext {
   selectWorkspaceTool: (tool: QualifiedContributionId) => void;
   openTerminal: (options?: { terminalId?: string | undefined }) => void;
   refreshFiles: () => void | Promise<void>;
-  /** @deprecated Browser-v1 compatibility alias. Use `WorkspacePanelContribution.onInvalidate` for host-driven refreshes. */
+  /** Invalidate plugin workspace-panel data for the selected workspace. */
+  refreshWorkspacePanels: (panelId?: QualifiedContributionId) => void | Promise<void>;
+  /** @deprecated Browser-v1 compatibility alias. Use `refreshWorkspacePanels()` or `WorkspacePanelContribution.onInvalidate`. */
   refreshGit: () => void | Promise<void>;
   refreshAppData: () => void | Promise<void>;
   checkForPiWebUpdates?: () => void | Promise<void>;
@@ -142,6 +144,8 @@ export interface PluginAction {
   title: string;
   description?: string;
   shortcut?: string;
+  /** Former qualified action ids whose saved shortcut preference should still apply. */
+  shortcutAliases?: QualifiedContributionId[];
   group?: string;
   enabled?: (context: PluginRuntimeContext) => boolean;
   /** Explain why a disabled action is visible but unavailable. */
@@ -189,6 +193,8 @@ export interface WorkspacePanelContribution {
   title: string;
   icon?: WorkspacePanelIcon;
   order?: number;
+  /** Former URL tool/view values that should resolve to this panel. */
+  routeAliases?: string[];
   visible?: (context: WorkspacePanelContext) => boolean;
   badge?: (context: WorkspacePanelContext) => string | number | TemplateResult | undefined;
   onInvalidate?: (context: WorkspacePanelContext) => void | Promise<void>;
@@ -200,6 +206,7 @@ export interface QualifiedWorkspacePanelContribution extends WorkspacePanelContr
   pluginId: PluginId;
   localId: LocalContributionId;
   machineId?: string;
+  sourcePluginId?: PluginId;
 }
 
 export interface WorkspaceLabelContext extends WorkspaceContext {

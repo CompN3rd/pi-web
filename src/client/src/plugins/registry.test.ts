@@ -8,7 +8,7 @@ import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { corePlugin } from "./core";
 import { PluginRegistry, installWorkspaceLabelScope, installWorkspacePanelScope } from "./registry";
 import { themePackPlugin } from "./themes";
-import type { PluginRuntimeContext, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "./types";
+import type { PiWebPlugin, PluginRuntimeContext, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "./types";
 import { createPluginWorkspaceBackend } from "./workspaceBackend";
 import type { PluginBackendRequestTarget } from "../api/pluginBackends";
 
@@ -46,6 +46,7 @@ function createContext(statePatch: Partial<AppState> = {}) {
     selectWorkspaceTool: vi.fn((tool: AppState["workspaceTool"]) => { calls.push(`selectWorkspaceTool:${tool}`); }),
     openTerminal: vi.fn((options?: { terminalId?: string | undefined }) => { calls.push(`openTerminal:${options?.terminalId ?? ""}`); }),
     refreshFiles: vi.fn(() => { calls.push("refreshFiles"); }),
+    refreshWorkspacePanels: vi.fn(() => { calls.push("refreshWorkspacePanels"); }),
     refreshGit: vi.fn(() => { calls.push("refreshGit"); }),
     refreshAppData: vi.fn(() => { calls.push("refreshAppData"); }),
     reloadPage: vi.fn(() => { calls.push("reloadPage"); }),
@@ -66,6 +67,28 @@ describe("PluginRegistry", () => {
 
     expect(registry.getActions(createContext().context).some((action) => action.id === "core:actions.show")).toBe(true);
     expect(registry.getWorkspacePanels().map((panel) => panel.id)).toEqual(["core:workspace.files", "core:workspace.terminal"]);
+  });
+
+  it("resolves panel and shortcut migrations to the active machine-scoped contribution", () => {
+    const registry = new PluginRegistry();
+    const plugin: PiWebPlugin = {
+      apiVersion: 1,
+      name: "VCS",
+      activate: () => ({
+        contributions: {
+          actions: [{ id: "view.vcs", title: "View VCS", shortcutAliases: ["core:view.vcs"], run: () => undefined }],
+          workspacePanels: [{ id: "workspace.vcs", title: "VCS", routeAliases: ["vcs", "core:workspace.vcs"], render: () => html`<p>VCS</p>` }],
+        },
+      }),
+    };
+    registry.register({ id: "vcs", plugin, machineSpecific: true });
+    const remotePluginId = machineScopedPluginId("remote-1", "vcs");
+    registry.register({ id: remotePluginId, sourcePluginId: "vcs", machineId: "remote-1", plugin, machineSpecific: true });
+
+    expect(registry.resolveWorkspacePanelRouteId("core:workspace.vcs", "local")).toBe("vcs:workspace.vcs");
+    expect(registry.resolveWorkspacePanelRouteId("vcs:workspace.vcs", "remote-1")).toBe(`${remotePluginId}:workspace.vcs`);
+    expect(registry.getActions(createContext({ selectedMachine: testMachine("remote-1") }).context)[0]?.shortcutAliases)
+      .toEqual(["core:view.vcs", "vcs:view.vcs"]);
   });
 
   it("provides html and svg helpers to plugin activation and callbacks", () => {
@@ -206,6 +229,12 @@ describe("PluginRegistry", () => {
 
     expect(invalidated).toHaveBeenCalledOnce();
     expect(warning).toHaveBeenCalledWith("Failed to invalidate PI WEB plugin panel example:broken", expect.objectContaining({ message: "broken refresh" }));
+
+    invalidated.mockClear();
+    warning.mockClear();
+    await registry.invalidateWorkspacePanels(createWorkspacePanelContext("local"), "example:healthy");
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(warning).not.toHaveBeenCalled();
   });
 
   it("evaluates core action enablement against runtime state", () => {
@@ -389,21 +418,6 @@ describe("PluginRegistry", () => {
     expect(calls).toEqual(["openModelPicker", "openThinkingLevelPicker"]);
   });
 
-  it("routes refresh current only to the active core Files panel", () => {
-    const registry = new PluginRegistry();
-    registry.register({ id: "core", plugin: corePlugin });
-    const { context, calls } = createContext({
-      selectedWorkspace: testWorkspace(),
-      workspaceTool: "core:workspace.files",
-    });
-    const action = registry.getActions(context).find((candidate) => candidate.id === "core:workspace.refresh-current");
-
-    if (action !== undefined) void action.run();
-
-    expect(action?.enabled).toBe(true);
-    expect(calls).toEqual(["refreshFiles"]);
-  });
-
   it("routes app reload and settings actions through the runtime context", () => {
     const registry = new PluginRegistry();
     registry.register({ id: "core", plugin: corePlugin });
@@ -444,7 +458,6 @@ describe("PluginRegistry", () => {
       ["core:view.files", "mod+2"],
       ["core:view.terminal", "mod+4"],
       ["core:workspace.refresh-files", "mod+shift+f"],
-      ["core:workspace.refresh-current", "mod+shift+r"],
       ["core:session.start", "mod+enter"],
       ["core:session.stop", "mod+."],
     ]);

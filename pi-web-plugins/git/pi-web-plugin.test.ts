@@ -46,21 +46,38 @@ describe("bundled Git browser plugin", () => {
     }))).toBe(false);
 
     const selectMainView = vi.fn<PluginRuntimeContext["selectMainView"]>();
-    const runtime = runtimeContext({ selectMainView });
+    const refreshWorkspacePanels = vi.fn<PluginRuntimeContext["refreshWorkspacePanels"]>(() => panel.onInvalidate?.(context));
+    const runtime = runtimeContext({ selectMainView, refreshWorkspacePanels });
     const goToGit = contributions.actions?.find((action) => action.id === "view.git");
     const refresh = contributions.actions?.find((action) => action.id === "workspace.refresh-git");
 
+    expect(contributions.actions?.map(({ id }) => id)).toEqual(["view.git", "workspace.refresh-git"]);
+    expect(panel.routeAliases).toEqual(["git", "core:workspace.git"]);
     expect(goToGit?.shortcut).toBe("mod+3");
+    expect(goToGit?.shortcutAliases).toEqual(["core:view.git"]);
+    expect(refresh?.shortcutAliases).toEqual(["core:workspace.refresh-git"]);
     expect(goToGit?.enabled?.(runtime)).toBe(true);
     await goToGit?.run(runtime);
     expect(selectMainView).toHaveBeenCalledWith("git:workspace.git");
 
     await refresh?.run(runtime);
+    expect(refreshWorkspacePanels).toHaveBeenCalledWith("git:workspace.git");
     expect(backend.request).toHaveBeenCalledWith("status", null);
 
     backend.request.mockClear();
     await panel.onInvalidate?.(context);
     expect(backend.request).toHaveBeenCalledWith("status", null);
+  });
+
+  it("keeps visibility checks free of route side effects", () => {
+    window.history.replaceState({}, "", `/?project=${projectId}&workspace=${workspaceId}&core.workspace.git--diff=README.md`);
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    const panel = requiredPanel(activate("git"));
+
+    expect(panel.visible?.(panelContext(backendFixture().request))).toBe(true);
+
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(new URL(window.location.href).searchParams.get("core.workspace.git--diff")).toBe("README.md");
   });
 
   it("uses the generic panel invalidation hook and reports an actionable error without a paired backend", async () => {
@@ -115,6 +132,14 @@ describe("bundled Git browser plugin", () => {
     expect(backend.request).toHaveBeenCalledWith("diff", { path: "src/main.ts", staged: true });
     expect(container.textContent).toContain("staged");
     expect(container.textContent).toContain("unstaged");
+    expect(container.querySelector(".git-panel")).not.toBeNull();
+    expect(container.querySelector(".split")).toBeNull();
+    const styleRules = (container.querySelector("style")?.textContent ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.includes("{"));
+    expect(styleRules).toContainEqual(expect.stringContaining(".git-panel .git-row"));
+    expect(styleRules.every((rule) => rule.startsWith(".git-panel"))).toBe(true);
     expect(container.querySelector('[role="table"][aria-label="Unified diff"]')).not.toBeNull();
     expect([...container.querySelectorAll(".inline-change")].map((entry) => entry.textContent)).toContain("new");
 
@@ -126,6 +151,60 @@ describe("bundled Git browser plugin", () => {
     render(panel.render(context), container);
     expect(button(container, "main.ts")).toBeDefined();
 
+    render(null, container);
+  });
+
+  it("preserves a deep link when entering a fresh workspace after route initialization", async () => {
+    window.history.replaceState({}, "", `/?project=${projectId}&workspace=${workspaceId}`);
+    const panel = requiredPanel(activate("git"));
+    const firstBackend = backendFixture();
+    const firstContext = panelContext(firstBackend.request);
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(panel.render(firstContext), container);
+    await settleBackend();
+    render(null, container);
+
+    const secondWorkspace = { ...gitWorkspace, id: "workspace-2" };
+    const secondBackend = backendFixture({ files: [changedFile("README.md")] });
+    const secondContext = panelContext(secondBackend.request, secondWorkspace);
+    window.history.replaceState({}, "", `/?project=${projectId}&workspace=${secondWorkspace.id}&core.workspace.git--diff=README.md`);
+    render(panel.render(secondContext), container);
+    await settleBackend();
+
+    expect(secondBackend.request).toHaveBeenCalledWith("diff", { path: "README.md" });
+    expect(new URL(window.location.href).searchParams.get("git.workspace.git--diff")).toBe("README.md");
+    render(null, container);
+  });
+
+  it("scopes cached state by machine and evicts old workspaces", async () => {
+    const panel = requiredPanel(activate("git"));
+    const localBackend = backendFixture({ branch: "local-main" });
+    const remoteBackend = backendFixture({ branch: "remote-main" });
+    const localContext = panelContext(localBackend.request, gitWorkspace, "local");
+    const remoteContext = panelContext(remoteBackend.request, gitWorkspace, "remote-1");
+
+    await panel.onInvalidate?.(localContext);
+    await panel.onInvalidate?.(remoteContext);
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(panel.render(localContext), container);
+    expect(container.textContent).toContain("local-main");
+    render(panel.render(remoteContext), container);
+    expect(container.textContent).toContain("remote-main");
+
+    const oldestBackend = backendFixture({ branch: "oldest" });
+    const oldestContext = panelContext(oldestBackend.request, { ...gitWorkspace, id: "bounded-0" });
+    await panel.onInvalidate?.(oldestContext);
+    // Traverse well beyond the intentionally small workspace-state cache.
+    for (let index = 1; index <= 16; index += 1) {
+      const backend = backendFixture({ branch: `bounded-${String(index)}` });
+      await panel.onInvalidate?.(panelContext(backend.request, { ...gitWorkspace, id: `bounded-${String(index)}` }));
+    }
+
+    render(panel.render(oldestContext), container);
+    await settleBackend();
+    expect(oldestBackend.request.mock.calls.filter(([operation]) => operation === "status")).toHaveLength(2);
     render(null, container);
   });
 
@@ -173,16 +252,21 @@ function requiredPanel(contributions: ReturnType<typeof activate>) {
   return panel;
 }
 
-function backendFixture(patch: { files?: ReturnType<typeof changedFile>[]; submodules?: string[] } = {}) {
+function backendFixture(patch: { files?: ReturnType<typeof changedFile>[]; submodules?: string[]; branch?: string } = {}) {
   const status = {
     isGitRepo: true,
-    hash: "status-hash",
-    branch: "main",
+    hash: `status-hash-${patch.branch ?? "main"}`,
+    branch: patch.branch ?? "main",
     files: patch.files ?? [changedFile("src/main.ts")],
     submodules: patch.submodules ?? [],
   };
   const request = vi.fn((operation: string, input: JsonValue): Promise<JsonValue> => {
-    if (operation === "status") return Promise.resolve({ ...status, files: [...status.files], submodules: [...status.submodules] });
+    if (operation === "status") return Promise.resolve({
+      ...status,
+      hash: `${status.hash}:${JSON.stringify(status.files)}`,
+      files: [...status.files],
+      submodules: [...status.submodules],
+    });
     const staged = isRecord(input) && input["staged"] === true;
     const path = isRecord(input) && typeof input["path"] === "string" ? input["path"] : "diff";
     return Promise.resolve({
@@ -200,10 +284,10 @@ function changedFile(path: string, patch: Record<string, JsonValue> = {}) {
   return { path, index: "unmodified", workingTree: "modified", ...patch };
 }
 
-function panelContext(request: WorkspaceBackend["request"] | undefined, workspace = gitWorkspace): WorkspacePanelContext {
+function panelContext(request: WorkspaceBackend["request"] | undefined, workspace = gitWorkspace, machineId = "local"): WorkspacePanelContext {
   const noop = () => undefined;
   return {
-    machine: { id: "local", name: "Local", kind: "local" },
+    machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
     workspace,
     state: { selectedWorkspace: workspace, workspaceTool: "git:workspace.git", mainView: "git:workspace.git" },
     files: {
@@ -234,6 +318,7 @@ function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntim
     selectWorkspaceTool: noop,
     openTerminal: noop,
     refreshFiles: noop,
+    refreshWorkspacePanels: noop,
     refreshGit: noop,
     refreshAppData: noop,
     reloadPage: noop,

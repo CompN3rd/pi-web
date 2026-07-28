@@ -128,14 +128,6 @@ export function createCoreActions(): PluginAction[] {
       run: (context) => context.refreshFiles(),
     },
     {
-      id: "workspace.refresh-current",
-      title: "Refresh Current Panel",
-      shortcut: "mod+shift+r",
-      group: "Workspace",
-      enabled: hasCurrentFilesPanel,
-      run: (context) => context.refreshFiles(),
-    },
-    {
       id: "workspace.delete",
       title: "Remove Workspace",
       description: "Run the owning provider's workspace removal operation",
@@ -205,10 +197,6 @@ export function createCoreActions(): PluginAction[] {
 
 function hasWorkspace(context: { state: AppState }): boolean {
   return context.state.selectedWorkspace !== undefined;
-}
-
-function hasCurrentFilesPanel(context: { state: AppState }): boolean {
-  return context.state.selectedWorkspace !== undefined && context.state.workspaceTool === "core:workspace.files";
 }
 
 function hasDeletableWorkspace(context: { state: AppState }): boolean {

@@ -47,6 +47,37 @@ describe("PiWebApp plugin host", () => {
     expect(invalidated.mock.calls[0]?.[0].backend).toBeUndefined();
   });
 
+  it("routes selected-panel, route, activity, and refresh-current invalidation through the generic seam", async () => {
+    const app = createApp();
+    setAppState(app, {
+      ...initialAppState(),
+      selectedWorkspace: workspace,
+      workspaces: [workspace],
+      workspaceTool: "browser-only:workspace.panel",
+      mainView: "browser-only:workspace.panel",
+    });
+    const invalidated = vi.fn<(context: WorkspacePanelContext) => void>();
+    appPluginRegistry(app).register({ id: "browser-only", plugin: pluginWithPanel("Browser only", invalidated) });
+
+    await callAsyncAppMethod(app, "refreshCurrentWorkspaceSurface");
+    await callAsyncAppMethod(app, "refreshRestoredWorkspaceTool", "browser-only:workspace.panel", undefined);
+    callAppMethod(app, "refreshSelectedWorkspaceTool", "browser-only:workspace.panel");
+    await Promise.resolve();
+
+    const actions = callAppMethod(app, "getDefaultActions");
+    if (!Array.isArray(actions)) throw new Error("PiWebApp default actions were unavailable");
+    const refreshCurrent = actions.find((candidate): candidate is { id: string; run: () => void | Promise<void> } => isAction(candidate) && candidate.id === "core:workspace.refresh-current");
+    await refreshCurrent?.run();
+
+    const inactive = { ...initialAppState(), selectedWorkspace: workspace, workspaces: [workspace], workspaceTool: "browser-only:workspace.panel" as const };
+    const active = { ...inactive, activity: { sessionId: "session-1", phase: "active" as const, label: "working", at: "now" } };
+    setAppState(app, inactive);
+    callAppMethod(app, "handleActivityTransition", active, inactive);
+    await Promise.resolve();
+
+    expect(invalidated).toHaveBeenCalledTimes(5);
+  });
+
   it("keeps successful registrations while making an incomplete gateway load retryable", async () => {
     const app = createApp();
     stubPluginLoadRendering(app);
@@ -187,6 +218,20 @@ function pluginWithPanel(name: string, onInvalidate: (context: WorkspacePanelCon
 
 function emptyPlugin(name: string): PiWebPlugin {
   return { apiVersion: 1, name, activate: () => ({ contributions: {} }) };
+}
+
+function callAppMethod(app: PiWebApp, name: string, ...args: unknown[]): unknown {
+  const method: unknown = Reflect.get(app, name);
+  if (typeof method !== "function") throw new Error(`PiWebApp.${name} is not callable`);
+  return Reflect.apply(method, app, args);
+}
+
+async function callAsyncAppMethod(app: PiWebApp, name: string, ...args: unknown[]): Promise<void> {
+  await callAppMethod(app, name, ...args);
+}
+
+function isAction(value: unknown): value is { id: string; run: () => void | Promise<void> } {
+  return typeof value === "object" && value !== null && "id" in value && typeof value.id === "string" && "run" in value && typeof value.run === "function";
 }
 
 function manifestEntry(id: string): PluginManifestEntry {

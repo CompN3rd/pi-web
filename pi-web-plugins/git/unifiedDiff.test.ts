@@ -94,6 +94,38 @@ describe("parseUnifiedDiff", () => {
     expect(added.newLineNumber).toBe(1);
     expect(added.spans).toEqual([{ text: "brand new", changed: false }]);
   });
+
+  it("keeps emoji graphemes intact in inline change spans", () => {
+    const lines = parseUnifiedDiff([
+      "@@ -1 +1 @@",
+      "-const author = \"👩🏽‍💻\";",
+      "+const author = \"👨🏻‍💻\";",
+    ].join("\n"));
+    const removed = firstLineOfKind(lines, "remove");
+    const added = firstLineOfKind(lines, "add");
+
+    expect(changedText(removed)).toEqual(["👩🏽‍💻"]);
+    expect(changedText(added)).toEqual(["👨🏻‍💻"]);
+    for (const span of [...removed.spans, ...added.spans]) expect(span.text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+  });
+
+  it("falls back to bounded whole-middle spans without losing shared text", () => {
+    const shared = "prefix ".repeat(40);
+    const removedMiddle = "a".repeat(600);
+    const addedMiddle = "b".repeat(600);
+    const lines = parseUnifiedDiff([
+      "@@ -1 +1 @@",
+      `-${shared}${removedMiddle}`,
+      `+${shared}${addedMiddle}`,
+    ].join("\n"));
+    const removed = firstLineOfKind(lines, "remove");
+    const added = firstLineOfKind(lines, "add");
+
+    expect(changedText(removed)).toEqual([removedMiddle]);
+    expect(changedText(added)).toEqual([addedMiddle]);
+    expect(removed.spans.map(({ text }) => text).join("")).toBe(`${shared}${removedMiddle}`);
+    expect(added.spans.map(({ text }) => text).join("")).toBe(`${shared}${addedMiddle}`);
+  });
 });
 
 function firstLineOfKind(lines: UnifiedDiffLine[], kind: UnifiedDiffLineKind): UnifiedDiffLine {
