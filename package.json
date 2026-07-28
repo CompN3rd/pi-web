@@ -5,6 +5,19 @@
   "license": "MIT",
   "author": "Federico Jaramillo Martinez",
   "type": "module",
+  "typesVersions": {
+    "*": {
+      "plugin-api": [
+        "dist/plugin-api.d.ts"
+      ],
+      "plugin-api/unstable": [
+        "dist/plugin-api/unstable.d.ts"
+      ],
+      "server-plugin-api": [
+        "dist/server-plugin-api.d.ts"
+      ]
+    }
+  },
   "bin": {
     "pi-web": "dist/cli.js",
     "pi-web-server": "dist/server/index.js",

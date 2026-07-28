@@ -67,6 +67,76 @@ describe("production build contents", () => {
     }
   });
 
+  it("resolves packaged plugin declaration subpaths for NodeNext consumers", async () => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), "pi-web-plugin-types-"));
+    try {
+      const packageRoot = join(fixtureRoot, "node_modules", "@jmfederico", "pi-web");
+      await mkdir(join(packageRoot, "dist", "plugin-api"), { recursive: true });
+      const consumerPath = join(fixtureRoot, "provider.mts");
+      await Promise.all([
+        copyFile(join(repoRoot, "package.json"), join(packageRoot, "package.json")),
+        copyFile(join(repoRoot, "server-plugin-api.d.ts"), join(packageRoot, "server-plugin-api.d.ts")),
+        copyFile(join(repoRoot, "src", "server-plugin-api.ts"), join(packageRoot, "dist", "server-plugin-api.d.ts")),
+        writeFile(join(packageRoot, "dist", "plugin-api.d.ts"), "export interface PiWebPlugin { apiVersion: 1; }\n", "utf8"),
+        writeFile(join(packageRoot, "dist", "plugin-api", "unstable.d.ts"), "export interface UnstablePluginRuntimeContext {}\n", "utf8"),
+        writeFile(join(fixtureRoot, "package.json"), '{"private":true,"type":"module"}\n', "utf8"),
+        writeFile(consumerPath, `
+import type { PiWebServerPlugin } from "@jmfederico/pi-web/server-plugin-api";
+
+const plugin: PiWebServerPlugin = {
+  apiVersion: 1,
+  name: "External declaration fixture",
+  activate: () => ({
+    workspaceProvider: {
+      probe: async () => "claim",
+      list: async (project) => [{ key: "main", path: project.path, label: project.name, isMain: true }],
+    },
+  }),
+};
+
+export default plugin;
+`, "utf8"),
+      ]);
+
+      const nodeNextOptions: ts.CompilerOptions = {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.NodeNext,
+        moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      };
+      const expectedDeclarations = new Map([
+        ["@jmfederico/pi-web/plugin-api", "node_modules/@jmfederico/pi-web/dist/plugin-api.d.ts"],
+        ["@jmfederico/pi-web/plugin-api/unstable", "node_modules/@jmfederico/pi-web/dist/plugin-api/unstable.d.ts"],
+        ["@jmfederico/pi-web/server-plugin-api", "node_modules/@jmfederico/pi-web/dist/server-plugin-api.d.ts"],
+      ]);
+      for (const [specifier, expected] of expectedDeclarations) {
+        const resolved = ts.resolveModuleName(specifier, consumerPath, nodeNextOptions, ts.sys).resolvedModule;
+        expect(resolved === undefined ? undefined : normalizePath(relative(fixtureRoot, resolved.resolvedFileName))).toBe(expected);
+      }
+
+      const program = ts.createProgram({
+        rootNames: [consumerPath],
+        options: {
+          target: ts.ScriptTarget.ES2022,
+          module: ts.ModuleKind.NodeNext,
+          moduleResolution: ts.ModuleResolutionKind.NodeNext,
+          strict: true,
+          exactOptionalPropertyTypes: true,
+          noUncheckedIndexedAccess: true,
+          noEmit: true,
+          skipLibCheck: false,
+          types: [],
+        },
+      });
+      const diagnostics = ts.getPreEmitDiagnostics(program);
+      if (diagnostics.length > 0) throw new Error(formatDiagnostics(diagnostics));
+
+      const projectSources = program.getSourceFiles().map((sourceFile) => normalizePath(relative(fixtureRoot, sourceFile.fileName)));
+      expect(projectSources).toContain("node_modules/@jmfederico/pi-web/dist/server-plugin-api.d.ts");
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   // This exercises the same command a clean development startup runs, including
   // typechecking, copying package metadata, and transpiling the complete import graph.
   it("builds package-complete importable bundled server plugins without prior output", { timeout: 60_000 }, async () => {
