@@ -18,7 +18,18 @@ afterEach(async () => {
 });
 
 describe("sessiond persisted server plugin recovery", () => {
-  it("starts from real config and catalog with no server module imports in emergency safe start", async () => {
+  it.each([
+    {
+      name: "starts from real config and catalog with no server module imports in emergency safe start",
+      safeStart: "none",
+      expectedDiagnostic: undefined,
+    },
+    {
+      name: "fails closed and starts without server module imports when safe start is malformed",
+      safeStart: "future-level",
+      expectedDiagnostic: "No server plugins will be loaded until safe start is repaired",
+    },
+  ])("$name", async ({ safeStart, expectedDiagnostic }) => {
     const root = await mkdtemp(join(tmpdir(), "pi-web-sessiond-plugin-recovery-"));
     tempRoots.push(root);
     const configPath = join(root, "config.json");
@@ -26,7 +37,7 @@ describe("sessiond persisted server plugin recovery", () => {
     const pluginRoot = join(dataDir, "plugins", "poison");
     const markerPath = join(root, "poison-imported");
     await mkdir(pluginRoot, { recursive: true });
-    await writeFile(configPath, `${JSON.stringify({ serverPlugins: { safeStart: "none" } })}\n`, "utf8");
+    await writeFile(configPath, `${JSON.stringify({ serverPlugins: { safeStart } })}\n`, "utf8");
     await writeFile(join(pluginRoot, "package.json"), `${JSON.stringify({
       piWeb: { plugins: [{ id: "poison", serverModule: "server.mjs" }] },
     })}\n`, "utf8");
@@ -53,6 +64,7 @@ describe("sessiond persisted server plugin recovery", () => {
 
     const startupOutput = await waitForOutput(child, "Server listening at", 15_000);
     expect(startupOutput).toContain("Server listening at");
+    if (expectedDiagnostic !== undefined) expect(startupOutput).toContain(expectedDiagnostic);
     expect(existsSync(markerPath)).toBe(false);
 
     child.kill("SIGTERM");

@@ -19,7 +19,14 @@ export type ServerPluginSafeStart = "bundled-only" | "none";
 export interface ServerPluginRecoveryConfig {
   path: string;
   exists: boolean;
+  /** Effective level. Malformed configured state resolves to `none`. */
   safeStart?: ServerPluginSafeStart;
+  safeStartDiagnostic?: string;
+}
+
+interface ResolvedServerPluginSafeStart {
+  safeStart?: ServerPluginSafeStart;
+  safeStartDiagnostic?: string;
 }
 
 export interface ServerPluginRecoveryConfigOptions {
@@ -41,11 +48,10 @@ export function loadServerPluginRecoveryConfig(
   const path = recoveryConfigPath(options);
   if (!existsSync(path)) return { path, exists: false };
   const root = readConfigObject(path);
-  const safeStart = readSafeStart(root, path);
   return {
     path,
     exists: true,
-    ...(safeStart === undefined ? {} : { safeStart }),
+    ...resolveSafeStart(root, path),
   };
 }
 
@@ -77,11 +83,17 @@ export function setServerPluginSafeStart(
   safeStart: ServerPluginSafeStart | undefined,
   options: ServerPluginRecoveryConfigOptions = {},
 ): ServerPluginRecoveryConfig {
-  return mutateRecoveryConfig(options, (root, path) => {
+  return mutateRecoveryConfig(options, (root) => {
     const configuredServerPlugins = root[SERVER_PLUGINS_CONFIG_KEY];
     if (configuredServerPlugins !== undefined && !isRecord(configuredServerPlugins)) {
-      throw new Error(`PI WEB config ${SERVER_PLUGINS_CONFIG_KEY} must be an object: ${path}`);
+      if (safeStart === undefined) {
+        Reflect.deleteProperty(root, SERVER_PLUGINS_CONFIG_KEY);
+      } else {
+        root[SERVER_PLUGINS_CONFIG_KEY] = { [SAFE_START_CONFIG_KEY]: safeStart };
+      }
+      return;
     }
+
     const serverPlugins = { ...(configuredServerPlugins ?? {}) };
     if (safeStart === undefined) {
       Reflect.deleteProperty(serverPlugins, SAFE_START_CONFIG_KEY);
@@ -110,12 +122,12 @@ function mutateRecoveryConfig(
   const path = recoveryConfigPath(options);
   const root = existsSync(path) ? readConfigObject(path) : {};
   mutate(root, path);
-  const safeStart = readSafeStart(root, path);
+  const safeStart = resolveSafeStart(root, path);
   writeConfigObject(path, root);
   return {
     path,
     exists: true,
-    ...(safeStart === undefined ? {} : { safeStart }),
+    ...safeStart,
   };
 }
 
@@ -125,18 +137,25 @@ function readConfigObject(path: string): Record<string, unknown> {
   return parsed;
 }
 
-function readSafeStart(root: Record<string, unknown>, path: string): ServerPluginSafeStart | undefined {
+function resolveSafeStart(root: Record<string, unknown>, path: string): ResolvedServerPluginSafeStart {
   const configuredServerPlugins = root[SERVER_PLUGINS_CONFIG_KEY];
-  if (configuredServerPlugins === undefined) return undefined;
+  if (configuredServerPlugins === undefined) return {};
   if (!isRecord(configuredServerPlugins)) {
-    throw new Error(`PI WEB config ${SERVER_PLUGINS_CONFIG_KEY} must be an object: ${path}`);
+    return invalidSafeStart(`PI WEB config ${SERVER_PLUGINS_CONFIG_KEY} must be an object: ${path}`);
   }
   const safeStart = configuredServerPlugins[SAFE_START_CONFIG_KEY];
-  if (safeStart === undefined) return undefined;
+  if (safeStart === undefined) return {};
   if (safeStart !== "bundled-only" && safeStart !== "none") {
-    throw new Error(`PI WEB config ${SERVER_PLUGINS_CONFIG_KEY}.${SAFE_START_CONFIG_KEY} must be "bundled-only" or "none": ${path}`);
+    return invalidSafeStart(`PI WEB config ${SERVER_PLUGINS_CONFIG_KEY}.${SAFE_START_CONFIG_KEY} must be "bundled-only" or "none": ${path}`);
   }
-  return safeStart;
+  return { safeStart };
+}
+
+function invalidSafeStart(message: string): ResolvedServerPluginSafeStart {
+  return {
+    safeStart: "none",
+    safeStartDiagnostic: `${message}. No server plugins will be loaded until safe start is repaired.`,
+  };
 }
 
 function writeConfigObject(path: string, root: Record<string, unknown>): void {

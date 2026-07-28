@@ -65,6 +65,7 @@ export function runPluginRecoveryCli(
   if (command.kind === "safe-start-show") {
     const recovery = loadServerPluginRecoveryConfig(configOptions);
     writeLine(`Server plugin safe start: ${recovery.safeStart ?? "off"}`);
+    reportRecoveryDiagnostic(recovery.safeStartDiagnostic, writeLine);
     writeLine(`Config: ${recovery.path}${recovery.exists ? "" : " (not created)"}`);
     return;
   }
@@ -72,6 +73,7 @@ export function runPluginRecoveryCli(
   if (command.kind === "disable") {
     const recovery = disableServerPlugin(command.pluginId, configOptions);
     writeLine(`Disabled server plugin ${JSON.stringify(command.pluginId)} in ${recovery.path}.`);
+    reportRecoveryDiagnostic(recovery.safeStartDiagnostic, writeLine);
     reportRestart(command.restart, restartPlanFor(recovery.path, command.configPath, dependencies), writeLine);
     return;
   }
@@ -79,12 +81,14 @@ export function runPluginRecoveryCli(
   if (command.kind === "safe-start-set") {
     const recovery = setServerPluginSafeStart(command.safeStart, configOptions);
     writeLine(`Set server plugin safe start to ${command.safeStart} in ${recovery.path}.`);
+    reportRecoveryDiagnostic(recovery.safeStartDiagnostic, writeLine);
     reportRestart(command.restart, restartPlanFor(recovery.path, command.configPath, dependencies), writeLine);
     return;
   }
 
   const recovery = setServerPluginSafeStart(undefined, configOptions);
   writeLine(`Cleared server plugin safe start in ${recovery.path}.`);
+  reportRecoveryDiagnostic(recovery.safeStartDiagnostic, writeLine);
   reportRestart(command.restart, restartPlanFor(recovery.path, command.configPath, dependencies), writeLine);
 }
 
@@ -190,6 +194,13 @@ function restartPlanFor(
   dependencies: Pick<PluginRecoveryCliDependencies, "restartPlan">,
 ): SessionDaemonRestartPlan {
   return dependencies.restartPlan({ configPath, explicitConfigPath: explicitConfigPath !== undefined });
+}
+
+function reportRecoveryDiagnostic(
+  diagnostic: string | undefined,
+  writeLine: (line: string) => void,
+): void {
+  if (diagnostic !== undefined) writeLine(`Warning: ${diagnostic}`);
 }
 
 function reportRestart(

@@ -51,6 +51,12 @@ const activeAgentProfile = createActiveAgentProfileDescriptor({
   sessionDirEnvKeys: agentSessionDirEnvKeys(config.agent.command),
 });
 const app = Fastify({ logger: true, bodyLimit: maxUploadBytes(daemonEnvironment, config) });
+if (serverPluginRecovery.safeStartDiagnostic !== undefined) {
+  app.log.error(
+    { component: "server-plugins", configPath: serverPluginRecovery.path },
+    serverPluginRecovery.safeStartDiagnostic,
+  );
+}
 await app.register(fastifyWebsocket);
 let serverQuiescing = false;
 app.addHook("onRequest", (_request, reply, done) => {

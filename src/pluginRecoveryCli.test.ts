@@ -58,24 +58,29 @@ describe("plugin recovery CLI", () => {
     ]);
   });
 
-  it("sets, shows, and clears safe start offline", async () => {
+  it("shows malformed safe start fail-closed, then repairs and clears it offline", async () => {
     const lines: string[] = [];
     const deps = dependencies(lines);
+    await writeFile(configPath, `${JSON.stringify({ serverPlugins: { safeStart: "future-level" } })}\n`, "utf8");
 
+    runPluginRecoveryCli(["safe-start", "show", "--config", configPath], deps);
     runPluginRecoveryCli(["safe-start", "set", "bundled-only", "--config", configPath], deps);
     runPluginRecoveryCli(["safe-start", "show", "--config", configPath], deps);
     runPluginRecoveryCli(["safe-start", "clear", "--config", configPath], deps);
     runPluginRecoveryCli(["safe-start", "show", "--config", configPath], deps);
 
+    expect(lines).toContain("Server plugin safe start: none");
+    expect(lines.some((line) => line.startsWith("Warning: ") && line.includes("No server plugins will be loaded"))).toBe(true);
     expect(lines).toContain("Server plugin safe start: bundled-only");
     expect(lines).toContain("Server plugin safe start: off");
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({});
   });
 
-  it("works in a child process with sessiond absent and never imports a discoverable poisonous module", async () => {
+  it("disables a plugin beside malformed safe start with sessiond absent and no plugin imports", async () => {
     const markerPath = join(tempDir, "poison-imported");
     const pluginRoot = join(tempDir, "data", "plugins", "poison");
     await mkdir(pluginRoot, { recursive: true });
+    await writeFile(configPath, `${JSON.stringify({ serverPlugins: { safeStart: "future-level" } })}\n`, "utf8");
     await writeFile(join(pluginRoot, "package.json"), `${JSON.stringify({
       piWeb: { plugins: [{ id: "poison", serverModule: "server.js" }] },
     })}\n`, "utf8");
@@ -106,10 +111,14 @@ describe("plugin recovery CLI", () => {
     });
 
     expect(result.stdout).toContain("Disabled server plugin \"poison\"");
+    expect(result.stdout).toContain("Warning: PI WEB config serverPlugins.safeStart");
     expect(result.stdout).toContain("cannot be restarted automatically");
     expect(result.stdout).toContain(`PI_WEB_CONFIG=${JSON.stringify(configPath)}`);
     expect(existsSync(markerPath)).toBe(false);
-    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({ plugins: { poison: { enabled: false } } });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      serverPlugins: { safeStart: "future-level" },
+      plugins: { poison: { enabled: false } },
+    });
   });
 
   it("optionally performs an automatic restart after the durable config write", () => {

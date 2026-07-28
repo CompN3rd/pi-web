@@ -107,18 +107,50 @@ describe("server plugin offline recovery config", () => {
     expect(await readConfig()).toEqual({ future: true });
   });
 
-  it("rejects invalid ids and malformed managed sections without overwriting the file", async () => {
+  it("fails closed for malformed safe start without blocking an unrelated plugin disable", async () => {
+    const original = {
+      plugins: { broken: { enabled: true, settings: { retained: true } } },
+      serverPlugins: { safeStart: "future-level", retained: true },
+      future: true,
+    };
+    await writeConfig(original);
+
+    const loaded = loadServerPluginRecoveryConfig({ configPath });
+    expect(loaded).toMatchObject({ path: configPath, exists: true, safeStart: "none" });
+    expect(loaded.safeStartDiagnostic).toContain("serverPlugins.safeStart must be \"bundled-only\" or \"none\"");
+
+    const recovery = disableServerPlugin("broken", { configPath });
+
+    expect(recovery.safeStart).toBe("none");
+    expect(recovery.safeStartDiagnostic).toContain("No server plugins will be loaded");
+    expect(await readConfig()).toEqual({
+      ...original,
+      plugins: { broken: { enabled: false, settings: { retained: true } } },
+    });
+  });
+
+  it("repairs malformed safe-start sections through set and clear", async () => {
+    await writeConfig({ serverPlugins: ["malformed"], future: true });
+
+    const loaded = loadServerPluginRecoveryConfig({ configPath });
+    expect(loaded.safeStart).toBe("none");
+    expect(loaded.safeStartDiagnostic).toContain("serverPlugins must be an object");
+
+    setServerPluginSafeStart("bundled-only", { configPath });
+    expect(await readConfig()).toEqual({ serverPlugins: { safeStart: "bundled-only" }, future: true });
+
+    await writeConfig({ serverPlugins: "malformed", future: true });
+    setServerPluginSafeStart(undefined, { configPath });
+    expect(await readConfig()).toEqual({ future: true });
+  });
+
+  it("rejects invalid ids and malformed plugin sections without overwriting the file", async () => {
     const original = { plugins: ["broken"], serverPlugins: { safeStart: "future-level" }, future: true };
     await writeConfig(original);
 
     expect(() => disableServerPlugin("Not Valid", { configPath })).toThrow("Invalid PI WEB plugin id");
     expect(() => disableServerPlugin("broken", { configPath })).toThrow("plugins must be an object");
-    expect(() => loadServerPluginRecoveryConfig({ configPath })).toThrow("must be \"bundled-only\" or \"none\"");
     expect(await readConfig()).toEqual(original);
-
-    await writeConfig({ plugins: { broken: { enabled: true } }, serverPlugins: { safeStart: "future-level" } });
-    expect(() => disableServerPlugin("broken", { configPath })).toThrow("must be \"bundled-only\" or \"none\"");
-    expect(await readConfig()).toEqual({ plugins: { broken: { enabled: true } }, serverPlugins: { safeStart: "future-level" } });
   });
 
   it("reports off without creating a missing config", () => {
