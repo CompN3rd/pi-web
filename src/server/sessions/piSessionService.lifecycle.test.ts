@@ -687,7 +687,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
       archiveStore: {
         list: () => Promise.resolve([{ sessionId: "archived", cwd: "/workspace", archivedAt: "2026-01-01T00:00:00.000Z" }]),
         get: () => Promise.resolve(undefined),
-        archive: () => Promise.resolve({ sessionId: "archived", cwd: "/workspace", archivedAt: "2026-01-01T00:00:00.000Z" }),
+        archive: () => { throw new Error("archive should not be called when listing"); },
         restore: () => Promise.resolve(),
         isArchived: () => Promise.resolve(false),
       },

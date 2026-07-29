@@ -976,7 +976,6 @@ export class PiSessionService implements SessionRouteService {
       await this.closeActive(record.sessionId, { kind: "clear", reason: "delete" });
       readyDeleteRecords.push(record);
     }
-    await this.ensureArchivedRecordsMoved(readyDeleteRecords);
     const deletedSessionIds = new Set(await this.archiveStoreDeleteArchivedMany(readyDeleteRecords.map((record) => record.sessionId)));
     deleteRecords.push(...readyDeleteRecords.filter((record) => deletedSessionIds.has(record.sessionId)));
     await this.forgetUnreadSessions(deleteRecords);
@@ -1035,11 +1034,7 @@ export class PiSessionService implements SessionRouteService {
   async list(cwd: string): Promise<ClientSession[]> {
     const [sessions, archivedRecords] = await Promise.all([this.sessionManager.list(cwd), this.archiveStore.list()]);
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
-    const archivedForCwd = await Promise.all(
-      archivedRecords
-        .filter((record) => record.cwd === cwd)
-        .map((record) => this.ensureArchivedSessionMoved(record, sessionsById.get(record.sessionId))),
-    );
+    const archivedForCwd = archivedRecords.filter((record) => record.cwd === cwd);
     const archivedById = new Map(archivedForCwd.map((record) => [record.sessionId, record]));
     for (const record of archivedForCwd) {
       this.publishNotificationMutations(this.notificationStore.clearSession(record.sessionId, "archive-reconcile"));
@@ -2240,7 +2235,6 @@ export class PiSessionService implements SessionRouteService {
     if (this.archiveStore.deleteArchived === undefined) throw new Error("Archive store does not support deletion");
 
     await this.closeActive(record.sessionId, { kind: "clear", reason: "delete" });
-    if (record.archivePath === undefined) await this.ensureArchivedRecordMoved(record);
     await this.archiveStore.deleteArchived(record.sessionId);
     await this.forgetUnreadSessions([record]);
   }
@@ -2278,12 +2272,7 @@ export class PiSessionService implements SessionRouteService {
       }
     }
 
-    const moveFailures = await this.moveLegacyArchivedRecordsForDelete(readyRecords);
-    failures.push(...moveFailures);
-    const moveFailureIds = new Set(moveFailures.map((failure) => failure.sessionId));
-    const deleteIds = readyRecords
-      .map((record) => record.sessionId)
-      .filter((sessionId) => !moveFailureIds.has(sessionId));
+    const deleteIds = readyRecords.map((record) => record.sessionId);
 
     let deletedSessionIds: string[] = [];
     try {
@@ -2433,34 +2422,6 @@ export class PiSessionService implements SessionRouteService {
     return [...sessionIds];
   }
 
-  private async moveLegacyArchivedRecordsForDelete(records: readonly ArchivedSessionRecord[]): Promise<SessionBulkFailure[]> {
-    const legacyRecords = records.filter((record) => record.archivePath === undefined);
-    if (legacyRecords.length === 0) return [];
-
-    let sessionsByCwd: Map<string, PiSessionListEntry[]>;
-    try {
-      sessionsByCwd = await this.listSessionsByCwd(legacyRecords.map((record) => record.cwd));
-    } catch (error: unknown) {
-      return legacyRecords.map((record) => ({ sessionId: record.sessionId, error: errorMessage(error) }));
-    }
-
-    const moveInputs = legacyRecords
-      .map((record) => findSessionByIdOrPrefix(sessionsByCwd.get(record.cwd) ?? [], record.sessionId))
-      .filter(isDefined)
-      .map(archiveInputFromListEntry);
-    if (moveInputs.length === 0) return [];
-
-    try {
-      await this.archiveStoreArchiveMany(moveInputs);
-      return [];
-    } catch (error: unknown) {
-      const failedIds = new Set(moveInputs.map((input) => input.sessionId));
-      return legacyRecords
-        .filter((record) => failedIds.has(record.sessionId))
-        .map((record) => ({ sessionId: record.sessionId, error: errorMessage(error) }));
-    }
-  }
-
   private async cleanupPlan(request: NormalizedSessionCleanupRequest) {
     const [sessions, archivedRecords] = await Promise.all([this.sessionManager.listAll(), this.archiveStore.list()]);
     return planSessionCleanup({
@@ -2492,34 +2453,6 @@ export class PiSessionService implements SessionRouteService {
       if (session.sessionManager.getCwd() === cwd && !archivedById.has(session.sessionId)) sessionIds.add(session.sessionId);
     }
     return [...sessionIds];
-  }
-
-  private async ensureArchivedSessionMoved(record: ArchivedSessionRecord, session: PiSessionListEntry | undefined): Promise<ArchivedSessionRecord> {
-    if (session === undefined || this.active.has(record.sessionId)) return record;
-    try {
-      return await this.archiveStore.archive(archiveInputFromListEntry(session));
-    } catch {
-      return record;
-    }
-  }
-
-  private async ensureArchivedRecordMoved(record: ArchivedSessionRecord): Promise<ArchivedSessionRecord> {
-    const session = (await this.sessionManager.list(record.cwd)).find((candidate) => candidate.id === record.sessionId);
-    if (session === undefined) return record;
-    const [moved] = await this.archiveStoreArchiveMany([archiveInputFromListEntry(session)]);
-    return moved ?? record;
-  }
-
-  private async ensureArchivedRecordsMoved(records: readonly ArchivedSessionRecord[]): Promise<void> {
-    const legacyRecords = records.filter((record) => record.archivePath === undefined);
-    if (legacyRecords.length === 0) return;
-
-    const sessionsByCwd = await this.listSessionsByCwd(legacyRecords.map((record) => record.cwd));
-    const moveInputs = legacyRecords
-      .map((record) => sessionsByCwd.get(record.cwd)?.find((candidate) => candidate.id === record.sessionId))
-      .filter(isDefined)
-      .map(archiveInputFromListEntry);
-    await this.archiveStoreArchiveMany(moveInputs);
   }
 
   private async archiveInputForSession(session: PiAgentSession): Promise<ArchiveSessionInput> {

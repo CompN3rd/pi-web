@@ -353,8 +353,8 @@ describe("PiSessionService archive and cleanup", () => {
     await service.dispose();
   });
 
-  it("bulk delete moves legacy archived records with one workspace scan before deleting", async () => {
-    const archiveMany = vi.fn((inputs: readonly { sessionId: string; cwd: string }[]) => Promise.resolve(inputs.map((input) => ({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-01-03T00:00:00.000Z", archivePath: `/archive/${input.sessionId}.jsonl` }))));
+  it("bulk delete removes records without archive files without re-archiving them", async () => {
+    const archiveMany = vi.fn(() => Promise.resolve([]));
     const deleteArchivedMany = vi.fn((sessionIds: readonly string[]) => Promise.resolve([...sessionIds]));
     const listCalls: string[] = [];
     const service = new PiSessionService(new CapturingSessionEventHub(), {
@@ -367,7 +367,7 @@ describe("PiSessionService archive and cleanup", () => {
           { sessionId: "moved", cwd: "/workspace", archivedAt: "2026-01-02T00:00:00.000Z", archivePath: "/archive/moved.jsonl" },
         ]),
         get: () => Promise.resolve(undefined),
-        archive: (input) => Promise.resolve({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-01-03T00:00:00.000Z" }),
+        archive: () => { throw new Error("archive should not be called"); },
         archiveMany,
         restore: () => Promise.resolve(),
         isArchived: () => Promise.resolve(false),
@@ -388,8 +388,8 @@ describe("PiSessionService archive and cleanup", () => {
 
     const result = await service.deleteArchivedMany([{ id: "legacy-a", cwd: "/workspace" }, { id: "legacy-b", cwd: "/workspace" }, { id: "moved", cwd: "/workspace" }]);
 
-    expect(listCalls).toEqual(["/workspace"]);
-    expect(archiveMany.mock.calls[0]?.[0].map((input) => input.sessionId)).toEqual(["legacy-a", "legacy-b"]);
+    expect(listCalls).toEqual([]);
+    expect(archiveMany).not.toHaveBeenCalled();
     expect(deleteArchivedMany).toHaveBeenCalledWith(["legacy-a", "legacy-b", "moved"]);
     expect(result.deletedSessionIds).toEqual(["legacy-a", "legacy-b", "moved"]);
     expect(result.failures).toEqual([]);
@@ -460,9 +460,9 @@ describe("PiSessionService archive and cleanup", () => {
     await service.dispose();
   });
 
-  it("moves legacy cleanup delete records with one workspace scan before batch deleting", async () => {
+  it("cleanup deletes records without archive files without re-archiving them", async () => {
     const listCalls: string[] = [];
-    const archiveMany = vi.fn((inputs: readonly { sessionId: string; cwd: string }[]) => Promise.resolve(inputs.map((input) => ({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-06-25T00:00:00.000Z", archivePath: `/archive/${input.sessionId}.jsonl` }))));
+    const archiveMany = vi.fn(() => Promise.resolve([]));
     const deleteArchivedMany = vi.fn((sessionIds: readonly string[]) => Promise.resolve([...sessionIds]));
     const service = new PiSessionService(new CapturingSessionEventHub(), {
       agentDir: TEST_AGENT_DIR,
@@ -495,9 +495,8 @@ describe("PiSessionService archive and cleanup", () => {
 
     const result = await service.cleanup({ thresholds: { deleteArchivedDays: 30 }, projectCwds: ["/old-project"] });
 
-    expect(listCalls).toEqual(["/old-project"]);
-    expect(archiveMany).toHaveBeenCalledTimes(1);
-    expect(archiveMany.mock.calls[0]?.[0].map((input) => input.sessionId)).toEqual(["legacy-a", "legacy-b"]);
+    expect(listCalls).toEqual([]);
+    expect(archiveMany).not.toHaveBeenCalled();
     expect(deleteArchivedMany).toHaveBeenCalledWith(["legacy-a", "legacy-b"]);
     expect(result.deletedSessionIds).toEqual(["legacy-a", "legacy-b"]);
 
