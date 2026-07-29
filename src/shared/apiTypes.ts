@@ -2,7 +2,6 @@ export type MachineKind = "local" | "remote";
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
 export const PI_WEB_CAPABILITIES = {
-  sessionsCleanup: "sessions.cleanup",
   sessionsReload: "sessions.reload",
   sessionsClearQueue: "sessions.clearQueue",
   sessionsPersistedState: "sessions.persistedState",

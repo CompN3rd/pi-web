@@ -46,9 +46,7 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
   @property({ type: Boolean }) canReloadSessions = false;
-  @property({ type: Boolean }) canCleanupSessions = false;
   @property({ type: Boolean }) authoritativeSessionPersistence = false;
-  @property({ type: String }) cleanupUnavailableMessage = "Update and restart Pi-Web on this machine to clean up sessions.";
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
   @property({ attribute: false }) onToggleProjects?: () => void;
@@ -175,9 +173,7 @@ export class AppNavigationPanel extends LitElement {
         .startingCount=${this.startingSessionCount}
         .canStart=${this.canStartSession}
         .canReload=${this.canReloadSessions}
-        .canCleanup=${this.canCleanupSessions}
         .authoritativeSessionPersistence=${this.authoritativeSessionPersistence}
-        .cleanupUnavailableMessage=${this.cleanupUnavailableMessage}
         .collapsible=${this.collapsible}
         .collapsed=${this.sessionsCollapsed}
         .onToggleCollapsed=${() => { this.onToggleSessions?.(); }}

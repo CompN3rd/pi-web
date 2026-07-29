@@ -37,9 +37,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ type: Number }) startingCount = 0;
   @property({ type: Boolean }) canStart = false;
   @property({ type: Boolean }) canReload = false;
-  @property({ type: Boolean }) canCleanup = false;
   @property({ type: Boolean }) authoritativeSessionPersistence = false;
-  @property({ type: String }) cleanupUnavailableMessage = "Update and restart Pi-Web on this machine to clean up sessions.";
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ attribute: false }) onSelect?: (session: SessionInfo) => void;
@@ -191,7 +189,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   }
 
   private renderCleanupButton() {
-    return html`<button class="cleanup-entry" title=${this.canCleanup ? "Preview session cleanup" : this.cleanupUnavailableMessage} @click=${(event: MouseEvent) => { event.stopPropagation(); this.onCleanup?.(); }}>Clean up</button>`;
+    return html`<button class="cleanup-entry" title="Preview session cleanup" @click=${(event: MouseEvent) => { event.stopPropagation(); this.onCleanup?.(); }}>Clean up</button>`;
   }
 
   private renderStartButton() {

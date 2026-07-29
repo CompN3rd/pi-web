@@ -24,7 +24,7 @@ import { KeyboardShortcutDispatcher } from "../keyboardShortcuts";
 import { selectedMachineId } from "../controllers/types";
 import { machineSessionKey } from "../machineKeys";
 import { resolveParentSessionLocation, type ParentSessionLocation } from "../parentSessionLocation";
-import { sessionCleanupRequestKey, sessionCleanupUnavailableMessage } from "../sessionCleanupUi";
+import { sessionCleanupRequestKey } from "../sessionCleanupUi";
 import { selectedNotificationView } from "../sessionNotifications";
 import { hasAuthoritativeSessionPersistence as runtimeHasAuthoritativeSessionPersistence } from "../sessionPersistence";
 import { SessionUnreadController } from "../sessionUnread";
@@ -1237,11 +1237,6 @@ export class PiWebApp extends LitElement {
     return runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsClearQueue);
   }
 
-  private canCleanupSessions(): boolean {
-    const runtime = this.selectedMachineRuntime();
-    return runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsCleanup);
-  }
-
   private hasAuthoritativeSessionPersistence(): boolean {
     return runtimeHasAuthoritativeSessionPersistence(this.selectedMachineRuntime());
   }
@@ -1252,10 +1247,6 @@ export class PiWebApp extends LitElement {
     // capability stay on the legacy cwd-based /files route.
     const runtime = this.state.machineRuntimes[machineId];
     return runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.workspaceFileSuggestions);
-  }
-
-  private sessionCleanupUnavailableMessage(): string {
-    return sessionCleanupUnavailableMessage(this.state.selectedMachine?.name);
   }
 
   private selectedMachineRuntime() {
@@ -1271,10 +1262,6 @@ export class PiWebApp extends LitElement {
   }
 
   private async previewSessionCleanup(request: SessionCleanupRequest): Promise<void> {
-    if (!this.canCleanupSessions()) {
-      this.sessionCleanupDialog = { ...(this.sessionCleanupDialog ?? {}), error: this.sessionCleanupUnavailableMessage(), preview: undefined, previewRequest: undefined, result: undefined, loading: false };
-      return;
-    }
     const machineId = selectedMachineId(this.state);
     this.sessionCleanupDialog = { ...(this.sessionCleanupDialog ?? {}), loading: true, error: "", preview: undefined, previewRequest: undefined, result: undefined };
     try {
@@ -1290,10 +1277,6 @@ export class PiWebApp extends LitElement {
     const dialog = this.sessionCleanupDialog;
     if (dialog?.preview === undefined || sessionCleanupRequestKey(dialog.previewRequest) !== sessionCleanupRequestKey(request)) {
       this.sessionCleanupDialog = { ...(dialog ?? {}), error: "Preview cleanup before running it." };
-      return;
-    }
-    if (!this.canCleanupSessions()) {
-      this.sessionCleanupDialog = { ...dialog, error: this.sessionCleanupUnavailableMessage(), running: false };
       return;
     }
     const machineId = selectedMachineId(this.state);
@@ -1336,9 +1319,7 @@ export class PiWebApp extends LitElement {
         .startingSessionCount=${this.state.startingSessionCount}
         .canStartSession=${!!this.state.selectedWorkspace}
         .canReloadSessions=${this.canReloadSessions()}
-        .canCleanupSessions=${this.canCleanupSessions()}
         .authoritativeSessionPersistence=${this.hasAuthoritativeSessionPersistence()}
-        .cleanupUnavailableMessage=${this.sessionCleanupUnavailableMessage()}
         .collapsible=${true}
         .compact=${this.appShell.isMobileNavigationLayout}
         .projectsCollapsed=${this.navigationSections.isCollapsed("projects")}
@@ -1646,14 +1627,12 @@ export class PiWebApp extends LitElement {
   }
 
   private sessionActions(): AppAction[] {
-    const canCleanup = this.canCleanupSessions();
     return [
       {
         id: "app.sessions.cleanup",
         title: "Clean Up Sessions",
         description: "Preview and manually clean up idle or archived sessions on the selected machine",
         group: "Sessions",
-        ...(canCleanup ? {} : { enabled: false, disabledReason: this.sessionCleanupUnavailableMessage() }),
         run: () => { this.openSessionCleanupDialog(); },
       },
     ];
@@ -2256,7 +2235,7 @@ export class PiWebApp extends LitElement {
         ${this.renderSessionTreeNavigator(state)}
         ${state.projectDialogOpen ? html`<project-dialog .machineId=${selectedMachineId(state)} .onSubmit=${(path: string, create: boolean) => this.projects.addProject(path, create)} .onCancel=${() => { this.setState({ projectDialogOpen: false }); }}></project-dialog>` : null}
         ${state.machineDialogOpen ? html`<machine-dialog .error=${state.error} .onSubmit=${(input: MachineDialogSubmit) => this.submitMachineDialog(input)} .onCancel=${() => { this.setState({ machineDialogOpen: false }); }}></machine-dialog>` : null}
-        ${this.sessionCleanupDialog !== undefined ? html`<session-cleanup-dialog .canCleanup=${this.canCleanupSessions()} .unavailableMessage=${this.sessionCleanupUnavailableMessage()} .preview=${this.sessionCleanupDialog.preview} .previewRequest=${this.sessionCleanupDialog.previewRequest} .result=${this.sessionCleanupDialog.result} .loading=${this.sessionCleanupDialog.loading === true} .running=${this.sessionCleanupDialog.running === true} .error=${this.sessionCleanupDialog.error ?? ""} .onPreview=${(request: SessionCleanupRequest) => { void this.previewSessionCleanup(request); }} .onRun=${(request: SessionCleanupRequest) => { void this.runSessionCleanup(request); }} .onClose=${() => { this.closeSessionCleanupDialog(); }}></session-cleanup-dialog>` : null}
+        ${this.sessionCleanupDialog !== undefined ? html`<session-cleanup-dialog .preview=${this.sessionCleanupDialog.preview} .previewRequest=${this.sessionCleanupDialog.previewRequest} .result=${this.sessionCleanupDialog.result} .loading=${this.sessionCleanupDialog.loading === true} .running=${this.sessionCleanupDialog.running === true} .error=${this.sessionCleanupDialog.error ?? ""} .onPreview=${(request: SessionCleanupRequest) => { void this.previewSessionCleanup(request); }} .onRun=${(request: SessionCleanupRequest) => { void this.runSessionCleanup(request); }} .onClose=${() => { this.closeSessionCleanupDialog(); }}></session-cleanup-dialog>` : null}
         ${state.themeDialog !== undefined ? html`<command-picker title=${state.themeDialog.title} .options=${state.themeDialog.options} .selectedValue=${state.themeDialog.selectedValue} .onPick=${(value: string) => { this.pickTheme(value); }} .onCancel=${() => { this.setState({ themeDialog: undefined }); }}></command-picker>` : null}
         ${this.settingsSection !== undefined ? html`<settings-dialog .section=${this.settingsSection} .machine=${state.selectedMachine} .machineRuntime=${this.selectedMachineRuntime()} .actions=${this.getDefaultActions()} .onNavigate=${(section: SettingsSection) => { this.navigateSettings(section); }} .onClose=${() => { this.closeSettings(); }} .onConfigSaved=${(config: PiWebConfigValues) => { this.applyClientConfig(config); }} .onRefreshMachineRuntime=${async (machineId: string) => { await this.machines.refreshMachineRuntime(machineId); }}></settings-dialog>` : null}
       </div>
