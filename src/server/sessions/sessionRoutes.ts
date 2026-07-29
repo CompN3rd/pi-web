@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type SessionBulkMutationRequest, type SessionBulkMutationRef, type SessionCleanupRequest, type SessionTreeNavigateRequest, type SessionTreeSummaryChoice, type SessionUnreadAcknowledgeRequest } from "../../shared/apiTypes.js";
+import { ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, EXTENSION_DIALOG_ID_MAX_LENGTH, EXTENSION_DIALOG_INPUT_MAX_LENGTH, SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type AskUserAnswer, type AskUserSubmission, type ExtensionDialogAnswerRequest, type ExtensionDialogCancelRequest, type SessionBulkMutationRequest, type SessionBulkMutationRef, type SessionCleanupRequest, type SessionTreeNavigateRequest, type SessionTreeSummaryChoice, type SessionUnreadAcknowledgeRequest } from "../../shared/apiTypes.js";
 import { projectBrowserMessageResponse } from "../browserMessageProjection.js";
 import { normalizeRequestCwd } from "../workingDirectory.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
@@ -45,10 +45,14 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     }
   });
 
-  app.post<{ Body: { cwd?: unknown } | undefined }>(`${prefix}/sessions`, async (request, reply) => {
+  app.post<{ Body: { cwd?: unknown; startupToken?: unknown } | undefined }>(`${prefix}/sessions`, async (request, reply) => {
     try {
       const body = requireRecord(request.body);
-      return await sessions.start(normalizeRequestCwd(requireString(body, "cwd")));
+      // An opaque label the caller uses to recognise its own construction's
+      // startup reports. Optional: only a browser row waiting for a session id
+      // has anything to correlate.
+      const startupToken = body["startupToken"] === undefined ? undefined : requireNonEmptyString(body, "startupToken");
+      return await sessions.start(normalizeRequestCwd(requireString(body, "cwd")), optionalField("startupToken", startupToken));
     } catch (error) {
       return reply.code(400).send({ error: errorMessage(error) });
     }
@@ -261,6 +265,45 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
   app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/queue/clear`, async (request, reply) => {
     try {
       return await sessions.clearQueue(sessionLookupFromBody(request.params.sessionId, optionalRecord(request.body)));
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown; askId?: unknown; answers?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/ask/submit`, async (request, reply) => {
+    try {
+      const body = requireRecord(request.body);
+      const askId = requireBoundedId(body["askId"], "askId");
+      return await sessions.submitAsk(sessionLookupFromBody(request.params.sessionId, body), askId, askUserSubmissionFromBody(body));
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown; askId?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/ask/cancel`, async (request, reply) => {
+    try {
+      const body = requireRecord(request.body);
+      return await sessions.cancelAsk(sessionLookupFromBody(request.params.sessionId, body), requireBoundedId(body["askId"], "askId"));
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown; dialogId?: unknown; value?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/dialogs/answer`, async (request, reply) => {
+    try {
+      const body = requireRecord(request.body);
+      const answer = extensionDialogAnswerFromBody(body);
+      return await sessions.answerDialog(sessionLookupFromBody(request.params.sessionId, body), answer.dialogId, answer.value);
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown; dialogId?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/dialogs/cancel`, async (request, reply) => {
+    try {
+      const body = requireRecord(request.body);
+      const cancel = extensionDialogCancelFromBody(body);
+      return await sessions.cancelDialog(sessionLookupFromBody(request.params.sessionId, body), cancel.dialogId);
     } catch (error) {
       return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
     }
@@ -491,6 +534,57 @@ function requireExactFields(record: Record<string, unknown>, fields: readonly st
   const allowed = new Set(fields);
   const unexpected = Object.keys(record).find((field) => !allowed.has(field));
   if (unexpected !== undefined) throw new Error(`${label} field contains unsupported property: ${unexpected}`);
+}
+
+/**
+ * Shape-check one submitted answer set. Only transport-level checks belong here:
+ * whether the answers fit the questions that were actually asked is the pending
+ * ask store's job, since only it knows the open ask.
+ */
+function askUserSubmissionFromBody(body: Record<string, unknown>): AskUserSubmission {
+  const answers = body["answers"];
+  if (!Array.isArray(answers)) throw new Error("answers field must be an array");
+  if (answers.length > ASK_USER_QUESTION_LIMIT) throw new Error("answers field has too many entries");
+  return { answers: answers.map(askUserAnswerFromValue) };
+}
+
+function askUserAnswerFromValue(value: unknown): AskUserAnswer {
+  const record = requireRecord(value);
+  const values = record["values"];
+  if (!Array.isArray(values)) throw new Error("values field must be an array");
+  if (values.length > ASK_USER_OPTION_LIMIT) throw new Error("values field has too many entries");
+  const otherText = record["otherText"];
+  if (otherText !== undefined && typeof otherText !== "string") throw new Error("otherText field must be a string");
+  if (typeof otherText === "string" && otherText.length > ASK_USER_OTHER_TEXT_MAX_LENGTH) throw new Error("otherText field is too long");
+  return {
+    id: requireBoundedId(record["id"], "id"),
+    values: values.map((entry) => requireBoundedId(entry, "values entry")),
+    ...(otherText === undefined ? {} : { otherText }),
+  };
+}
+
+function requireBoundedId(value: unknown, field: string): string {
+  return requireNonEmptyBoundedString(value, field, ASK_USER_ID_MAX_LENGTH);
+}
+
+/**
+ * Shape-check one dialog answer. Only transport-level checks belong here:
+ * whether the value fits the answered dialog's kind is the pending dialog
+ * store's job, since only it knows the open dialog.
+ */
+function extensionDialogAnswerFromBody(body: Record<string, unknown>): ExtensionDialogAnswerRequest {
+  const dialogId = requireNonEmptyBoundedString(body["dialogId"], "dialogId", EXTENSION_DIALOG_ID_MAX_LENGTH);
+  const value = body["value"];
+  if (typeof value === "boolean") return { dialogId, value };
+  if (typeof value === "string") {
+    if (value.length > EXTENSION_DIALOG_INPUT_MAX_LENGTH) throw new Error("value field is too long");
+    return { dialogId, value };
+  }
+  throw new Error("value field must be a string or a boolean");
+}
+
+function extensionDialogCancelFromBody(body: Record<string, unknown>): ExtensionDialogCancelRequest {
+  return { dialogId: requireNonEmptyBoundedString(body["dialogId"], "dialogId", EXTENSION_DIALOG_ID_MAX_LENGTH) };
 }
 
 function optionalRecord(value: unknown): Record<string, unknown> {

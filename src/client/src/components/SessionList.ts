@@ -4,6 +4,8 @@ import type { SessionActivity, SessionInfo, SessionStatus } from "../api";
 import { isCachedNewSessionInfo } from "../cachedNewSessions";
 import { shortSessionId } from "../sessionLabels";
 import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPersistence";
+import { parentSessionLocationLabel, parentSessionLocationTitle, type ParentSessionLocation } from "../parentSessionLocation";
+import { normalizeSessionPath } from "../sessionPaths";
 import { isSessionActive } from "../../../shared/activity";
 import { actionMenuPanelStyle } from "./actionMenu";
 import { renderActionActivityIndicator, type ActivityIndicatorKind } from "./activityBadge";
@@ -57,6 +59,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) onDeleteArchived?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onDeleteArchivedMany?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onDetachParent?: (session: SessionInfo) => void;
+  /** Resolves where a row's out-of-workspace parent lives; defaults to "unknown" so the list works standalone. */
+  @property({ attribute: false }) parentLocation: (session: SessionInfo) => ParentSessionLocation = () => ({ kind: "unknown" });
+  @property({ attribute: false }) onGoToParent?: (session: SessionInfo, location: ParentSessionLocation) => void;
+  @property({ attribute: false }) onMarkRead?: (session: SessionInfo) => void;
+  @property({ attribute: false }) onMarkReadMany?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onReload?: (session: SessionInfo) => void;
   @property({ attribute: false }) onCleanup?: () => void;
 
@@ -94,7 +101,24 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
       void this.updateComplete.then(() => { this.scrollSelectedIntoView(); });
       return;
     }
-    if ((changed.has("selected") || changed.has("sessions") || changed.has("collapsed")) && !this.collapsed) this.scrollSelectedIntoView();
+    if (this.shouldRevealSelectedRow(changed)) this.scrollSelectedIntoView();
+  }
+
+  /**
+   * Positive reveal triggers only: live data refreshes replace `sessions` and
+   * `selected` with same-id objects (status churn, renames, archive flips) and
+   * must never re-scroll. Reveal the selected row only when the selection
+   * moves to a different row (first render with a selection included), when a
+   * restore moves it from the archived section back to the current section
+   * (same id, archived flag cleared), or when the section expands.
+   */
+  private shouldRevealSelectedRow(changed: PropertyValues<this>): boolean {
+    if (this.collapsed) return false;
+    if (changed.has("collapsed")) return true;
+    if (!changed.has("selected")) return false;
+    const previousSelected = changed.get("selected");
+    if (previousSelected?.id !== this.selected?.id) return true;
+    return previousSelected?.archived === true && this.selected?.archived !== true;
   }
 
   async focusSelectedOrFirst(): Promise<boolean> {
@@ -108,11 +132,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const currentSelectableSessions = currentRows.map((row) => row.session).filter((session) => sessionSelectionScope(session) === "current");
     const archivedRows = sessionRows(this.sessions.filter((session) => session.archived === true && !currentRowIds.has(session.id)));
     const descendantCounts = unarchivedDescendantCounts(this.sessions);
-    const unreadCount = unreadSessionCount(currentSelectableSessions, this.unreadSessionIds, {
-      statuses: this.statuses,
-      activities: this.activities,
-      sending: this.sending,
-    });
+    const unreadCount = unreadSessionCount(currentSelectableSessions, this.unreadSessionIds);
     return html`
       <section>
         ${this.renderHeading(currentRows.length + archivedRows.length, currentSelectableSessions, unreadCount)}
@@ -209,6 +229,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
     const selectedSessions = this.selectedSessions("current");
     const archivableSessions = selectedSessions.filter((session) => isArchivableSessionInfo(session, this.statuses[session.id], this.sessionPersistenceOptions()));
+    const unreadSelectedSessions = selectedSessions.filter((session) => this.unreadSessionIds.has(session.id));
     const allVisibleSelected = visibleSessions.length > 0 && visibleSessions.every((session) => this.selectedSessionIds.has(session.id));
     const visibleSelectedCount = visibleSessions.filter((session) => this.selectedSessionIds.has(session.id)).length;
     return html`
@@ -216,6 +237,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
         <button ?disabled=${visibleSessions.length === 0} @click=${() => { this.toggleVisibleSelection(visibleSessions, !allVisibleSelected); }}>${allVisibleSelected ? "Clear visible" : "Select visible"}</button>
         <small>${selectedSessions.length} selected${visibleSelectedCount !== selectedSessions.length ? html` · ${visibleSelectedCount} visible` : null}</small>
         <button ?disabled=${archivableSessions.length === 0} @click=${() => { this.archiveSelectedCurrent(); }}>Archive selected</button>
+        <button ?disabled=${unreadSelectedSessions.length === 0} @click=${() => { this.markSelectedCurrentRead(); }}>Mark read</button>
         <button @click=${() => { this.clearSelection("current"); }}>Clear</button>
         <button @click=${() => { this.closeSelection("current"); }}>Done</button>
       </div>
@@ -249,14 +271,15 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const bulkSelected = showsCheckbox && this.selectedSessionIds.has(session.id);
     const status = this.statuses[session.id];
     const activity = this.activities[session.id];
-    const indicatorKind = sessionRowActivityKind(session, status, activity, this.sending[session.id] === true, this.unreadSessionIds.has(session.id));
+    const indicatorKind = sessionRowActivityKind(session, status, activity, this.sending[session.id] === true);
+    const unread = sessionRowUnread(session, this.unreadSessionIds);
     const persistenceOptions = this.sessionPersistenceOptions();
     const canArchive = isArchivableSessionInfo(session, status, persistenceOptions);
     const canDeleteTransient = isTransientNewSessionInfo(session, status, persistenceOptions);
     const canReloadSession = canArchive && this.canReload;
     return html`
       <div
-        class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${indicatorKind === "unread" ? "unread" : ""}"
+        class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${unread ? "unread" : ""}"
         style=${`--depth:${String(cappedDepth)}`}
         tabindex="0"
         title=${session.path}
@@ -265,8 +288,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
       >
         <div class="action-main ${selectionActive ? "selecting" : ""}">
           ${showsCheckbox ? html`<input class="session-checkbox" type="checkbox" aria-label=${`Select ${sessionLabel(session)}`} .checked=${bulkSelected} @click=${(event: MouseEvent) => { event.stopPropagation(); }} @change=${() => { this.toggleSelected(session.id); }}>` : null}
-          <span class="action-name-line"><span class="action-name" dir="auto">${row.depth > 0 ? html`<span class="tree-marker">↳</span>` : null}${sessionLabel(session)}${row.depth > 2 ? html` <span class="badge">depth ${row.depth}</span>` : null}${row.hasMissingParent ? html` <span class="badge">parent unavailable</span>` : null}</span></span><small>${this.renderSessionMetaPrefix(session, status, activity)}${String(session.messageCount)} messages</small>
-          ${this.renderActivity(indicatorKind)}
+          <span class="action-name-line"><span class="action-name" dir="auto">${this.renderRowMarker(row)}${sessionLabel(session)}</span>${this.renderRowBadges(row)}</span><small>${this.renderSessionMetaPrefix(session, status, activity)}${this.renderRelatedSessionsMeta(row)}${String(session.messageCount)} messages</small>
+          ${this.renderActivity(indicatorKind, unread)}
         </div>
         <div class="action-menu">
           <button class="action-menu-toggle" title="Session actions" @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(session.id, event.currentTarget); }}>⋯</button>
@@ -280,10 +303,12 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
                 : canDeleteTransient
                   ? html`<button title="Delete transient new session" @click=${() => { this.openMenuSessionId = undefined; this.onDelete?.(session); }}>Delete</button>`
                   : html`
+                    ${this.unreadSessionIds.has(session.id) ? html`<button title="Mark session as read" @click=${() => { this.openMenuSessionId = undefined; this.onMarkRead?.(session); }}>Mark as read</button>` : null}
                     ${canArchive ? html`
                       <button title="Archive session" @click=${() => { this.openMenuSessionId = undefined; this.onArchive?.(session); }}>Archive</button>
                       ${descendantCount > 0 ? html`<button title="Archive this session and its descendants" @click=${() => { this.openMenuSessionId = undefined; this.confirmArchiveWithDescendants(session, descendantCount); }}>Archive with descendants (${descendantCount})</button>` : null}
                     ` : null}
+                    ${this.renderGoToParentMenuItem(row)}
                     ${session.parentSessionPath !== undefined ? html`<button title="Detach from parent" @click=${() => { this.openMenuSessionId = undefined; this.onDetachParent?.(session); }}>Detach from parent</button>` : null}
                     ${canReloadSession ? html`<button title=${isSessionActive(this.statuses[session.id], this.activities[session.id]) ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isSessionActive(this.statuses[session.id], this.activities[session.id])} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
                   `}
@@ -292,6 +317,52 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
         </div>
       </div>
     `;
+  }
+
+  /**
+   * Leading marker stating that the row is a child of another session. Orphan
+   * children (a recorded parent that is not in this list) render at depth 0 and
+   * would otherwise look like roots, so they keep the same child glyph, dimmed
+   * to signal that the parent itself is not shown here. Where that parent lives
+   * is a separate question, answered by the badge on the other side of the row.
+   */
+  private renderRowMarker(row: SessionRow) {
+    if (row.hasMissingParent) {
+      const location = this.parentLocation(row.session);
+      return html`<span class="tree-marker orphan-marker" title=${parentSessionLocationTitle(location)} aria-label=${parentSessionLocationLabel(location)}>↳</span>`;
+    }
+    return row.depth > 0 ? html`<span class="tree-marker">↳</span>` : null;
+  }
+
+  /**
+   * Badges live outside `.action-name` so the clamped, ellipsizing title cannot
+   * hide them. Cross-workspace relationships are not badges: they are stated on
+   * the meta line below, where both directions read alike.
+   */
+  private renderRowBadges(row: SessionRow) {
+    if (row.depth <= 2) return null;
+    return html`<span class="row-badges"><span class="badge">depth ${row.depth}</span></span>`;
+  }
+
+  /**
+   * Cross-workspace relationships, at the start of the meta line so they survive
+   * truncation: where an out-of-workspace parent is, and how many children live
+   * in other workspaces. Both are stated plainly rather than flagged, since a
+   * session tree spanning worktrees is normal rather than a problem.
+   */
+  private renderRelatedSessionsMeta(row: SessionRow) {
+    const parts = [
+      row.hasMissingParent ? parentSessionLocationLabel(this.parentLocation(row.session)) : undefined,
+      childrenElsewhereLabel(row.session.childSessionsElsewhere),
+    ].filter((part) => part !== undefined);
+    return parts.length === 0 ? null : `${parts.join(" · ")} · `;
+  }
+
+  private renderGoToParentMenuItem(row: SessionRow) {
+    if (!row.hasMissingParent || this.onGoToParent === undefined) return null;
+    const location = this.parentLocation(row.session);
+    if (location.kind !== "workspace") return null;
+    return html`<button title=${parentSessionLocationTitle(location)} @click=${() => { this.openMenuSessionId = undefined; this.onGoToParent?.(row.session, location); }}>Go to parent session</button>`;
   }
 
   private handleSessionKeydown(event: KeyboardEvent, session: SessionInfo, scope: SessionSelectionScope): void {
@@ -329,6 +400,12 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (!confirm(`Permanently delete ${String(archived.length)} selected ${noun}? This cannot be undone.`)) return;
     this.selectedSessionIds = removeSessionIds(this.selectedSessionIds, archived.map((session) => session.id));
     void this.onDeleteArchivedMany?.(archived);
+  }
+
+  private markSelectedCurrentRead(): void {
+    const unreadSelected = this.selectedSessions("current").filter((session) => this.unreadSessionIds.has(session.id));
+    if (unreadSelected.length === 0) return;
+    void this.onMarkReadMany?.(unreadSelected);
   }
 
   private archiveSelectedCurrent(): void {
@@ -425,13 +502,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     return { authoritative: this.authoritativeSessionPersistence };
   }
 
-  private renderActivity(kind: ActivityIndicatorKind | undefined) {
-    const label = kind === "sending"
-      ? "Sending message"
-      : kind === "unread"
-        ? "Unread session activity"
-        : "Session active";
-    return renderActionActivityIndicator(kind, label);
+  private renderActivity(kind: ActivityIndicatorKind | undefined, unread: boolean) {
+    const label = kind === "sending" ? "Sending message" : "Session active";
+    return renderActionActivityIndicator(kind, label, unread ? "Unread session activity" : undefined);
   }
 
   static override styles = [listStyles, css`
@@ -449,6 +522,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .plain-heading { min-width: 0; }
     .action-name-line { min-width: 0; display: flex; align-items: flex-start; gap: 6px; }
     .action-name-line .action-name { flex: 1 1 auto; min-width: 0; }
+    /* Badges must not sit inside the line-clamped title, or a long name hides them entirely. */
+    .row-badges { flex: 0 0 auto; display: flex; align-items: flex-start; gap: 4px; }
+    .row-badges .badge { margin-left: 0; white-space: nowrap; }
+    /* Same glyph as a normal child marker, dimmed: the row is a child whose parent is not displayed here. */
+    .orphan-marker { color: var(--pi-dim); opacity: .65; }
     .bulk-row .capability-hint { flex: 1 0 100%; color: var(--pi-warning); }
     .bulk-row.selecting { padding: 6px; border: 1px solid var(--pi-border-muted); border-radius: 8px; background: color-mix(in srgb, var(--pi-surface) 65%, transparent); }
     button.danger, .action-menu-panel button.danger { color: var(--pi-danger); }
@@ -466,19 +544,14 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 export function unreadSessionCount(
   sessions: readonly SessionInfo[],
   unreadSessionIds: ReadonlySet<string>,
-  runtime: {
-    statuses?: Record<string, SessionStatus> | undefined;
-    activities?: Record<string, SessionActivity> | undefined;
-    sending?: Record<string, true> | undefined;
-  } = {},
 ): number {
-  return sessions.filter((session) => sessionRowActivityKind(
-    session,
-    runtime.statuses?.[session.id],
-    runtime.activities?.[session.id],
-    runtime.sending?.[session.id] === true,
-    unreadSessionIds.has(session.id),
-  ) === "unread").length;
+  return sessions.filter((session) => sessionRowUnread(session, unreadSessionIds)).length;
+}
+
+/** Plain-text count of children living in other workspaces, or undefined when there are none. */
+function childrenElsewhereLabel(count: number | undefined): string | undefined {
+  if (count === undefined || count === 0) return undefined;
+  return count === 1 ? "1 child elsewhere" : `${String(count)} children elsewhere`;
 }
 
 function sessionSelectionScope(session: SessionInfo): SessionSelectionScope {
@@ -494,18 +567,20 @@ function unarchivedDescendantCounts(sessions: SessionInfo[]): Map<string, number
   const childrenByParentPath = new Map<string, SessionInfo[]>();
   for (const session of sessions) {
     if (session.parentSessionPath === undefined) continue;
-    const children = childrenByParentPath.get(session.parentSessionPath) ?? [];
+    const parentKey = normalizeSessionPath(session.parentSessionPath);
+    const children = childrenByParentPath.get(parentKey) ?? [];
     children.push(session);
-    childrenByParentPath.set(session.parentSessionPath, children);
+    childrenByParentPath.set(parentKey, children);
   }
 
   const countFor = (session: SessionInfo, seenPaths: Set<string>): number => {
-    if (seenPaths.has(session.path)) return 0;
+    const sessionKey = normalizeSessionPath(session.path);
+    if (seenPaths.has(sessionKey)) return 0;
     const nextSeenPaths = new Set(seenPaths);
-    nextSeenPaths.add(session.path);
+    nextSeenPaths.add(sessionKey);
     let count = 0;
-    for (const child of childrenByParentPath.get(session.path) ?? []) {
-      if (nextSeenPaths.has(child.path)) continue;
+    for (const child of childrenByParentPath.get(sessionKey) ?? []) {
+      if (nextSeenPaths.has(normalizeSessionPath(child.path))) continue;
       if (child.archived !== true) count += 1;
       count += countFor(child, nextSeenPaths);
     }
@@ -517,69 +592,91 @@ function unarchivedDescendantCounts(sessions: SessionInfo[]): Map<string, number
 
 /**
  * Resolve the activity indicator kind for a session row, or undefined when the
- * row should show no indicator. Pure so it can be unit-tested without rendering.
+ * row should show no work dot. Pure so it can be unit-tested without rendering.
  *
  * "sending" (client-side upload in flight) is reported with its own kind, and
  * takes precedence over server activity, so it can be colored distinctly to
- * signal that it is not yet propagated to workspace/machine activity. Unread is
- * the idle fallback, so it never replaces an indicator for ongoing work.
+ * signal that it is not yet propagated to workspace/machine activity. Unread
+ * is not a kind: it is an attention flag resolved by `sessionRowUnread` and
+ * rendered as a ring around this dot (or a filled dot when this is undefined).
  */
 export function sessionRowActivityKind(
   session: SessionInfo,
   status: SessionStatus | undefined,
   activity: SessionActivity | undefined,
   sending: boolean,
-  unread = false,
 ): ActivityIndicatorKind | undefined {
   if (isCachedNewSessionInfo(session) || session.archived === true) return undefined;
   if (sending) return "sending";
   if (isSessionActive(status, activity)) return "session";
-  return unread ? "unread" : undefined;
+  return undefined;
+}
+
+/**
+ * Whether a session row carries the unread attention flag. Cached-new and
+ * archived sessions can never be unread: they have no server-side unread
+ * completions to acknowledge.
+ */
+export function sessionRowUnread(session: SessionInfo, unreadSessionIds: ReadonlySet<string>): boolean {
+  if (isCachedNewSessionInfo(session) || session.archived === true) return false;
+  return unreadSessionIds.has(session.id);
+}
+
+/**
+ * Index sessions by their normalized path. Parent links can arrive from a
+ * different server producer than the listing itself (a `session.created`
+ * broadcast carries the live runtime's file path), so keys are normalized to
+ * keep tree building from silently missing a link.
+ */
+function sessionsByNormalizedPath(sessions: readonly SessionInfo[]): Map<string, SessionInfo> {
+  return new Map(sessions.map((session) => [normalizeSessionPath(session.path), session]));
 }
 
 export function sessionRowsForCurrentTree(sessions: SessionInfo[]): SessionRow[] {
-  const byPath = new Map(sessions.map((session) => [session.path, session]));
+  const byPath = sessionsByNormalizedPath(sessions);
   const visible = new Set<string>();
   for (const session of sessions) {
     if (session.archived === true) continue;
     visible.add(session.id);
-    let parentPath = session.parentSessionPath;
-    const seenPaths = new Set<string>([session.path]);
-    while (parentPath !== undefined && !seenPaths.has(parentPath)) {
-      seenPaths.add(parentPath);
-      const parent = byPath.get(parentPath);
+    let parentKey = session.parentSessionPath === undefined ? undefined : normalizeSessionPath(session.parentSessionPath);
+    const seenPaths = new Set<string>([normalizeSessionPath(session.path)]);
+    while (parentKey !== undefined && !seenPaths.has(parentKey)) {
+      seenPaths.add(parentKey);
+      const parent = byPath.get(parentKey);
       if (parent === undefined) break;
       visible.add(parent.id);
-      parentPath = parent.parentSessionPath;
+      parentKey = parent.parentSessionPath === undefined ? undefined : normalizeSessionPath(parent.parentSessionPath);
     }
   }
   return sessionRows(sessions.filter((session) => visible.has(session.id)));
 }
 
 function sessionRows(sessions: SessionInfo[]): SessionRow[] {
-  const byPath = new Map(sessions.map((session) => [session.path, session]));
+  const byPath = sessionsByNormalizedPath(sessions);
   const childrenByPath = new Map<string, SessionInfo[]>();
   const roots: SessionInfo[] = [];
   for (const session of sessions) {
     const parentPath = session.parentSessionPath;
-    const parent = parentPath === undefined ? undefined : byPath.get(parentPath);
+    const parent = parentPath === undefined ? undefined : byPath.get(normalizeSessionPath(parentPath));
     if (parent === undefined) {
       roots.push(session);
       continue;
     }
-    const children = childrenByPath.get(parent.path) ?? [];
+    const parentKey = normalizeSessionPath(parent.path);
+    const children = childrenByPath.get(parentKey) ?? [];
     children.push(session);
-    childrenByPath.set(parent.path, children);
+    childrenByPath.set(parentKey, children);
   }
 
   const rows: SessionRow[] = [];
   const visit = (session: SessionInfo, depth: number, stack: Set<string>) => {
-    if (stack.has(session.path)) return;
+    const sessionKey = normalizeSessionPath(session.path);
+    if (stack.has(sessionKey)) return;
     const parentPath = session.parentSessionPath;
-    rows.push({ session, depth, hasMissingParent: parentPath !== undefined && !byPath.has(parentPath) });
+    rows.push({ session, depth, hasMissingParent: parentPath !== undefined && !byPath.has(normalizeSessionPath(parentPath)) });
     const nextStack = new Set(stack);
-    nextStack.add(session.path);
-    for (const child of childrenByPath.get(session.path) ?? []) visit(child, depth + 1, nextStack);
+    nextStack.add(sessionKey);
+    for (const child of childrenByPath.get(sessionKey) ?? []) visit(child, depth + 1, nextStack);
   };
   for (const root of roots) visit(root, 0, new Set());
   return rows;

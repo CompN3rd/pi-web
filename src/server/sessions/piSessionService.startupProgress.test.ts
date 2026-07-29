@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PiSessionService, type PiSessionRuntime } from "./piSessionService.js";
 import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, sessionGateway, sessionRecord, sessionRef, testModelRuntime } from "./piSessionService.testSupport.js";
+import { isSessionActive } from "../../shared/activity.js";
 import type { SessionActivity, SessionStartupProgressEvent } from "../../shared/apiTypes.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
@@ -77,7 +78,7 @@ describe("PiSessionService session startup progress", () => {
     // The proof that matters: the user is told what is being waited on before
     // the wait ends, not after it.
     expect(startupText(hub)).toEqual(["Creating session: Starting the Pi session"]);
-    expect(startupEvents(hub).at(0)).toMatchObject({ cwd: "/workspace", activity: { sessionId: "session-1", phase: "active" } });
+    expect(startupEvents(hub).at(0)).toMatchObject({ activity: { sessionId: "session-1", phase: "active" } });
 
     runtimeResult.resolve(fake.runtime);
     await started;
@@ -157,9 +158,40 @@ describe("PiSessionService session startup progress", () => {
 
     await service.start("/workspace");
 
-    expect(startupEvents(hub).at(-1)).toMatchObject({ cwd: "/workspace", activity: { sessionId: "session-1", phase: "idle", label: "idle" } });
+    expect(startupEvents(hub).at(-1)).toMatchObject({ activity: { sessionId: "session-1", phase: "idle", label: "idle" } });
     expect(startupEvents(hub).at(-1)?.activity.detail).toBeUndefined();
     await service.dispose();
+  });
+
+  it("echoes a create's correlation token on every startup report of that construction", async () => {
+    const { hub, service } = startupService();
+
+    await service.start("/workspace", { startupToken: "pending-session-3-k2x9" });
+
+    // The token labels the browser row that is waiting, so it must ride every
+    // report of this construction, the closing idle one included.
+    expect(startupEvents(hub).map((event) => event.startupToken)).toEqual([
+      "pending-session-3-k2x9",
+      "pending-session-3-k2x9",
+      "pending-session-3-k2x9",
+    ]);
+    // The token is an opaque throwaway label, never the session's identity.
+    expect(startupEvents(hub).map((event) => event.activity.sessionId)).toEqual(["session-1", "session-1", "session-1"]);
+    await service.dispose();
+  });
+
+  it("publishes no correlation token when a create supplies none, and none for an open", async () => {
+    const created = startupService();
+    await created.service.start("/workspace");
+    const opened = startupService({ sessionRecords: [sessionRecord("session-1")] });
+    await opened.service.status(sessionRef("session-1"));
+
+    for (const hub of [created.hub, opened.hub]) {
+      expect(startupEvents(hub).length).toBeGreaterThan(0);
+      expect(startupEvents(hub).every((event) => event.startupToken === undefined)).toBe(true);
+    }
+    await created.service.dispose();
+    await opened.service.dispose();
   });
 
   it("ends the startup window when the runtime construction itself fails", async () => {
@@ -201,6 +233,34 @@ describe("PiSessionService session startup progress", () => {
       "Creating session: Loading session extensions",
       "idle",
     ]);
+    await service.dispose();
+  });
+
+  it("reports startup progress as starting rather than as work in progress", async () => {
+    const { hub, service } = startupService();
+
+    await service.start("/workspace");
+
+    // Startup phases are published with an "active" phase so the waiting user
+    // sees them, but opening a session is not work: nothing that decides whether
+    // work is in progress may count them.
+    const phases = startupEvents(hub).filter((event) => event.activity.phase === "active");
+    expect(phases).toHaveLength(2);
+    expect(phases.map((event) => isSessionActive(undefined, event.activity))).toEqual([false, false]);
+    await service.dispose();
+  });
+
+  it("still reports a real activity published during startup as work", async () => {
+    const { hub, fake, service } = startupService();
+
+    await service.start("/workspace");
+    fake.emit({ type: "tool_execution_start", toolName: "bash" });
+
+    // The marker belongs to the startup channel alone; an ordinary activity for
+    // the same session still counts, or the fix would hide real work.
+    const running = activityUpdates(hub).filter((activity) => activity.phase === "active");
+    expect(running.length).toBeGreaterThan(0);
+    expect(running.every((activity) => isSessionActive(undefined, activity))).toBe(true);
     await service.dispose();
   });
 

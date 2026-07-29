@@ -91,6 +91,7 @@
             <strong>On this page</strong>
             <a href="#extend">What can be extended</a>
             <a href="#packages-vs-plugins">Pi packages, extensions, and plugins</a>
+            <a href="#pi-extension-dialogs">Pi extension dialogs</a>
             <a href="#ask-ai">What to ask AI to build</a>
             <a href="#example">Canonical example</a>
             <a href="#built-in-plugins">Built-in plugins</a>
@@ -174,6 +175,32 @@
               </p>
             </section>
 
+            <section id="pi-extension-dialogs">
+              <h2>Pi extension dialogs in PI WEB</h2>
+              <p>
+                Pi extensions running under PI WEB's session daemon can ask the user questions with
+                <code>ctx.ui.confirm()</code>, <code>ctx.ui.select()</code>, and <code>ctx.ui.input()</code>. For these
+                three methods <code>ctx.hasUI</code> is true in fact: the call renders a dialog card inline in the
+                session transcript — including from <code>session_start</code> hooks while the session is still starting
+                and from in-flight <code>tool_call</code> hooks — and resolves with the user's actual answer.
+              </p>
+              <p>
+                Answers travel over a dedicated session-daemon channel, never the prompt queue, so a parked
+                <code>tool_call</code> hook cannot deadlock the run. Open dialogs survive browser reloads, the first
+                answer wins across tabs, and unanswered dialogs settle safely: aborting the run or replacing the runtime
+                resolves them immediately with the kind's cancel value (<code>false</code> for confirm,
+                <code>undefined</code> for select and input), and the effective deadline — the sooner of the extension's
+                own <code>timeout</code> and the daemon's <code>extensionDialogsTimeoutMs</code> safety valve (default 5
+                minutes, <code>0</code> waits forever) — does the same when no one answers. Other
+                <code>ExtensionUIContext</code> surfaces (widgets, status, editor, <code>custom</code>) remain no-ops
+                despite <code>hasUI === true</code>.
+              </p>
+              <p>
+                For the full behavior notes and author guidance, read <a href="plugins.md">plugins.md</a>; for the
+                timeout key, see <a href="config#extension-dialogs">Extension dialogs</a> in the configuration reference.
+              </p>
+            </section>
+
             <section id="ask-ai">
               <h2>What to ask AI to build</h2>
               <p>
@@ -231,13 +258,17 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
               </p>
               <ul>
                 <li><code>pi-web-plugins/info/package.json</code> shows the required metadata shape.</li>
-                <li><code>pi-web-plugins/info/pi-web-plugin.ts</code> shows the TypeScript source shape.</li>
+                <li><code>pi-web-plugins/info/pi-web-plugin.ts</code> is the skeleton: metadata and contribution definitions.</li>
+                <li><code>pi-web-plugins/info/infoInternals.ts</code> holds the bundled panel and action implementation, which you can ignore or replace when copying the plugin.</li>
                 <li><code>dist/pi-web-plugins/info/pi-web-plugin.js</code> is the built browser module in a checkout.</li>
               </ul>
               <p>
                 Read it on GitHub:
                 <a href="https://github.com/jmfederico/pi-web/tree/main/pi-web-plugins/info">pi-web-plugins/info</a>.
                 If you copy it, choose a new plugin id so it does not conflict with the bundled <code>info</code> plugin.
+                Its panel also doubles as an always-available PI WEB status view: it renders the host-provided
+                <code>context.state.piWebStatus</code> without issuing its own requests, and its action copies a
+                plain-text diagnostics summary suitable for bug reports.
               </p>
               <p>
                 The bundled <code>updates</code> plugin demonstrates dynamic <code>visible</code> and <code>badge</code>

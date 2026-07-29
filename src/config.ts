@@ -15,10 +15,12 @@ export interface LoadedPiWebConfig {
   config: PiWebConfig;
 }
 
-export interface EffectivePiWebConfig extends Omit<PiWebConfig, "uploads" | "spawnSessions" | "subsessions" | "agent"> {
+export interface EffectivePiWebConfig extends Omit<PiWebConfig, "uploads" | "spawnSessions" | "subsessions" | "askUser" | "agent" | "extensionDialogsTimeoutMs"> {
   uploads: NonNullable<PiWebConfig["uploads"]>;
   spawnSessions: boolean;
   subsessions: boolean;
+  askUser: boolean;
+  extensionDialogsTimeoutMs: number;
   agent: Required<NonNullable<PiWebConfig["agent"]>>;
 }
 
@@ -48,6 +50,14 @@ export function defaultPiWebDataDir(): string {
 export const DEFAULT_MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
 
 export const DEFAULT_UPLOADS_FOLDER = ".pi-web/uploads";
+
+/**
+ * Default auto-cancel delay for extension dialogs whose extension set no
+ * `timeout` of its own: five minutes. `extensionDialogsTimeoutMs: 0` waits
+ * forever. Tunes the unattended-dialog safety valve only; dialogs are always
+ * enabled.
+ */
+export const DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS = 300_000;
 
 export const DEFAULT_AGENT_COMMAND = "pi";
 export const PI_WEB_AGENT_COMMAND_ENV = "PI_WEB_AGENT_COMMAND";
@@ -156,6 +166,10 @@ export function resolveEffectivePiWebConfig(loaded: LoadedPiWebConfig, options: 
       spawnSessions: spawnSessionsEnabled(env, loaded.config),
       // Beta capability, resolved off by default.
       subsessions: subsessionsEnabled(env, loaded.config),
+      // Always resolved (on by default); the user is present for every ask.
+      askUser: askUserEnabled(env, loaded.config),
+      // Always resolved; the unattended-dialog safety valve, not a gate.
+      extensionDialogsTimeoutMs: loaded.config.extensionDialogsTimeoutMs ?? DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS,
       agent: { command: agent.command, dir: agent.dir },
     },
   };
@@ -178,6 +192,7 @@ export function savePiWebConfig(config: PiWebConfig, options: LoadOptions = {}):
   delete existing["maxUploadBytes"];
   delete existing["spawnSessions"];
   delete existing["subsessions"];
+  delete existing["askUser"];
   delete existing["agent"];
   const merged = { ...existing, ...piWebConfigRecord(normalized) };
   mkdirSync(dirname(path), { recursive: true });
@@ -204,6 +219,7 @@ function piWebConfigRecord(config: PiWebConfig): Record<string, unknown> {
     ...(config.maxUploadBytes !== undefined ? { maxUploadBytes: config.maxUploadBytes } : {}),
     ...(config.spawnSessions !== undefined ? { spawnSessions: config.spawnSessions } : {}),
     ...(config.subsessions !== undefined ? { subsessions: config.subsessions } : {}),
+    ...(config.askUser !== undefined ? { askUser: config.askUser } : {}),
     ...(config.agent !== undefined ? { agent: config.agent } : {}),
   };
 }
@@ -220,6 +236,8 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["maxUploadBytes"] !== undefined ? { maxUploadBytes: parseMaxUploadBytes(value["maxUploadBytes"], "maxUploadBytes", path) } : {}),
     ...(value["spawnSessions"] !== undefined ? { spawnSessions: parseSpawnSessions(value["spawnSessions"], path) } : {}),
     ...(value["subsessions"] !== undefined ? { subsessions: parseSubsessions(value["subsessions"], path) } : {}),
+    ...(value["askUser"] !== undefined ? { askUser: parseAskUser(value["askUser"], path) } : {}),
+    ...(value["extensionDialogsTimeoutMs"] !== undefined ? { extensionDialogsTimeoutMs: parseExtensionDialogsTimeoutMs(value["extensionDialogsTimeoutMs"], path) } : {}),
     ...(value["agent"] !== undefined ? { agent: parseAgentConfig(value["agent"], path) } : {}),
   };
 }
@@ -264,6 +282,31 @@ export function subsessionsEnabled(env: NodeJS.ProcessEnv = process.env, config:
   const fromEnv = env["PI_WEB_SUBSESSIONS"];
   if (fromEnv !== undefined && fromEnv !== "") return fromEnv === "1" || fromEnv.toLowerCase() === "true";
   return config.subsessions ?? false;
+}
+
+function parseAskUser(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`PI WEB config askUser must be a boolean: ${path}`);
+  return value;
+}
+
+function parseExtensionDialogsTimeoutMs(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`PI WEB config extensionDialogsTimeoutMs must be a non-negative integer: ${path}`);
+  }
+  return value;
+}
+
+/**
+ * Whether LLMs may post a question set to the browser via the ask_user tool. On
+ * by default: the questions land in the session the user is already watching and
+ * nothing happens without them acting. Set the env var `PI_WEB_ASK_USER` or the
+ * `askUser` config key to `false` to remove the tool. The env var takes
+ * precedence over the config file.
+ */
+export function askUserEnabled(env: NodeJS.ProcessEnv = process.env, config: PiWebConfig = {}): boolean {
+  const fromEnv = env["PI_WEB_ASK_USER"];
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv === "1" || fromEnv.toLowerCase() === "true";
+  return config.askUser ?? true;
 }
 
 const OFFLINE_ENV_KEYS = ["PI_WEB_OFFLINE", "PI_OFFLINE"] as const;

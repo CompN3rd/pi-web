@@ -253,6 +253,22 @@ describe("session API compatibility", () => {
     expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }] });
   });
 
+  it("carries a create's correlation token in the start request body when one is supplied", async () => {
+    const fetchMock = stubSequenceFetch([
+      jsonResponse(sessionInfoResponse("s 1")),
+      jsonResponse(sessionInfoResponse("s 2")),
+    ]);
+
+    await sessionsApi.startSession("/repo", "remote a", "pending-session-3-k2x9");
+    await sessionsApi.startSession("/repo", "remote a");
+
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions");
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ cwd: "/repo", startupToken: "pending-session-3-k2x9" });
+    // The token is optional, so a caller with no row to label sends none rather
+    // than an empty one.
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ cwd: "/repo" });
+  });
+
   it("keeps legacy session-id calls free of cwd context", async () => {
     const fetchMock = stubJsonFetch({ accepted: true });
 
@@ -303,6 +319,34 @@ describe("session API compatibility", () => {
     expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/queue/clear");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces" });
+  });
+
+  it("answers and cancels extension dialogs through encoded machine routes", async () => {
+    const answered = {
+      result: "closed",
+      outcome: { dialogId: "dialog 1", reason: "answered", answer: true, askedAt: "2026-07-20T00:00:00.000Z", closedAt: "2026-07-20T00:01:00.000Z" },
+      sessionStatus: dialogStatusWire(),
+    };
+    const cancelled = { result: "stale", sessionStatus: dialogStatusWire() };
+    const fetchMock = stubSequenceFetch([jsonResponse(answered), jsonResponse(cancelled)]);
+    const ref = { id: "s /?", cwd: "/repo with spaces" };
+
+    await expect(sessionsApi.answerDialog(ref, "dialog 1", true, "remote /?")).resolves.toEqual({
+      result: "closed",
+      outcome: { dialogId: "dialog 1", reason: "answered", answer: true, askedAt: "2026-07-20T00:00:00.000Z", closedAt: "2026-07-20T00:01:00.000Z" },
+      sessionStatus: parsedDialogStatus(),
+    });
+    await expect(sessionsApi.cancelDialog(ref, "dialog 1", "remote /?")).resolves.toEqual({ result: "stale", sessionStatus: parsedDialogStatus() });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [answerUrl, answerInit] = fetchCall(fetchMock, 0);
+    expect(answerUrl).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/dialogs/answer");
+    expect(answerInit?.method).toBe("POST");
+    expect(JSON.parse(requestBody(answerInit))).toEqual({ cwd: "/repo with spaces", dialogId: "dialog 1", value: true });
+    const [cancelUrl, cancelInit] = fetchCall(fetchMock, 1);
+    expect(cancelUrl).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/dialogs/cancel");
+    expect(cancelInit?.method).toBe("POST");
+    expect(JSON.parse(requestBody(cancelInit))).toEqual({ cwd: "/repo with spaces", dialogId: "dialog 1" });
   });
 
   it("posts session tree navigation through an encoded cwd-scoped machine route", async () => {
@@ -572,13 +616,34 @@ function requestBody(init: RequestInit | undefined): string {
   return init.body;
 }
 
+function sessionInfoResponse(id: string) {
+  return { id, path: `/tmp/${id}.jsonl`, cwd: "/repo", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
+}
+
+function dialogStatusWire() {
+  return {
+    sessionId: "s /?",
+    isStreaming: true,
+    isCompacting: false,
+    isBashRunning: false,
+    pendingMessageCount: 0,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    cost: 0,
+  };
+}
+
+// The parsed status normalizes the wire shape (queuedMessages defaults to []).
+function parsedDialogStatus() {
+  return { ...dialogStatusWire(), queuedMessages: [] };
+}
+
 function piWebConfigResponse(config: PiWebConfigValues) {
   return {
     path: "/tmp/pi-web/config.json",
     exists: true,
     config,
     effectiveConfig: config,
-    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, agentCommand: false, agentDir: false, agentSessionDir: false },
+    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false, agentCommand: false, agentDir: false, agentSessionDir: false },
   };
 }
 

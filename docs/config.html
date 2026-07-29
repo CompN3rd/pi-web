@@ -102,6 +102,7 @@
             <a href="#pi-extension-provider-baseline">Pi extension providers</a>
             <a href="#catalog-refresh">Model catalog refresh</a>
             <a href="#session-tools">Session tools</a>
+            <a href="#extension-dialogs">Extension dialogs</a>
             <a href="#completion-tools">Completion tools</a>
           </aside>
 
@@ -167,13 +168,13 @@
                 Environment overrides include <code>PI_WEB_HOST</code>, <code>PI_WEB_PORT</code> / <code>PORT</code>,
                 <code>PI_WEB_ALLOWED_HOSTS</code>, <code>PI_WEB_MAX_UPLOAD_BYTES</code>, <code>PI_WEB_AGENT_COMMAND</code>,
                 <code>PI_WEB_AGENT_DIR</code>, <code>PI_WEB_AGENT_SESSION_DIR</code>, <code>PI_CODING_AGENT_DIR</code> /
-                <code>PI_CODING_AGENT_SESSION_DIR</code> for Pi compatibility, <code>PI_WEB_SPAWN_SESSIONS</code>, and
-                <code>PI_WEB_SUBSESSIONS</code>.
+                <code>PI_CODING_AGENT_SESSION_DIR</code> for Pi compatibility, <code>PI_WEB_SPAWN_SESSIONS</code>,
+                <code>PI_WEB_SUBSESSIONS</code>, and <code>PI_WEB_ASK_USER</code>.
               </p>
               <ul>
                 <li><code>host</code> / <code>port</code>: restart the gateway web/API service or process.</li>
                 <li><code>maxUploadBytes</code>: restart both the web/API process and the session daemon on that machine.</li>
-                <li><code>agent.command</code> / <code>agent.dir</code> / <code>spawnSessions</code> / <code>subsessions</code>: restart the session daemon on that machine.</li>
+                <li><code>agent.command</code> / <code>agent.dir</code> / <code>spawnSessions</code> / <code>subsessions</code> / <code>askUser</code> / <code>extensionDialogsTimeoutMs</code>: restart the session daemon on that machine.</li>
                 <li><code>pathAccess</code>: applies on the next request; existing file views may need a browser refresh.</li>
                 <li><code>uploads.defaultFolder</code>: applies to newly opened Files upload dialogs and new direct drag/drop batches after config/workspace refresh.</li>
                 <li><code>plugins</code>: reload the browser tab after changing PI WEB plugin enablement.</li>
@@ -212,6 +213,8 @@
   },
   "spawnSessions": true,
   "subsessions": false,
+  "askUser": true,
+  "extensionDialogsTimeoutMs": 300000,
   "plugins": {
     "workspace-tasks": { "enabled": true },
     "updates": { "enabled": true },
@@ -269,7 +272,7 @@
                 it, and whether project-local config overrides or merges with global config. Rows with JSON key
                 <code>—</code> are runtime-only environment variables, not config-file keys. <code>Global</code> means
                 machine-global. In Settings, selected-machine-safe global keys (<code>pathAccess</code>, <code>uploads</code>,
-                <code>maxUploadBytes</code>, <code>agent</code>, <code>spawnSessions</code>, <code>subsessions</code>, and <code>plugins</code>)
+                <code>maxUploadBytes</code>, <code>agent</code>, <code>spawnSessions</code>, <code>subsessions</code>, <code>askUser</code>, and <code>plugins</code>)
                 are edited for the selected machine; gateway host/port/allowed-hosts, keyboard shortcuts, and machine
                 registry/tokens stay local.
               </p>
@@ -368,6 +371,22 @@
                       <td>Restart session daemon on that machine</td>
                     </tr>
                     <tr>
+                      <td>Agent can post question forms</td>
+                      <td><code>askUser</code></td>
+                      <td><code>PI_WEB_ASK_USER</code></td>
+                      <td>Global/session daemon</td>
+                      <td>Not supported locally</td>
+                      <td>Restart session daemon on that machine</td>
+                    </tr>
+                    <tr>
+                      <td>Extension dialog auto-cancel timeout</td>
+                      <td><code>extensionDialogsTimeoutMs</code></td>
+                      <td>—</td>
+                      <td>Global/session daemon</td>
+                      <td>Not supported locally</td>
+                      <td>Restart session daemon on that machine</td>
+                    </tr>
+                    <tr>
                       <td>PI WEB plugin enablement/settings</td>
                       <td><code>plugins.&lt;id&gt;.enabled</code>, <code>plugins.&lt;id&gt;.settings</code></td>
                       <td>—</td>
@@ -406,7 +425,7 @@
                       <td><code>PI_WEB_DATA_DIR</code></td>
                       <td>Process/env</td>
                       <td>Not supported locally</td>
-                      <td>Restart services before changing; moves managed state location</td>
+                      <td>Restart services before changing; existing state stays in the previous data directory</td>
                     </tr>
                     <tr>
                       <td>Session daemon socket</td>
@@ -791,6 +810,72 @@
                 session daemon on that machine after changing them.
               </p>
               <p>Environment override: <code>PI_WEB_SUBSESSIONS=0|1|true|false</code>.</p>
+
+              <h3><code>askUser</code> and <code>ask_user</code></h3>
+              <p>
+                <code>askUser</code> controls whether agents receive the core <code>ask_user</code> tool. It defaults to
+                <code>true</code>; set it to <code>false</code>, or set <code>PI_WEB_ASK_USER=false</code>, to remove the
+                tool. The environment override accepts <code>0|1|true|false</code> and takes precedence over the config file.
+              </p>
+              <p>
+                Use <strong>Settings → Session daemon → Allow agents to ask questions</strong> to change
+                <code>askUser</code> on the selected machine. An environment override makes the toggle read-only.
+              </p>
+              <p>
+                The tool accepts one set of 1–20 questions. Each question has a unique <code>id</code>, its
+                <code>question</code> text, optional supporting <code>detail</code>, up to 12 options with stable values and
+                user-facing labels, and an optional <code>multiple</code> flag. The browser always adds a
+                <strong>Custom</strong> free-text answer, including when the model supplies no options. No question is
+                required: the user may leave any of them unanswered.
+              </p>
+              <p>
+                Calling <code>ask_user</code> posts the whole set as one browser form and ends the current agent run
+                instead of waiting for the user. The open form is owned by the session daemon, so it survives a browser
+                disconnect, browser reload, or web/API restart while that daemon keeps running. When the user submits,
+                the answers arrive as a follow-up that wakes the session; each question is reported with its selected
+                option values or free text, or explicitly as unanswered.
+              </p>
+              <p>
+                PI WEB confirms a partial submission before sending it and names the unanswered questions. Only one ask
+                can be open per session: a later <code>ask_user</code> call supersedes the earlier one, reports that fact
+                and its unanswered questions to the model, and turns the earlier card into a read-only transcript record.
+                Submitted and cancelled asks likewise remain readable in the transcript.
+              </p>
+              <p>
+                Sending an ordinary chat message while a form is open voids the form: the card closes as cancelled and
+                the model is told its questions went unanswered as part of the turn the message itself starts.
+              </p>
+              <div class="callout warning">
+                <strong>Restart required:</strong> restart the session daemon after changing <code>askUser</code> or after
+                upgrading PI WEB to a version that introduces this tool. For the systemd user service, run
+                <code>systemctl --user restart pi-web-sessiond</code>.
+              </div>
+            </section>
+
+            <section id="extension-dialogs">
+              <h2>Extension dialogs</h2>
+              <p>
+                Pi extensions can ask the user questions from <code>ctx.ui.confirm()</code>,
+                <code>ctx.ui.select()</code>, and <code>ctx.ui.input()</code> — including from
+                <code>session_start</code> hooks and in-flight <code>tool_call</code> hooks. PI WEB renders these dialogs
+                inline in the session transcript and answers them through a dedicated session-daemon channel, never the
+                prompt queue, so a dialog parked inside a <code>tool_call</code> hook cannot deadlock the run. Dialog
+                support is always on; there is no enable flag. See
+                <a href="plugins#pi-extension-dialogs">Pi extension dialogs in PI WEB</a> for behavior details and author
+                guidance.
+              </p>
+              <p>
+                <code>extensionDialogsTimeoutMs</code> is the unattended-dialog safety valve: how long the session daemon
+                waits for an answer before settling the dialog with its kind's cancel value (<code>false</code> for
+                confirm, <code>undefined</code> for select and input). It defaults to <code>300000</code> (5 minutes);
+                set it to <code>0</code> to wait forever. An extension's own <code>timeout</code> option still applies,
+                and the effective deadline is the sooner of the two.
+              </p>
+              <div class="callout warning">
+                <strong>Restart required:</strong> <code>extensionDialogsTimeoutMs</code> is edited directly in the global
+                config file. Restart the session daemon after changing it — for the systemd user service, run
+                <code>systemctl --user restart pi-web-sessiond</code>.
+              </div>
             </section>
 
 

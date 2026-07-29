@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
-import { SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
+import { ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
+import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
 
 describe("API parsers", () => {
   it("preserves additive interactive API-key flow hints and defaults legacy options", () => {
@@ -61,13 +61,13 @@ describe("API parsers", () => {
       exists: true,
       config: { host: "0.0.0.0", port: 8504, allowedHosts: ["example.local"], shortcuts: { "core:view.chat": "mod+1", "core:session.stop": null }, plugins: { info: { enabled: false, settings: { compact: true } } }, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: "manual/uploads" }, maxUploadBytes: 1234, agent: { command: "agent-lab", dir: "~/agent-profiles/lab" } },
       effectiveConfig: { host: "127.0.0.1", port: 8504, allowedHosts: true, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: ".pi-web/uploads" }, agent: { command: "agent-lab", dir: "/Users/dev/agent-profiles/lab" } },
-      envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, agentCommand: false, agentDir: true, agentDirSource: "pi-compatibility", agentSessionDir: false },
+      envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false, agentCommand: false, agentDir: true, agentDirSource: "pi-compatibility", agentSessionDir: false },
     })).toEqual({
       path: "/tmp/config.json",
       exists: true,
       config: { host: "0.0.0.0", port: 8504, allowedHosts: ["example.local"], shortcuts: { "core:view.chat": "mod+1", "core:session.stop": null }, plugins: { info: { enabled: false, settings: { compact: true } } }, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: "manual/uploads" }, maxUploadBytes: 1234, agent: { command: "agent-lab", dir: "~/agent-profiles/lab" } },
       effectiveConfig: { host: "127.0.0.1", port: 8504, allowedHosts: true, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: ".pi-web/uploads" }, agent: { command: "agent-lab", dir: "/Users/dev/agent-profiles/lab" } },
-      envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, agentCommand: false, agentDir: true, agentDirSource: "pi-compatibility", agentSessionDir: false },
+      envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false, agentCommand: false, agentDir: true, agentDirSource: "pi-compatibility", agentSessionDir: false },
     });
   });
 
@@ -289,34 +289,45 @@ describe("API parsers", () => {
     })).toThrow("positive safe integer");
   });
 
-  it("parses session startup progress with and without a wait detail", () => {
+  it("parses session startup progress with and without a correlation token", () => {
     const activity = { sessionId: "session-1", phase: "active", label: "Creating session", detail: "Starting the Pi session", at: "2026-07-20T00:00:01.000Z" };
 
-    expect(parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity })).toEqual({
+    expect(parseSessionStartupProgressEvent({ type: "session.startup", startupToken: "pending-session-1-abc", activity })).toEqual({
       type: "session.startup",
-      cwd: "/repo",
+      startupToken: "pending-session-1-abc",
       activity,
     });
+    // An open carries no token: the activity's own session id is the only route.
     const idle = { sessionId: "session-1", phase: "idle", label: "idle", at: "2026-07-20T00:00:02.000Z" };
-    expect(parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: idle })).toEqual({
+    expect(parseSessionStartupProgressEvent({ type: "session.startup", activity: idle })).toEqual({
       type: "session.startup",
-      cwd: "/repo",
       activity: idle,
     });
+  });
+
+  it("carries the startup marker so an opening session is not mistaken for a working one", () => {
+    const activity = { sessionId: "session-1", phase: "active", label: "Opening session", detail: "Starting the Pi session", at: "2026-07-20T00:00:01.000Z", startup: true };
+
+    expect(parseSessionStartupProgressEvent({ type: "session.startup", activity })).toEqual({ type: "session.startup", activity });
+    // A malformed marker is dropped like any other malformed field rather than
+    // being coerced into "this is startup" or "this is work".
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", activity: { ...activity, startup: "yes" } })).toThrow("Expected optional boolean field: startup");
   });
 
   it("rejects session startup progress that cannot be routed or rendered honestly", () => {
     const activity = { sessionId: "session-1", phase: "active", label: "Creating session", at: "2026-07-20T00:00:01.000Z" };
 
-    expect(() => parseSessionStartupProgressEvent({ type: "activity.update", cwd: "/repo", activity })).toThrow("Invalid session startup event type");
-    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", activity })).toThrow("Expected string field: cwd");
-    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "", activity })).toThrow("Expected non-empty string field: cwd");
-    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo" })).toThrow("Expected object response");
-    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, phase: "waiting" } })).toThrow("Expected session activity phase field: phase");
-    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, label: 7 } })).toThrow("Expected string field: label");
-    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, label: "" } })).toThrow("Expected non-empty string field: label");
-    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, detail: 7 } })).toThrow("Expected optional string field: detail");
-    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", cwd: "/repo", activity: { ...activity, sessionId: "" } })).toThrow("Expected non-empty string field: sessionId");
+    expect(() => parseSessionStartupProgressEvent({ type: "activity.update", activity })).toThrow("Invalid session startup event type");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup" })).toThrow("Expected object response");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", startupToken: 7, activity })).toThrow("Expected optional string field: startupToken");
+    // An empty token would match nothing but must still be rejected rather than
+    // silently carried, so a malformed frame never reaches the routing at all.
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", startupToken: "", activity })).toThrow("Expected non-empty string field: startupToken");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", activity: { ...activity, phase: "waiting" } })).toThrow("Expected session activity phase field: phase");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", activity: { ...activity, label: 7 } })).toThrow("Expected string field: label");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", activity: { ...activity, label: "" } })).toThrow("Expected non-empty string field: label");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", activity: { ...activity, detail: 7 } })).toThrow("Expected optional string field: detail");
+    expect(() => parseSessionStartupProgressEvent({ type: "session.startup", activity: { ...activity, sessionId: "" } })).toThrow("Expected non-empty string field: sessionId");
   });
 
   it("parses session cleanup preview and execute responses", () => {
@@ -711,7 +722,231 @@ describe("API parsers", () => {
       delta: { kind: "cleared", reason: "future-reason" },
     })).toThrow("Invalid notification clear reason");
   });
+
+  it("parses an open ask and normalizes every question to allow custom answers", () => {
+    const parsed = parseSessionStatus({ ...statusWire(), pendingAsk: pendingAskWire() });
+
+    expect(parsed.pendingAsk).toEqual({
+      askId: "ask-1",
+      askedAt: "2026-07-20T00:00:00.000Z",
+      questions: [
+        { id: "q1", question: "Which database?", detail: "Pick the primary store", options: [{ value: "pg", label: "Postgres", detail: "Relational" }, { value: "sqlite", label: "SQLite" }], allowOther: true },
+        { id: "q2", question: "Which extras?", options: [{ value: "metrics", label: "Metrics" }], allowOther: true, multiple: true },
+      ],
+    });
+  });
+
+  it("omits the pending ask entirely when the field is absent", () => {
+    expect(parseSessionStatus(statusWire()).pendingAsk).toBeUndefined();
+  });
+
+  it("validates an ask before rendering it", () => {
+    const ask = pendingAskWire();
+    const first = ask.questions[0];
+    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [] } })).toThrow("Pending ask has no questions");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [first, first] } })).toThrow("Duplicate ask question id");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, askId: "" } })).toThrow("Expected non-empty string field: askId");
+    expect(parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "Anything?", options: [] }] } }).pendingAsk?.questions[0])
+      .toEqual({ id: "q1", question: "Anything?", options: [], allowOther: true });
+    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "Anything?", options: [], allowOther: "yes" }] } })).toThrow("Expected optional boolean field: allowOther");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "Which?", options: [{ value: "a", label: "A" }, { value: "a", label: "Also A" }] }] } })).toThrow("Duplicate ask option value");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "x".repeat(ASK_USER_TEXT_MAX_LENGTH + 1), options: [{ value: "a", label: "A" }] }] } })).toThrow("String field exceeds limit: question");
+  });
+
+  it("parses a closed ask response carrying the outcome and recomputed status", () => {
+    const response = parseAskUserCloseResponse({
+      result: "closed",
+      outcome: askOutcomeWire(),
+      sessionStatus: statusWire(),
+    });
+
+    expect(response.result).toBe("closed");
+    expect(response.outcome).toMatchObject({
+      askId: "ask-1",
+      reason: "submitted",
+      answeredCount: 1,
+      unansweredIds: ["q2"],
+      summary: "Answered 1 of 2; unanswered: q2",
+    });
+    expect(response.outcome?.questions[0]).toMatchObject({ answered: true, values: ["pg"] });
+    expect(response.sessionStatus.sessionId).toBe("s1");
+  });
+
+  it("parses a stale close as an ordinary race with no outcome", () => {
+    const response = parseAskUserCloseResponse({ result: "stale", sessionStatus: statusWire() });
+
+    expect(response).toEqual({ result: "stale", sessionStatus: parseSessionStatus(statusWire()) });
+  });
+
+  it("rejects close responses whose outcome contradicts itself", () => {
+    const outcome = askOutcomeWire();
+    expect(() => parseAskUserCloseResponse({ result: "closed", sessionStatus: statusWire() })).toThrow("Ask close response outcome mismatch");
+    expect(() => parseAskUserCloseResponse({ result: "stale", outcome, sessionStatus: statusWire() })).toThrow("Ask close response outcome mismatch");
+    expect(() => parseAskUserCloseResponse({ result: "closed", outcome: { ...outcome, answeredCount: 2 }, sessionStatus: statusWire() })).toThrow("Ask outcome answered count mismatch");
+    expect(() => parseAskUserCloseResponse({ result: "closed", outcome: { ...outcome, unansweredIds: [] }, sessionStatus: statusWire() })).toThrow("Ask outcome unanswered ids mismatch");
+    expect(() => parseAskUserCloseResponse({ result: "closed", outcome: { ...outcome, reason: "ignored" }, sessionStatus: statusWire() })).toThrow("Invalid ask close reason");
+    expect(() => parseAskUserCloseResponse({
+      result: "closed",
+      outcome: { ...outcome, questions: [{ ...askAnsweredRecordWire(), answered: false }, askUnansweredRecordWire()] },
+      sessionStatus: statusWire(),
+    })).toThrow("Ask answer contradicts its answered flag");
+    expect(() => parseAskUserCloseResponse({
+      result: "closed",
+      outcome: { ...outcome, questions: [{ ...askAnsweredRecordWire(), values: ["mysql"] }, askUnansweredRecordWire()] },
+      sessionStatus: statusWire(),
+    })).toThrow("Ask answer selected an option the question never offered");
+  });
+
+  it("parses open extension dialogs on the session status, oldest first", () => {
+    const parsed = parseSessionStatus({ ...statusWire(), pendingDialogs: [confirmDialogWire(), selectDialogWire(), inputDialogWire()] });
+
+    expect(parsed.pendingDialogs).toEqual([
+      { dialogId: "dialog-1", kind: "confirm", title: "Delete the build cache?", message: "This cannot be undone", askedAt: "2026-07-20T00:00:00.000Z", runScoped: true },
+      { dialogId: "dialog-2", kind: "select", title: "Pick a database", options: ["Postgres", "SQLite"], askedAt: "2026-07-20T00:01:00.000Z", timeoutAt: "2026-07-20T00:06:00.000Z", runScoped: false },
+      { dialogId: "dialog-3", kind: "input", title: "Name the branch", placeholder: "feature/...", askedAt: "2026-07-20T00:02:00.000Z", runScoped: false },
+    ]);
+  });
+
+  it("omits pending dialogs entirely when the field is absent", () => {
+    expect(parseSessionStatus(statusWire()).pendingDialogs).toBeUndefined();
+  });
+
+  it("validates an extension dialog before rendering it", () => {
+    const dialog = confirmDialogWire();
+    expect(() => parseSessionStatus({ ...statusWire(), pendingDialogs: [{ ...dialog, kind: "modal" }] })).toThrow("Invalid extension dialog kind");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingDialogs: [{ ...dialog, title: "" }] })).toThrow("Expected non-empty string field: title");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingDialogs: [{ ...dialog, title: "x".repeat(EXTENSION_DIALOG_TEXT_MAX_LENGTH + 1) }] })).toThrow("String field exceeds limit: title");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingDialogs: [{ ...dialog, runScoped: "yes" }] })).toThrow("Expected boolean field: runScoped");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingDialogs: [{ ...dialog, timeoutAt: "" }] })).toThrow("Expected non-empty string field: timeoutAt");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingDialogs: [{ ...selectDialogWire(), options: [] }] })).toThrow("Select dialog has no options");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingDialogs: [{ ...selectDialogWire(), options: ["a", "a"] }] })).toThrow("Duplicate dialog option");
+    expect(() => parseSessionStatus({ ...statusWire(), pendingDialogs: [dialog, { ...inputDialogWire(), dialogId: "dialog-1" }] })).toThrow("Duplicate dialog id");
+  });
+
+  it("parses a closed dialog response carrying the outcome and recomputed status", () => {
+    const response = parseExtensionDialogCloseResponse({
+      result: "closed",
+      outcome: dialogOutcomeWire(),
+      sessionStatus: statusWire(),
+    });
+
+    expect(response.result).toBe("closed");
+    expect(response.outcome).toEqual({
+      dialogId: "dialog-1",
+      reason: "answered",
+      answer: true,
+      askedAt: "2026-07-20T00:00:00.000Z",
+      closedAt: "2026-07-20T00:01:00.000Z",
+    });
+    expect(response.sessionStatus.sessionId).toBe("s1");
+  });
+
+  it("parses a stale dialog close as an ordinary race with no outcome", () => {
+    const response = parseExtensionDialogCloseResponse({ result: "stale", sessionStatus: statusWire() });
+
+    expect(response).toEqual({ result: "stale", sessionStatus: parseSessionStatus(statusWire()) });
+  });
+
+  it("rejects dialog close responses whose outcome contradicts itself", () => {
+    const outcome = dialogOutcomeWire();
+    expect(() => parseExtensionDialogCloseResponse({ result: "closed", sessionStatus: statusWire() })).toThrow("Dialog close response outcome mismatch");
+    expect(() => parseExtensionDialogCloseResponse({ result: "stale", outcome, sessionStatus: statusWire() })).toThrow("Dialog close response outcome mismatch");
+    expect(() => parseExtensionDialogCloseResponse({ result: "closed", outcome: { ...outcome, reason: "timeout" }, sessionStatus: statusWire() })).toThrow("Dialog outcome answer mismatch");
+    expect(() => parseExtensionDialogCloseResponse({ result: "closed", outcome: { ...outcome, answer: 1 }, sessionStatus: statusWire() })).toThrow("Invalid extension dialog answer");
+    expect(() => parseExtensionDialogCloseResponse({ result: "closed", outcome: { ...outcome, reason: "ignored" }, sessionStatus: statusWire() })).toThrow("Invalid extension dialog close reason");
+  });
 });
+
+function statusWire() {
+  return {
+    sessionId: "s1",
+    isStreaming: false,
+    isCompacting: false,
+    isBashRunning: false,
+    pendingMessageCount: 0,
+    queuedMessages: [],
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    cost: 0,
+  };
+}
+
+function pendingAskWire() {
+  return {
+    askId: "ask-1",
+    askedAt: "2026-07-20T00:00:00.000Z",
+    questions: [
+      { id: "q1", question: "Which database?", detail: "Pick the primary store", options: [{ value: "pg", label: "Postgres", detail: "Relational" }, { value: "sqlite", label: "SQLite" }], allowOther: false },
+      { id: "q2", question: "Which extras?", options: [{ value: "metrics", label: "Metrics" }], allowOther: true, multiple: true },
+    ],
+  };
+}
+
+function askAnsweredRecordWire() {
+  const ask = pendingAskWire();
+  return { question: ask.questions[0], answered: true, values: ["pg"] };
+}
+
+function askUnansweredRecordWire() {
+  const ask = pendingAskWire();
+  return { question: ask.questions[1], answered: false, values: [] };
+}
+
+function askOutcomeWire() {
+  return {
+    askId: "ask-1",
+    reason: "submitted",
+    askedAt: "2026-07-20T00:00:00.000Z",
+    closedAt: "2026-07-20T00:01:00.000Z",
+    questions: [askAnsweredRecordWire(), askUnansweredRecordWire()],
+    answeredCount: 1,
+    unansweredIds: ["q2"],
+    summary: "Answered 1 of 2; unanswered: q2",
+  };
+}
+
+function confirmDialogWire() {
+  return {
+    dialogId: "dialog-1",
+    kind: "confirm",
+    title: "Delete the build cache?",
+    message: "This cannot be undone",
+    askedAt: "2026-07-20T00:00:00.000Z",
+    runScoped: true,
+  };
+}
+
+function selectDialogWire() {
+  return {
+    dialogId: "dialog-2",
+    kind: "select",
+    title: "Pick a database",
+    options: ["Postgres", "SQLite"],
+    askedAt: "2026-07-20T00:01:00.000Z",
+    timeoutAt: "2026-07-20T00:06:00.000Z",
+    runScoped: false,
+  };
+}
+
+function inputDialogWire() {
+  return {
+    dialogId: "dialog-3",
+    kind: "input",
+    title: "Name the branch",
+    placeholder: "feature/...",
+    askedAt: "2026-07-20T00:02:00.000Z",
+    runScoped: false,
+  };
+}
+
+function dialogOutcomeWire() {
+  return {
+    dialogId: "dialog-1",
+    reason: "answered",
+    answer: true,
+    askedAt: "2026-07-20T00:00:00.000Z",
+    closedAt: "2026-07-20T00:01:00.000Z",
+  };
+}
 
 function sessionTreeWire() {
   const kinds = [
