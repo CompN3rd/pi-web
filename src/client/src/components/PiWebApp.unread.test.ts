@@ -1,6 +1,5 @@
 import type { TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import type { Machine, Project, SessionInfo, SessionUnreadEvent, SessionUnreadSummary, Workspace } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import type { BrowserRealtimeEvent } from "../sessionSocket";
@@ -128,37 +127,24 @@ describe("PiWebApp session unread wiring", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("fetches initial state only after the selected runtime advertises unread support", async () => {
+  it("fetches the durable server snapshot when the machine list loads", async () => {
     const background = session("background");
     const durable = { catalogId: "catalog-a", catalogRevision: 1, sessions: [unreadSummary(background, 1)] };
     const fetchMock = stubJsonFetch(durable);
     const app = createApp();
     enableUnread(app);
     const foreground = session("foreground");
-    const localMachine = {
-      id: "local",
-      name: "Local",
-      kind: "local" as const,
-      createdAt: "2026-07-20T00:00:00.000Z",
-      updatedAt: "2026-07-20T00:00:00.000Z",
-    };
+    const localMachine = machine("local");
     setAppState(app, {
       ...initialAppState(),
-      machines: [localMachine],
       selectedMachine: localMachine,
       sessions: [foreground, background],
       selectedSession: foreground,
       mainView: "chat",
     });
-
-    setState(app, { machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [] } } });
     expect(fetchMock).not.toHaveBeenCalled();
 
-    setState(app, {
-      machineRuntimes: {
-        local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsUnread] },
-      },
-    });
+    setState(app, { machines: [localMachine] });
     await vi.waitFor(() => { expect([...navigationUnreadSessionIds(app)]).toEqual([background.id]); });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://pi.example.test/api/machines/local/sessions/unread");
@@ -188,40 +174,6 @@ describe("PiWebApp session unread wiring", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://pi.example.test/api/machines/local/sessions/unread");
-  });
-
-  it("renegotiates cached support before refreshing after a runtime rollback", async () => {
-    const fetchMock = vi.fn(() => Promise.reject(new Error("Unexpected unread request")));
-    vi.stubGlobal("fetch", fetchMock);
-    const app = createApp();
-    enableUnread(app);
-    const localMachine = {
-      id: "local",
-      name: "Local",
-      kind: "local" as const,
-      createdAt: "2026-07-20T00:00:00.000Z",
-      updatedAt: "2026-07-20T00:00:00.000Z",
-    };
-    setAppState(app, {
-      ...initialAppState(),
-      machines: [localMachine],
-      selectedMachine: localMachine,
-      machineRuntimes: {
-        local: { machineId: "local", ok: true, checkedAt: "before", capabilities: [PI_WEB_CAPABILITIES.sessionsUnread] },
-      },
-    });
-    const machines: unknown = Reflect.get(app, "machines");
-    if (typeof machines !== "object" || machines === null) throw new Error("PiWebApp machine controller is unavailable");
-    if (!Reflect.set(machines, "refreshMachineRuntime", () => {
-      const runtime = { machineId: "local", ok: true as const, checkedAt: "after", capabilities: [] };
-      setState(app, { machineRuntimes: { local: runtime } });
-      return Promise.resolve(runtime);
-    })) throw new Error("Could not stub machine runtime refresh");
-
-    await renegotiateUnreadMachine(app, "local");
-    await refreshUnread(app, "local");
-
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not treat the legacy browser-local key as unread authority", () => {
@@ -283,7 +235,6 @@ describe("PiWebApp session unread wiring", () => {
     stubJsonFetch({ catalogId: "catalog-a", catalogRevision: 2, sessions: [] });
     const app = createApp();
     enableUnread(app);
-    enableUnreadMachine(app, "remote");
     const selected = session("selected");
     setAppState(app, {
       ...initialAppState(),
@@ -368,7 +319,6 @@ type HandleMachineActivityEvent = (this: PiWebApp, machineId: string, event: Bro
 type MobileMainTabs = (this: PiWebApp) => AppMobileMainTab[];
 type UpdatedHook = (this: PiWebApp) => void;
 type DisconnectedHook = (this: PiWebApp) => void;
-type RenegotiateUnreadMachine = (this: PiWebApp, machineId: string) => Promise<void>;
 type RefreshUnread = (machineId: string) => Promise<void>;
 type MarkSessionRead = (session: SessionInfo) => void;
 type MarkSessionsRead = (sessions: SessionInfo[]) => void;
@@ -426,15 +376,6 @@ function handleMachineActivityEvent(app: PiWebApp, machineId: string, event: Bro
 
 function enableUnread(app: PiWebApp): void {
   if (!Reflect.set(app, "unreadConnected", true)) throw new Error("Could not connect PiWebApp unread state");
-  enableUnreadMachine(app, "local");
-}
-
-function enableUnreadMachine(app: PiWebApp, machineId: string): void {
-  const controller: unknown = Reflect.get(app, "sessionUnread");
-  if (typeof controller !== "object" || controller === null) throw new Error("PiWebApp unread controller is unavailable");
-  const setCapability: unknown = Reflect.get(controller, "setCapability");
-  if (typeof setCapability !== "function") throw new Error("PiWebApp unread capability setter is unavailable");
-  Reflect.apply(setCapability, controller, [machineId, "supported"]);
 }
 
 function exposeSelectedChat(app: PiWebApp): void {
@@ -472,12 +413,6 @@ function invokeDisconnected(app: PiWebApp): void {
   const method: unknown = Reflect.get(app, "disconnectedCallback");
   if (!isDisconnectedHook(method)) throw new Error("PiWebApp.disconnectedCallback is not callable");
   method.call(app);
-}
-
-async function renegotiateUnreadMachine(app: PiWebApp, machineId: string): Promise<void> {
-  const method: unknown = Reflect.get(app, "renegotiateUnreadMachine");
-  if (!isRenegotiateUnreadMachine(method)) throw new Error("PiWebApp unread renegotiation is not callable");
-  await method.call(app, machineId);
 }
 
 function refreshUnread(app: PiWebApp, machineId: string): Promise<void> {
@@ -639,10 +574,6 @@ function isUpdatedHook(value: unknown): value is UpdatedHook {
 }
 
 function isDisconnectedHook(value: unknown): value is DisconnectedHook {
-  return typeof value === "function";
-}
-
-function isRenegotiateUnreadMachine(value: unknown): value is RenegotiateUnreadMachine {
   return typeof value === "function";
 }
 

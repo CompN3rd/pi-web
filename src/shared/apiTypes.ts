@@ -2,7 +2,6 @@ export type MachineKind = "local" | "remote";
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
 export const PI_WEB_CAPABILITIES = {
-  sessionsUnread: "sessions.unread",
   sessionsAskUser: "sessions.askUser",
   workspaceFileSuggestions: "workspace.fileSuggestions",
   piPackagesManage: "piPackages.manage",

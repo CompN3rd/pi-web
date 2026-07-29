@@ -16,26 +16,6 @@ describe("PI WEB capabilities", () => {
     })).toEqual([PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.selectedMachineSettings, PI_WEB_CAPABILITIES.agentProfileConfig]);
   });
 
-  it("negotiates daemon-authoritative unread state only when both runtimes support it", () => {
-    const unread = PI_WEB_CAPABILITIES.sessionsUnread;
-    expect(WEB_RUNTIME_CAPABILITIES).toContain(unread);
-    expect(SESSIOND_RUNTIME_CAPABILITIES).toContain(unread);
-    expect(parseKnownPiWebCapabilities([unread, "future.capability"])).toEqual([unread]);
-
-    expect(effectivePiWebCapabilities({
-      web: { available: true, capabilities: [unread] },
-      sessiond: { available: true, capabilities: [] },
-    })).not.toContain(unread);
-    expect(effectivePiWebCapabilities({
-      web: { available: true, capabilities: [] },
-      sessiond: { available: true, capabilities: [unread] },
-    })).not.toContain(unread);
-    expect(effectivePiWebCapabilities({
-      web: { available: true, capabilities: [unread] },
-      sessiond: { available: true, capabilities: [unread] },
-    })).toContain(unread);
-  });
-
   it("renders the question card only when both runtimes support daemon-owned asks", () => {
     const askUser = PI_WEB_CAPABILITIES.sessionsAskUser;
     expect(WEB_RUNTIME_CAPABILITIES).toContain(askUser);

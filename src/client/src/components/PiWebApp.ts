@@ -205,7 +205,6 @@ export class PiWebApp extends LitElement {
   private readonly keyboard = new KeyboardShortcutDispatcher();
   private readonly realtime = new RealtimeSocket();
   private readonly machineRealtimeSockets = new Map<string, RealtimeSocket>();
-  private readonly unreadRuntimeRefreshes = new Map<string, Promise<void>>();
   private readonly activeTerminalIds = new Set<string>();
   private readonly machineNavigation = new SessionStorageMachineNavigationMemory();
   private readonly terminalSelection = new SessionStorageTerminalSelectionMemory();
@@ -256,7 +255,7 @@ export class PiWebApp extends LitElement {
     await this.restoreRoute(false);
   });
   private readonly onPageShow = () => {
-    void this.renegotiateUnreadMachines();
+    void this.sessionUnread.refreshAll();
     this.appShell.repairViewportPosition();
     this.retryPendingRemoteRouteRestoreSoon();
   };
@@ -375,7 +374,7 @@ export class PiWebApp extends LitElement {
     this.systemLightThemeMedia?.addEventListener("change", this.onSystemLightThemeChange);
     this.applyPreferredTheme(false);
     this.connectRealtime();
-    void this.renegotiateUnreadMachines();
+    this.syncSessionUnreadMachines();
     this.piWebStatusTimer = window.setInterval(() => { this.schedulePiWebStatusRefresh(); }, PI_WEB_STATUS_REFRESH_MS);
     void this.refreshWorkspaceActivity();
     void this.loadClientConfig();
@@ -387,7 +386,6 @@ export class PiWebApp extends LitElement {
     this.unreadConnected = false;
     this.committedChatIdentity = undefined;
     this.readyChatIdentity = undefined;
-    this.unreadRuntimeRefreshes.clear();
     this.sessionUnread.retainMachines(new Set<string>());
     window.removeEventListener("popstate", this.onPopState);
     window.removeEventListener("pageshow", this.onPageShow);
@@ -452,7 +450,7 @@ export class PiWebApp extends LitElement {
   }
 
   private async refreshAfterBrowserResume(): Promise<void> {
-    await this.renegotiateUnreadMachines();
+    await this.sessionUnread.refreshAll();
     await Promise.all([
       this.sessions.refreshSelectedSession(),
       this.refreshMachineActivities(),
@@ -949,44 +947,13 @@ export class PiWebApp extends LitElement {
       return;
     }
     const machineIds = new Set(this.state.machines.map((machine) => machine.id));
+    machineIds.add(selectedMachineId(this.state));
     this.sessionUnread.retainMachines(machineIds);
     for (const machineId of machineIds) {
-      const runtime = this.state.machineRuntimes[machineId];
-      if (runtime === undefined) continue;
-      const capability = this.unreadRuntimeRefreshes.has(machineId) || !runtime.ok
-        ? "unknown"
-        : supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsUnread)
-          ? "supported"
-          : "unsupported";
-      if (this.sessionUnread.setCapability(machineId, capability)) void this.sessionUnread.refresh(machineId);
+      // Socket events keep a loaded projection current; only the initial join
+      // (or a machine whose snapshot never landed) needs an HTTP snapshot.
+      if (this.sessionUnread.projection(machineId) === undefined) void this.sessionUnread.refresh(machineId);
     }
-  }
-
-  private async renegotiateUnreadMachines(): Promise<void> {
-    if (!this.unreadConnected) return;
-    const machineIds = new Set(this.state.machines.map((machine) => machine.id));
-    machineIds.add(selectedMachineId(this.state));
-    await Promise.all([...machineIds].map(async (machineId) => { await this.renegotiateUnreadMachine(machineId); }));
-  }
-
-  private renegotiateUnreadMachine(machineId: string): Promise<void> {
-    const existing = this.unreadRuntimeRefreshes.get(machineId);
-    if (existing !== undefined) return existing;
-    this.sessionUnread.setCapability(machineId, "unknown");
-    let refreshed = false;
-    const refresh = Promise.resolve().then(async () => {
-      refreshed = await this.machines.refreshMachineRuntime(machineId) !== undefined;
-    });
-    this.unreadRuntimeRefreshes.set(machineId, refresh);
-    const finishRefresh = () => {
-      if (this.unreadRuntimeRefreshes.get(machineId) !== refresh) return;
-      this.unreadRuntimeRefreshes.delete(machineId);
-      if (!this.unreadConnected) return;
-      if (refreshed) this.syncSessionUnreadMachines();
-      else this.sessionUnread.setCapability(machineId, "unknown");
-    };
-    void refresh.then(finishRefresh, finishRefresh);
-    return refresh;
   }
 
   private connectRealtime(): void {
@@ -994,7 +961,7 @@ export class PiWebApp extends LitElement {
     this.realtime.connect(
       (event) => { this.handleRealtimeEvent(machineId, event); },
       () => {
-        void this.renegotiateUnreadMachine(machineId);
+        void this.sessionUnread.refresh(machineId);
         const workspace = this.state.selectedWorkspace;
         if (workspace !== undefined) void this.refreshActiveTerminals(workspace);
         void this.refreshWorkspaceActivity(machineId);
@@ -1016,7 +983,7 @@ export class PiWebApp extends LitElement {
       socket.connect(
         (event) => { this.handleMachineActivityEvent(machineId, event); },
         () => {
-          void this.renegotiateUnreadMachine(machineId);
+          void this.sessionUnread.refresh(machineId);
           void this.refreshWorkspaceActivity(machineId);
         },
         machineId,
@@ -2251,7 +2218,7 @@ function selectedChatIdentity(state: Pick<AppState, "selectedMachine" | "selecte
 }
 
 function machineUnreadInputsChanged(previous: AppState, next: AppState): boolean {
-  return previous.machines !== next.machines || previous.machineRuntimes !== next.machineRuntimes;
+  return previous.machines !== next.machines;
 }
 
 function machineActivitySubscriptionInputsChanged(previous: AppState, next: AppState): boolean {
