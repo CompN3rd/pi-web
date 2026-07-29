@@ -8,7 +8,7 @@ const projectPackage: PiPackageInfo = { source: "../project-tools", scope: "proj
 const localTarget: PiPackageTargetContext = { id: "local", name: "local", kind: "local" };
 const remoteTarget: PiPackageTargetContext = { id: "remote-a", name: "Lab Mac", kind: "remote" };
 const runtimeWithPackageManagement: MachineRuntime = { machineId: "remote-a", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] };
-const runtimeWithoutPackageManagement: MachineRuntime = { machineId: "remote-a", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsReload] };
+const runtimeWithoutPackageManagement: MachineRuntime = { machineId: "remote-a", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsAskUser] };
 const unavailableRuntime: MachineRuntime = { machineId: "remote-a", ok: false, checkedAt: "now", error: "Remote runtime returned HTTP 404" };
 
 describe("Pi package settings helpers", () => {

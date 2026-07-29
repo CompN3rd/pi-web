@@ -36,7 +36,6 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) selected?: SessionInfo;
   @property({ type: Number }) startingCount = 0;
   @property({ type: Boolean }) canStart = false;
-  @property({ type: Boolean }) canReload = false;
   @property({ type: Boolean }) authoritativeSessionPersistence = false;
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean, reflect: true }) collapsed = false;
@@ -271,7 +270,6 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const persistenceOptions = this.sessionPersistenceOptions();
     const canArchive = isArchivableSessionInfo(session, status, persistenceOptions);
     const canDeleteTransient = isTransientNewSessionInfo(session, status, persistenceOptions);
-    const canReloadSession = canArchive && this.canReload;
     return html`
       <div
         class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${unread ? "unread" : ""}"
@@ -305,7 +303,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
                     ` : null}
                     ${this.renderGoToParentMenuItem(row)}
                     ${session.parentSessionPath !== undefined ? html`<button title="Detach from parent" @click=${() => { this.openMenuSessionId = undefined; this.onDetachParent?.(session); }}>Detach from parent</button>` : null}
-                    ${canReloadSession ? html`<button title=${isSessionActive(this.statuses[session.id], this.activities[session.id]) ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isSessionActive(this.statuses[session.id], this.activities[session.id])} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
+                    ${canArchive ? html`<button title=${isSessionActive(this.statuses[session.id], this.activities[session.id]) ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isSessionActive(this.statuses[session.id], this.activities[session.id])} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
                   `}
             </div>
           ` : null}

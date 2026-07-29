@@ -45,7 +45,6 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Boolean }) sessionsCollapsed = false;
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
-  @property({ type: Boolean }) canReloadSessions = false;
   @property({ type: Boolean }) authoritativeSessionPersistence = false;
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
@@ -172,7 +171,6 @@ export class AppNavigationPanel extends LitElement {
         .selected=${this.selectedSession}
         .startingCount=${this.startingSessionCount}
         .canStart=${this.canStartSession}
-        .canReload=${this.canReloadSessions}
         .authoritativeSessionPersistence=${this.authoritativeSessionPersistence}
         .collapsible=${this.collapsible}
         .collapsed=${this.sessionsCollapsed}

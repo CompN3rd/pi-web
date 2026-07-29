@@ -738,11 +738,6 @@ export class SessionController {
   async reloadSession(session = this.getState().selectedSession) {
     if (session === undefined || !isArchivableSessionInfo(session, this.statusForSession(session), this.sessionPersistenceOptions())) return;
     const machineId = selectedMachineId(this.getState());
-    const runtime = this.getState().machineRuntimes[machineId];
-    if (runtime?.ok !== true || !supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsReload)) {
-      this.setState({ error: "Reloading sessions from disk requires an updated Pi-Web runtime on this machine." });
-      return;
-    }
     try {
       await this.api.reloadSession(session.id, machineId);
       this.transcripts.discard(this.sessionCacheKey(session.id));

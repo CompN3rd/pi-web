@@ -39,7 +39,7 @@ describe("PiWebApp queued-message clear wiring", () => {
     const runtimes: (MachineRuntime | undefined)[] = [
       undefined,
       { ...runtimeWithCapabilities([PI_WEB_CAPABILITIES.sessionsClearQueue]), ok: false },
-      runtimeWithCapabilities([PI_WEB_CAPABILITIES.sessionsReload]),
+      runtimeWithCapabilities([PI_WEB_CAPABILITIES.sessionsAskUser]),
     ];
 
     for (const runtime of runtimes) {

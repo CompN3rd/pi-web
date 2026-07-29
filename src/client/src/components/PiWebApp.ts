@@ -1227,11 +1227,6 @@ export class PiWebApp extends LitElement {
     this.panelResize.resetPanels();
   }
 
-  private canReloadSessions(): boolean {
-    const runtime = this.selectedMachineRuntime();
-    return runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsReload);
-  }
-
   private canClearServerQueue(): boolean {
     const runtime = this.selectedMachineRuntime();
     return runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsClearQueue);
@@ -1318,7 +1313,6 @@ export class PiWebApp extends LitElement {
         .selectedSession=${this.state.selectedSession}
         .startingSessionCount=${this.state.startingSessionCount}
         .canStartSession=${!!this.state.selectedWorkspace}
-        .canReloadSessions=${this.canReloadSessions()}
         .authoritativeSessionPersistence=${this.hasAuthoritativeSessionPersistence()}
         .collapsible=${true}
         .compact=${this.appShell.isMobileNavigationLayout}
