@@ -42,7 +42,6 @@ describe("SessionController notification event boundary", () => {
       clearSelectedSession: vi.fn(),
       refreshSelectedSession,
       applyInboxEvent: vi.fn(),
-      shouldFilterLegacyNotification: vi.fn(() => true),
     };
     const controller = new SessionController(
       () => state,
@@ -69,7 +68,7 @@ describe("SessionController notification event boundary", () => {
     expect(refreshSelectedSession).toHaveBeenLastCalledWith(oldSession, "local");
   });
 
-  it("handles inbox events before transcript watermarking and filters only marked legacy output with support", async () => {
+  it("handles inbox events before transcript watermarking and filters notification-owned legacy output", async () => {
     const socket = new EmitSocket();
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: oldSession, sessions: [oldSession] };
     const applyInboxEvent = vi.fn();
@@ -78,7 +77,6 @@ describe("SessionController notification event boundary", () => {
       clearSelectedSession: vi.fn(),
       refreshSelectedSession: vi.fn(() => Promise.resolve()),
       applyInboxEvent,
-      shouldFilterLegacyNotification: vi.fn((_machineId, notificationId) => notificationId !== undefined),
     };
     const api: typeof defaultApi = {
       ...defaultApi,
@@ -104,38 +102,5 @@ describe("SessionController notification event boundary", () => {
     socket.emit({ type: "command.output", level: "info", message: "ordinary extension output", seq: 102 });
     expect(state.messages).toHaveLength(1);
     expect(state.messages[0]?.parts).toEqual([{ type: "text", text: "ordinary extension output" }]);
-  });
-
-  it("preserves marked legacy notification output when capability support is absent", async () => {
-    const socket = new EmitSocket();
-    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: oldSession, sessions: [oldSession] };
-    const bridge: SessionNotificationSessionBridge = {
-      prepareSelectedSession: vi.fn(),
-      clearSelectedSession: vi.fn(),
-      refreshSelectedSession: vi.fn(() => Promise.resolve()),
-      applyInboxEvent: vi.fn(),
-      shouldFilterLegacyNotification: vi.fn(() => false),
-    };
-    const controller = new SessionController(
-      () => state,
-      (patch) => { state = { ...state, ...patch }; },
-      () => undefined,
-      undefined,
-      {
-        socket,
-        notifications: bridge,
-        api: {
-          ...defaultApi,
-          messages: vi.fn(() => Promise.resolve(emptyPage)),
-          status: vi.fn(() => Promise.resolve(status(oldSession.id))),
-          streamSnapshot: vi.fn(() => Promise.resolve({ seq: 0, partial: null })),
-        },
-      },
-    );
-    await controller.selectSession(oldSession, { updateUrl: false });
-
-    socket.emit({ type: "command.output", level: "info", message: "legacy notification", notificationId: "new-daemon:1", seq: 1 });
-
-    expect(state.messages[0]?.parts).toEqual([{ type: "text", text: "legacy notification" }]);
   });
 });

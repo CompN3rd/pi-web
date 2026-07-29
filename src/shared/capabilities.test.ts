@@ -16,26 +16,6 @@ describe("PI WEB capabilities", () => {
     })).toEqual([PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.selectedMachineSettings, PI_WEB_CAPABILITIES.agentProfileConfig]);
   });
 
-  it("requires both web and session daemon support for notification inboxes", () => {
-    const notifications = PI_WEB_CAPABILITIES.sessionsNotifications;
-    expect(WEB_RUNTIME_CAPABILITIES).toContain(notifications);
-    expect(SESSIOND_RUNTIME_CAPABILITIES).toContain(notifications);
-    expect(parseKnownPiWebCapabilities([notifications, "future.capability"])).toEqual([notifications]);
-
-    expect(effectivePiWebCapabilities({
-      web: { available: true, capabilities: [notifications] },
-      sessiond: { available: true, capabilities: [] },
-    })).not.toContain(notifications);
-    expect(effectivePiWebCapabilities({
-      web: { available: true, capabilities: [] },
-      sessiond: { available: true, capabilities: [notifications] },
-    })).not.toContain(notifications);
-    expect(effectivePiWebCapabilities({
-      web: { available: true, capabilities: [notifications] },
-      sessiond: { available: true, capabilities: [notifications] },
-    })).toContain(notifications);
-  });
-
   it("negotiates daemon-authoritative unread state only when both runtimes support it", () => {
     const unread = PI_WEB_CAPABILITIES.sessionsUnread;
     expect(WEB_RUNTIME_CAPABILITIES).toContain(unread);

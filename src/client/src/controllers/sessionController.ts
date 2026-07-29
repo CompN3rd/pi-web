@@ -37,7 +37,6 @@ export interface SessionNotificationSessionBridge {
   clearSelectedSession(): void;
   refreshSelectedSession(session: SessionRef, machineId: string): Promise<void>;
   applyInboxEvent(machineId: string, event: SessionNotificationInboxEvent): void;
-  shouldFilterLegacyNotification(machineId: string, notificationId: string | undefined): boolean;
 }
 
 export interface PromptEditorTextReplacement {
@@ -1424,7 +1423,10 @@ export class SessionController {
       this.notifications?.applyInboxEvent(selectedMachineId(this.getState()), event);
       return;
     }
-    if (event.type === "command.output" && this.notifications?.shouldFilterLegacyNotification(selectedMachineId(this.getState()), event.notificationId) === true) return;
+    // The daemon mirrors every notification into the output stream with its
+    // notification id. The notification inbox owns those cards, so the chat
+    // transcript always drops the marked duplicate.
+    if (event.type === "command.output" && event.notificationId !== undefined && event.notificationId !== "") return;
 
     // Drop events already reflected in the seeded join snapshot (committed
     // history + partial). Everything past the watermark applies exactly once,
