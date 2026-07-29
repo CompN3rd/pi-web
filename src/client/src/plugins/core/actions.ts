@@ -1,7 +1,6 @@
 import { isSessionActive } from "../../../../shared/activity";
 import type { AppState } from "../../appState";
-import { selectedMachineId } from "../../controllers/types";
-import { isArchivableSessionInfo, isTransientNewSessionInfo, sessionPersistenceOptionsForRuntime } from "../../sessionPersistence";
+import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../../sessionPersistence";
 import { isWorkspaceDeletionPending } from "../../workspaceDeletion";
 import type { PluginAction } from "../types";
 
@@ -236,18 +235,14 @@ function hasSelectableSession(context: { state: AppState }): boolean {
 }
 
 function hasArchivableSession(context: { state: AppState }): boolean {
-  return isArchivableSessionInfo(context.state.selectedSession, context.state.status, sessionPersistenceOptions(context.state));
+  return isArchivableSessionInfo(context.state.selectedSession, context.state.status);
 }
 
 function hasTransientNewSession(context: { state: AppState }): boolean {
-  return isTransientNewSessionInfo(context.state.selectedSession, context.state.status, sessionPersistenceOptions(context.state));
+  return isTransientNewSessionInfo(context.state.selectedSession, context.state.status);
 }
 
 function hasReloadableSession(context: { state: AppState }): boolean {
-  if (!isArchivableSessionInfo(context.state.selectedSession, context.state.status, sessionPersistenceOptions(context.state))) return false;
+  if (!isArchivableSessionInfo(context.state.selectedSession, context.state.status)) return false;
   return !isSessionActive(context.state.status, context.state.activity);
-}
-
-function sessionPersistenceOptions(state: AppState) {
-  return sessionPersistenceOptionsForRuntime(state.machineRuntimes[selectedMachineId(state)]);
 }

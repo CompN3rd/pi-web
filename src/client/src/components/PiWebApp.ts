@@ -26,7 +26,6 @@ import { machineSessionKey } from "../machineKeys";
 import { resolveParentSessionLocation, type ParentSessionLocation } from "../parentSessionLocation";
 import { sessionCleanupRequestKey } from "../sessionCleanupUi";
 import { selectedNotificationView } from "../sessionNotifications";
-import { hasAuthoritativeSessionPersistence as runtimeHasAuthoritativeSessionPersistence } from "../sessionPersistence";
 import { SessionUnreadController } from "../sessionUnread";
 import { deriveUnreadPresence, EMPTY_UNREAD_PRESENCE, sameUnreadPresence, type UnreadPresence } from "../unreadPresence";
 import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility, toggleSessionWarnings } from "../sessionWarningVisibility";
@@ -1227,10 +1226,6 @@ export class PiWebApp extends LitElement {
     this.panelResize.resetPanels();
   }
 
-  private hasAuthoritativeSessionPersistence(): boolean {
-    return runtimeHasAuthoritativeSessionPersistence(this.selectedMachineRuntime());
-  }
-
   private supportsWorkspaceFileSuggestions(machineId = selectedMachineId(this.state)): boolean {
     if (machineId === "local") return true;
     // COMPAT-CAP workspace.fileSuggestions: remote machines without this
@@ -1308,7 +1303,6 @@ export class PiWebApp extends LitElement {
         .selectedSession=${this.state.selectedSession}
         .startingSessionCount=${this.state.startingSessionCount}
         .canStartSession=${!!this.state.selectedWorkspace}
-        .authoritativeSessionPersistence=${this.hasAuthoritativeSessionPersistence()}
         .collapsible=${true}
         .compact=${this.appShell.isMobileNavigationLayout}
         .projectsCollapsed=${this.navigationSections.isCollapsed("projects")}

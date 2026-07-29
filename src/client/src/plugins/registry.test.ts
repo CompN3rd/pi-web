@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, MoveWorkspaceFileResponse, SessionInfo, SessionStatus, WriteWorkspaceFileResponse, Workspace } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { markCachedNewSessionInfo } from "../cachedNewSessions";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { corePlugin } from "./core";
 import { PluginRegistry } from "./registry";
@@ -179,18 +178,13 @@ describe("PluginRegistry", () => {
     const registry = new PluginRegistry();
     registry.register({ id: "core", plugin: corePlugin });
 
-    const persistedStateRuntime = { local: { machineId: "local", ok: true as const, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsPersistedState] } };
-    const persistedActions = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }), machineRuntimes: persistedStateRuntime }).context);
+    const persistedActions = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }) }).context);
     expect(persistedActions.find((action) => action.id === "core:session.archive")?.enabled).toBe(true);
     expect(persistedActions.find((action) => action.id === "core:session.delete")?.enabled).toBe(false);
 
-    const unknownActions = registry.getActions(createContext({ selectedSession: testSession(), machineRuntimes: persistedStateRuntime }).context);
+    const unknownActions = registry.getActions(createContext({ selectedSession: testSession() }).context);
     expect(unknownActions.find((action) => action.id === "core:session.archive")?.enabled).toBe(false);
     expect(unknownActions.find((action) => action.id === "core:session.delete")?.enabled).toBe(false);
-
-    const legacyUnknownActions = registry.getActions(createContext({ selectedSession: testSession() }).context);
-    expect(legacyUnknownActions.find((action) => action.id === "core:session.archive")?.enabled).toBe(true);
-    expect(legacyUnknownActions.find((action) => action.id === "core:session.delete")?.enabled).toBe(false);
 
     const transientActions = registry.getActions(createContext({ selectedSession: testSession({ persisted: false }) }).context);
     expect(transientActions.find((action) => action.id === "core:session.archive")?.enabled).toBe(false);
@@ -221,10 +215,8 @@ describe("PluginRegistry", () => {
   it("enables session disk reload only for a writable, idle session", () => {
     const registry = new PluginRegistry();
     registry.register({ id: "core", plugin: corePlugin });
-    const authoritativeRuntime = { local: { machineId: "local", ok: true as const, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsPersistedState] } };
-    const nonAuthoritativeRuntime = { local: { machineId: "local", ok: true as const, checkedAt: "now", capabilities: [] } };
 
-    const reloadable = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }), machineRuntimes: authoritativeRuntime }).context);
+    const reloadable = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }) }).context);
     const reloadableAction = reloadable.find((action) => action.id === "core:session.reload");
     expect(reloadableAction?.enabled).toBe(true);
     expect(reloadableAction?.title).toBe("Reload Session from Disk");
@@ -233,29 +225,25 @@ describe("PluginRegistry", () => {
     const noRuntime = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }) }).context);
     expect(noRuntime.find((action) => action.id === "core:session.reload")?.enabled).toBe(true);
 
-    const unknown = registry.getActions(createContext({ selectedSession: testSession(), machineRuntimes: authoritativeRuntime }).context);
+    const unknown = registry.getActions(createContext({ selectedSession: testSession() }).context);
     expect(unknown.find((action) => action.id === "core:session.reload")?.enabled).toBe(false);
 
-    const legacyUnknown = registry.getActions(createContext({ selectedSession: testSession(), machineRuntimes: nonAuthoritativeRuntime }).context);
-    expect(legacyUnknown.find((action) => action.id === "core:session.reload")?.enabled).toBe(true);
-
-    const transient = registry.getActions(createContext({ selectedSession: testSession({ persisted: false }), machineRuntimes: authoritativeRuntime }).context);
+    const transient = registry.getActions(createContext({ selectedSession: testSession({ persisted: false }) }).context);
     expect(transient.find((action) => action.id === "core:session.reload")?.enabled).toBe(false);
 
-    const archived = registry.getActions(createContext({ selectedSession: { ...testSession({ persisted: true }), archived: true, archivedAt: "2026-05-20T00:00:00.000Z" }, machineRuntimes: authoritativeRuntime }).context);
+    const archived = registry.getActions(createContext({ selectedSession: { ...testSession({ persisted: true }), archived: true, archivedAt: "2026-05-20T00:00:00.000Z" } }).context);
     expect(archived.find((action) => action.id === "core:session.reload")?.enabled).toBe(false);
 
-    const busy = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }), machineRuntimes: authoritativeRuntime, status: testStatus({ persisted: true, isStreaming: true }) }).context);
+    const busy = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }), status: testStatus({ persisted: true, isStreaming: true }) }).context);
     expect(busy.find((action) => action.id === "core:session.reload")?.enabled).toBe(false);
   });
 
   it("treats a session that is only starting up as having no work to stop or block", () => {
     const registry = new PluginRegistry();
     registry.register({ id: "core", plugin: corePlugin });
-    const reloadRuntime = { local: { machineId: "local", ok: true as const, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsPersistedState] } };
     const startupActivity = { sessionId: "s1", phase: "active" as const, label: "Opening session", detail: "Starting the Pi session", at: "now", startup: true };
 
-    const opening = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }), status: testStatus({ persisted: true }), activity: startupActivity, machineRuntimes: reloadRuntime }).context);
+    const opening = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }), status: testStatus({ persisted: true }), activity: startupActivity }).context);
 
     // Nothing is being worked on, so there is nothing to stop and no reason to
     // block a reload with "Stop current session activity before reloading".
@@ -263,7 +251,7 @@ describe("PluginRegistry", () => {
     expect(opening.find((action) => action.id === "core:session.reload")?.enabled).toBe(true);
 
     // Real work is still real work, whatever else the session is doing.
-    const working = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }), status: testStatus({ persisted: true, isStreaming: true }), activity: startupActivity, machineRuntimes: reloadRuntime }).context);
+    const working = registry.getActions(createContext({ selectedSession: testSession({ persisted: true }), status: testStatus({ persisted: true, isStreaming: true }), activity: startupActivity }).context);
     expect(working.find((action) => action.id === "core:session.stop")?.enabled).toBe(true);
     expect(working.find((action) => action.id === "core:session.reload")?.enabled).toBe(false);
   });

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { initialAppState } from "../appState";
 import { ChatTranscriptStore } from "../chatTranscriptStore";
 import { SessionController } from "./sessionController";
@@ -60,14 +59,13 @@ describe("SessionController reload and selection", () => {
     expect(state.error).toBe("");
   });
 
-  it("does not reload sessions from disk without a persisted server signal when persistence is authoritative", async () => {
+  it("does not reload sessions from disk without a persisted server signal", async () => {
     const reloadCalls: string[] = [];
     let state: AppState = {
       ...initialAppState(),
       selectedWorkspace: workspace,
       selectedSession: oldSession,
       sessions: [oldSession],
-      machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsPersistedState] } },
     };
     const api: typeof defaultApi = {
       ...defaultApi,

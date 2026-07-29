@@ -34,31 +34,6 @@ describe("SessionController archive and cleanup", () => {
     expect(urlUpdates).toEqual([undefined]);
   });
 
-  it("archives legacy sessions when persistence support is not advertised", async () => {
-    const legacySession = { ...oldSession };
-    const archivedIds: string[] = [];
-    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: legacySession, sessions: [legacySession] };
-    const api: typeof defaultApi = {
-      ...defaultApi,
-      archive: (session) => {
-        archivedIds.push(sessionLookupId(session));
-        return Promise.resolve({ archived: true });
-      },
-    };
-    const controller = new SessionController(
-      () => state,
-      (patch) => { state = { ...state, ...patch }; },
-      () => undefined,
-      new InMemorySessionSelectionMemory(),
-      { api, socket: new FakeSocket() },
-    );
-
-    await controller.archiveSession(legacySession);
-
-    expect(archivedIds).toEqual([legacySession.id]);
-    expect(state.sessions[0]).toMatchObject({ id: legacySession.id, archived: true });
-  });
-
   it("archives selected session descendants and selects the next active session", async () => {
     const persistedSession = { ...oldSession, persisted: true };
     const childSession = { ...oldSession, id: "child-session", path: "/tmp/child-session.jsonl", parentSessionPath: persistedSession.path, persisted: true };
