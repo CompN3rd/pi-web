@@ -133,8 +133,8 @@ export function chatMessageGroupLabel(defaultOpen: boolean): string {
 }
 
 /** Whether a queued-message section shows the server clear-queue action. */
-export function chatQueuedSectionShowsClearAction(section: QueuedMessageSection, canClearServerQueue: boolean, hasClearHandler: boolean): boolean {
-  return section.source === "server" && canClearServerQueue && hasClearHandler;
+export function chatQueuedSectionShowsClearAction(section: QueuedMessageSection, hasClearHandler: boolean): boolean {
+  return section.source === "server" && hasClearHandler;
 }
 
 /** A rendered session-warning row derived from live status warnings. */
@@ -205,7 +205,6 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) onCancelDialog?: ExtensionDialogCancelCallback;
   @property({ attribute: false }) onDismissClosedDialog?: ExtensionDialogDismissCallback;
   @property({ attribute: false }) notificationInbox?: SelectedSessionNotificationView;
-  @property({ type: Boolean }) canClearServerQueue = false;
   @property({ attribute: false }) onClearServerQueue?: () => void;
   @property({ attribute: false }) onDismissWarning?: (dismissId: string) => void;
   @property({ attribute: false }) onDismissNotification?: (notificationId: string) => void;
@@ -654,7 +653,7 @@ export class ChatView extends LitElement {
   }
 
   private renderQueuedMessageList(section: QueuedMessageSection) {
-    const canClear = chatQueuedSectionShowsClearAction(section, this.canClearServerQueue, this.onClearServerQueue !== undefined);
+    const canClear = chatQueuedSectionShowsClearAction(section, this.onClearServerQueue !== undefined);
     return html`
       <aside class="queued-messages" aria-live="polite">
         <div class="queued-header">

@@ -7,7 +7,6 @@ export const KNOWN_PI_WEB_CAPABILITIES = Object.values(PI_WEB_CAPABILITIES);
 const knownPiWebCapabilities: ReadonlySet<string> = new Set(KNOWN_PI_WEB_CAPABILITIES);
 
 export const WEB_RUNTIME_CAPABILITIES = [
-  PI_WEB_CAPABILITIES.sessionsClearQueue,
   PI_WEB_CAPABILITIES.sessionsPersistedState,
   PI_WEB_CAPABILITIES.sessionsNotifications,
   PI_WEB_CAPABILITIES.sessionsUnread,
@@ -19,7 +18,6 @@ export const WEB_RUNTIME_CAPABILITIES = [
 ] as const satisfies readonly PiWebCapability[];
 
 export const SESSIOND_RUNTIME_CAPABILITIES = [
-  PI_WEB_CAPABILITIES.sessionsClearQueue,
   PI_WEB_CAPABILITIES.sessionsPersistedState,
   PI_WEB_CAPABILITIES.sessionsNotifications,
   PI_WEB_CAPABILITIES.sessionsUnread,
@@ -27,7 +25,6 @@ export const SESSIOND_RUNTIME_CAPABILITIES = [
 ] as const satisfies readonly PiWebCapability[];
 
 const EFFECTIVE_CAPABILITY_REQUIREMENTS = {
-  [PI_WEB_CAPABILITIES.sessionsClearQueue]: ["web", "sessiond"],
   [PI_WEB_CAPABILITIES.sessionsPersistedState]: ["web", "sessiond"],
   [PI_WEB_CAPABILITIES.sessionsNotifications]: ["web", "sessiond"],
   [PI_WEB_CAPABILITIES.sessionsUnread]: ["web", "sessiond"],
