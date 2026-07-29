@@ -61,13 +61,13 @@ describe("buildApp machine routes", () => {
         packageName: "@jmfederico/pi-web",
         generatedAt: "2026-05-25T00:00:00.000Z",
         components: {
-          web: { component: "web", label: "Remote Web", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"] },
+          web: { component: "web", label: "Remote Web", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.sessionsAskUser, PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"] },
           sessiond: {
             component: "sessiond",
             label: "Remote Sessiond",
             runtimeVersion: "1.0.0",
             available: true,
-            capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived],
+            capabilities: [PI_WEB_CAPABILITIES.sessionsAskUser],
             activeAgentProfile: {
               schemaVersion: 1,
               revision: `sha256:${"a".repeat(64)}`,
@@ -77,7 +77,7 @@ describe("buildApp machine routes", () => {
             },
           },
         },
-        capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"],
+        capabilities: [PI_WEB_CAPABILITIES.sessionsAskUser, PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"],
       },
     }));
     appTestContext.remoteClient = fakeRemoteClient({ requestJson });
@@ -90,7 +90,7 @@ describe("buildApp machine routes", () => {
     expect(runtime.json()).toMatchObject({
       machineId: remote.id,
       ok: true,
-      capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig],
+      capabilities: [PI_WEB_CAPABILITIES.sessionsAskUser, PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig],
       components: { sessiond: { activeAgentProfile: { command: "remote-agent", dir: "/srv/remote-agent" } } },
     });
     expect(requestJson).toHaveBeenCalledTimes(2);

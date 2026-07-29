@@ -1227,14 +1227,6 @@ export class PiWebApp extends LitElement {
     this.panelResize.resetPanels();
   }
 
-  private canDeleteArchivedSessions(): boolean {
-    const runtime = this.selectedMachineRuntime();
-    // COMPAT-CAP sessions.deleteArchived: older federated machines may support
-    // the legacy DELETE route without advertising runtime capabilities. Only
-    // block when capability discovery succeeds and reports no support.
-    return runtime?.ok !== true || supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsDeleteArchived);
-  }
-
   private canReloadSessions(): boolean {
     const runtime = this.selectedMachineRuntime();
     return runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsReload);
@@ -1260,11 +1252,6 @@ export class PiWebApp extends LitElement {
     // capability stay on the legacy cwd-based /files route.
     const runtime = this.state.machineRuntimes[machineId];
     return runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.workspaceFileSuggestions);
-  }
-
-  private archivedDeleteUnavailableMessage(): string {
-    const machineName = this.state.selectedMachine?.name ?? "this machine";
-    return `Update and restart Pi-Web on ${machineName} to delete archived sessions.`;
   }
 
   private sessionCleanupUnavailableMessage(): string {
@@ -1348,11 +1335,9 @@ export class PiWebApp extends LitElement {
         .selectedSession=${this.state.selectedSession}
         .startingSessionCount=${this.state.startingSessionCount}
         .canStartSession=${!!this.state.selectedWorkspace}
-        .canDeleteArchivedSessions=${this.canDeleteArchivedSessions()}
         .canReloadSessions=${this.canReloadSessions()}
         .canCleanupSessions=${this.canCleanupSessions()}
         .authoritativeSessionPersistence=${this.hasAuthoritativeSessionPersistence()}
-        .archivedDeleteUnavailableMessage=${this.archivedDeleteUnavailableMessage()}
         .cleanupUnavailableMessage=${this.sessionCleanupUnavailableMessage()}
         .collapsible=${true}
         .compact=${this.appShell.isMobileNavigationLayout}

@@ -607,13 +607,6 @@ export class SessionController {
     if (candidates.length === 0) return;
 
     const machineId = selectedMachineId(this.getState());
-    const runtime = this.getState().machineRuntimes[machineId];
-    // Preserve legacy federated deletes when capability discovery is unavailable;
-    // only a positive runtime response without support should block the action.
-    if (runtime?.ok === true && !supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsDeleteArchived)) {
-      this.setState({ error: "Deleting archived sessions requires an updated Pi-Web runtime on this machine." });
-      return;
-    }
     try {
       const { succeededIds: deletedIds, failures } = await this.deleteArchivedSessionBatch(candidates, machineId);
       if (deletedIds.length > 0) {

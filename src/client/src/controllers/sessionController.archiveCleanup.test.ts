@@ -208,13 +208,7 @@ describe("SessionController archive and cleanup", () => {
     const archivedSession = { ...oldSession, archived: true, archivedAt: "later" };
     const nextSession = { ...oldSession, id: "next-session", path: "/tmp/next-session.jsonl" };
     const deletedIds: string[] = [];
-    let state: AppState = {
-      ...initialAppState(),
-      selectedWorkspace: workspace,
-      selectedSession: archivedSession,
-      sessions: [archivedSession, nextSession],
-      machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived] } },
-    };
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: archivedSession, sessions: [archivedSession, nextSession] };
     const api: typeof defaultApi = {
       ...defaultApi,
       deleteArchived: (session) => {
@@ -248,7 +242,7 @@ describe("SessionController archive and cleanup", () => {
       selectedWorkspace: workspace,
       selectedSession: deletedSession,
       sessions: [deletedSession, failedSession],
-      machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.sessionsBulkMutations] } },
+      machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsBulkMutations] } },
     };
     const api: typeof defaultApi = {
       ...defaultApi,
@@ -322,57 +316,5 @@ describe("SessionController archive and cleanup", () => {
     expect(state.sessionStatuses[oldSession.id]).toBeUndefined();
     expect(state.sessionStatuses[deletedArchived.id]).toBeUndefined();
     expect(state.sessionActivities[oldSession.id]).toBeUndefined();
-  });
-
-  it("does not delete archived sessions when the selected machine runtime reports no support", async () => {
-    const archivedSession = { ...oldSession, archived: true, archivedAt: "later" };
-    const deletedIds: string[] = [];
-    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [archivedSession], machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [] } } };
-    const api: typeof defaultApi = {
-      ...defaultApi,
-      deleteArchived: (session) => {
-        deletedIds.push(sessionLookupId(session));
-        return Promise.resolve({ deleted: true });
-      },
-    };
-    const controller = new SessionController(
-      () => state,
-      (patch) => { state = { ...state, ...patch }; },
-      () => undefined,
-      new InMemorySessionSelectionMemory(),
-      { api, socket: new FakeSocket() },
-    );
-
-    await controller.deleteArchivedSessions([archivedSession]);
-
-    expect(deletedIds).toEqual([]);
-    expect(state.sessions).toEqual([archivedSession]);
-    expect(state.error).toContain("requires an updated Pi-Web runtime");
-  });
-
-  it("allows legacy archived-session deletion when runtime support is unknown", async () => {
-    const archivedSession = { ...oldSession, archived: true, archivedAt: "later" };
-    const deletedIds: string[] = [];
-    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: archivedSession, sessions: [archivedSession] };
-    const api: typeof defaultApi = {
-      ...defaultApi,
-      deleteArchived: (session) => {
-        deletedIds.push(sessionLookupId(session));
-        return Promise.resolve({ deleted: true });
-      },
-    };
-    const controller = new SessionController(
-      () => state,
-      (patch) => { state = { ...state, ...patch }; },
-      () => undefined,
-      new InMemorySessionSelectionMemory(),
-      { api, socket: new FakeSocket() },
-    );
-
-    await controller.deleteArchivedSessions([archivedSession]);
-
-    expect(deletedIds).toEqual([archivedSession.id]);
-    expect(state.sessions).toEqual([]);
-    expect(state.error).toBe("");
   });
 });
