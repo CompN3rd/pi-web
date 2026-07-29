@@ -1165,14 +1165,10 @@ function optionalOAuthDeviceCode(value: unknown): NonNullable<OAuthFlowState["au
 function optionalOAuthPrompt(value: unknown): OAuthFlowState["prompt"] | undefined {
   if (value === undefined) return undefined;
   const record = requireRecord(value);
-  const kind = requireString(record, "kind");
-  if (kind !== "prompt" && kind !== "manual") throw new Error("Invalid OAuth prompt kind");
-  const promptType = record["promptType"] === undefined ? (kind === "manual" ? "manual_code" : "text") : parseOAuthPromptType(record["promptType"]);
   return {
     requestId: requireString(record, "requestId"),
     message: requireString(record, "message"),
-    kind,
-    promptType,
+    promptType: parseOAuthPromptType(record["promptType"]),
     ...optionalField("placeholder", optionalString(record, "placeholder")),
     ...optionalField("allowEmpty", optionalBoolean(record, "allowEmpty")),
   };

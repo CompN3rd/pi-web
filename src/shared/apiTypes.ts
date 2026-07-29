@@ -782,7 +782,7 @@ export interface AuthProviderOption {
   name: string;
   authType: AuthType;
   status: AuthProviderStatus;
-  /** Additive hint: use the generic AuthInteraction transport instead of the legacy one-secret form. */
+  /** Present when the provider logs in through the generic AuthInteraction flow. */
   loginFlow?: "interactive";
 }
 
@@ -805,9 +805,7 @@ export interface OAuthFlowState {
     message: string;
     placeholder?: string;
     allowEmpty?: boolean;
-    /** Additive semantic detail; legacy peers continue to use `kind`. */
-    promptType?: "text" | "secret" | "manual_code";
-    kind: "prompt" | "manual";
+    promptType: "text" | "secret" | "manual_code";
   };
   select?: { requestId: string; message: string; options: CommandOption[] };
   progress: string[];
