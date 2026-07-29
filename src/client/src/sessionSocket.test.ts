@@ -155,9 +155,136 @@ describe("notification socket guards", () => {
     // Dialog frames are per-session only, so they must not be accepted globally.
     expect(parseRealtimeSocketEvent({ type: "dialog.opened", dialog })).toBeUndefined();
   });
+});
 
-  it("preserves existing event acceptance without treating unknown types as realtime events", () => {
-    expect(parseSessionSocketEvent({ type: "command.output", level: "info", message: "legacy" })).toMatchObject({ type: "command.output" });
+function statusWire() {
+  return {
+    sessionId: "session-1",
+    isStreaming: true,
+    isCompacting: false,
+    isBashRunning: false,
+    pendingMessageCount: 0,
+    queuedMessages: [],
+    tokens: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 },
+    cost: 0.5,
+  };
+}
+
+function activityWire() {
+  return { sessionId: "session-1", phase: "active", label: "running bash", detail: "ls", at: "2026-07-20T00:00:01.000Z" };
+}
+
+function sessionInfoWire() {
+  return {
+    id: "session-1",
+    path: "/repo/.pi/sessions/session-1.jsonl",
+    cwd: "/repo",
+    created: "2026-07-20T00:00:00.000Z",
+    modified: "2026-07-20T00:00:01.000Z",
+    messageCount: 2,
+    firstMessage: "hello",
+  };
+}
+
+function terminalInfoWire() {
+  return { id: "terminal-1", cwd: "/repo", name: "bash", createdAt: "2026-07-20T00:00:00.000Z", exited: false };
+}
+
+function workspaceActivityWire() {
+  return { cwd: "/repo", hasSessionActivity: true, hasTerminalActivity: false, updatedAt: "2026-07-20T00:00:00.000Z" };
+}
+
+describe("socket stream validation", () => {
+  it("accepts the full session stream vocabulary with valid payloads", () => {
+    const validFrames = [
+      { type: "message.append", message: { role: "user", content: [] } },
+      { type: "assistant.delta", text: "hello" },
+      { type: "assistant.thinking.delta", text: "thinking" },
+      { type: "tool.start", toolName: "read", toolCallId: "call-1", summary: "read file", args: { path: "/a" } },
+      { type: "tool.update", toolName: "read", toolCallId: "call-1", text: "partial", content: [], details: {} },
+      { type: "tool.end", toolName: "read", toolCallId: "call-1", text: "done", isError: false },
+      { type: "shell.start", command: "ls", excludeFromContext: true },
+      { type: "shell.chunk", chunk: "out" },
+      { type: "shell.end", output: "out", exitCode: 0, cancelled: false, truncated: false, fullOutputPath: "/tmp/out", isError: false },
+      { type: "shell.end", exitCode: null },
+      { type: "agent.start" },
+      { type: "agent.end" },
+      { type: "message.end", message: { role: "assistant" } },
+      { type: "message.end" },
+      { type: "status.update", status: statusWire() },
+      { type: "activity.update", activity: activityWire() },
+      { type: "command.output", level: "success", message: "done", notificationId: "daemon-a:1" },
+      { type: "session.error", message: "boom" },
+      { type: "session.name", sessionId: "session-1", name: "rename" },
+      { type: "session.created", session: sessionInfoWire() },
+      { type: "pi.event", eventType: "turn_start" },
+    ];
+    for (const frame of validFrames) expect(parseSessionSocketEvent(frame)).toEqual(frame);
+  });
+
+  it("drops malformed session stream frames instead of accepting them on type alone", () => {
+    expect(parseSessionSocketEvent({ type: "message.append" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "assistant.delta" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "assistant.delta", text: 7 })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "assistant.thinking.delta", text: true })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "tool.start", toolName: "read", toolCallId: "call-1" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "tool.update", toolName: "read", toolCallId: "call-1", text: 4 })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "tool.end", toolName: "read", toolCallId: "call-1", text: "done" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "shell.start", command: "ls", excludeFromContext: "yes" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "shell.chunk", chunk: 8 })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "shell.end", exitCode: "0" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "shell.end", cancelled: "no" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "command.output", level: "verbose", message: "x" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "command.output", level: "info" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "session.error" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "session.name", name: "rename" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "session.name", sessionId: "" })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "session.created", session: { id: "session-1" } })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "pi.event", eventType: 9 })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "status.update", status: { sessionId: "session-1" } })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "activity.update", activity: { ...activityWire(), phase: "waiting" } })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "session.startup", activity: activityWire() })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "terminal.created", terminal: terminalInfoWire() })).toBeUndefined();
+    expect(parseSessionSocketEvent({ type: "totally.unknown" })).toBeUndefined();
+  });
+
+  it("rebuilds stream frames from validated fields and carries the hub seq stamp", () => {
+    // The join-time exactly-once filter reads seq, so validation must not strip
+    // it; a non-numeric stamp fails open rather than dropping the frame.
+    expect(parseSessionSocketEvent({ type: "assistant.delta", text: "hi", seq: 41, bogus: "dropped" }))
+      .toEqual({ type: "assistant.delta", text: "hi", seq: 41 });
+    expect(parseSessionSocketEvent({ type: "assistant.delta", text: "hi", seq: "41" }))
+      .toEqual({ type: "assistant.delta", text: "hi" });
+    expect(parseSessionSocketEvent({ type: "assistant.delta", text: "hi" }))
+      .toEqual({ type: "assistant.delta", text: "hi" });
+  });
+
+  it("accepts the full realtime vocabulary with valid payloads", () => {
+    const validFrames = [
+      { type: "status.update", status: statusWire() },
+      { type: "activity.update", activity: activityWire() },
+      { type: "session.name", sessionId: "session-1", name: "rename" },
+      { type: "session.created", session: sessionInfoWire() },
+      { type: "terminal.created", terminal: terminalInfoWire() },
+      { type: "terminal.exited", terminal: { ...terminalInfoWire(), exited: true, exitCode: 0 } },
+      { type: "terminal.closed", terminalId: "terminal-1", cwd: "/repo" },
+      { type: "workspace.activity", activity: workspaceActivityWire() },
+    ];
+    for (const frame of validFrames) expect(parseRealtimeSocketEvent(frame)).toEqual(frame);
+  });
+
+  it("drops malformed realtime frames instead of accepting them on type alone", () => {
+    expect(parseRealtimeSocketEvent({ type: "status.update", status: { sessionId: "session-1" } })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "activity.update", activity: { ...activityWire(), phase: "waiting" } })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "session.name", name: "rename" })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "session.created", session: {} })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "terminal.created", terminal: { id: "terminal-1" } })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "terminal.exited", terminal: null })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "terminal.closed", terminalId: "terminal-1" })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "terminal.closed", terminalId: "", cwd: "/repo" })).toBeUndefined();
+    expect(parseRealtimeSocketEvent({ type: "workspace.activity", activity: { cwd: "/repo" } })).toBeUndefined();
+    // Per-session stream frames are not accepted on the global socket.
+    expect(parseRealtimeSocketEvent({ type: "assistant.delta", text: "hi" })).toBeUndefined();
     expect(parseRealtimeSocketEvent({ type: "future.notification", payload: {} })).toBeUndefined();
   });
 });
