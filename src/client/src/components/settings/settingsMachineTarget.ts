@@ -7,14 +7,12 @@ export interface SettingsMachineTarget {
   kind: MachineKind;
 }
 
-export type SelectedMachineSettingsSupportState = "supported" | "unsupported" | "unknown";
+export type AgentProfileSettingsSupportState = "supported" | "unsupported" | "unknown";
 
-export interface SelectedMachineSettingsSupport {
-  state: SelectedMachineSettingsSupportState;
+export interface AgentProfileSettingsSupport {
+  state: AgentProfileSettingsSupportState;
   message?: string;
 }
-
-export type AgentProfileSettingsSupport = SelectedMachineSettingsSupport;
 
 export function settingsMachineTarget(machine: Pick<Machine, "id" | "name" | "kind"> | undefined): SettingsMachineTarget {
   if (machine !== undefined) return { id: machine.id, name: machine.name, kind: machine.kind };
@@ -23,13 +21,6 @@ export function settingsMachineTarget(machine: Pick<Machine, "id" | "name" | "ki
 
 export function settingsMachineTargetLabel(target: SettingsMachineTarget): string {
   return target.kind === "local" ? `${target.name} (local gateway)` : `${target.name} (remote machine)`;
-}
-
-export function selectedMachineSettingsSupport(target: SettingsMachineTarget, runtime: Pick<MachineRuntime, "ok" | "capabilities"> | undefined): SelectedMachineSettingsSupport {
-  if (target.kind === "local") return { state: "supported" };
-  if (runtime?.ok !== true) return { state: "unknown" };
-  if (supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.selectedMachineSettings)) return { state: "supported" };
-  return { state: "unsupported", message: selectedMachineSettingsUnavailableMessage(target) };
 }
 
 export function agentProfileSettingsSupport(target: SettingsMachineTarget, runtime: Pick<MachineRuntime, "ok" | "capabilities"> | undefined): AgentProfileSettingsSupport {
@@ -47,28 +38,13 @@ export function agentProfileSettingsSupport(target: SettingsMachineTarget, runti
   };
 }
 
-export function selectedMachineSettingsSupportKey(support: SelectedMachineSettingsSupport): string {
-  return `${support.state}:${support.message ?? ""}`;
-}
-
-export function isSelectedMachineSettingsUnsupported(support: SelectedMachineSettingsSupport | undefined): support is SelectedMachineSettingsSupport & { state: "unsupported" } {
-  return support?.state === "unsupported";
-}
-
 export function isAgentProfileSettingsSupported(support: AgentProfileSettingsSupport | undefined): boolean {
   return support?.state === "supported";
-}
-
-export function selectedMachineSettingsUnavailableMessage(target: SettingsMachineTarget): string {
-  return `Selected-machine settings are not available on ${target.name}. Update and restart PI WEB on that machine, then try again.`;
 }
 
 export function friendlySelectedMachineSettingsErrorMessage(message: string, target: SettingsMachineTarget): string {
   const normalized = message.trim();
   if (target.kind !== "remote") return normalized;
-  if (isUnsupportedRemoteSelectedMachineSettingsRouteMessage(normalized)) {
-    return selectedMachineSettingsUnavailableMessage(target);
-  }
   if (normalized === "Remote machine timeout") {
     return `Timed out while contacting ${target.name} for selected-machine settings. The operation may still be running remotely; reload before retrying.`;
   }
@@ -76,10 +52,4 @@ export function friendlySelectedMachineSettingsErrorMessage(message: string, tar
     return `Could not reach ${target.name} for selected-machine settings. Check the machine connection and try again.`;
   }
   return normalized;
-}
-
-function isUnsupportedRemoteSelectedMachineSettingsRouteMessage(message: string): boolean {
-  return message === "Not Found"
-    || /route\s+(GET|PUT):?\/api\/(config|plugins)\b.*not found/iu.test(message)
-    || /cannot\s+(GET|PUT)\s+.*\/api\/(config|plugins)\b/iu.test(message);
 }

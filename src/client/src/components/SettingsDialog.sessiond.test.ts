@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { configApi, pluginsApi, type PiWebConfigResponse, type PiWebPluginsResponse } from "../api";
 import { SettingsDialog } from "./SettingsDialog";
-import { callDialogPromise, callDialogUpdated, configResponse, deferred, getDialogProperty, pluginInfo, pluginsResponse, remoteMachine, runtimeWithPackageManagement as runtimeWithoutSelectedMachineSettings, secondRemoteMachine, setDialogProperty, stubWindowTimers } from "./SettingsDialog.testSupport";
+import { callDialogPromise, callDialogUpdated, configResponse, deferred, getDialogProperty, remoteMachine, secondRemoteMachine, setDialogProperty, stubWindowTimers } from "./SettingsDialog.testSupport";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -81,7 +81,7 @@ describe("settings-dialog session daemon machine targeting", () => {
       machineId: remoteMachine.id,
       ok: true,
       checkedAt: "now",
-      capabilities: [PI_WEB_CAPABILITIES.selectedMachineSettings],
+      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage],
     };
 
     await callDialogPromise(dialog, "saveSessiondConfig", { agent: { command: "agent-lab", dir: "/srv/agent-lab" } });
@@ -101,7 +101,7 @@ describe("settings-dialog session daemon machine targeting", () => {
       machineId: remoteMachine.id,
       ok: true,
       checkedAt: "now",
-      capabilities: [PI_WEB_CAPABILITIES.selectedMachineSettings, PI_WEB_CAPABILITIES.agentProfileConfig],
+      capabilities: [PI_WEB_CAPABILITIES.agentProfileConfig],
     };
 
     await callDialogPromise(dialog, "saveSessiondConfig", patch);
@@ -146,44 +146,6 @@ describe("settings-dialog session daemon machine targeting", () => {
     expect(getDialogProperty(dialog, "sessiondConfigResponse")).toBeUndefined();
     expect(getDialogProperty(dialog, "savedMessage")).toBe("");
     expect(getDialogProperty(dialog, "saving")).toBe(false);
-  });
-
-  it("skips selected-machine settings loads when the remote runtime does not advertise support", async () => {
-    const configSpy = vi.spyOn(configApi, "config").mockResolvedValue(configResponse({ spawnSessions: true }));
-    const pluginsSpy = vi.spyOn(pluginsApi, "plugins").mockResolvedValue(pluginsResponse([pluginInfo("info", true)]));
-    const dialog = new SettingsDialog();
-    dialog.machine = remoteMachine;
-    dialog.machineRuntime = runtimeWithoutSelectedMachineSettings;
-
-    await callDialogPromise(dialog, "loadSessiondConfigForTarget");
-    await callDialogPromise(dialog, "loadAccessConfigForTarget");
-    await callDialogPromise(dialog, "loadPluginsForTarget");
-
-    expect(configSpy).not.toHaveBeenCalled();
-    expect(pluginsSpy).not.toHaveBeenCalled();
-    expect(getDialogProperty(dialog, "sessiondConfigResponse")).toBeUndefined();
-    expect(getDialogProperty(dialog, "accessConfigResponse")).toBeUndefined();
-    expect(getDialogProperty(dialog, "selectedPluginConfigResponse")).toBeUndefined();
-    expect(getDialogProperty(dialog, "sessiondError")).toBe("Selected-machine settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.");
-    expect(getDialogProperty(dialog, "accessError")).toBe("Selected-machine settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.");
-    expect(getDialogProperty(dialog, "pluginError")).toBe("Selected-machine settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.");
-  });
-
-  it("does not save remote selected-machine settings when runtime support is missing", async () => {
-    const saveSpy = vi.spyOn(configApi, "saveConfig").mockResolvedValue(configResponse({ spawnSessions: true }));
-    const dialog = new SettingsDialog();
-    dialog.machine = remoteMachine;
-    dialog.machineRuntime = runtimeWithoutSelectedMachineSettings;
-    setDialogProperty(dialog, "selectedPluginConfigResponse", configResponse({ plugins: { info: { enabled: true } } }));
-
-    await callDialogPromise(dialog, "saveSessiondConfig", { spawnSessions: true });
-    await callDialogPromise(dialog, "saveMachineAccessConfig", { pathAccess: { allowedPaths: ["/mnt/share"] } });
-    await callDialogPromise(dialog, "togglePlugin", "info", false);
-
-    expect(saveSpy).not.toHaveBeenCalled();
-    expect(getDialogProperty(dialog, "sessiondError")).toBe("Selected-machine settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.");
-    expect(getDialogProperty(dialog, "accessError")).toBe("Selected-machine settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.");
-    expect(getDialogProperty(dialog, "pluginError")).toBe("Selected-machine settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.");
   });
 
   it("shows selected-machine settings errors with the selected target name", async () => {

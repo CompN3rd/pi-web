@@ -11,7 +11,7 @@ import "./settings/SettingsShortcutsPanel";
 import { friendlyPiPackageErrorMessage, isPiPackageManagementUnsupported, piPackageManagementSupport, piPackageManagementSupportKey, piPackageMutationFollowUpMessage, piPackageTargetLabel, shouldRefreshGatewayPluginsAfterPiPackageMutation, type PiPackageManagementSupport, type PiPackageOperationState, type PiPackageTargetContext } from "./settings/piPackageSettings";
 import { loadGatewaySettingsData, loadPiPackagesData } from "./settings/settingsDataLoading";
 import { mergeSelectedMachineAccessConfig } from "./settings/settingsMachineAccessConfig";
-import { agentProfileSettingsSupport, friendlySelectedMachineSettingsErrorMessage, isAgentProfileSettingsSupported, isSelectedMachineSettingsUnsupported, selectedMachineSettingsSupport, selectedMachineSettingsSupportKey, settingsMachineTarget, settingsMachineTargetLabel, type AgentProfileSettingsSupport, type SelectedMachineSettingsSupport, type SettingsMachineTarget } from "./settings/settingsMachineTarget";
+import { agentProfileSettingsSupport, friendlySelectedMachineSettingsErrorMessage, isAgentProfileSettingsSupported, settingsMachineTarget, settingsMachineTargetLabel, type AgentProfileSettingsSupport, type SettingsMachineTarget } from "./settings/settingsMachineTarget";
 import { mergeSelectedMachinePluginConfig, pluginEnabledConfigPatch } from "./settings/settingsPluginConfig";
 import { mergeSelectedMachineSessiondConfig } from "./settings/settingsSessiondConfig";
 
@@ -87,14 +87,6 @@ export class SettingsDialog extends LitElement {
     }
 
     if (!changed.has("machineRuntime")) return;
-    if (this.selectedMachineSettingsSupportNeedsReload(changed.get("machineRuntime"), currentTarget)) {
-      this.resetAccessStateForTargetChange();
-      if (this.isConnected) void this.loadAccessConfigForTarget(currentTarget);
-      this.resetSessiondStateForTargetChange();
-      if (this.isConnected) void this.loadSessiondConfigForTarget(currentTarget);
-      this.resetPluginStateForTargetChange();
-      if (this.isConnected) void this.loadPluginsForTarget(currentTarget);
-    }
     if (!this.packageManagementSupportNeedsReload(changed.get("machineRuntime"), currentTarget)) return;
     this.resetPackageStateForTargetChange();
     if (this.isConnected) void this.loadPackagesForTarget(currentTarget);
@@ -248,13 +240,6 @@ export class SettingsDialog extends LitElement {
 
   private async loadAccessConfigForTarget(target = this.settingsTarget()): Promise<void> {
     const requestSeq = ++this.accessLoadRequestSeq;
-    const support = this.selectedMachineSettingsSupport(target);
-    if (isSelectedMachineSettingsUnsupported(support)) {
-      this.accessConfigResponse = undefined;
-      this.accessLoading = false;
-      this.accessError = support.message ?? `Selected-machine settings are not available on ${settingsMachineTargetLabel(target)}.`;
-      return;
-    }
     this.accessLoading = true;
     this.accessError = "";
     try {
@@ -279,13 +264,6 @@ export class SettingsDialog extends LitElement {
 
   private async loadSessiondConfigForTarget(target = this.settingsTarget()): Promise<void> {
     const requestSeq = ++this.sessiondLoadRequestSeq;
-    const support = this.selectedMachineSettingsSupport(target);
-    if (isSelectedMachineSettingsUnsupported(support)) {
-      this.sessiondConfigResponse = undefined;
-      this.sessiondLoading = false;
-      this.sessiondError = support.message ?? `Selected-machine settings are not available on ${settingsMachineTargetLabel(target)}.`;
-      return;
-    }
     this.sessiondLoading = true;
     this.sessiondError = "";
     try {
@@ -303,14 +281,6 @@ export class SettingsDialog extends LitElement {
 
   private async loadPluginsForTarget(target = this.settingsTarget()): Promise<void> {
     const requestSeq = ++this.pluginLoadRequestSeq;
-    const support = this.selectedMachineSettingsSupport(target);
-    if (isSelectedMachineSettingsUnsupported(support)) {
-      this.selectedPluginConfigResponse = undefined;
-      this.selectedPluginsResponse = undefined;
-      this.pluginLoading = false;
-      this.pluginError = support.message ?? `Selected-machine settings are not available on ${settingsMachineTargetLabel(target)}.`;
-      return;
-    }
     this.pluginLoading = true;
     this.pluginError = "";
     try {
@@ -349,11 +319,6 @@ export class SettingsDialog extends LitElement {
   private async togglePlugin(pluginId: string, enabled: boolean): Promise<void> {
     if (this.saving) return;
     const target = this.settingsTarget();
-    const support = this.selectedMachineSettingsSupport(target);
-    if (isSelectedMachineSettingsUnsupported(support)) {
-      this.pluginError = support.message ?? `Selected-machine settings are not available on ${settingsMachineTargetLabel(target)}.`;
-      return;
-    }
     if (this.selectedPluginConfigResponse === undefined) {
       this.pluginError = `Plugin config is not loaded for ${settingsMachineTargetLabel(target)}. Reload before changing plugin enablement.`;
       return;
@@ -403,11 +368,6 @@ export class SettingsDialog extends LitElement {
   private async saveMachineAccessConfig(config: PiWebConfigValues): Promise<void> {
     if (this.saving) return;
     const target = this.settingsTarget();
-    const support = this.selectedMachineSettingsSupport(target);
-    if (isSelectedMachineSettingsUnsupported(support)) {
-      this.accessError = support.message ?? `Selected-machine settings are not available on ${settingsMachineTargetLabel(target)}.`;
-      return;
-    }
     this.saving = true;
     this.accessError = "";
     this.savedMessage = "";
@@ -432,11 +392,6 @@ export class SettingsDialog extends LitElement {
   private async saveSessiondConfig(config: PiWebConfigValues): Promise<void> {
     if (this.saving) return;
     const target = this.settingsTarget();
-    const support = this.selectedMachineSettingsSupport(target);
-    if (isSelectedMachineSettingsUnsupported(support)) {
-      this.sessiondError = support.message ?? `Selected-machine settings are not available on ${settingsMachineTargetLabel(target)}.`;
-      return;
-    }
     if (config.agent !== undefined) {
       const profileSupport = this.agentProfileSettingsSupport(target);
       if (!isAgentProfileSettingsSupported(profileSupport)) {
@@ -537,18 +492,8 @@ export class SettingsDialog extends LitElement {
     return this.settingsTarget();
   }
 
-  private selectedMachineSettingsSupport(target = this.settingsTarget()): SelectedMachineSettingsSupport {
-    return selectedMachineSettingsSupport(target, this.machineRuntime);
-  }
-
   private agentProfileSettingsSupport(target = this.settingsTarget()): AgentProfileSettingsSupport {
     return agentProfileSettingsSupport(target, this.machineRuntime);
-  }
-
-  private selectedMachineSettingsSupportNeedsReload(previousRuntime: MachineRuntime | undefined, target: SettingsMachineTarget): boolean {
-    const previousSupport = selectedMachineSettingsSupport(target, previousRuntime);
-    const currentSupport = this.selectedMachineSettingsSupport(target);
-    return selectedMachineSettingsSupportKey(previousSupport) !== selectedMachineSettingsSupportKey(currentSupport);
   }
 
   private packageManagementSupport(target = this.packageTarget()): PiPackageManagementSupport {
