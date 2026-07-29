@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { comparePackageVersions, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus, updateCommandFor } from "./piWebStatus.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
-import type { PiWebComponentStatus, PiWebRuntimeComponent } from "../shared/apiTypes.js";
+import type { PiWebRuntimeComponent } from "../shared/apiTypes.js";
 
 const originalSkipVersionCheck = process.env["PI_WEB_SKIP_VERSION_CHECK"];
 const originalHome = process.env["HOME"];
@@ -35,14 +35,7 @@ describe("PI WEB status", () => {
   });
 
   it("returns installed and running version components without release metadata", async () => {
-    const daemon = daemonWithComponent({
-      component: "sessiond",
-      label: "Session daemon",
-      runtimeVersion: "1.202605.7",
-      installedVersion: "1.202605.8",
-      stale: true,
-      available: true,
-    });
+    const daemon = daemonWithRuntime(runningSessiondRuntime("1.202605.7"));
 
     const status = await getPiWebVersionStatus(daemon);
 
@@ -97,14 +90,7 @@ describe("PI WEB status", () => {
   });
 
   it("advertises no capabilities while the capability registry is empty", async () => {
-    const daemon = daemonWithComponent({
-      component: "sessiond",
-      label: "Session daemon",
-      runtimeVersion: "1.202605.7",
-      installedVersion: "1.202605.8",
-      stale: true,
-      available: true,
-    });
+    const daemon = daemonWithRuntime(runningSessiondRuntime());
 
     const runtime = await getPiWebRuntime(daemon);
 
@@ -143,15 +129,7 @@ describe("PI WEB status", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(npmVersionResponse("1.202607.1"))
       .mockResolvedValueOnce(npmVersionResponse("1.202607.2"));
-    const daemon = daemonWithComponent({
-      component: "sessiond",
-      label: "Session daemon",
-      runtimeVersion: "1.202607.0",
-      installedVersion: "1.202607.0",
-      stale: false,
-      available: true,
-      installation: { kind: "docker", dockerMode: "runtime" },
-    });
+    const daemon = daemonWithRuntime(runningSessiondRuntime("1.202607.0"));
 
     const first = await getPiWebStatus(daemon, { forceReleaseCheck: true });
     const cached = await getPiWebStatus(daemon);
@@ -163,25 +141,53 @@ describe("PI WEB status", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("reports stale session daemon versions as messages", async () => {
-    process.env["PI_WEB_SKIP_VERSION_CHECK"] = "1";
-    disableDockerRuntimeEnv();
-    const daemon = daemonWithComponent({
-      component: "sessiond",
-      label: "Session daemon",
-      runtimeVersion: "1.202605.7",
-      installedVersion: "1.202605.8",
-      stale: true,
-      available: true,
-      installation: { kind: "pi-package", source: "npm:@jmfederico/pi-web", scope: "user", path: "/tmp/pi-web" },
+  it("marks the session daemon unavailable without falling back to the legacy health payload", async () => {
+    const daemon = new SessionDaemonClient();
+    const request = vi.spyOn(daemon, "request").mockResolvedValue({
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        version: {
+          component: "sessiond",
+          label: "Session daemon",
+          runtimeVersion: "1.202605.7",
+          stale: false,
+          available: true,
+        },
+      }),
     });
 
-    const status = await getPiWebStatus(daemon, { forceReleaseCheck: true });
+    const status = await getPiWebVersionStatus(daemon);
+    const runtime = await getPiWebRuntime(daemon);
 
-    expect(status.release.skipped).toBe(true);
-    expect(status.components.sessiond.stale).toBe(true);
-    expect(status.components.sessiond.installation).toMatchObject({ kind: "pi-package", source: "npm:@jmfederico/pi-web", scope: "user" });
-    expect(status.messages.map((message) => message.id)).toContain("sessiond-stale");
+    expect(status.components.sessiond.available).toBe(false);
+    expect(status.components.sessiond.error).toBe("runtime response did not include valid runtime information");
+    expect(runtime.components.sessiond.available).toBe(false);
+    expect(runtime.components.sessiond.error).toBe("runtime response did not include valid runtime information");
+    expect(request.mock.calls.map(([, path]) => path)).not.toContain("/health");
+  });
+
+  it("surfaces the session daemon as unavailable with the upstream error when the runtime check fails", async () => {
+    process.env["PI_WEB_SKIP_VERSION_CHECK"] = "1";
+    disableDockerRuntimeEnv();
+    const home = await tempHome();
+    try {
+      process.env["HOME"] = home;
+      const daemon = new SessionDaemonClient();
+      vi.spyOn(daemon, "request").mockResolvedValue({
+        statusCode: 500,
+        headers: { "content-type": "application/json" },
+        body: "",
+      });
+
+      const status = await getPiWebStatus(daemon);
+
+      expect(status.components.sessiond.available).toBe(false);
+      expect(status.components.sessiond.error).toBe("runtime check returned HTTP 500");
+      expect(status.messages.map((message) => message.id)).toContain("sessiond-unavailable");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it("suppresses Pi package update planning without an active companion command", async () => {
@@ -258,14 +264,13 @@ describe("PI WEB status", () => {
       await installExecutable(binDir, "systemctl");
       process.env["PATH"] = `${binDir}:${process.env["PATH"] ?? ""}`;
       await installSystemdServiceFiles(home, ["pi-web-sessiond.service", "pi-web-ui-dev.service"]);
-      const daemon = daemonWithComponent(staleLocalSessiond());
+      const daemon = daemonWithRuntime(runningSessiondRuntime());
 
       const status = await getPiWebStatus(daemon);
 
       expect(status.commands.restart).toBe("systemd-run --user --collect --unit=pi-web-restart -- systemctl --user restart pi-web-ui-dev.service pi-web-sessiond.service");
       expect(status.commands.restartWeb).toBe("systemd-run --user --collect --unit=pi-web-restart-web -- systemctl --user restart pi-web-ui-dev.service");
       expect(status.commands.restartSessiond).toBe("systemd-run --user --collect --unit=pi-web-restart-sessiond -- systemctl --user restart pi-web-sessiond.service");
-      expect(status.messages.find((message) => message.id === "sessiond-stale")?.command).toBe("systemd-run --user --collect --unit=pi-web-restart-sessiond -- systemctl --user restart pi-web-sessiond.service");
     } finally {
       await Promise.all([
         rm(home, { recursive: true, force: true }),
@@ -280,7 +285,7 @@ describe("PI WEB status", () => {
     process.env["PI_WEB_DOCKER_MODE"] = "runtime";
     process.env["PI_WEB_DOCKER_INSTALL_DIR"] = "/srv/pi-web-docker";
     process.env["PATH"] = "";
-    const daemon = daemonWithComponent({ ...staleLocalSessiond(), installation: { kind: "docker", path: "/srv/pi-web-docker", dockerMode: "runtime" } });
+    const daemon = daemonWithRuntime(runningSessiondRuntime());
 
     const status = await getPiWebStatus(daemon);
 
@@ -302,7 +307,7 @@ describe("PI WEB status", () => {
     process.env["PI_WEB_DOCKER_MODE"] = "dev";
     process.env["PI_WEB_DOCKER_DEV_REPO_ROOT"] = "/workspace/pi-web";
     process.env["PATH"] = "";
-    const daemon = daemonWithComponent({ ...staleLocalSessiond(), installation: { kind: "docker", path: "/workspace/pi-web", dockerMode: "dev" } });
+    const daemon = daemonWithRuntime(runningSessiondRuntime());
 
     const status = await getPiWebStatus(daemon);
 
@@ -321,7 +326,7 @@ describe("PI WEB status", () => {
     Reflect.deleteProperty(process.env, "PI_WEB_DOCKER_MODE");
     process.env["PI_WEB_DOCKER_DEV_REPO_ROOT"] = "/workspace/pi-web";
     process.env["PATH"] = "";
-    const daemon = daemonWithComponent(staleLocalSessiond());
+    const daemon = daemonWithRuntime(runningSessiondRuntime());
 
     const status = await getPiWebStatus(daemon);
 
@@ -336,13 +341,12 @@ describe("PI WEB status", () => {
     const home = await tempHome();
     try {
       process.env["HOME"] = home;
-      const daemon = daemonWithComponent(staleLocalSessiond());
+      const daemon = daemonWithRuntime(runningSessiondRuntime());
 
       const status = await getPiWebStatus(daemon);
-      const staleMessage = status.messages.find((message) => message.id === "sessiond-stale");
 
       expect(status.commands.restart).toBeUndefined();
-      expect(staleMessage?.command).toBeUndefined();
+      expect(status.messages.some((message) => message.id === "sessiond-stale")).toBe(false);
       expect(JSON.stringify(status)).not.toContain("pi-web restart");
     } finally {
       await rm(home, { recursive: true, force: true });
@@ -364,14 +368,14 @@ function npmVersionResponse(version: string): Response {
   return new Response(JSON.stringify({ version }), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function daemonWithComponent(component: PiWebComponentStatus): SessionDaemonClient {
-  const daemon = new SessionDaemonClient();
-  vi.spyOn(daemon, "request").mockResolvedValue({
-    statusCode: 200,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ version: component }),
-  });
-  return daemon;
+function runningSessiondRuntime(runtimeVersion = "1.202605.7"): PiWebRuntimeComponent {
+  return {
+    component: "sessiond",
+    label: "Session daemon",
+    runtimeVersion,
+    available: true,
+    capabilities: [],
+  };
 }
 
 function daemonWithRuntime(component: PiWebRuntimeComponent): SessionDaemonClient {
@@ -382,18 +386,6 @@ function daemonWithRuntime(component: PiWebRuntimeComponent): SessionDaemonClien
     body: JSON.stringify(component),
   });
   return daemon;
-}
-
-function staleLocalSessiond(): PiWebComponentStatus {
-  return {
-    component: "sessiond",
-    label: "Session daemon",
-    runtimeVersion: "1.202605.7",
-    installedVersion: "1.202605.8",
-    stale: true,
-    available: true,
-    installation: { kind: "local", path: "/srv/dev/pi-web" },
-  };
 }
 
 async function tempHome(): Promise<string> {
