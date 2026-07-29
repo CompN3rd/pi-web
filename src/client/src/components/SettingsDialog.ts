@@ -8,7 +8,7 @@ import "./settings/SettingsSessiondPanel";
 import "./settings/SettingsPackagesPanel";
 import "./settings/SettingsPluginsPanel";
 import "./settings/SettingsShortcutsPanel";
-import { friendlyPiPackageErrorMessage, isPiPackageManagementUnsupported, piPackageManagementSupport, piPackageManagementSupportKey, piPackageMutationFollowUpMessage, piPackageTargetLabel, shouldRefreshGatewayPluginsAfterPiPackageMutation, type PiPackageManagementSupport, type PiPackageOperationState, type PiPackageTargetContext } from "./settings/piPackageSettings";
+import { friendlyPiPackageErrorMessage, piPackageMutationFollowUpMessage, piPackageTargetLabel, shouldRefreshGatewayPluginsAfterPiPackageMutation, type PiPackageOperationState, type PiPackageTargetContext } from "./settings/piPackageSettings";
 import { loadGatewaySettingsData, loadPiPackagesData } from "./settings/settingsDataLoading";
 import { mergeSelectedMachineAccessConfig } from "./settings/settingsMachineAccessConfig";
 import { friendlySelectedMachineSettingsErrorMessage, settingsMachineTarget, settingsMachineTargetLabel, type SettingsMachineTarget } from "./settings/settingsMachineTarget";
@@ -71,23 +71,15 @@ export class SettingsDialog extends LitElement {
 
   protected override updated(changed: PropertyValues<this>): void {
     const currentTarget = this.settingsTarget();
-    if (changed.has("machine")) {
-      const previousTarget = settingsMachineTarget(changed.get("machine"));
-      if (previousTarget.id !== currentTarget.id) {
-        this.resetAccessStateForTargetChange();
-        if (this.isConnected) void this.loadAccessConfigForTarget(currentTarget);
-        this.resetSessiondStateForTargetChange();
-        if (this.isConnected) void this.loadSessiondConfigForTarget(currentTarget);
-        this.resetPluginStateForTargetChange();
-        if (this.isConnected) void this.loadPluginsForTarget(currentTarget);
-        this.resetPackageStateForTargetChange();
-        if (this.isConnected) void this.loadPackagesForTarget(currentTarget);
-        return;
-      }
-    }
-
-    if (!changed.has("machineRuntime")) return;
-    if (!this.packageManagementSupportNeedsReload(changed.get("machineRuntime"), currentTarget)) return;
+    if (!changed.has("machine")) return;
+    const previousTarget = settingsMachineTarget(changed.get("machine"));
+    if (previousTarget.id === currentTarget.id) return;
+    this.resetAccessStateForTargetChange();
+    if (this.isConnected) void this.loadAccessConfigForTarget(currentTarget);
+    this.resetSessiondStateForTargetChange();
+    if (this.isConnected) void this.loadSessiondConfigForTarget(currentTarget);
+    this.resetPluginStateForTargetChange();
+    if (this.isConnected) void this.loadPluginsForTarget(currentTarget);
     this.resetPackageStateForTargetChange();
     if (this.isConnected) void this.loadPackagesForTarget(currentTarget);
   }
@@ -158,7 +150,6 @@ export class SettingsDialog extends LitElement {
         <settings-packages-panel
           .packagesResponse=${this.packagesResponse}
           .targetMachine=${this.packageTarget()}
-          .managementSupport=${this.packageManagementSupport()}
           .loading=${this.packageLoading}
           .operation=${this.packageOperation}
           .error=${this.packageError}
@@ -305,7 +296,7 @@ export class SettingsDialog extends LitElement {
     this.packageError = "";
     this.packageMessage = "";
     try {
-      const result = await loadPiPackagesData(target, (targetId) => piPackagesApi.packages(targetId), this.packageManagementSupport(target));
+      const result = await loadPiPackagesData(target, (targetId) => piPackagesApi.packages(targetId));
       if (!this.isCurrentPackageLoad(requestSeq, target)) return;
 
       this.packagesResponse = result.packagesResponse;
@@ -425,11 +416,6 @@ export class SettingsDialog extends LitElement {
   }
 
   private async runPiPackageMutation(operation: PiPackageOperationState, label: string, target: PiPackageTargetContext, mutate: () => Promise<PiPackageMutationResponse>): Promise<void> {
-    const support = this.packageManagementSupport(target);
-    if (isPiPackageManagementUnsupported(support)) {
-      this.packageError = support.message ?? `Pi package management is not available on ${piPackageTargetLabel(target)}.`;
-      throw new Error(this.packageError);
-    }
     if (this.saving) throw new Error("A settings operation is already running.");
     const requestSeq = ++this.packageMutationSeq;
     this.packageLoadRequestSeq += 1;
@@ -482,17 +468,6 @@ export class SettingsDialog extends LitElement {
 
   private packageTarget(): PiPackageTargetContext {
     return this.settingsTarget();
-  }
-
-  private packageManagementSupport(target = this.packageTarget()): PiPackageManagementSupport {
-    return piPackageManagementSupport(target, this.machineRuntime);
-  }
-
-  private packageManagementSupportNeedsReload(previousRuntime: MachineRuntime | undefined, target: PiPackageTargetContext): boolean {
-    const previousSupport = piPackageManagementSupport(target, previousRuntime);
-    const currentSupport = this.packageManagementSupport(target);
-    if (piPackageManagementSupportKey(previousSupport) === piPackageManagementSupportKey(currentSupport)) return false;
-    return previousSupport.state === "unsupported" || currentSupport.state === "unsupported";
   }
 
   private isCurrentLoad(requestSeq: number): boolean {

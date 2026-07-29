@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { comparePackageVersions, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus, updateCommandFor } from "./piWebStatus.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import type { PiWebComponentStatus, PiWebRuntimeComponent } from "../shared/apiTypes.js";
-import { PI_WEB_CAPABILITIES } from "../shared/capabilities.js";
 
 const originalSkipVersionCheck = process.env["PI_WEB_SKIP_VERSION_CHECK"];
 const originalHome = process.env["HOME"];
@@ -97,7 +96,7 @@ describe("PI WEB status", () => {
     }
   });
 
-  it("reports web-only capabilities from the web runtime", async () => {
+  it("advertises no capabilities while the capability registry is empty", async () => {
     const daemon = daemonWithComponent({
       component: "sessiond",
       label: "Session daemon",
@@ -109,9 +108,9 @@ describe("PI WEB status", () => {
 
     const runtime = await getPiWebRuntime(daemon);
 
-    expect(runtime.components.web.capabilities).toEqual(expect.arrayContaining([PI_WEB_CAPABILITIES.piPackagesManage]));
-    expect(runtime.components.sessiond.capabilities).not.toContain(PI_WEB_CAPABILITIES.piPackagesManage);
-    expect(runtime.capabilities).toEqual(expect.arrayContaining([PI_WEB_CAPABILITIES.piPackagesManage]));
+    expect(runtime.components.web.capabilities).toEqual([]);
+    expect(runtime.components.sessiond.capabilities).toEqual([]);
+    expect(runtime.capabilities).toEqual([]);
   });
 
   it("carries the daemon-owned active agent profile through the web runtime response", async () => {

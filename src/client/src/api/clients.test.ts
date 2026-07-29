@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import type { PiWebConfigValues, TerminalCommandRun, Workspace } from "../../../shared/apiTypes";
 import { configApi, filesApi, machinesApi, piPackagesApi, piWebApi, pluginsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 
@@ -80,7 +79,7 @@ describe("machine-scoped runtime API", () => {
   });
 
   it("reads machine runtime through the gateway route", async () => {
-    const response = { machineId: "remote a", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] };
+    const response = { machineId: "remote a", ok: true, checkedAt: "now", capabilities: [] };
     const fetchMock = stubSequenceFetch([jsonResponse(response), jsonResponse(response)]);
 
     await machinesApi.runtime("remote a");

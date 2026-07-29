@@ -1,9 +1,13 @@
 export type MachineKind = "local" | "remote";
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
-export const PI_WEB_CAPABILITIES = {
-  piPackagesManage: "piPackages.manage",
-} as const;
+/**
+ * Registry of feature-gating capabilities. Currently empty: every component is
+ * expected to run the current version, so no capability is advertised. Add an
+ * entry here (plus the runtime/requirements entries in `capabilities.ts`) when
+ * a future feature needs rolling-version gating again.
+ */
+export const PI_WEB_CAPABILITIES = {} as const;
 
 export type PiWebCapability = typeof PI_WEB_CAPABILITIES[keyof typeof PI_WEB_CAPABILITIES];
 

@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { api, type Machine, type MachineHealth } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { MachineController } from "./machineController";
@@ -211,7 +210,7 @@ describe("MachineController", () => {
     const first = controller.refreshMachineRuntime("local");
     const second = controller.refreshMachineRuntime("local");
     await second;
-    resolveOlder?.({ machineId: "local", ok: true, checkedAt: "old", capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] });
+    resolveOlder?.({ machineId: "local", ok: true, checkedAt: "old", capabilities: [] });
     await first;
 
     expect(state.machineRuntimes["local"]).toMatchObject({ checkedAt: "new", capabilities: [] });

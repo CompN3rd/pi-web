@@ -1,6 +1,5 @@
 import { vi } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
-import type { Machine, MachineRuntime, PiPackageInfo, PiPackageMutationResponse, PiWebConfigResponse, PiWebConfigValues, PiWebPluginInfo, PiWebPluginsResponse } from "../api";
+import type { Machine, PiPackageInfo, PiPackageMutationResponse, PiWebConfigResponse, PiWebConfigValues, PiWebPluginInfo, PiWebPluginsResponse } from "../api";
 import { SettingsDialog } from "./SettingsDialog";
 
 export const remoteMachine: Machine = {
@@ -19,13 +18,6 @@ export const secondRemoteMachine: Machine = {
   baseUrl: "https://build.example.test",
   createdAt: "2026-07-01T00:00:00.000Z",
   updatedAt: "2026-07-01T00:00:00.000Z",
-};
-
-export const runtimeWithPackageManagement: MachineRuntime = {
-  machineId: "remote-a",
-  ok: true,
-  checkedAt: "2026-07-01T00:00:00.000Z",
-  capabilities: [PI_WEB_CAPABILITIES.piPackagesManage],
 };
 
 export function getDialogProperty(dialog: SettingsDialog, property: string): unknown {

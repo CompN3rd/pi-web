@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MachineClient } from "./machines/machineClient.js";
-import { PI_WEB_CAPABILITIES } from "../shared/capabilities.js";
 import type { PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 import { appTestContext, configFromMachineConfigWriteBody, fakeRemoteClient, fullPiWebConfig, piWebConfigResponse, registerAppTestHooks, selectedMachinePiWebConfig } from "./app.testSupport.js";
 
@@ -61,7 +60,7 @@ describe("buildApp machine routes", () => {
         packageName: "@jmfederico/pi-web",
         generatedAt: "2026-05-25T00:00:00.000Z",
         components: {
-          web: { component: "web", label: "Remote Web", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, "future.capability"] },
+          web: { component: "web", label: "Remote Web", runtimeVersion: "1.0.0", available: true, capabilities: ["piPackages.manage", "future.capability"] },
           sessiond: {
             component: "sessiond",
             label: "Remote Sessiond",
@@ -77,7 +76,7 @@ describe("buildApp machine routes", () => {
             },
           },
         },
-        capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, "future.capability"],
+        capabilities: ["piPackages.manage", "future.capability"],
       },
     }));
     appTestContext.remoteClient = fakeRemoteClient({ requestJson });
@@ -90,7 +89,7 @@ describe("buildApp machine routes", () => {
     expect(runtime.json()).toMatchObject({
       machineId: remote.id,
       ok: true,
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage],
+      capabilities: [],
       components: { sessiond: { activeAgentProfile: { command: "remote-agent", dir: "/srv/remote-agent" } } },
     });
     expect(requestJson).toHaveBeenCalledTimes(2);
