@@ -609,6 +609,7 @@ describe("PiSessionService daemon-owned unread state", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([sessionRecord("listed-idle"), sessionRecord("active-idle"), sessionRecord("busy")]),
+        listAll: () => Promise.resolve([]),
         open: (path) => fakeSessionManager("/workspace", { getSessionId: () => path.replace(/^\/sessions\/|\.jsonl$/g, "") }),
       },
       archiveStore: {
@@ -668,6 +669,7 @@ describe("PiSessionService daemon-owned unread state", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([root, directChild, archivedChild, grandchild]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       archiveStore: {

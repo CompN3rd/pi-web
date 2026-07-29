@@ -186,6 +186,7 @@ function serviceListing(
       options.listCwd?.(cwd);
       return Promise.resolve(listings[cwd] ?? []);
     },
+    listAll: () => Promise.resolve(Object.values(listings).flat()),
     open: () => fakeSessionManager(),
   };
   return new PiSessionService(new CapturingSessionEventHub(), {

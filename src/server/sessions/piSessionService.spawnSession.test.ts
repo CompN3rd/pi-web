@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { PiSessionService, type PiAgentSession } from "./piSessionService.js";
 import type { SpawnTargetDecision } from "./spawnTargetResolver.js";
-import { CapturingSessionEventHub, fakeRuntime, runtimeCreator, sessionGateway, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
+import { CapturingSessionEventHub, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 
 describe("PiSessionService", () => {
   describe("spawnSession", () => {
     function spawnService(decision: SpawnTargetDecision) {
-      const fake = fakeRuntime("spawned-1", { sessionFile: "/tmp/spawned-1.jsonl" });
+      const fake = fakeRuntime("spawned-1", { sessionFile: "/tmp/spawned-1.jsonl", sessionManager: fakeSessionManager(decision.allowed ? decision.cwd : "/workspace") });
       const log: { details: Record<string, unknown>; message: string }[] = [];
       const service = new PiSessionService(new CapturingSessionEventHub(), {
         agentDir: TEST_AGENT_DIR,
@@ -34,7 +34,7 @@ describe("PiSessionService", () => {
     });
 
     it("uses the dispatching session's model as the spawned session's initial model", async () => {
-      const fake = fakeRuntime("spawned-1", { sessionFile: "/tmp/spawned-1.jsonl" });
+      const fake = fakeRuntime("spawned-1", { sessionFile: "/tmp/spawned-1.jsonl", sessionManager: fakeSessionManager("/workspace-feature") });
       const model = testModel();
       let initialModel: PiAgentSession["model"];
       let delegationToolsEnabled: boolean | undefined;

@@ -72,6 +72,7 @@ describe("PiSessionService archive and cleanup", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: (cwd) => Promise.resolve(cwd === "/workspace" ? [root, directChild, archivedChild, grandchild] : [otherWorkspaceChild]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -187,8 +188,8 @@ describe("PiSessionService archive and cleanup", () => {
       heartbeatIntervalMs: 60_000,
     });
 
-    await expect(service.deleteArchived("arch")).resolves.toBeUndefined();
-    await expect(service.deleteArchived("active")).rejects.toThrow("Archived session not found");
+    await expect(service.deleteArchived(sessionRef("arch"))).resolves.toBeUndefined();
+    await expect(service.deleteArchived(sessionRef("active"))).rejects.toThrow("Archived session not found");
 
     expect(deletedSessionIds).toEqual(["archived"]);
     expect(notificationStore.catalogSnapshot().sessions).toEqual([]);
@@ -253,6 +254,7 @@ describe("PiSessionService archive and cleanup", () => {
           listCalls.push(cwd);
           return Promise.resolve(recordsByCwd.get(cwd) ?? []);
         },
+        listAll: () => Promise.resolve([]),
         open,
       },
       heartbeatIntervalMs: 60_000,
@@ -291,6 +293,7 @@ describe("PiSessionService archive and cleanup", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([sessionRecord("busy"), sessionRecord("ok")]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -331,6 +334,7 @@ describe("PiSessionService archive and cleanup", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([sessionRecord("unarchived")]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -376,6 +380,7 @@ describe("PiSessionService archive and cleanup", () => {
           listCalls.push(cwd);
           return Promise.resolve([sessionRecord("legacy-a"), sessionRecord("legacy-b"), sessionRecord("unarchived")]);
         },
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -526,7 +531,7 @@ describe("PiSessionService archive and cleanup", () => {
       heartbeatIntervalMs: 60_000,
     });
 
-    await service.status("busy-open");
+    await service.status(sessionRef("busy-open", "/old-project"));
     const result = await service.cleanup({ thresholds: { archiveIdleDays: 1 } });
 
     expect(result.archivedSessionIds).toEqual([]);

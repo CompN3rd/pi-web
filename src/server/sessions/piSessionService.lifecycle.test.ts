@@ -117,29 +117,6 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     }
   });
 
-  it("opens legacy id-only lookups from the default session store gateway", async () => {
-    const hub = new CapturingSessionEventHub();
-    const fake = fakeRuntime("legacy-session");
-    const open = vi.fn(() => fakeSessionManager());
-    const service = new PiSessionService(hub, {
-      agentDir: TEST_AGENT_DIR,
-      modelRuntime: testModelRuntime,
-      createAgentRuntime: runtimeCreator(fake.runtime),
-      sessionManager: {
-        create: () => fakeSessionManager(),
-        list: () => Promise.resolve([]),
-        listAll: () => Promise.resolve([sessionRecord("legacy-session")]),
-        open,
-      },
-      heartbeatIntervalMs: 60_000,
-    });
-
-    await expect(service.status("legacy")).resolves.toMatchObject({ sessionId: "legacy-session" });
-    expect(open).toHaveBeenCalledWith("/sessions/legacy-session.jsonl");
-
-    await service.dispose();
-  });
-
   it("shares one runtime when concurrent cold lookups resolve to the same session", async () => {
     const sessionId = "single-flight-session";
     const createStarted = deferred();
@@ -329,7 +306,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     expect(replacement.calls.bindExtensions).toHaveLength(1);
     expect(replacementSessionStartText).toBe("replacement started");
     expect(service.activeCount()).toBe(1);
-    expect(await service.status("session-2")).toMatchObject({ sessionId: "session-2" });
+    expect(await service.status(sessionRef("session-2"))).toMatchObject({ sessionId: "session-2" });
 
     await service.dispose();
   });
@@ -720,6 +697,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
           { ...sessionRecord("active"), messageCount: 1, firstMessage: "hello", allMessagesText: "hello" },
           { ...sessionRecord("archived"), messageCount: 2, firstMessage: "bye", allMessagesText: "bye" },
         ]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -748,6 +726,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([{ ...sessionRecord("active"), messageCount: 1, firstMessage: "hello", allMessagesText: "hello" }]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -1023,6 +1002,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       workspaceActivity: {

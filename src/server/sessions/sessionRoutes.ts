@@ -3,10 +3,10 @@ import { ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_
 import { projectBrowserMessageResponse } from "../browserMessageProjection.js";
 import { normalizeRequestCwd } from "../workingDirectory.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
-import type { SessionRouteLookup, SessionRouteService } from "./sessionService.js";
+import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
 import { normalizeSessionCleanupRequest } from "./sessionCleanup.js";
 
-type SessionLookup = SessionRouteLookup;
+type SessionLookup = SessionRouteRef;
 
 interface SessionQuery {
   cwd?: string;
@@ -163,9 +163,15 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
   });
 
   app.get<{ Params: { sessionId: string }; Querystring: MessageQuery }>(`${prefix}/sessions/:sessionId/messages`, async (request, reply) => {
+    let lookup: SessionLookup;
+    try {
+      lookup = sessionLookupFromQuery(request.params.sessionId, request.query);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
     try {
       const page = { ...optionalField("before", optionalNumber(request.query.before)), ...optionalField("limit", optionalNumber(request.query.limit)) };
-      const messages = await sessions.messages(sessionLookupFromQuery(request.params.sessionId, request.query), page);
+      const messages = await sessions.messages(lookup, page);
       return projectBrowserMessageResponse(messages);
     } catch (error) {
       return reply.code(404).send({ error: errorMessage(error) });
@@ -173,24 +179,42 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
   });
 
   app.get<{ Params: { sessionId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId/status`, async (request, reply) => {
+    let lookup: SessionLookup;
     try {
-      return await sessions.status(sessionLookupFromQuery(request.params.sessionId, request.query));
+      lookup = sessionLookupFromQuery(request.params.sessionId, request.query);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+    try {
+      return await sessions.status(lookup);
     } catch (error) {
       return reply.code(404).send({ error: errorMessage(error) });
     }
   });
 
   app.get<{ Params: { sessionId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId/stream-snapshot`, async (request, reply) => {
+    let lookup: SessionLookup;
     try {
-      return await sessions.streamSnapshot(sessionLookupFromQuery(request.params.sessionId, request.query));
+      lookup = sessionLookupFromQuery(request.params.sessionId, request.query);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+    try {
+      return await sessions.streamSnapshot(lookup);
     } catch (error) {
       return reply.code(404).send({ error: errorMessage(error) });
     }
   });
 
   app.get<{ Params: { sessionId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId/models`, async (request, reply) => {
+    let lookup: SessionLookup;
     try {
-      return { models: await sessions.availableModels(sessionLookupFromQuery(request.params.sessionId, request.query)) };
+      lookup = sessionLookupFromQuery(request.params.sessionId, request.query);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+    try {
+      return { models: await sessions.availableModels(lookup) };
     } catch (error) {
       return reply.code(404).send({ error: errorMessage(error) });
     }
@@ -217,8 +241,14 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
   });
 
   app.get<{ Params: { sessionId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId/thinking-levels`, async (request, reply) => {
+    let lookup: SessionLookup;
     try {
-      return { levels: await sessions.availableThinkingLevels(sessionLookupFromQuery(request.params.sessionId, request.query)) };
+      lookup = sessionLookupFromQuery(request.params.sessionId, request.query);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+    try {
+      return { levels: await sessions.availableThinkingLevels(lookup) };
     } catch (error) {
       return reply.code(404).send({ error: errorMessage(error) });
     }
@@ -245,8 +275,14 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
   });
 
   app.get<{ Params: { sessionId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId/commands`, async (request, reply) => {
+    let lookup: SessionLookup;
     try {
-      return await sessions.commands(sessionLookupFromQuery(request.params.sessionId, request.query));
+      lookup = sessionLookupFromQuery(request.params.sessionId, request.query);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+    try {
+      return await sessions.commands(lookup);
     } catch (error) {
       return reply.code(404).send({ error: errorMessage(error) });
     }
@@ -464,10 +500,7 @@ function parseBulkMutationRef(value: unknown): SessionBulkMutationRef {
   const record = requireRecord(value);
   const id = requireString(record, "id").trim();
   if (id === "") throw new Error("id field must not be empty");
-  const cwd = record["cwd"];
-  if (cwd === undefined || cwd === "") return { id };
-  if (typeof cwd !== "string") throw new Error("cwd field must be a string");
-  return { id, cwd: normalizeRequestCwd(cwd) };
+  return { id, cwd: requireLookupCwd(record["cwd"]) };
 }
 
 function notificationRefFromQuery(id: string, query: SessionQuery): { id: string; cwd: string } {
@@ -488,20 +521,22 @@ function notificationRef(id: string, cwd: string): { id: string; cwd: string } {
 }
 
 function sessionLookupFromQuery(id: string, query: SessionQuery): SessionLookup {
-  return sessionLookupFromCwd(id, query.cwd);
-}
-
-function sessionLookupFromBody(id: string, body: Record<string, unknown>): SessionLookup {
-  const cwd = body["cwd"];
-  if (cwd === undefined || cwd === "") return id;
-  if (typeof cwd !== "string") throw new Error("cwd field must be a string");
+  const cwd = query.cwd;
+  if (cwd === undefined || cwd === "") throw new Error("cwd query parameter is required");
   return { id, cwd: normalizeRequestCwd(cwd) };
 }
 
-function sessionLookupFromCwd(id: string, cwd: string | undefined): SessionLookup {
-  // Legacy id-only lookups (no cwd) remain supported; a supplied cwd is
-  // normalized here so everything past the route layer sees canonical paths.
-  return cwd === undefined || cwd === "" ? id : { id, cwd: normalizeRequestCwd(cwd) };
+function sessionLookupFromBody(id: string, body: Record<string, unknown>): SessionLookup {
+  return { id, cwd: requireLookupCwd(body["cwd"]) };
+}
+
+// Every per-session lookup is cwd-scoped: the workspace path picks the session
+// store the id resolves in, and it is normalized here so everything past the
+// route layer sees canonical paths.
+function requireLookupCwd(cwd: unknown): string {
+  if (typeof cwd !== "string") throw new Error("cwd field must be a string");
+  if (cwd === "") throw new Error("cwd field must not be empty");
+  return normalizeRequestCwd(cwd);
 }
 
 function sessionTreeNavigateRequestFromBody(body: Record<string, unknown>): SessionTreeNavigateRequest {

@@ -85,13 +85,12 @@ describe("SessionDirResolver", () => {
 });
 
 describe("Pi session manager gateway", () => {
-  it("lists legacy id-only sessions from the default Pi session store", async () => {
+  it("lists sessions across the default Pi session store", async () => {
     const otherCwd = join(tempDir, "other-workspace");
     await writeSessionFile(defaultPiSessionDir(cwd, agentDir), "session-a", cwd);
     await writeSessionFile(defaultPiSessionDir(otherCwd, agentDir), "session-b", otherCwd);
     const gateway = createPiSessionManagerGateway(piProfileOptions());
 
-    if (gateway.listAll === undefined) throw new Error("Expected legacy listing support");
     await expect(gateway.listAll()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ id: "session-a", cwd }), expect.objectContaining({ id: "session-b", cwd: otherCwd })]));
   });
 
@@ -101,7 +100,6 @@ describe("Pi session manager gateway", () => {
     await writeSessionFile(envSessionDir, "env-session", cwd);
     const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: envSessionDir }));
 
-    if (gateway.listAll === undefined) throw new Error("Expected legacy listing support");
     await expect(gateway.listAll()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ id: "default-session", cwd }), expect.objectContaining({ id: "env-session", cwd })]));
   });
 
@@ -115,7 +113,6 @@ describe("Pi session manager gateway", () => {
         sessionDirEnvKeys: [envKey],
       });
 
-      if (gateway.listAll === undefined) throw new Error("Expected legacy listing support");
       await expect(gateway.listAll()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ id: `${envKey.toLowerCase()}-session`, cwd })]));
     }
   });

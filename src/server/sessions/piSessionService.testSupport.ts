@@ -233,8 +233,9 @@ export function runtimeCreator(runtime: PiSessionRuntime): RuntimeCreator {
 
 export function sessionGateway(records: ReturnType<typeof sessionRecord>[]): SessionGateway {
   return {
-    create: () => fakeSessionManager(),
+    create: (cwd) => fakeSessionManager(cwd),
     list: () => Promise.resolve(records),
+    listAll: () => Promise.resolve(records),
     open: () => fakeSessionManager(),
   };
 }

@@ -240,13 +240,13 @@ describe("session API compatibility", () => {
     const deleted = { deleted: true, deletedSessionIds: ["s 1"], failures: [], generatedAt: "later" };
     const fetchMock = stubSequenceFetch([jsonResponse(archived), jsonResponse(deleted)]);
 
-    await expect(sessionsApi.archiveMany([{ id: "s 1", cwd: "/repo" }, "s 2"], "remote a")).resolves.toEqual(archived);
+    await expect(sessionsApi.archiveMany([{ id: "s 1", cwd: "/repo" }, { id: "s 2", cwd: "/repo" }], "remote a")).resolves.toEqual(archived);
     await expect(sessionsApi.deleteArchivedMany([{ id: "s 1", cwd: "/repo" }], "remote a")).resolves.toEqual(deleted);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/bulk/archive");
     expect(fetchCall(fetchMock, 0)[1]?.method).toBe("POST");
-    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }, { id: "s 2" }] });
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }, { id: "s 2", cwd: "/repo" }] });
     expect(fetchCall(fetchMock, 1)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/bulk/delete-archived");
     expect(fetchCall(fetchMock, 1)[1]?.method).toBe("POST");
     expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }] });
@@ -266,17 +266,6 @@ describe("session API compatibility", () => {
     // The token is optional, so a caller with no row to label sends none rather
     // than an empty one.
     expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ cwd: "/repo" });
-  });
-
-  it("keeps legacy session-id calls free of cwd context", async () => {
-    const fetchMock = stubJsonFetch({ accepted: true });
-
-    await sessionsApi.prompt("s 1", "hello", "followUp", "remote a");
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchCall(fetchMock, 0);
-    expect(url).toBe("https://pi.example.test/api/machines/remote%20a/sessions/s%201/prompt");
-    expect(JSON.parse(requestBody(init))).toEqual({ text: "hello", streamingBehavior: "followUp" });
   });
 
   it("adds cwd context when session refs include a workspace", async () => {
@@ -388,15 +377,6 @@ describe("session API compatibility", () => {
     const [url, init] = fetchCall(fetchMock, 0);
     expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/stream-snapshot?cwd=%2Frepo+with+spaces");
     expect(init?.method ?? "GET").toBe("GET");
-  });
-
-  it("reads a session stream snapshot for a legacy session-id ref without cwd context", async () => {
-    const fetchMock = stubJsonFetch({ seq: 0, partial: null });
-
-    await expect(sessionsApi.streamSnapshot("s 1", "remote a")).resolves.toEqual({ seq: 0, partial: null });
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/s%201/stream-snapshot");
   });
 
   it("uses encoded selected-session notification routes, cwd queries, and authoritative mutation cutoffs", async () => {
