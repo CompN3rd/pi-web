@@ -80,7 +80,7 @@ describe("machine-scoped runtime API", () => {
   });
 
   it("reads machine runtime through the gateway route", async () => {
-    const response = { machineId: "remote a", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.workspaceFileSuggestions] };
+    const response = { machineId: "remote a", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] };
     const fetchMock = stubSequenceFetch([jsonResponse(response), jsonResponse(response)]);
 
     await machinesApi.runtime("remote a");
@@ -426,22 +426,13 @@ describe("session API compatibility", () => {
 });
 
 describe("machine-scoped file suggestion API", () => {
-  it("uses the workspace-scoped route when the caller has enabled workspace-scoped suggestions", async () => {
+  it("uses the workspace-scoped route", async () => {
     const fetchMock = stubJsonFetch([]);
 
-    await filesApi.files("/repo", "README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a", workspaceScoped: true });
+    await filesApi.files("README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a" });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/projects/p%201/workspaces/w%2F1/files?q=README&scope=tracked");
-  });
-
-  it("falls back to the legacy cwd route when workspace-scoped suggestions are not enabled", async () => {
-    const fetchMock = stubJsonFetch([]);
-
-    await filesApi.files("/repo", "README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a" });
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/files?q=README&scope=tracked&cwd=%2Frepo");
   });
 });
 

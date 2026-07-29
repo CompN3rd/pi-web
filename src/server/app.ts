@@ -8,10 +8,7 @@ import fastifyWebsocket from "@fastify/websocket";
 import { ProjectStore } from "./storage/projectStore.js";
 import { ProjectService } from "./projects/projectService.js";
 import { WorkspaceService } from "./workspaces/workspaceService.js";
-import { isAbsoluteishFileSuggestionQuery, listFileSuggestions, listPathSuggestions } from "./workspaces/fileSuggestions.js";
-import { pathAccessForCwd } from "./workspaces/effectivePathAccess.js";
 import { loadEffectiveProjectUploadsConfig } from "./workspaces/projectPiWebConfig.js";
-import { normalizeRequestCwd } from "./workingDirectory.js";
 import { listDirectorySuggestions } from "./projects/directorySuggestions.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import { registerSessionProxyRoutes, type SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
@@ -106,25 +103,6 @@ async function listWorkspacesWithEffectiveConfig(project: Project, workspaces: W
 async function workspaceEffectiveConfig(projectPath: string, config?: Pick<PiWebConfigService, "read">): Promise<NonNullable<Workspace["effectiveConfig"]>> {
   const globalConfig = config === undefined ? {} : (await config.read()).effectiveConfig;
   return { uploads: await loadEffectiveProjectUploadsConfig(projectPath, globalConfig) };
-}
-
-interface LocalFileSuggestionRouteOptions {
-  config?: Pick<PiWebConfigService, "read">;
-}
-
-function registerLocalFileSuggestionRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceService, prefix: string, options: LocalFileSuggestionRouteOptions = {}): void {
-  app.get<{ Querystring: { cwd?: string; q?: string; kind?: "tracked" | "untracked" | "other"; mode?: "file" | "path"; scope?: "tracked" | "all" } }>(`${prefix}/files`, async (request, reply) => {
-    if (request.query.cwd === undefined || request.query.cwd === "") return reply.code(400).send({ error: "cwd query parameter is required" });
-    try {
-      const cwd = normalizeRequestCwd(request.query.cwd);
-      const query = request.query.q ?? "";
-      const pathAccess = isAbsoluteishFileSuggestionQuery(query) ? await pathAccessForCwd(cwd, projects, workspaces, options.config) : undefined;
-      if (request.query.mode === "path") return await listPathSuggestions(cwd, query, pathAccess);
-      return await listFileSuggestions(cwd, query, { kind: request.query.kind, scope: request.query.scope, pathAccess });
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
-    }
-  });
 }
 
 async function readEffectiveConfig(config: Pick<PiWebConfigService, "read">) {
@@ -231,9 +209,6 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerTerminalProxyRoutes(app, projects, workspaces, sessionDaemon, "/api/machines/local");
   registerWorkspaceDeletionRoutes(app, projects, workspaces, sessionDaemon);
   registerWorkspaceDeletionRoutes(app, projects, workspaces, sessionDaemon, "/api/machines/local");
-
-  registerLocalFileSuggestionRoutes(app, projects, workspaces, "/api", { config: configService });
-  registerLocalFileSuggestionRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
 
   registerMachineProxyRoutes(app, machines);
 

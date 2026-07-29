@@ -42,7 +42,6 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "GET", path: "/terminal-command-runs" },
   { method: "GET", path: "/terminal-command-runs/:runId" },
   { method: "POST", path: "/terminal-command-runs/:runId/cancel" },
-  { method: "GET", path: "/files" },
   { method: "GET", path: "/activity" },
   { method: "GET", path: "/sessions" },
   { method: "POST", path: "/sessions" },

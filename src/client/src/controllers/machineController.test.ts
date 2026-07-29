@@ -211,7 +211,7 @@ describe("MachineController", () => {
     const first = controller.refreshMachineRuntime("local");
     const second = controller.refreshMachineRuntime("local");
     await second;
-    resolveOlder?.({ machineId: "local", ok: true, checkedAt: "old", capabilities: [PI_WEB_CAPABILITIES.workspaceFileSuggestions] });
+    resolveOlder?.({ machineId: "local", ok: true, checkedAt: "old", capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] });
     await first;
 
     expect(state.machineRuntimes["local"]).toMatchObject({ checkedAt: "new", capabilities: [] });

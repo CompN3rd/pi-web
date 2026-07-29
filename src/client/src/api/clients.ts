@@ -319,22 +319,17 @@ export interface FileSuggestionQueryOptions {
   mode?: "file" | "path" | undefined;
   scope?: "tracked" | "all" | undefined;
   machineId?: string | undefined;
-  projectId?: string | undefined;
-  workspaceId?: string | undefined;
-  workspaceScoped?: boolean | undefined;
+  projectId: string;
+  workspaceId: string;
 }
 
 export const filesApi = {
-  files: (cwd: string, query: string, options: FileSuggestionQueryOptions = {}) => {
+  files: (query: string, options: FileSuggestionQueryOptions) => {
     const params = new URLSearchParams({ q: query });
     if (options.kind !== undefined) params.set("kind", options.kind);
     if (options.mode !== undefined) params.set("mode", options.mode);
     if (options.scope !== undefined) params.set("scope", options.scope);
-    if (options.workspaceScoped === true && options.projectId !== undefined && options.workspaceId !== undefined) {
-      return request(`${machinePrefix(options.machineId)}/projects/${encodeURIComponent(options.projectId)}/workspaces/${encodeURIComponent(options.workspaceId)}/files?${params.toString()}`, arrayOf(parseFileSuggestion));
-    }
-    params.set("cwd", cwd);
-    return request(`${machinePrefix(options.machineId)}/files?${params.toString()}`, arrayOf(parseFileSuggestion));
+    return request(`${machinePrefix(options.machineId)}/projects/${encodeURIComponent(options.projectId)}/workspaces/${encodeURIComponent(options.workspaceId)}/files?${params.toString()}`, arrayOf(parseFileSuggestion));
   },
 };
 

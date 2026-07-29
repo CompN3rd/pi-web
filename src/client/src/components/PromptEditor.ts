@@ -29,7 +29,6 @@ export class PromptEditor extends LitElement {
   @property() machineId = "local";
   @property() projectId?: string;
   @property() workspaceId?: string;
-  @property({ type: Boolean }) workspaceScopedFileSuggestions = false;
   @property({ type: Boolean }) canSteer = false;
   @property({ type: Boolean }) isCompacting = false;
   @property({ type: Boolean }) canStop = false;
@@ -356,8 +355,8 @@ export class PromptEditor extends LitElement {
           detail: command.source,
           ...(command.description === undefined ? {} : { description: command.description }),
         }));
-    } else if (trigger.kind === "file" && this.cwd !== undefined && this.cwd !== "") {
-      const files = await api.files(this.cwd, trigger.query, { scope: trigger.fileScope, machineId: this.machineId, projectId: this.projectId, workspaceId: this.workspaceId, workspaceScoped: this.workspaceScopedFileSuggestions }).catch(emptyFileSuggestions);
+    } else if (trigger.kind === "file" && this.projectId !== undefined && this.workspaceId !== undefined) {
+      const files = await api.files(trigger.query, { scope: trigger.fileScope, machineId: this.machineId, projectId: this.projectId, workspaceId: this.workspaceId }).catch(emptyFileSuggestions);
       if (version !== this.requestVersion) return;
       this.completions = files
         .slice(0, 12)

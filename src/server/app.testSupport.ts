@@ -98,10 +98,10 @@ export function registerAppTestHooks(): void {
           packageName: "@jmfederico/pi-web",
           generatedAt: "2026-05-25T00:00:00.000Z",
           components: {
-            web: { component: "web", label: "PI WEB", available: true, capabilities: [PI_WEB_CAPABILITIES.workspaceFileSuggestions] },
-            sessiond: { component: "sessiond", label: "PI WEB Session Daemon", available: true, capabilities: [PI_WEB_CAPABILITIES.workspaceFileSuggestions] },
+            web: { component: "web", label: "PI WEB", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] },
+            sessiond: { component: "sessiond", label: "PI WEB Session Daemon", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] },
           },
-          capabilities: [PI_WEB_CAPABILITIES.workspaceFileSuggestions],
+          capabilities: [PI_WEB_CAPABILITIES.piPackagesManage],
         }),
       }),
       sessionDaemon: fakeSessionDaemon(),
