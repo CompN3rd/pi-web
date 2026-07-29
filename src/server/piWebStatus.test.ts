@@ -109,10 +109,9 @@ describe("PI WEB status", () => {
 
     const runtime = await getPiWebRuntime(daemon);
 
-    expect(runtime.components.web.capabilities).toEqual(expect.arrayContaining([PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig]));
+    expect(runtime.components.web.capabilities).toEqual(expect.arrayContaining([PI_WEB_CAPABILITIES.piPackagesManage]));
     expect(runtime.components.sessiond.capabilities).not.toContain(PI_WEB_CAPABILITIES.piPackagesManage);
-    expect(runtime.components.sessiond.capabilities).not.toContain(PI_WEB_CAPABILITIES.agentProfileConfig);
-    expect(runtime.capabilities).toEqual(expect.arrayContaining([PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig]));
+    expect(runtime.capabilities).toEqual(expect.arrayContaining([PI_WEB_CAPABILITIES.piPackagesManage]));
   });
 
   it("carries the daemon-owned active agent profile through the web runtime response", async () => {

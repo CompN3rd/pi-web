@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Machine } from "../../api";
-import { PI_WEB_CAPABILITIES } from "../../../../shared/capabilities";
-import { agentProfileSettingsSupport, friendlySelectedMachineSettingsErrorMessage, isAgentProfileSettingsSupported, settingsMachineTarget, settingsMachineTargetLabel } from "./settingsMachineTarget";
+import { friendlySelectedMachineSettingsErrorMessage, settingsMachineTarget, settingsMachineTargetLabel } from "./settingsMachineTarget";
 
 const remoteMachine: Machine = {
   id: "remote-a",
@@ -21,27 +20,6 @@ describe("selected-machine settings target helpers", () => {
   it("labels local and remote settings targets factually", () => {
     expect(settingsMachineTargetLabel({ id: "local", name: "local", kind: "local" })).toBe("local (local gateway)");
     expect(settingsMachineTargetLabel(settingsMachineTarget(remoteMachine))).toBe("Lab Mac (remote machine)");
-  });
-
-  it("gates remote agent profile edits on their granular capability", () => {
-    const target = settingsMachineTarget(remoteMachine);
-
-    expect(agentProfileSettingsSupport({ id: "local", name: "local", kind: "local" }, undefined)).toEqual({ state: "supported" });
-    expect(agentProfileSettingsSupport(target, undefined)).toEqual({
-      state: "unknown",
-      message: "Pi-compatible agent profile support could not be verified on Lab Mac. Reload machine status before changing the profile.",
-    });
-    expect(agentProfileSettingsSupport(target, {
-      ok: true,
-      capabilities: [PI_WEB_CAPABILITIES.agentProfileConfig],
-    })).toEqual({ state: "supported" });
-
-    const unsupported = agentProfileSettingsSupport(target, { ok: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] });
-    expect(isAgentProfileSettingsSupported(unsupported)).toBe(false);
-    expect(unsupported).toEqual({
-      state: "unsupported",
-      message: "Pi-compatible agent profile settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.",
-    });
   });
 
   it("scopes remote reachability errors to selected-machine settings", () => {

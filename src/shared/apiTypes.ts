@@ -3,7 +3,6 @@ export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
 export const PI_WEB_CAPABILITIES = {
   piPackagesManage: "piPackages.manage",
-  agentProfileConfig: "settings.agentProfile",
 } as const;
 
 export type PiWebCapability = typeof PI_WEB_CAPABILITIES[keyof typeof PI_WEB_CAPABILITIES];

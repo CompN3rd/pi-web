@@ -1,17 +1,9 @@
-import type { Machine, MachineKind, MachineRuntime } from "../../api";
-import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../../shared/capabilities";
+import type { Machine, MachineKind } from "../../api";
 
 export interface SettingsMachineTarget {
   id: string;
   name: string;
   kind: MachineKind;
-}
-
-export type AgentProfileSettingsSupportState = "supported" | "unsupported" | "unknown";
-
-export interface AgentProfileSettingsSupport {
-  state: AgentProfileSettingsSupportState;
-  message?: string;
 }
 
 export function settingsMachineTarget(machine: Pick<Machine, "id" | "name" | "kind"> | undefined): SettingsMachineTarget {
@@ -21,25 +13,6 @@ export function settingsMachineTarget(machine: Pick<Machine, "id" | "name" | "ki
 
 export function settingsMachineTargetLabel(target: SettingsMachineTarget): string {
   return target.kind === "local" ? `${target.name} (local gateway)` : `${target.name} (remote machine)`;
-}
-
-export function agentProfileSettingsSupport(target: SettingsMachineTarget, runtime: Pick<MachineRuntime, "ok" | "capabilities"> | undefined): AgentProfileSettingsSupport {
-  if (target.kind === "local") return { state: "supported" };
-  if (runtime?.ok !== true) {
-    return {
-      state: "unknown",
-      message: `Pi-compatible agent profile support could not be verified on ${target.name}. Reload machine status before changing the profile.`,
-    };
-  }
-  if (supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.agentProfileConfig)) return { state: "supported" };
-  return {
-    state: "unsupported",
-    message: `Pi-compatible agent profile settings are not available on ${target.name}. Update and restart PI WEB on that machine, then try again.`,
-  };
-}
-
-export function isAgentProfileSettingsSupported(support: AgentProfileSettingsSupport | undefined): boolean {
-  return support?.state === "supported";
 }
 
 export function friendlySelectedMachineSettingsErrorMessage(message: string, target: SettingsMachineTarget): string {

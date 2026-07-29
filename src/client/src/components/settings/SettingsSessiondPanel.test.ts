@@ -111,7 +111,6 @@ function noticeContext(overrides: Partial<SessiondPanelNoticeContext>): Sessiond
     savedMessage: "",
     activeProfile: undefined,
     targetLabel: "local (local gateway)",
-    profileEditingSupported: true,
     ...overrides,
   };
 }

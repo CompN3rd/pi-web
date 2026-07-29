@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { configApi, pluginsApi, type PiWebConfigResponse, type PiWebPluginsResponse } from "../api";
 import { SettingsDialog } from "./SettingsDialog";
 import { callDialogPromise, callDialogUpdated, configResponse, deferred, getDialogProperty, remoteMachine, secondRemoteMachine, setDialogProperty, stubWindowTimers } from "./SettingsDialog.testSupport";
@@ -73,36 +72,13 @@ describe("settings-dialog session daemon machine targeting", () => {
     expect(getDialogProperty(dialog, "saving")).toBe(false);
   });
 
-  it("fails closed for a remote agent-profile save without granular support", async () => {
-    const saveSpy = vi.spyOn(configApi, "saveConfig").mockResolvedValue(configResponse({ agent: { command: "agent-lab", dir: "/srv/agent-lab" } }));
-    const dialog = new SettingsDialog();
-    dialog.machine = remoteMachine;
-    dialog.machineRuntime = {
-      machineId: remoteMachine.id,
-      ok: true,
-      checkedAt: "now",
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage],
-    };
-
-    await callDialogPromise(dialog, "saveSessiondConfig", { agent: { command: "agent-lab", dir: "/srv/agent-lab" } });
-
-    expect(saveSpy).not.toHaveBeenCalled();
-    expect(getDialogProperty(dialog, "sessiondError")).toBe("Pi-compatible agent profile settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.");
-  });
-
-  it("saves a remote agent profile when granular support is advertised", async () => {
+  it("saves a remote agent profile on the selected machine", async () => {
     stubWindowTimers();
     const patch = { agent: { command: "agent-lab", dir: "/srv/agent-lab" } };
     const saved = configResponse(patch);
     const saveSpy = vi.spyOn(configApi, "saveConfig").mockResolvedValue(saved);
     const dialog = new SettingsDialog();
     dialog.machine = remoteMachine;
-    dialog.machineRuntime = {
-      machineId: remoteMachine.id,
-      ok: true,
-      checkedAt: "now",
-      capabilities: [PI_WEB_CAPABILITIES.agentProfileConfig],
-    };
 
     await callDialogPromise(dialog, "saveSessiondConfig", patch);
 

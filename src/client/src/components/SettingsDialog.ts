@@ -11,7 +11,7 @@ import "./settings/SettingsShortcutsPanel";
 import { friendlyPiPackageErrorMessage, isPiPackageManagementUnsupported, piPackageManagementSupport, piPackageManagementSupportKey, piPackageMutationFollowUpMessage, piPackageTargetLabel, shouldRefreshGatewayPluginsAfterPiPackageMutation, type PiPackageManagementSupport, type PiPackageOperationState, type PiPackageTargetContext } from "./settings/piPackageSettings";
 import { loadGatewaySettingsData, loadPiPackagesData } from "./settings/settingsDataLoading";
 import { mergeSelectedMachineAccessConfig } from "./settings/settingsMachineAccessConfig";
-import { agentProfileSettingsSupport, friendlySelectedMachineSettingsErrorMessage, isAgentProfileSettingsSupported, settingsMachineTarget, settingsMachineTargetLabel, type AgentProfileSettingsSupport, type SettingsMachineTarget } from "./settings/settingsMachineTarget";
+import { friendlySelectedMachineSettingsErrorMessage, settingsMachineTarget, settingsMachineTargetLabel, type SettingsMachineTarget } from "./settings/settingsMachineTarget";
 import { mergeSelectedMachinePluginConfig, pluginEnabledConfigPatch } from "./settings/settingsPluginConfig";
 import { mergeSelectedMachineSessiondConfig } from "./settings/settingsSessiondConfig";
 
@@ -134,7 +134,6 @@ export class SettingsDialog extends LitElement {
           .savedMessage=${this.savedMessage}
           .targetLabel=${settingsMachineTargetLabel(this.settingsTarget())}
           .activeAgentProfile=${this.machineRuntime?.components?.sessiond.activeAgentProfile}
-          .agentProfileSupport=${this.agentProfileSettingsSupport()}
           .onReload=${() => this.reloadSessiondState()}
           .onSave=${(config: PiWebConfigValues) => this.saveSessiondConfig(config)}
         ></settings-sessiond-panel>
@@ -392,13 +391,6 @@ export class SettingsDialog extends LitElement {
   private async saveSessiondConfig(config: PiWebConfigValues): Promise<void> {
     if (this.saving) return;
     const target = this.settingsTarget();
-    if (config.agent !== undefined) {
-      const profileSupport = this.agentProfileSettingsSupport(target);
-      if (!isAgentProfileSettingsSupported(profileSupport)) {
-        this.sessiondError = profileSupport.message ?? `Pi-compatible agent profile settings are not available on ${settingsMachineTargetLabel(target)}.`;
-        return;
-      }
-    }
     this.saving = true;
     this.sessiondError = "";
     this.savedMessage = "";
@@ -490,10 +482,6 @@ export class SettingsDialog extends LitElement {
 
   private packageTarget(): PiPackageTargetContext {
     return this.settingsTarget();
-  }
-
-  private agentProfileSettingsSupport(target = this.settingsTarget()): AgentProfileSettingsSupport {
-    return agentProfileSettingsSupport(target, this.machineRuntime);
   }
 
   private packageManagementSupport(target = this.packageTarget()): PiPackageManagementSupport {

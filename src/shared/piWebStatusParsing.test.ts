@@ -8,16 +8,16 @@ describe("PI WEB status parsing", () => {
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",
       components: {
-        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"] },
+        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, "future.capability"] },
         sessiond: { component: "sessiond", label: "Session daemon", runtimeVersion: "1.0.0", available: true, capabilities: ["future.sessiondCapability"] },
       },
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"],
+      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, "future.capability"],
     })).toMatchObject({
       components: {
-        web: { capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig] },
+        web: { capabilities: [PI_WEB_CAPABILITIES.piPackagesManage] },
         sessiond: { capabilities: [] },
       },
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig],
+      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage],
     });
   });
 

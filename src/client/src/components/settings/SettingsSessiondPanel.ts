@@ -4,7 +4,6 @@ import type { ActiveAgentProfileDescriptor, PiWebConfigResponse, PiWebConfigValu
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
 import { agentProfileConfigPatchFromDraft, agentProfileDraftFromConfig, agentProfileDraftMatchesConfig, emptyAgentProfileConfigDraft, type AgentProfileConfigDraft } from "./settingsConfigDraft";
-import type { AgentProfileSettingsSupport } from "./settingsMachineTarget";
 import { agentDirFieldOverridden, agentProfileActivationState, askUserConfigPatch, spawnSessionsConfigPatch, subsessionsConfigPatch } from "./settingsSessiondConfig";
 
 @customElement("settings-sessiond-panel")
@@ -16,7 +15,6 @@ export class SettingsSessiondPanel extends LitElement {
   @property() savedMessage = "";
   @property() targetLabel = "local (local gateway)";
   @property({ attribute: false }) activeAgentProfile: ActiveAgentProfileDescriptor | undefined;
-  @property({ attribute: false }) agentProfileSupport: AgentProfileSettingsSupport = { state: "supported" };
   @property({ attribute: false }) onReload?: () => void | Promise<void>;
   @property({ attribute: false }) onSave?: (config: PiWebConfigValues) => void | Promise<void>;
   @state() private agentDraft: AgentProfileConfigDraft = emptyAgentProfileConfigDraft();
@@ -53,7 +51,6 @@ export class SettingsSessiondPanel extends LitElement {
     const askUserOverridden = config?.envOverrides.askUser === true;
     const effectiveAskUser = config?.effectiveConfig.askUser === true;
     const agentCommandOverridden = config?.envOverrides.agentCommand === true;
-    const profileEditingSupported = this.agentProfileSupport.state === "supported";
     const draftCommand = agentCommandOverridden ? (config.effectiveConfig.agent?.command ?? this.agentDraft.command) : this.agentDraft.command;
     const agentDirLocked = agentDirFieldOverridden(config?.envOverrides, draftCommand);
     const effectiveAgentDirOverridden = config?.envOverrides.agentDir === true;
@@ -74,7 +71,6 @@ export class SettingsSessiondPanel extends LitElement {
             <code>${config.path}</code>
           </div>
           <form class="profile-form" aria-label="Pi-compatible agent profile" @submit=${(event: Event) => { void this.saveAgentProfile(event); }}>
-            ${profileEditingSupported ? null : html`<div class="profile-support-message">${this.agentProfileSupport.message ?? "Pi-compatible agent profile editing is unavailable for this machine."}</div>`}
             <label class="field">
               <span class="field-heading">
                 <span>Companion CLI command</span>
@@ -87,7 +83,7 @@ export class SettingsSessiondPanel extends LitElement {
                 spellcheck="false"
                 .value=${this.agentDraft.command}
                 placeholder="pi"
-                ?disabled=${this.loading || this.saving || !profileEditingSupported || agentCommandOverridden}
+                ?disabled=${this.loading || this.saving || agentCommandOverridden}
                 @input=${(event: Event) => { this.updateAgentDraft({ command: inputValue(event) }); }}
               >
               <small>Set the Pi-compatible companion CLI used for doctor and update checks. The embedded session runtime remains PI WEB's bundled Pi SDK.</small>
@@ -104,13 +100,13 @@ export class SettingsSessiondPanel extends LitElement {
                 spellcheck="false"
                 .value=${this.agentDraft.dir}
                 placeholder="~/.pi/agent or ~/agent-profiles/work"
-                ?disabled=${this.loading || this.saving || !profileEditingSupported || agentDirLocked}
+                ?disabled=${this.loading || this.saving || agentDirLocked}
                 @input=${(event: Event) => { this.updateAgentDraft({ dir: inputValue(event) }); }}
               >
               <small>Choose the Pi-compatible auth, models, settings, and sessions PI WEB reads. An alternate command and its required state directory are saved together.</small>
             </label>
             <footer class="form-actions">
-              <button class="primary" type="submit" ?disabled=${this.loading || this.saving || !profileEditingSupported || (agentCommandOverridden && agentDirLocked)}>${this.saving ? "Saving…" : "Save agent profile"}</button>
+              <button class="primary" type="submit" ?disabled=${this.loading || this.saving || (agentCommandOverridden && agentDirLocked)}>${this.saving ? "Saving…" : "Save agent profile"}</button>
             </footer>
           </form>
           <div class="field">
@@ -189,7 +185,6 @@ export class SettingsSessiondPanel extends LitElement {
       savedMessage: this.savedMessage,
       activeProfile: this.activeAgentProfile,
       targetLabel: this.targetLabel,
-      profileEditingSupported: this.agentProfileSupport.state === "supported",
     });
   }
 
@@ -234,11 +229,10 @@ export class SettingsSessiondPanel extends LitElement {
     button, input { font: inherit; }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
     button:disabled { opacity: .55; cursor: not-allowed; }
-    .loading-card, .config-path-card, .effective-card, .profile-support-message { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
+    .loading-card, .config-path-card, .effective-card { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
     .loading-card { color: var(--pi-muted); }
     .config-path-card { display: grid; gap: 5px; }
     .profile-form { display: grid; gap: 14px; }
-    .profile-support-message { color: var(--pi-muted); line-height: 1.45; }
     .form-actions { display: flex; justify-content: flex-end; }
     .primary { border-color: var(--pi-accent); background: var(--pi-accent); color: var(--pi-accent-contrast); }
     .config-path-card span, .field-heading, dt { color: var(--pi-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
@@ -300,7 +294,6 @@ export interface SessiondPanelNoticeContext {
   readonly savedMessage: string;
   readonly activeProfile: ActiveAgentProfileDescriptor | undefined;
   readonly targetLabel: string;
-  readonly profileEditingSupported: boolean;
 }
 
 /**
@@ -323,7 +316,7 @@ export function sessiondPanelNotices(
       title: `Pi-compatible agent profile restart required on ${context.targetLabel}`,
       content: html`The desired profile differs from the active session-daemon profile. Run <code>pi-web restart</code> on that machine (or restart its session daemon service) to apply the command and state directory together.`,
     });
-  } else if (config !== undefined && activation === "unavailable" && context.profileEditingSupported) {
+  } else if (config !== undefined && activation === "unavailable") {
     notices.push({
       type: "info",
       title: `Active Pi-compatible agent profile unavailable on ${context.targetLabel}`,

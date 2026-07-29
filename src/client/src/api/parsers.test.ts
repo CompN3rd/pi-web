@@ -76,7 +76,7 @@ describe("API parsers", () => {
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",
       components: {
-        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"] },
+        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, "future.capability"] },
         sessiond: {
           component: "sessiond",
           label: "Session daemon",
@@ -92,9 +92,9 @@ describe("API parsers", () => {
           },
         },
       },
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"],
+      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, "future.capability"],
     })).toMatchObject({
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.agentProfileConfig],
+      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage],
       components: { sessiond: { activeAgentProfile: { command: "agent-lab", dir: "/srv/agent-lab" } } },
     });
   });
