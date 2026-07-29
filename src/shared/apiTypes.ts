@@ -11,7 +11,6 @@ export const PI_WEB_CAPABILITIES = {
   sessionsNotifications: "sessions.notifications",
   sessionsUnread: "sessions.unread",
   sessionsAskUser: "sessions.askUser",
-  promptAttachments: "prompt.attachments",
   workspaceFileSuggestions: "workspace.fileSuggestions",
   piPackagesManage: "piPackages.manage",
   selectedMachineSettings: "settings.selectedMachine",

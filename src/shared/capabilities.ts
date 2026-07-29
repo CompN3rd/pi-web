@@ -16,7 +16,6 @@ export const WEB_RUNTIME_CAPABILITIES = [
   PI_WEB_CAPABILITIES.sessionsNotifications,
   PI_WEB_CAPABILITIES.sessionsUnread,
   PI_WEB_CAPABILITIES.sessionsAskUser,
-  PI_WEB_CAPABILITIES.promptAttachments,
   PI_WEB_CAPABILITIES.workspaceFileSuggestions,
   PI_WEB_CAPABILITIES.piPackagesManage,
   PI_WEB_CAPABILITIES.selectedMachineSettings,
@@ -33,7 +32,6 @@ export const SESSIOND_RUNTIME_CAPABILITIES = [
   PI_WEB_CAPABILITIES.sessionsNotifications,
   PI_WEB_CAPABILITIES.sessionsUnread,
   PI_WEB_CAPABILITIES.sessionsAskUser,
-  PI_WEB_CAPABILITIES.promptAttachments,
 ] as const satisfies readonly PiWebCapability[];
 
 const EFFECTIVE_CAPABILITY_REQUIREMENTS = {
@@ -46,7 +44,6 @@ const EFFECTIVE_CAPABILITY_REQUIREMENTS = {
   [PI_WEB_CAPABILITIES.sessionsNotifications]: ["web", "sessiond"],
   [PI_WEB_CAPABILITIES.sessionsUnread]: ["web", "sessiond"],
   [PI_WEB_CAPABILITIES.sessionsAskUser]: ["web", "sessiond"],
-  [PI_WEB_CAPABILITIES.promptAttachments]: ["web", "sessiond"],
   [PI_WEB_CAPABILITIES.workspaceFileSuggestions]: ["web"],
   [PI_WEB_CAPABILITIES.piPackagesManage]: ["web"],
   [PI_WEB_CAPABILITIES.selectedMachineSettings]: ["web"],
