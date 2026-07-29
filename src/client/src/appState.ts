@@ -33,8 +33,7 @@ export interface AppState {
   activity: SessionActivity | undefined;
   /**
    * The selected session's open `ask_user` question set, derived from the
-   * daemon-owned {@link SessionStatus.pendingAsk} plus live ask events, and
-   * dropped when the machine reports no `sessions.askUser` support.
+   * daemon-owned {@link SessionStatus.pendingAsk} plus live ask events.
    */
   pendingAsk: PendingAskUser | undefined;
   /**

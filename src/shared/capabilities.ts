@@ -7,19 +7,15 @@ export const KNOWN_PI_WEB_CAPABILITIES = Object.values(PI_WEB_CAPABILITIES);
 const knownPiWebCapabilities: ReadonlySet<string> = new Set(KNOWN_PI_WEB_CAPABILITIES);
 
 export const WEB_RUNTIME_CAPABILITIES = [
-  PI_WEB_CAPABILITIES.sessionsAskUser,
   PI_WEB_CAPABILITIES.workspaceFileSuggestions,
   PI_WEB_CAPABILITIES.piPackagesManage,
   PI_WEB_CAPABILITIES.selectedMachineSettings,
   PI_WEB_CAPABILITIES.agentProfileConfig,
 ] as const satisfies readonly PiWebCapability[];
 
-export const SESSIOND_RUNTIME_CAPABILITIES = [
-  PI_WEB_CAPABILITIES.sessionsAskUser,
-] as const satisfies readonly PiWebCapability[];
+export const SESSIOND_RUNTIME_CAPABILITIES = [] as const satisfies readonly PiWebCapability[];
 
 const EFFECTIVE_CAPABILITY_REQUIREMENTS = {
-  [PI_WEB_CAPABILITIES.sessionsAskUser]: ["web", "sessiond"],
   [PI_WEB_CAPABILITIES.workspaceFileSuggestions]: ["web"],
   [PI_WEB_CAPABILITIES.piPackagesManage]: ["web"],
   [PI_WEB_CAPABILITIES.selectedMachineSettings]: ["web"],

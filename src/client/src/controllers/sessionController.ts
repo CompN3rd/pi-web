@@ -11,7 +11,6 @@ import { fileCompletionInsertText } from "../promptCompletions";
 import { SessionSocket, type GlobalSessionEvent, type SessionUiEvent } from "../sessionSocket";
 import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPersistence";
 import { isSessionActive } from "../../../shared/activity";
-import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
 import type { PromptAttachmentDelivery, SessionNotificationInboxEvent, SessionStartupProgressEvent } from "../../../shared/apiTypes";
 import { InMemorySessionSelectionMemory, markSessionArchived, markSessionsArchived, selectPreferredSession, selectionAfterArchivingSession, selectionAfterArchivingSessions, shouldDeselectAfterArchivedCollapse, type SessionSelectionMemory } from "./sessionSelection";
 import { selectedMachineId, type GetState, type SetState, type UpdateUrl } from "./types";
@@ -225,7 +224,7 @@ export class SessionController {
       ...(options?.preserveTreeDialog === true ? {} : { treeDialog: undefined }),
       status: session.archived === true ? undefined : this.getState().sessionStatuses[session.id],
       activity: session.archived === true ? undefined : this.getState().sessionActivities[session.id],
-      pendingAsk: session.archived === true ? undefined : this.selectedPendingAsk(this.getState().sessionStatuses[session.id], machineId),
+      pendingAsk: session.archived === true ? undefined : this.getState().sessionStatuses[session.id]?.pendingAsk,
       pendingDialogs: session.archived === true ? [] : (this.getState().sessionStatuses[session.id]?.pendingDialogs ?? []),
       closedDialogs: [],
       availableThinkingLevels: [],
@@ -1160,7 +1159,7 @@ export class SessionController {
       sessionActivities: omitSessionActivity(state.sessionActivities, tempId),
       sendingPrompts: moveRecordKey(state.sendingPrompts, tempId, cachedSession.id),
       clientQueuedSessionMessages: moveRecordKey(state.clientQueuedSessionMessages, tempId, cachedSession.id),
-      ...(wasSelected ? { selectedSession: cachedSession, status: state.sessionStatuses[cachedSession.id], activity: state.sessionActivities[cachedSession.id], pendingAsk: this.selectedPendingAsk(state.sessionStatuses[cachedSession.id], pending.machineId), pendingDialogs: state.sessionStatuses[cachedSession.id]?.pendingDialogs ?? [], closedDialogs: [] } : {}),
+      ...(wasSelected ? { selectedSession: cachedSession, status: state.sessionStatuses[cachedSession.id], activity: state.sessionActivities[cachedSession.id], pendingAsk: state.sessionStatuses[cachedSession.id]?.pendingAsk, pendingDialogs: state.sessionStatuses[cachedSession.id]?.pendingDialogs ?? [], closedDialogs: [] } : {}),
       error: "",
     });
     this.applyReleasedCreatedSessions(releasedCreatedSessions, pending.machineId);
@@ -1326,7 +1325,7 @@ export class SessionController {
       activity: isSelected && clearsStaleActivity ? undefined : state.activity,
       // The daemon owns whether an ask is open, so every status it publishes is
       // authoritative for the selected session's card, including its removal.
-      ...(isSelected ? { pendingAsk: this.selectedPendingAsk(status, selectedMachineId(state)) } : {}),
+      ...(isSelected ? { pendingAsk: status.pendingAsk } : {}),
       // Same for extension dialogs: the status projection is authoritative for
       // the open list. Closed-card outcomes are event/response-driven instead,
       // so a status without the dialog simply drops it from the open list.
@@ -1374,7 +1373,7 @@ export class SessionController {
     if (state.selectedSession === undefined) return;
     // A superseded ask keeps its draft: the read-only record of an ask the user
     // never submitted must still be able to show what they had typed.
-    this.setState({ pendingAsk: this.selectedPendingAsk({ pendingAsk: ask }, selectedMachineId(state)) });
+    this.setState({ pendingAsk: ask });
   }
 
   private applyClosedAsk(askId: string): void {
@@ -1382,22 +1381,6 @@ export class SessionController {
     // (typically the supersede half of an open), so it must not clear the card.
     if (this.getState().pendingAsk?.askId !== askId) return;
     this.setState({ pendingAsk: undefined });
-  }
-
-  /**
-   * The open ask to show for the selected session, or `undefined` when there is
-   * none or the machine cannot serve it.
-   *
-   * COMPAT-CAP sessions.askUser: only a positive runtime answer without the
-   * capability drops an ask. A machine that reports no support cannot have posted
-   * one, so dropping it there is honest; while capability discovery is pending or
-   * failed, hiding questions the daemon says are open would strand the model.
-   */
-  private selectedPendingAsk(status: Pick<SessionStatus, "pendingAsk"> | undefined, machineId: string): PendingAskUser | undefined {
-    if (status?.pendingAsk === undefined) return undefined;
-    const runtime = this.getState().machineRuntimes[machineId];
-    if (runtime?.ok === true && !supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsAskUser)) return undefined;
-    return status.pendingAsk;
   }
 
   private applySessionName(sessionId: string, name: string | undefined) {

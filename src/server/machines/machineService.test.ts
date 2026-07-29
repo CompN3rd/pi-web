@@ -263,17 +263,17 @@ function remoteRuntimeBody(): PiWebRuntimeResponse {
         label: "Remote Web",
         runtimeVersion: "1.0.0",
         available: true,
-        capabilities: [PI_WEB_CAPABILITIES.sessionsAskUser, PI_WEB_CAPABILITIES.piPackagesManage],
+        capabilities: [PI_WEB_CAPABILITIES.workspaceFileSuggestions, PI_WEB_CAPABILITIES.piPackagesManage],
       },
       sessiond: {
         component: "sessiond",
         label: "Remote Session daemon",
         runtimeVersion: "1.0.0",
         available: true,
-        capabilities: [PI_WEB_CAPABILITIES.sessionsAskUser],
+        capabilities: [PI_WEB_CAPABILITIES.workspaceFileSuggestions],
       },
     },
-    capabilities: [PI_WEB_CAPABILITIES.sessionsAskUser, PI_WEB_CAPABILITIES.piPackagesManage],
+    capabilities: [PI_WEB_CAPABILITIES.workspaceFileSuggestions, PI_WEB_CAPABILITIES.piPackagesManage],
   };
 }
 
