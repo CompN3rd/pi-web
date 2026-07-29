@@ -19,7 +19,6 @@ import { sessionPathsEqual } from "../sessionPaths";
 import { TrailingRefreshCoordinator } from "./trailingRefreshCoordinator";
 
 const MESSAGE_PAGE_SIZE = 100;
-const BULK_FALLBACK_CONCURRENCY = 4;
 
 export interface SessionEventSocket {
   connect(
@@ -627,31 +626,13 @@ export class SessionController {
   }
 
   private async archiveSessionBatch(sessions: readonly SessionInfo[], machineId: string): Promise<BulkSessionMutationResult> {
-    const runtime = this.getState().machineRuntimes[machineId];
-    if (runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsBulkMutations)) {
-      const response = await this.api.archiveMany(sessions, machineId);
-      return { succeededIds: response.archivedSessionIds, failures: bulkFailureMessages(response.failures), generatedAt: response.generatedAt };
-    }
-
-    const results = await allSettledWithConcurrency(sessions, BULK_FALLBACK_CONCURRENCY, async (session) => {
-      await this.api.archive(session, machineId);
-      return session.id;
-    });
-    return { succeededIds: fulfilledValues(results), failures: settledSessionFailureMessages(sessions, results) };
+    const response = await this.api.archiveMany(sessions, machineId);
+    return { succeededIds: response.archivedSessionIds, failures: bulkFailureMessages(response.failures), generatedAt: response.generatedAt };
   }
 
   private async deleteArchivedSessionBatch(sessions: readonly SessionInfo[], machineId: string): Promise<BulkSessionMutationResult> {
-    const runtime = this.getState().machineRuntimes[machineId];
-    if (runtime?.ok === true && supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsBulkMutations)) {
-      const response = await this.api.deleteArchivedMany(sessions, machineId);
-      return { succeededIds: response.deletedSessionIds, failures: bulkFailureMessages(response.failures) };
-    }
-
-    const results = await allSettledWithConcurrency(sessions, BULK_FALLBACK_CONCURRENCY, async (session) => {
-      await this.api.deleteArchived(session, machineId);
-      return session.id;
-    });
-    return { succeededIds: fulfilledValues(results), failures: settledSessionFailureMessages(sessions, results) };
+    const response = await this.api.deleteArchivedMany(sessions, machineId);
+    return { succeededIds: response.deletedSessionIds, failures: bulkFailureMessages(response.failures) };
   }
 
   async applySessionCleanupResult(result: SessionCleanupExecuteResponse, machineId = selectedMachineId(this.getState())): Promise<void> {
@@ -1812,51 +1793,8 @@ function uniqueSessionsById(sessions: readonly SessionInfo[]): SessionInfo[] {
   return unique;
 }
 
-function fulfilledValues<T>(results: readonly PromiseSettledResult<T>[]): T[] {
-  return results.filter(isFulfilled).map((result) => result.value);
-}
-
 function bulkFailureMessages(failures: readonly SessionBulkFailure[]): string[] {
   return failures.map((failure) => `${failure.sessionId}: ${failure.error}`);
-}
-
-function settledSessionFailureMessages(sessions: readonly SessionInfo[], results: readonly PromiseSettledResult<unknown>[]): string[] {
-  return results.flatMap((result, index) => {
-    if (!isRejected(result)) return [];
-    const sessionId = sessions[index]?.id ?? "unknown";
-    return [`${sessionId}: ${errorMessage(result.reason)}`];
-  });
-}
-
-async function allSettledWithConcurrency<T, R>(items: readonly T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
-  const indexedItems = items.map((item, index) => ({ item, index }));
-  const results: PromiseSettledResult<R>[] = [];
-  let nextIndex = 0;
-
-  async function runWorker(): Promise<void> {
-    while (nextIndex < indexedItems.length) {
-      const entry = indexedItems[nextIndex];
-      if (entry === undefined) return;
-      nextIndex += 1;
-      try {
-        results[entry.index] = { status: "fulfilled", value: await worker(entry.item) };
-      } catch (reason) {
-        results[entry.index] = { status: "rejected", reason };
-      }
-    }
-  }
-
-  const workerCount = Math.min(Math.max(1, concurrency), indexedItems.length);
-  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-  return results;
-}
-
-function isFulfilled<T>(result: PromiseSettledResult<T>): result is PromiseFulfilledResult<T> {
-  return result.status === "fulfilled";
-}
-
-function isRejected<T>(result: PromiseSettledResult<T>): result is PromiseRejectedResult {
-  return result.status === "rejected";
 }
 
 function errorMessage(error: unknown): string {

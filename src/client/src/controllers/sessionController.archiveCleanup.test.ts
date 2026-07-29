@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { initialAppState } from "../appState";
 import { SessionController } from "./sessionController";
 import { InMemorySessionSelectionMemory } from "./sessionSelection";
@@ -91,14 +90,15 @@ describe("SessionController archive and cleanup", () => {
     const persistedSession = { ...oldSession, persisted: true };
     const secondSession = { ...oldSession, id: "second-session", path: "/tmp/second-session.jsonl", persisted: true };
     const nextSession = { ...oldSession, id: "next-session", path: "/tmp/next-session.jsonl", persisted: true };
-    const archivedIds: string[] = [];
+    const archiveCalls: { ids: string[]; machineId: string }[] = [];
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [persistedSession, secondSession, nextSession] };
     const api: typeof defaultApi = {
       ...defaultApi,
-      archive: (session) => {
-        archivedIds.push(sessionLookupId(session));
-        return Promise.resolve({ archived: true });
+      archiveMany: (sessions, machineId) => {
+        archiveCalls.push({ ids: sessions.map(sessionLookupId), machineId: machineId ?? "local" });
+        return Promise.resolve({ archived: true, archivedSessionIds: sessions.map(sessionLookupId), failures: [], generatedAt: "now" });
       },
+      archive: () => { throw new Error("single archive should not be used"); },
       messages: () => Promise.resolve(emptyPage),
       status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
@@ -113,13 +113,13 @@ describe("SessionController archive and cleanup", () => {
     await controller.selectSession(persistedSession, { updateUrl: false });
     await controller.archiveSessions([persistedSession, secondSession]);
 
-    expect(archivedIds).toEqual([oldSession.id, secondSession.id]);
+    expect(archiveCalls).toEqual([{ ids: [oldSession.id, secondSession.id], machineId: "local" }]);
     expect(state.sessions.find((session) => session.id === oldSession.id)).toMatchObject({ archived: true });
     expect(state.sessions.find((session) => session.id === secondSession.id)).toMatchObject({ archived: true });
     expect(state.selectedSession?.id).toBe(nextSession.id);
   });
 
-  it("uses true bulk archive when the selected runtime supports it and applies partial failures", async () => {
+  it("applies partial failures from bulk archive", async () => {
     const persistedSession = { ...oldSession, persisted: true };
     const failedSession = { ...oldSession, id: "failed-session", path: "/tmp/failed-session.jsonl", persisted: true };
     const archiveCalls: { ids: string[]; machineId: string }[] = [];
@@ -127,7 +127,6 @@ describe("SessionController archive and cleanup", () => {
       ...initialAppState(),
       selectedWorkspace: workspace,
       sessions: [persistedSession, failedSession],
-      machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsBulkMutations] } },
     };
     const api: typeof defaultApi = {
       ...defaultApi,
@@ -157,64 +156,18 @@ describe("SessionController archive and cleanup", () => {
     expect(state.error).toBe("Archive failed for 1 session: failed-session: busy");
   });
 
-  it("throttles per-session archive fallback when bulk mutations are unsupported", async () => {
-    const sessions = Array.from({ length: 6 }, (_value, index) => ({ ...oldSession, id: `session-${String(index)}`, path: `/tmp/session-${String(index)}.jsonl`, persisted: true }));
-    const resolvers: (() => void)[] = [];
-    const startedIds: string[] = [];
-    let activeCount = 0;
-    let maxActiveCount = 0;
-    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions };
-    const api: typeof defaultApi = {
-      ...defaultApi,
-      archive: (session) => new Promise((resolve) => {
-        activeCount += 1;
-        maxActiveCount = Math.max(maxActiveCount, activeCount);
-        startedIds.push(sessionLookupId(session));
-        resolvers.push(() => {
-          activeCount -= 1;
-          resolve({ archived: true });
-        });
-      }),
-      messages: () => Promise.resolve(emptyPage),
-      status: (session) => Promise.resolve(status(sessionLookupId(session))),
-    };
-    const controller = new SessionController(
-      () => state,
-      (patch) => { state = { ...state, ...patch }; },
-      () => undefined,
-      new InMemorySessionSelectionMemory(),
-      { api, socket: new FakeSocket() },
-    );
-
-    const archive = controller.archiveSessions(sessions);
-    await Promise.resolve();
-
-    expect(startedIds).toHaveLength(4);
-    resolvers.shift()?.();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(startedIds).toHaveLength(5);
-    for (const resolve of resolvers.splice(0)) resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    for (const resolve of resolvers.splice(0)) resolve();
-    await archive;
-
-    expect(maxActiveCount).toBe(4);
-    expect(state.sessions.every((session) => session.archived === true)).toBe(true);
-  });
-
   it("deletes selected archived sessions in bulk and selects the next current session", async () => {
     const archivedSession = { ...oldSession, archived: true, archivedAt: "later" };
     const nextSession = { ...oldSession, id: "next-session", path: "/tmp/next-session.jsonl" };
-    const deletedIds: string[] = [];
+    const deleteCalls: { ids: string[]; machineId: string }[] = [];
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: archivedSession, sessions: [archivedSession, nextSession] };
     const api: typeof defaultApi = {
       ...defaultApi,
-      deleteArchived: (session) => {
-        deletedIds.push(sessionLookupId(session));
-        return Promise.resolve({ deleted: true });
+      deleteArchivedMany: (sessions, machineId) => {
+        deleteCalls.push({ ids: sessions.map(sessionLookupId), machineId: machineId ?? "local" });
+        return Promise.resolve({ deleted: true, deletedSessionIds: sessions.map(sessionLookupId), failures: [], generatedAt: "now" });
       },
+      deleteArchived: () => { throw new Error("single delete should not be used"); },
       messages: () => Promise.resolve(emptyPage),
       status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
@@ -228,12 +181,12 @@ describe("SessionController archive and cleanup", () => {
 
     await controller.deleteArchivedSessions([archivedSession]);
 
-    expect(deletedIds).toEqual([archivedSession.id]);
+    expect(deleteCalls).toEqual([{ ids: [archivedSession.id], machineId: "local" }]);
     expect(state.sessions.map((session) => session.id)).toEqual([nextSession.id]);
     expect(state.selectedSession?.id).toBe(nextSession.id);
   });
 
-  it("uses true bulk delete when supported and keeps partial failures visible", async () => {
+  it("keeps partial failures visible from bulk delete", async () => {
     const deletedSession = { ...oldSession, archived: true, archivedAt: "later" };
     const failedSession = { ...oldSession, id: "failed-archived", path: "/tmp/failed-archived.jsonl", archived: true, archivedAt: "later" };
     const deleteCalls: { ids: string[]; machineId: string }[] = [];
@@ -242,7 +195,6 @@ describe("SessionController archive and cleanup", () => {
       selectedWorkspace: workspace,
       selectedSession: deletedSession,
       sessions: [deletedSession, failedSession],
-      machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsBulkMutations] } },
     };
     const api: typeof defaultApi = {
       ...defaultApi,
