@@ -502,11 +502,6 @@ export interface AskUserQuestion {
   detail?: string;
   /** Offered options; may be empty when only free text makes sense. */
   options: AskUserQuestionOption[];
-  /**
-   * Compatibility marker for older clients. Canonical questions set this to
-   * true because every question offers a custom free-text answer.
-   */
-  allowOther?: boolean;
   /** When true, several options may be selected at once. */
   multiple?: boolean;
 }

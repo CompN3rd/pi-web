@@ -224,16 +224,12 @@ function parseAskUserQuestion(value: unknown): AskUserQuestion {
   const record = requireRecord(value);
   const options = boundedArrayOf(record["options"], parseAskUserQuestionOption, ASK_USER_OPTION_LIMIT, "options");
   assertUniqueStrings(options.map((option) => option.value), "ask option value");
-  // Validate the legacy wire field when present, but normalize every question to
-  // the current invariant: the browser always offers a custom answer.
-  parseOptionalBoolean(record["allowOther"], "allowOther");
   const multiple = parseOptionalBoolean(record["multiple"], "multiple");
   return {
     id: requireBoundedNonEmptyString(record, "id", ASK_USER_ID_MAX_LENGTH),
     question: requireBoundedNonEmptyString(record, "question", ASK_USER_TEXT_MAX_LENGTH),
     ...optionalField("detail", optionalBoundedNonEmptyString(record, "detail", ASK_USER_TEXT_MAX_LENGTH)),
     options,
-    allowOther: true,
     ...(multiple === undefined ? {} : { multiple }),
   };
 }
