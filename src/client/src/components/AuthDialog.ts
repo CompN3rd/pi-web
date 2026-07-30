@@ -75,7 +75,7 @@ export class AuthDialog extends LitElement {
     const flow = state.flow;
     const prompt = flow.prompt;
     const select = flow.select;
-    const promptInputType = oauthPromptInputType(prompt?.promptType);
+    const promptInputType = prompt === undefined ? undefined : oauthPromptInputType(prompt.promptType);
     return html`
       <div class="form">
         ${flow.auth !== undefined ? html`
@@ -164,7 +164,7 @@ export class AuthDialog extends LitElement {
   `];
 }
 
-export function oauthPromptInputType(promptType: NonNullable<OAuthFlowState["prompt"]>["promptType"] | undefined): "text" | "password" {
+export function oauthPromptInputType(promptType: NonNullable<OAuthFlowState["prompt"]>["promptType"]): "text" | "password" {
   return promptType === "secret" ? "password" : "text";
 }
 

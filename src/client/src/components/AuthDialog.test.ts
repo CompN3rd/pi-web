@@ -6,6 +6,5 @@ describe("oauthPromptInputType", () => {
     expect(oauthPromptInputType("secret")).toBe("password");
     expect(oauthPromptInputType("text")).toBe("text");
     expect(oauthPromptInputType("manual_code")).toBe("text");
-    expect(oauthPromptInputType(undefined)).toBe("text");
   });
 });

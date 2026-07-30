@@ -124,11 +124,11 @@ function authLossWarningKey(sessionId: string, provider: string, modelId: string
   return `${sessionId}:${provider}/${modelId}`;
 }
 
-function lookupMatchesActiveSession(ref: PiSessionRef, active: ActiveSession<PiSessionRuntime>): boolean {
+function refMatchesActiveSession(ref: PiSessionRef, active: ActiveSession<PiSessionRuntime>): boolean {
   return cwdPathsEqual(active.runtime.cwd, ref.cwd);
 }
 
-function lookupMatchesStartupSession(ref: PiSessionRef, session: PiAgentSession): boolean {
+function refMatchesStartupSession(ref: PiSessionRef, session: PiAgentSession): boolean {
   return cwdPathsEqual(session.sessionManager.getCwd(), ref.cwd);
 }
 
@@ -260,7 +260,7 @@ interface WorkspaceArchiveCandidate extends SessionArchiveTreeCandidate {
   activeSession?: PiAgentSession;
 }
 
-interface BulkSessionLookupContext {
+interface BulkSessionRefContext {
   sessionsByCwd: Map<string, PiSessionListEntry[]>;
 }
 
@@ -2104,7 +2104,7 @@ export class PiSessionService implements SessionRouteService {
     const uniqueRefs = uniqueBulkSessionRefs(refs);
     const [archivedRecords, sessionContext] = await Promise.all([
       this.archiveStore.list(),
-      this.bulkSessionLookupContext(uniqueRefs),
+      this.bulkSessionRefContext(uniqueRefs),
     ]);
     const failures: SessionBulkFailure[] = [];
     const alreadyArchivedSessionIds: string[] = [];
@@ -2120,7 +2120,7 @@ export class PiSessionService implements SessionRouteService {
         continue;
       }
 
-      const active = this.activeForLookup(bulkRefToLookup(ref));
+      const active = this.activeForRef(bulkRefToSessionRef(ref));
       const listed = findListedSessionForBulkRef(sessionContext, ref);
       const resolvedSessionId = active?.runtime.session.sessionId ?? listed?.id ?? ref.id;
       if (active !== undefined && this.hasActiveWork(active.runtime.session)) {
@@ -2143,7 +2143,7 @@ export class PiSessionService implements SessionRouteService {
 
     const readyPlanItems: { input: ArchiveSessionInput; active?: ActiveSession<PiSessionRuntime> }[] = [];
     for (const item of planItems) {
-      const active = this.activeForLookup({ id: item.input.sessionId, cwd: item.input.cwd });
+      const active = this.activeForRef({ id: item.input.sessionId, cwd: item.input.cwd });
       if (active !== undefined && this.hasActiveWork(active.runtime.session)) {
         failures.push({ sessionId: item.input.sessionId, error: "Stop current session activity before archiving" });
         continue;
@@ -2244,7 +2244,7 @@ export class PiSessionService implements SessionRouteService {
         continue;
       }
 
-      const active = this.activeForLookup({ id: record.sessionId, cwd: record.cwd });
+      const active = this.activeForRef({ id: record.sessionId, cwd: record.cwd });
       if (active !== undefined && this.hasActiveWork(active.runtime.session)) {
         failures.push({ sessionId: record.sessionId, error: "Stop current session activity before deleting archived session" });
         continue;
@@ -2344,7 +2344,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   async abort(ref: PiSessionRef): Promise<void> {
-    const active = this.activeForLookup(ref);
+    const active = this.activeForRef(ref);
     if (active === undefined) return;
     const sessionId = active.runtime.session.sessionId;
     this.clearCompactionPromptQueue(sessionId);
@@ -2368,7 +2368,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   async stop(ref: PiSessionRef): Promise<void> {
-    const active = this.activeForLookup(ref);
+    const active = this.activeForRef(ref);
     if (active !== undefined) {
       await this.closeActive(active.runtime.session.sessionId);
       return;
@@ -2376,7 +2376,7 @@ export class PiSessionService implements SessionRouteService {
     // A session whose open is parked (e.g. on a session_start dialog) is not
     // active yet; close it through the same path so stopping cannot block
     // behind the dialog timeout.
-    const startup = this.startupSessionForLookup(ref);
+    const startup = this.startupSessionForRef(ref);
     if (startup !== undefined) {
       await this.closeActive(startup.sessionId);
       return;
@@ -2384,7 +2384,7 @@ export class PiSessionService implements SessionRouteService {
     this.publishNotificationMutations(this.notificationStore.clearSessionIdentity(ref.id, canonicalizeStoredCwd(ref.cwd), "runtime-close"));
   }
 
-  private async bulkSessionLookupContext(refs: readonly SessionBulkMutationRef[]): Promise<BulkSessionLookupContext> {
+  private async bulkSessionRefContext(refs: readonly SessionBulkMutationRef[]): Promise<BulkSessionRefContext> {
     const cwdSet = new Set<string>();
     for (const ref of refs) cwdSet.add(ref.cwd);
     return { sessionsByCwd: await this.listSessionsByCwd([...cwdSet]) };
@@ -2574,7 +2574,7 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private async getActive(ref: PiSessionRef, options: Pick<CreateSessionRuntimeOptions, "notificationGeneration"> = {}): Promise<ActiveSession<PiSessionRuntime>> {
-    const active = this.activeForLookup(ref);
+    const active = this.activeForRef(ref);
     if (active !== undefined) return active;
 
     const archived = await this.getArchived(ref);
@@ -2599,7 +2599,7 @@ export class PiSessionService implements SessionRouteService {
     openSessionManager: () => PiSessionManager,
     options: Pick<CreateSessionRuntimeOptions, "notificationGeneration" | "notifications"> = {},
   ): Promise<ActiveSession<PiSessionRuntime>> {
-    const active = this.activeForLookup({ id: sessionId, cwd });
+    const active = this.activeForRef({ id: sessionId, cwd });
     if (active !== undefined) return Promise.resolve(active);
 
     const key = JSON.stringify([canonicalizeStoredCwd(cwd), sessionId]);
@@ -2645,22 +2645,22 @@ export class PiSessionService implements SessionRouteService {
     return { id: sessionId, cwd: active.runtime.cwd };
   }
 
-  private activeForLookup(ref: PiSessionRef): ActiveSession<PiSessionRuntime> | undefined {
+  private activeForRef(ref: PiSessionRef): ActiveSession<PiSessionRuntime> | undefined {
     const sessionId = ref.id;
     const exact = this.active.get(sessionId);
-    if (exact !== undefined && lookupMatchesActiveSession(ref, exact)) return exact;
+    if (exact !== undefined && refMatchesActiveSession(ref, exact)) return exact;
     for (const [candidateId, active] of this.active.entries()) {
-      if (candidateId.startsWith(sessionId) && lookupMatchesActiveSession(ref, active)) return active;
+      if (candidateId.startsWith(sessionId) && refMatchesActiveSession(ref, active)) return active;
     }
     return undefined;
   }
 
-  private startupSessionForLookup(ref: PiSessionRef): PiAgentSession | undefined {
+  private startupSessionForRef(ref: PiSessionRef): PiAgentSession | undefined {
     const sessionId = ref.id;
     const exact = this.startupSessions.get(sessionId);
-    if (exact !== undefined && lookupMatchesStartupSession(ref, exact)) return exact;
+    if (exact !== undefined && refMatchesStartupSession(ref, exact)) return exact;
     for (const [candidateId, session] of this.startupSessions.entries()) {
-      if (candidateId.startsWith(sessionId) && lookupMatchesStartupSession(ref, session)) return session;
+      if (candidateId.startsWith(sessionId) && refMatchesStartupSession(ref, session)) return session;
     }
     return undefined;
   }
@@ -2672,7 +2672,7 @@ export class PiSessionService implements SessionRouteService {
    * its status projection).
    */
   private async sessionForStatusOrDialogClose(ref: PiSessionRef): Promise<PiAgentSession> {
-    const reachable = this.activeForLookup(ref)?.runtime.session ?? this.startupSessionForLookup(ref);
+    const reachable = this.activeForRef(ref)?.runtime.session ?? this.startupSessionForRef(ref);
     if (reachable !== undefined) return reachable;
     return this.getOrOpen(ref);
   }
@@ -3512,7 +3512,7 @@ function uniqueBulkSessionRefs(refs: readonly SessionBulkMutationRef[]): Session
   return unique;
 }
 
-function bulkRefToLookup(ref: SessionBulkMutationRef): PiSessionRef {
+function bulkRefToSessionRef(ref: SessionBulkMutationRef): PiSessionRef {
   return { id: ref.id, cwd: ref.cwd };
 }
 
@@ -3520,7 +3520,7 @@ function findArchivedRecordForBulkRef(records: readonly ArchivedSessionRecord[],
   return records.find((record) => record.cwd === ref.cwd && (record.sessionId === ref.id || record.sessionId.startsWith(ref.id)));
 }
 
-function findListedSessionForBulkRef(context: BulkSessionLookupContext, ref: SessionBulkMutationRef): PiSessionListEntry | undefined {
+function findListedSessionForBulkRef(context: BulkSessionRefContext, ref: SessionBulkMutationRef): PiSessionListEntry | undefined {
   return findSessionByIdOrPrefix(context.sessionsByCwd.get(ref.cwd) ?? [], ref.id);
 }
 
