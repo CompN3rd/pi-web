@@ -1776,7 +1776,7 @@ export class PiSessionService implements SessionRouteService {
     );
   }
 
-  async messages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<unknown[] | ClientMessagePage> {
+  async messages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage> {
     const session = await this.getOrOpen(ref);
     return pageMessagesAtSafeBoundary(historyMessages(session), page);
   }

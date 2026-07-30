@@ -924,7 +924,7 @@ class CapturingRouteSessionService implements SessionRouteService {
   readonly dismissAllNotificationCalls: { ref: SessionRef; request: Omit<SessionNotificationDismissAllRequest, "cwd"> }[] = [];
   dismissWarningError: Error | undefined;
   unreadError: Error | undefined;
-  messagesResponse: unknown[] | MessagePage = [];
+  messagesResponse: MessagePage = { messages: [], start: 0, total: 0 };
   streamSnapshotResponse: SessionStreamSnapshot = { seq: 0, partial: null };
   readonly streamSnapshotCalls: SessionRouteRef[] = [];
   readonly cleanupPreviewCalls: NormalizedSessionCleanupRequest[] = [];
@@ -1065,7 +1065,7 @@ class CapturingRouteSessionService implements SessionRouteService {
     });
   }
 
-  messages(): Promise<unknown[] | MessagePage> {
+  messages(): Promise<MessagePage> {
     return Promise.resolve(this.messagesResponse);
   }
 

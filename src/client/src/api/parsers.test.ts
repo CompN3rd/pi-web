@@ -206,9 +206,9 @@ describe("API parsers", () => {
     });
   });
 
-  it("accepts legacy array message pages and paged message responses", () => {
-    expect(parseMessagePage(["a", "b"])).toEqual({ messages: ["a", "b"], start: 0, total: 2 });
+  it("parses paged message responses and rejects legacy array message pages", () => {
     expect(parseMessagePage({ messages: ["c"], start: 3, total: 9 })).toEqual({ messages: ["c"], start: 3, total: 9 });
+    expect(() => parseMessagePage(["a", "b"])).toThrow("Expected array response");
   });
 
   it("parses a session stream snapshot, defaulting a missing partial to null", () => {

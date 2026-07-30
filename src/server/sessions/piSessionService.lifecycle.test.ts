@@ -172,7 +172,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     expect(createCalls).toBe(1);
     expect(open).toHaveBeenCalledOnce();
     expect(activeCount).toBe(1);
-    expect(messages).toEqual([{ role: "user", content: "shared runtime" }]);
+    expect(messages).toEqual({ messages: [{ role: "user", content: "shared runtime" }], start: 0, total: 1 });
     expect(status).toMatchObject({ sessionId });
     expect(winnerSubscribe).toHaveBeenCalledOnce();
     expect(winnerUnsubscribe).toHaveBeenCalledOnce();

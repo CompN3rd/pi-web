@@ -49,7 +49,7 @@ export interface SessionRouteService {
    * echoes it and never interprets it.
    */
   start(cwd: string, options?: { startupToken?: string }): Promise<ClientSession>;
-  messages(ref: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<unknown[] | ClientMessagePage>;
+  messages(ref: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage>;
   status(ref: SessionRouteRef): Promise<ClientSessionStatus>;
   streamSnapshot(ref: SessionRouteRef): Promise<SessionStreamSnapshot>;
   notificationCatalog(): SessionNotificationCatalogSnapshot | Promise<SessionNotificationCatalogSnapshot>;

@@ -55,7 +55,6 @@ function arrayOfString(value: unknown, key: string): string[] {
 }
 
 export function parseMessagePage(value: unknown): MessagePage {
-  if (Array.isArray(value)) return { messages: value, start: 0, total: value.length };
   const record = requireRecord(value);
   return { messages: parseUnknownArray(record["messages"]), start: requireNumber(record, "start"), total: requireNumber(record, "total") };
 }
