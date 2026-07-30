@@ -447,15 +447,6 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     }
   });
 
-  app.delete<{ Params: { sessionId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId`, async (request, reply) => {
-    try {
-      await sessions.deleteArchived(sessionLookupFromQuery(request.params.sessionId, request.query));
-      return { deleted: true };
-    } catch (error) {
-      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
-    }
-  });
-
   app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/reload`, async (request, reply) => {
     try {
       await sessions.reload(sessionLookupFromBody(request.params.sessionId, optionalRecord(request.body)));

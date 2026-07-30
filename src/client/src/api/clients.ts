@@ -10,7 +10,6 @@ import {
   parseAuthProvidersResponse,
   parseClosed,
   parseCommandResult,
-  parseDeleted,
   parseDeleteWorkspaceFileResponse,
   parseDetached,
   parseExtensionDialogCloseResponse,
@@ -70,10 +69,6 @@ function sessionPath(session: SessionRef, endpoint: string, machineId = "local")
 
 function sessionQueryPath(session: SessionRef, endpoint: string, machineId = "local"): string {
   return `${sessionPath(session, endpoint, machineId)}${sessionQuery(session)}`;
-}
-
-function sessionBaseQueryPath(session: SessionRef, machineId = "local"): string {
-  return `${sessionBasePath(session, machineId)}${sessionQuery(session)}`;
 }
 
 function sessionQuery(session: SessionRef): string {
@@ -237,7 +232,6 @@ export const sessionsApi = {
   archive: (session: SessionRef, machineId = "local") => request(sessionPath(session, "archive", machineId), parseArchived, { method: "POST", body: sessionBody(session) }),
   archiveWithDescendants: (session: SessionRef, machineId = "local") => request(sessionPath(session, "archive-tree", machineId), parseArchived, { method: "POST", body: sessionBody(session) }),
   restore: (session: SessionRef, machineId = "local") => request(sessionPath(session, "restore", machineId), parseRestored, { method: "POST", body: sessionBody(session) }),
-  deleteArchived: (session: SessionRef, machineId = "local") => request(sessionBaseQueryPath(session, machineId), parseDeleted, { method: "DELETE" }),
   detachParent: (session: SessionRef, machineId = "local") => request(sessionPath(session, "detach-parent", machineId), parseDetached, { method: "POST", body: sessionBody(session) }),
   reloadSession: (session: SessionRef, machineId = "local") => request(sessionPath(session, "reload", machineId), parseReloaded, { method: "POST", body: sessionBody(session) }),
   authProviders: (options?: { mode?: "login" | "logout"; authType?: "oauth" | "api_key"; machineId?: string }) => {

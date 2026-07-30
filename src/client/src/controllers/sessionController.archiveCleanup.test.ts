@@ -142,7 +142,6 @@ describe("SessionController archive and cleanup", () => {
         deleteCalls.push({ ids: sessions.map(sessionLookupId), machineId: machineId ?? "local" });
         return Promise.resolve({ deleted: true, deletedSessionIds: sessions.map(sessionLookupId), failures: [], generatedAt: "now" });
       },
-      deleteArchived: () => { throw new Error("single delete should not be used"); },
       messages: () => Promise.resolve(emptyPage),
       status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
@@ -177,7 +176,6 @@ describe("SessionController archive and cleanup", () => {
         deleteCalls.push({ ids: sessions.map(sessionLookupId), machineId: machineId ?? "local" });
         return Promise.resolve({ deleted: true, deletedSessionIds: [deletedSession.id], failures: [{ sessionId: failedSession.id, error: "busy" }], generatedAt: "now" });
       },
-      deleteArchived: () => { throw new Error("single delete should not be used"); },
       messages: () => Promise.resolve(emptyPage),
     };
     const controller = new SessionController(

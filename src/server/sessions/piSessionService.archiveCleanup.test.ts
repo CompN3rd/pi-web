@@ -167,15 +167,14 @@ describe("PiSessionService archive and cleanup", () => {
     const notificationStore = new SessionNotificationStore({ daemonInstanceId: "daemon-delete-test" });
     const registration = notificationStore.registerSession("archived", "/workspace");
     notificationStore.addNotification(registration.generation, "delete me", "info");
+    const archivedRecord = { sessionId: "archived", cwd: "/workspace", archivedAt: "2026-01-02T00:00:00.000Z", archivePath: "/archive/archived.jsonl" };
     const service = new PiSessionService(new CapturingSessionEventHub(), {
       agentDir: TEST_AGENT_DIR,
       modelRuntime: testModelRuntime,
       notificationStore,
       archiveStore: {
-        list: () => Promise.resolve([]),
-        get: (sessionId) => Promise.resolve(sessionId === "archived" || "archived".startsWith(sessionId)
-          ? { sessionId: "archived", cwd: "/workspace", archivedAt: "2026-01-02T00:00:00.000Z", archivePath: "/archive/archived.jsonl" }
-          : undefined),
+        list: () => Promise.resolve([archivedRecord]),
+        get: () => Promise.resolve(undefined),
         archive: () => { throw new Error("archive should not be called for records that already have archive files"); },
         restore: () => Promise.resolve(),
         isArchived: () => Promise.resolve(false),
@@ -188,9 +187,10 @@ describe("PiSessionService archive and cleanup", () => {
       heartbeatIntervalMs: 60_000,
     });
 
-    await expect(service.deleteArchived(sessionRef("arch"))).resolves.toBeUndefined();
-    await expect(service.deleteArchived(sessionRef("active"))).rejects.toThrow("Archived session not found");
+    const result = await service.deleteArchivedMany([{ id: "arch", cwd: "/workspace" }, { id: "active", cwd: "/workspace" }]);
 
+    expect(result.deletedSessionIds).toEqual(["archived"]);
+    expect(result.failures).toEqual([{ sessionId: "active", error: "Archived session not found" }]);
     expect(deletedSessionIds).toEqual(["archived"]);
     expect(notificationStore.catalogSnapshot().sessions).toEqual([]);
     await service.dispose();

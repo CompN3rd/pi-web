@@ -86,7 +86,6 @@ export interface SessionRouteService {
   archive(ref: SessionRouteRef): Promise<void>;
   archiveTree(ref: SessionRouteRef): Promise<ClientArchiveSessionsResponse>;
   restore(ref: SessionRouteRef): Promise<void>;
-  deleteArchived(ref: SessionRouteRef): Promise<void>;
   reload(ref: SessionRouteRef): Promise<void>;
   detachParent(ref: SessionRouteRef): Promise<void>;
 }

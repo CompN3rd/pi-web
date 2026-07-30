@@ -2229,16 +2229,6 @@ export class PiSessionService implements SessionRouteService {
     await this.forgetUnreadSessions([archived]);
   }
 
-  async deleteArchived(ref: PiSessionRef): Promise<void> {
-    const record = await this.getArchived(ref);
-    if (record === undefined) throw new Error("Archived session not found");
-    if (this.archiveStore.deleteArchived === undefined) throw new Error("Archive store does not support deletion");
-
-    await this.closeActive(record.sessionId, { kind: "clear", reason: "delete" });
-    await this.archiveStore.deleteArchived(record.sessionId);
-    await this.forgetUnreadSessions([record]);
-  }
-
   async deleteArchivedMany(refs: readonly SessionBulkMutationRef[]): Promise<SessionBulkDeleteArchivedResponse> {
     if (this.archiveStore.deleteArchived === undefined && this.archiveStore.deleteArchivedMany === undefined) throw new Error("Archive store does not support deletion");
 

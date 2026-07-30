@@ -1122,8 +1122,6 @@ class CapturingRouteSessionService implements SessionRouteService {
   archive(): never { throw unusedRouteMethod("archive"); }
   archiveTree(): never { throw unusedRouteMethod("archiveTree"); }
   restore(): never { throw unusedRouteMethod("restore"); }
-  deleteArchived(): never { throw unusedRouteMethod("deleteArchived"); }
-
 
   detachParent(): never { throw unusedRouteMethod("detachParent"); }
 }

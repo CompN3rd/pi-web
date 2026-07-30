@@ -348,7 +348,7 @@ describe("PiSessionService daemon-owned unread state", () => {
         "delete-me",
       ]);
 
-      await service.deleteArchived(sessionRef("delete-me"));
+      await service.deleteArchivedMany([{ id: "delete-me", cwd: "/workspace" }]);
       expect((await service.unreadCatalog()).sessions.map((summary) => summary.sessionId)).toEqual(["orphan"]);
 
       await service.list(WORKSPACE_CWD);
