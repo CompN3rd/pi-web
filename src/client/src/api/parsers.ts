@@ -1459,12 +1459,11 @@ function parsePiWebConfigEnvOverrides(value: unknown): PiWebConfigEnvOverrides {
     allowedHosts: requireBoolean(record, "allowedHosts"),
     spawnSessions: requireBoolean(record, "spawnSessions"),
     subsessions: requireBoolean(record, "subsessions"),
-    // Older servers predate the ask_user tool; a missing flag means "not overridden".
-    askUser: optionalBoolean(record, "askUser") ?? false,
-    agentCommand: optionalBoolean(record, "agentCommand") ?? false,
-    agentDir: optionalBoolean(record, "agentDir") ?? false,
+    askUser: requireBoolean(record, "askUser"),
+    agentCommand: requireBoolean(record, "agentCommand"),
+    agentDir: requireBoolean(record, "agentDir"),
     ...optionalAgentDirSource(record),
-    agentSessionDir: optionalBoolean(record, "agentSessionDir") ?? false,
+    agentSessionDir: requireBoolean(record, "agentSessionDir"),
   };
 }
 

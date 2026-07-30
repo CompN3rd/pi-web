@@ -131,8 +131,22 @@ describe("API parsers", () => {
       exists: true,
       config: {},
       effectiveConfig: {},
-      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, agentDirSource: "future" },
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false, agentCommand: false, agentDir: false, agentSessionDir: false, agentDirSource: "future" },
     })).toThrow("Invalid PI WEB agentDirSource field");
+  });
+
+  it("rejects config responses missing a required agent override flag", () => {
+    const envOverrides = { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false, agentCommand: false, agentDir: false, agentSessionDir: false };
+    for (const flag of ["askUser", "agentCommand", "agentDir", "agentSessionDir"] as const) {
+      const incomplete = Object.fromEntries(Object.entries(envOverrides).filter(([key]) => key !== flag));
+      expect(() => parsePiWebConfigResponse({
+        path: "/tmp/config.json",
+        exists: true,
+        config: {},
+        effectiveConfig: {},
+        envOverrides: incomplete,
+      })).toThrow(`Expected boolean field: ${flag}`);
+    }
   });
 
   it("parses Pi package list and mutation responses", () => {

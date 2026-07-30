@@ -45,9 +45,6 @@ export class SettingsSessiondPanel extends LitElement {
     const subsessionsOverridden = config?.envOverrides.subsessions === true;
     // Beta, off by default; also requires spawn to be enabled.
     const effectiveSubsessions = config?.effectiveConfig.subsessions === true && effectiveSpawn;
-    // Current servers always resolve this on-by-default setting. Absence means
-    // an older selected machine cannot persist it yet.
-    const askUserSupported = config?.effectiveConfig.askUser !== undefined;
     const askUserOverridden = config?.envOverrides.askUser === true;
     const effectiveAskUser = config?.effectiveConfig.askUser === true;
     const agentCommandOverridden = config?.envOverrides.agentCommand === true;
@@ -152,14 +149,12 @@ export class SettingsSessiondPanel extends LitElement {
                 type="checkbox"
                 aria-label="Enable Ask Questions"
                 .checked=${effectiveAskUser}
-                ?disabled=${this.loading || this.saving || askUserOverridden || !askUserSupported}
+                ?disabled=${this.loading || this.saving || askUserOverridden}
                 @change=${(event: Event) => { void this.toggleAskUser(event); }}
               >
               <span>Enable the <code>ask_user</code> tool</span>
             </label>
-            <small>${askUserSupported
-              ? html`Agents can post a structured question form and pause until the user responds. On by default.`
-              : html`This machine does not expose the Ask Questions setting. Update and restart PI WEB on that machine to configure it.`}</small>
+            <small>Agents can post a structured question form and pause until the user responds. On by default.</small>
           </div>
           <section class="effective-card" aria-label="Desired and active session daemon configuration summary">
             <h3>Desired after environment overrides</h3>
@@ -171,7 +166,7 @@ export class SettingsSessiondPanel extends LitElement {
               <div><dt>Profile status</dt><dd>${profileActivationLabel(profileActivation)}</dd></div>
               <div><dt>Spawn sessions</dt><dd>${effectiveSpawn ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
               <div><dt>Subsessions</dt><dd>${effectiveSubsessions ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
-              <div><dt>Ask questions</dt><dd>${!askUserSupported ? html`<span class="muted">Unavailable</span>` : effectiveAskUser ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
+              <div><dt>Ask questions</dt><dd>${effectiveAskUser ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>
             </dl>
           </section>
         `}
