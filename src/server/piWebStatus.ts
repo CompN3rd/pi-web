@@ -328,7 +328,13 @@ async function getSessiondComponentStatus(daemon: PiWebStatusDaemon, options: Pi
     const runtime = parsePiWebRuntimeComponent(parsed);
     if (runtime?.available !== true) return unavailableSessiond(runtime?.error ?? "runtime response did not include valid runtime information");
     const status = await getPiWebComponentStatus("sessiond", options);
-    return { ...status, ...(runtime.runtimeVersion === undefined ? {} : { runtimeVersion: runtime.runtimeVersion }), available: true };
+    const runtimeVersion = runtime.runtimeVersion ?? status.runtimeVersion;
+    return {
+      ...status,
+      ...(runtimeVersion === undefined ? {} : { runtimeVersion }),
+      stale: isInstalledVersionNewer(status.installedVersion, runtimeVersion),
+      available: true,
+    };
   } catch (error) {
     return unavailableSessiond(error instanceof Error ? error.message : String(error));
   }

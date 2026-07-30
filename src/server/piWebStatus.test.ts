@@ -1,6 +1,7 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { comparePackageVersions, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus, updateCommandFor } from "./piWebStatus.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
@@ -190,6 +191,31 @@ describe("PI WEB status", () => {
     }
   });
 
+  it("reports a session daemon running an older version than the installed package as stale", async () => {
+    process.env["PI_WEB_SKIP_VERSION_CHECK"] = "1";
+    disableDockerRuntimeEnv();
+    const home = await tempHome();
+    try {
+      process.env["HOME"] = home;
+      const installedVersion = await installedPackageVersion();
+      const daemon = daemonWithRuntime(runningSessiondRuntime("1.202605.7"));
+
+      const status = await getPiWebStatus(daemon);
+
+      expect(status.components.sessiond.stale).toBe(true);
+      expect(status.components.sessiond.runtimeVersion).toBe("1.202605.7");
+      expect(status.components.sessiond.installedVersion).toBe(installedVersion);
+      expect(status.messages.find((message) => message.id === "sessiond-stale")).toEqual({
+        id: "sessiond-stale",
+        severity: "warning",
+        title: "Session daemon restart needed",
+        body: `The session daemon is running 1.202605.7, but ${installedVersion} is installed. Restart the session daemon service or process to use the installed version.`,
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("suppresses Pi package update planning without an active companion command", async () => {
     const hasCommand = vi.fn(() => Promise.resolve(true));
 
@@ -271,6 +297,7 @@ describe("PI WEB status", () => {
       expect(status.commands.restart).toBe("systemd-run --user --collect --unit=pi-web-restart -- systemctl --user restart pi-web-ui-dev.service pi-web-sessiond.service");
       expect(status.commands.restartWeb).toBe("systemd-run --user --collect --unit=pi-web-restart-web -- systemctl --user restart pi-web-ui-dev.service");
       expect(status.commands.restartSessiond).toBe("systemd-run --user --collect --unit=pi-web-restart-sessiond -- systemctl --user restart pi-web-sessiond.service");
+      expect(status.messages.find((message) => message.id === "sessiond-stale")?.command).toBe("systemd-run --user --collect --unit=pi-web-restart-sessiond -- systemctl --user restart pi-web-sessiond.service");
     } finally {
       await Promise.all([
         rm(home, { recursive: true, force: true }),
@@ -341,7 +368,7 @@ describe("PI WEB status", () => {
     const home = await tempHome();
     try {
       process.env["HOME"] = home;
-      const daemon = daemonWithRuntime(runningSessiondRuntime());
+      const daemon = daemonWithRuntime(runningSessiondRuntime(await installedPackageVersion()));
 
       const status = await getPiWebStatus(daemon);
 
@@ -386,6 +413,19 @@ function daemonWithRuntime(component: PiWebRuntimeComponent): SessionDaemonClien
     body: JSON.stringify(component),
   });
   return daemon;
+}
+
+async function installedPackageVersion(): Promise<string> {
+  const path = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+  const info: unknown = JSON.parse(await readFile(path, "utf8"));
+  if (!isRecord(info) || typeof info["version"] !== "string" || info["version"] === "") {
+    throw new Error("package.json did not include a usable version");
+  }
+  return info["version"];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function tempHome(): Promise<string> {
