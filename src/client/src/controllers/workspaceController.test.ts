@@ -14,7 +14,7 @@ function project(id: string, path: string): Project {
 }
 
 function workspace(projectId: string, path: string, options: { isMain?: boolean } = {}): Workspace {
-  return { id: path, projectId, path, label: path, isMain: options.isMain ?? false, isGitRepo: true, isGitWorktree: true };
+  return { id: path, projectId, path, label: path, isMain: options.isMain ?? false, isGitRepo: true, isGitWorktree: true, effectiveConfig: {} };
 }
 
 function session(cwd: string, id = "s1"): SessionInfo {

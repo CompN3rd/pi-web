@@ -517,8 +517,8 @@ describe("API parsers", () => {
     });
   });
 
-  it("accepts legacy workspace responses without effective config", () => {
-    expect(parseWorkspace({
+  it("rejects workspace responses without effective config", () => {
+    expect(() => parseWorkspace({
       id: "w1",
       projectId: "p1",
       path: "/repo",
@@ -526,15 +526,7 @@ describe("API parsers", () => {
       isMain: true,
       isGitRepo: false,
       isGitWorktree: false,
-    })).toEqual({
-      id: "w1",
-      projectId: "p1",
-      path: "/repo",
-      label: "main",
-      isMain: true,
-      isGitRepo: false,
-      isGitWorktree: false,
-    });
+    })).toThrow("Expected workspace effectiveConfig field");
   });
 
   it("parses workspace activity snapshots", () => {

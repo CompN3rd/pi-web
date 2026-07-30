@@ -114,6 +114,7 @@ const mainWorkspace: Workspace = {
   isMain: true,
   isGitRepo: true,
   isGitWorktree: true,
+  effectiveConfig: {},
 };
 
 const featureWorkspace: Workspace = {
@@ -125,6 +126,7 @@ const featureWorkspace: Workspace = {
   isMain: false,
   isGitRepo: true,
   isGitWorktree: true,
+  effectiveConfig: {},
 };
 
 function child(parent: { parentSessionCwd?: string; parentSessionId?: string }): SessionInfo {

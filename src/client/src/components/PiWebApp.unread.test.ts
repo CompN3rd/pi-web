@@ -485,7 +485,7 @@ function project(id: string): Project {
 }
 
 function workspace(id: string, projectId: string, path: string): Workspace {
-  return { id, projectId, path, label: id, isMain: true, isGitRepo: true, isGitWorktree: false };
+  return { id, projectId, path, label: id, isMain: true, isGitRepo: true, isGitWorktree: false, effectiveConfig: {} };
 }
 
 function session(id: string): SessionInfo {

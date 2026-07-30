@@ -14,6 +14,7 @@ const workspace: Workspace = {
   isMain: true,
   isGitRepo: true,
   isGitWorktree: true,
+  effectiveConfig: {},
 };
 const session = { id: "s 1", cwd: workspace.path };
 

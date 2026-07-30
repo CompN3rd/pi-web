@@ -32,7 +32,7 @@ import { MachineService } from "./machines/machineService.js";
 import { registerMachineRoutes } from "./machines/machineRoutes.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
 import { proxyMachinePluginAsset, registerMachinePluginProxyRoutes } from "./machines/machinePluginProxyRoutes.js";
-import type { Project, Workspace } from "./types.js";
+import type { Project, Workspace, WorkspaceEffectiveConfig } from "./types.js";
 
 export interface AppDependencies {
   projects?: ProjectService;
@@ -100,7 +100,7 @@ async function listWorkspacesWithEffectiveConfig(project: Project, workspaces: W
   return workspaceList.map((workspace) => ({ ...workspace, effectiveConfig }));
 }
 
-async function workspaceEffectiveConfig(projectPath: string, config?: Pick<PiWebConfigService, "read">): Promise<NonNullable<Workspace["effectiveConfig"]>> {
+async function workspaceEffectiveConfig(projectPath: string, config?: Pick<PiWebConfigService, "read">): Promise<WorkspaceEffectiveConfig> {
   const globalConfig = config === undefined ? {} : (await config.read()).effectiveConfig;
   return { uploads: await loadEffectiveProjectUploadsConfig(projectPath, globalConfig) };
 }

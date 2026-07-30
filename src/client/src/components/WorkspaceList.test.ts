@@ -154,5 +154,5 @@ function workspaceActivity(cwd: string, hasSessionActivity: boolean, hasTerminal
 }
 
 function workspace(id: string): Workspace {
-  return { id, projectId: "project-1", path: `/repo/${id}`, label: id, isMain: true, isGitRepo: true, isGitWorktree: false };
+  return { id, projectId: "project-1", path: `/repo/${id}`, label: id, isMain: true, isGitRepo: true, isGitWorktree: false, effectiveConfig: {} };
 }

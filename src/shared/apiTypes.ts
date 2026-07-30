@@ -201,8 +201,8 @@ export interface Workspace {
   isMain: boolean;
   isGitRepo: boolean;
   isGitWorktree: boolean;
-  /** Workspace-effective project/global settings needed by workspace UI features. */
-  effectiveConfig?: WorkspaceEffectiveConfig;
+  /** Workspace-effective project/global settings needed by workspace UI features. Always present on current server workspace responses. */
+  effectiveConfig: WorkspaceEffectiveConfig;
 }
 
 export interface SessionRef {

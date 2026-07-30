@@ -253,9 +253,8 @@
               </p>
               <p>
                 Project-local <code>uploads.defaultFolder</code> overrides the global upload destination for workspaces in
-                that project. Current PI WEB servers include this workspace-effective value on local and federated
-                workspace responses; older remote servers may omit it and the browser falls back to the global/default
-                upload folder.
+                that project. PI WEB servers always include this workspace-effective value on local and federated
+                workspace responses.
               </p>
               <p>
                 Plugins may own separate project files, such as <code>.pi-web/tasks.json</code> for the built-in Workspace
@@ -560,9 +559,9 @@
                 batch/file, and conflicts or errors stay visible in the upload progress UI.
               </p>
               <p>
-                For machine federation, Settings saves the global upload default on the selected machine. Current remote
-                PI WEB servers also return workspace-effective upload defaults on workspace responses; older remote
-                servers may omit them and the browser falls back to the global/default upload folder.
+                For machine federation, Settings saves the global upload default on the selected machine. Remote
+                PI WEB servers always return workspace-effective upload defaults on workspace responses, and the Files
+                panel uses them as the default upload destination.
               </p>
             </section>
 
