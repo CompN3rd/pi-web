@@ -714,7 +714,6 @@ function parseCommandOutputEvent(record: Record<string, unknown>): Extract<Sessi
     type: "command.output",
     level,
     message: requireString(record, "message"),
-    ...optionalField("notificationId", optionalString(record, "notificationId")),
   };
 }
 

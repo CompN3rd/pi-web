@@ -2880,13 +2880,6 @@ export class PiSessionService implements SessionRouteService {
       }
       const added = this.notificationStore.addNotification(generation, message, type);
       this.publishNotificationMutations(added.mutations);
-      if (added.notification === undefined) return;
-      this.events.publish(session.sessionId, {
-        type: "command.output",
-        level: type === "error" ? "error" : "info",
-        message,
-        notificationId: added.notification.id,
-      });
     };
     // PI WEB owns the browser-facing dialog, notification, and text-formatting
     // boundaries: the three dialog primitives park daemon-held Promises that

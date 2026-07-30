@@ -213,7 +213,7 @@ describe("socket stream validation", () => {
       { type: "message.end" },
       { type: "status.update", status: statusWire() },
       { type: "activity.update", activity: activityWire() },
-      { type: "command.output", level: "success", message: "done", notificationId: "daemon-a:1" },
+      { type: "command.output", level: "success", message: "done" },
       { type: "session.error", message: "boom" },
       { type: "session.name", sessionId: "session-1", name: "rename" },
       { type: "session.created", session: sessionInfoWire() },

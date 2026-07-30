@@ -374,12 +374,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await expect(service.runCommand(sessionRef("extension-command-session"), "/ctx-stats")).resolves.toEqual({ type: "done" });
 
     expect(extensionMode).toBe("rpc");
-    const legacyEvent = hub.sessionEvents.find(({ event }) => event.type === "command.output" && event.message === "context-mode stats");
-    expect(legacyEvent).toMatchObject({
-      sessionId: "extension-command-session",
-      event: { type: "command.output", level: "info", message: "context-mode stats" },
-    });
-    expect(legacyEvent?.event.type === "command.output" ? typeof legacyEvent.event.notificationId : undefined).toBe("string");
+    expect(hub.sessionEvents.filter(({ event }) => event.type === "command.output")).toHaveLength(0);
     const inboxEvent = hub.sessionEvents.find(({ event }) => event.type === "notifications.inbox");
     expect(inboxEvent).toMatchObject({
       sessionId: "extension-command-session",
@@ -430,7 +425,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     ]);
     expect(fake.session.sessionManager.getBranch()).toBe(branch);
     expect(fake.session.messages).toEqual([]);
-    expect(hub.sessionEvents.filter(({ event }) => event.type === "command.output")).toHaveLength(2);
+    expect(hub.sessionEvents.filter(({ event }) => event.type === "command.output")).toHaveLength(0);
     expect(hub.sessionEvents.filter(({ event }) => event.type === "notifications.inbox")).toHaveLength(2);
 
     await service.dispose();

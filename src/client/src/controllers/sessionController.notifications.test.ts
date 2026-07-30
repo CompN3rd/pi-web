@@ -68,7 +68,7 @@ describe("SessionController notification event boundary", () => {
     expect(refreshSelectedSession).toHaveBeenLastCalledWith(oldSession, "local");
   });
 
-  it("handles inbox events before transcript watermarking and filters notification-owned legacy output", async () => {
+  it("handles inbox events before transcript watermarking while ordinary extension output still flows", async () => {
     const socket = new EmitSocket();
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: oldSession, sessions: [oldSession] };
     const applyInboxEvent = vi.fn();
@@ -94,10 +94,8 @@ describe("SessionController notification event boundary", () => {
     await controller.selectSession(oldSession, { updateUrl: false });
 
     socket.emit({ ...inboxEvent(), seq: 50 });
-    socket.emit({ type: "command.output", level: "info", message: "legacy duplicate", notificationId: "daemon-a:1", seq: 101 });
 
     expect(applyInboxEvent).toHaveBeenCalledExactlyOnceWith("local", expect.objectContaining({ type: "notifications.inbox" }));
-    expect(state.messages).toEqual([]);
 
     socket.emit({ type: "command.output", level: "info", message: "ordinary extension output", seq: 102 });
     expect(state.messages).toHaveLength(1);
