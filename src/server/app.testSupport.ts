@@ -13,7 +13,6 @@ import { MachineStore } from "./machines/machineStore.js";
 import { WorkspaceService } from "./workspaces/workspaceService.js";
 import type { PiPackageService } from "./piPackageService.js";
 import type { SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
-import { PI_WEB_CAPABILITIES } from "../shared/capabilities.js";
 import type { ActiveAgentProfileDescriptor, PiPackageInfo, PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 import type { SessionDaemonAgentProfileResult } from "../sessiond/sessionDaemonClient.js";
 
@@ -98,10 +97,10 @@ export function registerAppTestHooks(): void {
           packageName: "@jmfederico/pi-web",
           generatedAt: "2026-05-25T00:00:00.000Z",
           components: {
-            web: { component: "web", label: "PI WEB", available: true, capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived] },
-            sessiond: { component: "sessiond", label: "PI WEB Session Daemon", available: true, capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived] },
+            web: { component: "web", label: "PI WEB", available: true, capabilities: [] },
+            sessiond: { component: "sessiond", label: "PI WEB Session Daemon", available: true, capabilities: [] },
           },
-          capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived],
+          capabilities: [],
         }),
       }),
       sessionDaemon: fakeSessionDaemon(),

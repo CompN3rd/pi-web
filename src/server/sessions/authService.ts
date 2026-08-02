@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { ModelRuntime, type CreateModelRuntimeOptions } from "@earendil-works/pi-coding-agent";
-import type { AuthInteraction } from "@earendil-works/pi-ai";
 import type { AuthProvidersResponse, AuthType, OAuthFlowState } from "../../shared/apiTypes.js";
 import { getLoginProviderOptions, getLogoutProviderOptions } from "./authProviderOptions.js";
 import { OAuthLoginFlowService } from "./oauthLoginFlowService.js";
@@ -125,29 +124,6 @@ export class AuthService {
     await this.runtime.refresh();
     const providers = mode === "logout" ? await getLogoutProviderOptions(this.runtime) : getLoginProviderOptions(this.runtime, authType);
     return { providers };
-  }
-
-  async saveApiKey(providerId: string, key: string): Promise<{ accepted: true }> {
-    if (key.trim() === "") throw new Error("API key is required");
-    const provider = await this.requireApiKeyLoginProvider(providerId);
-    let promptAttempted = false;
-    const interaction: AuthInteraction = {
-      prompt: (prompt) => {
-        if (promptAttempted) {
-          throw new Error(`${provider.name} requires interactive setup; use Pi's generic /login flow`);
-        }
-        promptAttempted = true;
-        if (prompt.signal?.aborted === true) throw new Error("Login cancelled");
-        if (prompt.type !== "secret") {
-          throw new Error(`${provider.name} requires interactive setup; use Pi's generic /login flow`);
-        }
-        return Promise.resolve(key);
-      },
-      notify: () => undefined,
-    };
-    await this.runtime.login(providerId, "api_key", interaction);
-    await this.emit({}, { operation: "login", providerId, authType: "api_key" });
-    return { accepted: true };
   }
 
   async logoutProvider(providerId: string): Promise<{ accepted: true }> {

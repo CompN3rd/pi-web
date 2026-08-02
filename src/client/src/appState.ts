@@ -33,8 +33,7 @@ export interface AppState {
   activity: SessionActivity | undefined;
   /**
    * The selected session's open `ask_user` question set, derived from the
-   * daemon-owned {@link SessionStatus.pendingAsk} plus live ask events, and
-   * dropped when the machine reports no `sessions.askUser` support.
+   * daemon-owned {@link SessionStatus.pendingAsk} plus live ask events.
    */
   pendingAsk: PendingAskUser | undefined;
   /**
@@ -102,7 +101,6 @@ export interface ClosedExtensionDialog {
 export type AuthDialogState =
   | { step: "method" }
   | { step: "providers"; mode: "login"; authType?: "oauth" | "api_key"; providers: AuthProviderOption[] }
-  | { step: "apiKey"; provider: AuthProviderOption; value: string; saving?: boolean; error?: string }
   | { step: "oauth"; flow: OAuthFlowState; machineId: string; responding?: boolean; inputValue?: string; error?: string }
   | { step: "logout"; providers: AuthProviderOption[] };
 

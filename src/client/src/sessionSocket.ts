@@ -1,12 +1,10 @@
 import { realtimeEvents, sessionEvents } from "./api";
-import { parseSessionAskClosedEvent, parseSessionAskOpenedEvent, parseSessionDialogClosedEvent, parseSessionDialogOpenedEvent, parseSessionNotificationInboxEvent, parseSessionStartupProgressEvent, parseSessionUnreadEvent } from "./api/parsers";
-import type { GlobalSessionEvent, RealtimeEvent, SessionRef, SessionUiEvent } from "../../shared/apiTypes";
+import { parseRealtimeStreamEvent, parseSessionAskClosedEvent, parseSessionAskOpenedEvent, parseSessionDialogClosedEvent, parseSessionDialogOpenedEvent, parseSessionNotificationInboxEvent, parseSessionStartupProgressEvent, parseSessionStreamEvent, parseSessionUnreadEvent } from "./api/parsers";
+import type { RealtimeEvent, SessionRef, SessionUiEvent } from "../../shared/apiTypes";
 
 export type { GlobalSessionEvent, RealtimeEvent, SessionUiEvent } from "../../shared/apiTypes";
 
 export type BrowserRealtimeEvent = Exclude<RealtimeEvent, { type: "notifications.summary" }>;
-type BrowserGlobalSessionEvent = Exclude<GlobalSessionEvent, { type: "notifications.summary" }>;
-type NonGlobalBrowserRealtimeEvent = Exclude<BrowserRealtimeEvent, BrowserGlobalSessionEvent>;
 
 export class SessionSocket {
   private socket: WebSocket | undefined;
@@ -154,41 +152,35 @@ export class RealtimeSocket {
 
 export function parseSessionSocketEvent(event: unknown): SessionUiEvent | undefined {
   const type = eventType(event);
-  if (type === "notifications.inbox") return safelyParseNotificationEvent(() => parseSessionNotificationInboxEvent(event));
-  // Ask frames drive an interactive form the user answers on the model's behalf,
-  // so they are validated rather than accepted on their type alone.
+  // Inbox, ask, and dialog frames have dedicated validators (they drive the
+  // notification inbox and the interactive cards answered on the model's or an
+  // extension's behalf). Every other accepted frame is session stream
+  // vocabulary, validated field by field.
+  if (type === "notifications.inbox") return safelyParseValidatedEvent(() => parseSessionNotificationInboxEvent(event));
   if (type === "ask.opened") return safelyParseValidatedEvent(() => parseSessionAskOpenedEvent(event));
   if (type === "ask.closed") return safelyParseValidatedEvent(() => parseSessionAskClosedEvent(event));
-  // Dialog frames drive an interactive card the user answers on the extension's
-  // behalf, so they are validated rather than accepted on their type alone.
   if (type === "dialog.opened") return safelyParseValidatedEvent(() => parseSessionDialogOpenedEvent(event));
   if (type === "dialog.closed") return safelyParseValidatedEvent(() => parseSessionDialogClosedEvent(event));
-  return isLegacySessionUiEvent(event) ? event : undefined;
+  const parsed = safelyParseValidatedEvent(() => parseSessionStreamEvent(event));
+  return parsed === undefined ? undefined : withTransportSeq(parsed, event);
 }
 
 export function parseRealtimeSocketEvent(event: unknown): BrowserRealtimeEvent | undefined {
-  if (eventType(event) === "sessions.unread") return safelyParseValidatedEvent(() => parseSessionUnreadEvent(event));
-  if (eventType(event) === "session.startup") return safelyParseValidatedEvent(() => parseSessionStartupProgressEvent(event));
-  if (isLegacyGlobalSessionEvent(event) || isLegacyRealtimeEvent(event)) return event;
-  return undefined;
-}
-
-function isLegacySessionUiEvent(event: unknown): event is SessionUiEvent {
-  return ["message.append", "assistant.delta", "assistant.thinking.delta", "tool.start", "tool.update", "tool.end", "shell.start", "shell.chunk", "shell.end", "agent.start", "agent.end", "message.end", "status.update", "activity.update", "command.output", "session.error", "session.name", "session.created", "pi.event"].includes(eventType(event));
-}
-
-function isLegacyGlobalSessionEvent(event: unknown): event is BrowserGlobalSessionEvent {
   const type = eventType(event);
-  return type === "status.update" || type === "activity.update" || type === "session.name" || type === "session.created";
+  if (type === "sessions.unread") return safelyParseValidatedEvent(() => parseSessionUnreadEvent(event));
+  if (type === "session.startup") return safelyParseValidatedEvent(() => parseSessionStartupProgressEvent(event));
+  return safelyParseValidatedEvent(() => parseRealtimeStreamEvent(event));
 }
 
-function isLegacyRealtimeEvent(event: unknown): event is NonGlobalBrowserRealtimeEvent {
-  const type = eventType(event);
-  return type === "terminal.created" || type === "terminal.exited" || type === "terminal.closed" || type === "workspace.activity";
-}
-
-function safelyParseNotificationEvent<T>(parse: () => T): T | undefined {
-  return safelyParseValidatedEvent(parse);
+// The hub stamps every per-session frame with a monotonic seq that the
+// join-time exactly-once filter compares against the stream snapshot watermark.
+// Validation rebuilds the event object, so the stamp must be carried over
+// explicitly; a frame without a numeric stamp still flows, because the
+// watermark filter fails open for unstamped events.
+function withTransportSeq(event: SessionUiEvent, raw: unknown): SessionUiEvent {
+  if (typeof raw !== "object" || raw === null || !("seq" in raw)) return event;
+  const seq = raw.seq;
+  return typeof seq === "number" ? { ...event, seq } : event;
 }
 
 function safelyParseValidatedEvent<T>(parse: () => T): T | undefined {

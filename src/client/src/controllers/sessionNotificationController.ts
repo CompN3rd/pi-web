@@ -1,4 +1,4 @@
-import { api as defaultApi, type Machine, type SessionInfo } from "../api";
+import { api as defaultApi, type SessionInfo } from "../api";
 import type { AppState } from "../appState";
 import {
   applySelectedNotificationEvent,
@@ -9,7 +9,6 @@ import {
   type SelectedSessionNotificationInbox,
   type SessionNotificationTarget,
 } from "../sessionNotifications";
-import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
 import type {
   SessionNotificationInboxEvent,
   SessionNotificationInboxSnapshot,
@@ -48,7 +47,6 @@ interface SelectedRefreshOperation {
 export class SessionNotificationController {
   private readonly api: SessionNotificationApi;
   private readonly onBackgroundError: (message: string, error: unknown) => void;
-  private readonly acceptedSupportByMachine = new Set<string>();
   private selectedTarget: SessionNotificationTarget | undefined;
   private selectedGeneration = 0;
   private selectedJoin: SelectedJoin | undefined;
@@ -71,7 +69,6 @@ export class SessionNotificationController {
     this.selectedGeneration += 1;
     this.selectedTarget = undefined;
     this.selectedJoin = undefined;
-    this.acceptedSupportByMachine.clear();
     this.dismissingNotificationIds.clear();
     this.dismissAllPending = false;
   }
@@ -82,7 +79,7 @@ export class SessionNotificationController {
     this.selectedJoin = undefined;
     this.dismissingNotificationIds.clear();
     this.dismissAllPending = false;
-    if (this.selectedTarget === undefined || !this.machineSupportsNotifications(machineId)) {
+    if (this.selectedTarget === undefined) {
       this.setState({ selectedNotificationInbox: undefined });
       return;
     }
@@ -101,7 +98,7 @@ export class SessionNotificationController {
   refreshSelectedSession(session: SessionRef, machineId: string): Promise<void> {
     const target = this.selectedTarget;
     if (this.disposed || target?.machineId !== machineId || target.sessionId !== session.id || target.cwd !== session.cwd) return Promise.resolve();
-    if (!this.machineSupportsNotifications(machineId) || !this.machineIsReachable(machineId)) return Promise.resolve();
+    if (!this.machineIsReachable(machineId)) return Promise.resolve();
     const generation = this.selectedGeneration;
     const existing = this.selectedRefresh;
     if (existing?.generation === generation) {
@@ -121,7 +118,6 @@ export class SessionNotificationController {
   applyInboxEvent(machineId: string, event: SessionNotificationInboxEvent): void {
     const target = this.selectedTarget;
     if (target?.machineId !== machineId || target.sessionId !== event.summary.sessionId || target.cwd !== event.summary.cwd) return;
-    this.acceptedSupportByMachine.add(machineId);
     const join = this.selectedJoin;
     if (join?.generation === this.selectedGeneration) {
       join.events.push(event);
@@ -134,17 +130,14 @@ export class SessionNotificationController {
 
   syncEnvironment(previous: AppState, next: AppState): void {
     if (this.disposed) return;
-    if (previous.machines !== next.machines) this.pruneRemovedMachines(next.machines);
 
     const environmentChanged = previous.machines !== next.machines
-      || previous.machineStatuses !== next.machineStatuses
-      || previous.machineRuntimes !== next.machineRuntimes;
+      || previous.machineStatuses !== next.machineStatuses;
     const selected = this.selectedTarget;
     if (!environmentChanged || selected === undefined) return;
 
-    const wasEligible = this.machineSupportsNotificationsInState(previous, selected.machineId)
-      && this.machineIsReachableInState(previous, selected.machineId);
-    if (!this.machineSupportsNotifications(selected.machineId) || !this.machineIsReachable(selected.machineId)) {
+    const wasEligible = this.machineIsReachableInState(previous, selected.machineId);
+    if (!this.machineIsReachable(selected.machineId)) {
       this.markSelectedStale(selected);
       return;
     }
@@ -153,10 +146,6 @@ export class SessionNotificationController {
     if (!wasEligible || this.getState().selectedNotificationInbox?.status !== "fresh") {
       void this.refreshSelectedSession({ id: selected.sessionId, cwd: selected.cwd }, selected.machineId);
     }
-  }
-
-  shouldFilterLegacyNotification(machineId: string, notificationId: string | undefined): boolean {
-    return notificationId !== undefined && notificationId !== "" && this.machineSupportsNotifications(machineId);
   }
 
   async dismissNotification(notificationId: string): Promise<void> {
@@ -230,11 +219,10 @@ export class SessionNotificationController {
       try {
         const snapshot = await this.api.notificationInbox({ id: target.sessionId, cwd: target.cwd }, target.machineId);
         if (!this.isCurrentTarget(target, operation.generation)) return;
-        if (!this.machineSupportsNotifications(target.machineId) || !this.machineIsReachable(target.machineId)) {
+        if (!this.machineIsReachable(target.machineId)) {
           this.markSelectedStale(target);
           return;
         }
-        this.acceptedSupportByMachine.add(target.machineId);
         const current = this.getState().selectedNotificationInbox;
         let inbox = current === undefined || shouldInstallSelectedSnapshot(current, target, snapshot)
           ? installSelectedNotificationSnapshot(current, target, snapshot)
@@ -265,7 +253,7 @@ export class SessionNotificationController {
   ): void {
     const current = this.getState().selectedNotificationInbox;
     if (current === undefined || !notificationTargetsEqual(current, target)) return;
-    if (!this.machineSupportsNotifications(target.machineId) || !this.machineIsReachable(target.machineId)) {
+    if (!this.machineIsReachable(target.machineId)) {
       this.setState({ selectedNotificationInbox: { ...removeOverlay(current), status: "stale" } });
       return;
     }
@@ -303,26 +291,11 @@ export class SessionNotificationController {
     this.setState({ selectedNotificationInbox: { ...current, status: "stale" } });
   }
 
-  private pruneRemovedMachines(machines: readonly Machine[]): void {
-    const machineIds = new Set(machines.map((machine) => machine.id));
-    if (machineIds.size === 0) machineIds.add("local");
-    for (const machineId of [...this.acceptedSupportByMachine]) if (!machineIds.has(machineId)) this.acceptedSupportByMachine.delete(machineId);
-  }
-
   private isCurrentTarget(target: SessionNotificationTarget, generation: number): boolean {
     return !this.disposed
       && generation === this.selectedGeneration
       && this.selectedTarget !== undefined
       && notificationTargetsEqual(this.selectedTarget, target);
-  }
-
-  private machineSupportsNotifications(machineId: string): boolean {
-    return this.machineSupportsNotificationsInState(this.getState(), machineId);
-  }
-
-  private machineSupportsNotificationsInState(state: AppState, machineId: string): boolean {
-    return this.acceptedSupportByMachine.has(machineId)
-      || (state.machineRuntimes[machineId]?.ok === true && supportsPiWebCapability(state.machineRuntimes[machineId], PI_WEB_CAPABILITIES.sessionsNotifications));
   }
 
   private machineIsReachable(machineId: string): boolean {

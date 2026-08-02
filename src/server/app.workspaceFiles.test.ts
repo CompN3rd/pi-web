@@ -50,11 +50,17 @@ describe("buildApp workspace file routes", () => {
       payload: { name: "Local Suggestions", path: appTestContext.projectDir, create: true },
     });
     expect(addResponse.statusCode).toBe(200);
+    const project = addResponse.json<Project>();
     await writeFile(join(appTestContext.projectDir, "sdk.md"), "local sdk\n");
+
+    const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
+    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    if (workspace === undefined) throw new Error("Expected workspace");
+
     await mkdir(join(appTestContext.projectDir, ".pi-web"), { recursive: true });
     await writeFile(join(appTestContext.projectDir, ".pi-web", "config.json"), `${JSON.stringify({ version: 1, pathAccess: { allowedPaths: [""] } }, null, 2)}\n`);
 
-    const response = await appTestContext.app.inject({ method: "GET", url: `/api/files?cwd=${encodeURIComponent(appTestContext.projectDir)}&q=sdk&scope=all` });
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/files?q=sdk&scope=all` });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([{ path: "sdk.md", kind: "other" }]);

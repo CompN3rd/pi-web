@@ -93,6 +93,7 @@ function workspace(id: string, overrides: Partial<Workspace> = {}): Workspace {
     isMain: false,
     isGitRepo: true,
     isGitWorktree: true,
+    effectiveConfig: {},
     ...overrides,
   };
 }

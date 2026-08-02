@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { initialAppState } from "../appState";
 import { ChatTranscriptStore } from "../chatTranscriptStore";
 import { SessionController } from "./sessionController";
@@ -19,7 +18,6 @@ describe("SessionController reload and selection", () => {
       selectedWorkspace: workspace,
       selectedSession: persistedSession,
       sessions: [persistedSession],
-      machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsReload] } },
     };
     const api: typeof defaultApi = {
       ...defaultApi,
@@ -61,44 +59,13 @@ describe("SessionController reload and selection", () => {
     expect(state.error).toBe("");
   });
 
-  it("does not reload sessions from disk when the selected machine runtime does not support it", async () => {
-    const persistedSession = { ...oldSession, persisted: true };
-    const reloadCalls: string[] = [];
-    let state: AppState = {
-      ...initialAppState(),
-      selectedWorkspace: workspace,
-      selectedSession: persistedSession,
-      sessions: [persistedSession],
-    };
-    const api: typeof defaultApi = {
-      ...defaultApi,
-      reloadSession: (session) => {
-        reloadCalls.push(sessionLookupId(session));
-        return Promise.resolve({ reloaded: true });
-      },
-    };
-    const controller = new SessionController(
-      () => state,
-      (patch) => { state = { ...state, ...patch }; },
-      () => undefined,
-      new InMemorySessionSelectionMemory(),
-      { api, socket: new FakeSocket() },
-    );
-
-    await controller.reloadSession(persistedSession);
-
-    expect(reloadCalls).toEqual([]);
-    expect(state.error).toContain("Reloading sessions from disk requires an updated Pi-Web runtime");
-  });
-
-  it("does not reload sessions from disk without a persisted server signal when persistence is authoritative", async () => {
+  it("does not reload sessions from disk without a persisted server signal", async () => {
     const reloadCalls: string[] = [];
     let state: AppState = {
       ...initialAppState(),
       selectedWorkspace: workspace,
       selectedSession: oldSession,
       sessions: [oldSession],
-      machineRuntimes: { local: { machineId: "local", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsReload, PI_WEB_CAPABILITIES.sessionsPersistedState] } },
     };
     const api: typeof defaultApi = {
       ...defaultApi,

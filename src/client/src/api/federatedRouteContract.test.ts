@@ -14,6 +14,7 @@ const workspace: Workspace = {
   isMain: true,
   isGitRepo: true,
   isGitWorktree: true,
+  effectiveConfig: {},
 };
 const session = { id: "s 1", cwd: workspace.path };
 
@@ -96,8 +97,7 @@ describe("federated route contract", () => {
       ignoreParseFailure(workspacesApi.writeWorkspaceFile("p 1", "w 1", "README.md", "hello", { overwrite: false }, machineId)),
       ignoreParseFailure(workspacesApi.deleteWorkspaceFile("p 1", "w 1", "README.md", machineId)),
       ignoreParseFailure(workspacesApi.moveWorkspaceFile("p 1", "w 1", "README.md", "docs/README.md", { overwrite: false }, machineId)),
-      ignoreParseFailure(filesApi.files("/repo", "README", { kind: "tracked", mode: "file", machineId })),
-      ignoreParseFailure(filesApi.files("/repo", "README", { kind: "tracked", mode: "file", projectId: "p 1", workspaceId: "w 1", machineId, workspaceScoped: true })),
+      ignoreParseFailure(filesApi.files("README", { kind: "tracked", mode: "file", projectId: "p 1", workspaceId: "w 1", machineId })),
       ignoreParseFailure(gitApi.gitStatus("p 1", "w 1", machineId)),
       ignoreParseFailure(gitApi.gitDiff("p 1", "w 1", { path: "README.md", staged: true }, machineId)),
       ignoreParseFailure(sessionsApi.sessions("/repo", machineId)),
@@ -135,11 +135,9 @@ describe("federated route contract", () => {
       ignoreParseFailure(sessionsApi.archive(session, machineId)),
       ignoreParseFailure(sessionsApi.archiveWithDescendants(session, machineId)),
       ignoreParseFailure(sessionsApi.restore(session, machineId)),
-      ignoreParseFailure(sessionsApi.deleteArchived(session, machineId)),
       ignoreParseFailure(sessionsApi.reloadSession(session, machineId)),
       ignoreParseFailure(sessionsApi.detachParent(session, machineId)),
       ignoreParseFailure(sessionsApi.authProviders({ mode: "login", authType: "oauth", machineId })),
-      ignoreParseFailure(sessionsApi.saveApiKey("openai", "key", machineId)),
       ignoreParseFailure(sessionsApi.startInteractiveApiKeyLogin("amazon-bedrock", machineId)),
       ignoreParseFailure(sessionsApi.logoutProvider("openai", machineId)),
       ignoreParseFailure(sessionsApi.startOAuthLogin("openai", machineId)),

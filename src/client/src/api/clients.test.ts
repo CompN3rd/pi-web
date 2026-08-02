@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import type { PiWebConfigValues, TerminalCommandRun, Workspace } from "../../../shared/apiTypes";
 import { configApi, filesApi, machinesApi, piPackagesApi, piWebApi, pluginsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 
@@ -11,6 +10,7 @@ const workspace: Workspace = {
   isMain: true,
   isGitRepo: true,
   isGitWorktree: true,
+  effectiveConfig: {},
 };
 
 function piWebStatusResponse() {
@@ -80,7 +80,7 @@ describe("machine-scoped runtime API", () => {
   });
 
   it("reads machine runtime through the gateway route", async () => {
-    const response = { machineId: "remote a", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived] };
+    const response = { machineId: "remote a", ok: true, checkedAt: "now", capabilities: [] };
     const fetchMock = stubSequenceFetch([jsonResponse(response), jsonResponse(response)]);
 
     await machinesApi.runtime("remote a");
@@ -241,13 +241,13 @@ describe("session API compatibility", () => {
     const deleted = { deleted: true, deletedSessionIds: ["s 1"], failures: [], generatedAt: "later" };
     const fetchMock = stubSequenceFetch([jsonResponse(archived), jsonResponse(deleted)]);
 
-    await expect(sessionsApi.archiveMany([{ id: "s 1", cwd: "/repo" }, "s 2"], "remote a")).resolves.toEqual(archived);
+    await expect(sessionsApi.archiveMany([{ id: "s 1", cwd: "/repo" }, { id: "s 2", cwd: "/repo" }], "remote a")).resolves.toEqual(archived);
     await expect(sessionsApi.deleteArchivedMany([{ id: "s 1", cwd: "/repo" }], "remote a")).resolves.toEqual(deleted);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/bulk/archive");
     expect(fetchCall(fetchMock, 0)[1]?.method).toBe("POST");
-    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }, { id: "s 2" }] });
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }, { id: "s 2", cwd: "/repo" }] });
     expect(fetchCall(fetchMock, 1)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/bulk/delete-archived");
     expect(fetchCall(fetchMock, 1)[1]?.method).toBe("POST");
     expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }] });
@@ -267,17 +267,6 @@ describe("session API compatibility", () => {
     // The token is optional, so a caller with no row to label sends none rather
     // than an empty one.
     expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ cwd: "/repo" });
-  });
-
-  it("keeps legacy session-id calls free of cwd context", async () => {
-    const fetchMock = stubJsonFetch({ accepted: true });
-
-    await sessionsApi.prompt("s 1", "hello", "followUp", "remote a");
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchCall(fetchMock, 0);
-    expect(url).toBe("https://pi.example.test/api/machines/remote%20a/sessions/s%201/prompt");
-    expect(JSON.parse(requestBody(init))).toEqual({ text: "hello", streamingBehavior: "followUp" });
   });
 
   it("adds cwd context when session refs include a workspace", async () => {
@@ -391,15 +380,6 @@ describe("session API compatibility", () => {
     expect(init?.method ?? "GET").toBe("GET");
   });
 
-  it("reads a session stream snapshot for a legacy session-id ref without cwd context", async () => {
-    const fetchMock = stubJsonFetch({ seq: 0, partial: null });
-
-    await expect(sessionsApi.streamSnapshot("s 1", "remote a")).resolves.toEqual({ seq: 0, partial: null });
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/s%201/stream-snapshot");
-  });
-
   it("uses encoded selected-session notification routes, cwd queries, and authoritative mutation cutoffs", async () => {
     const notification = { id: "daemon-a:1", message: "notice", truncated: false, severity: "warning", receivedAt: "2026-07-18T00:00:00.000Z", order: 1 };
     const summary = { sessionId: "s /?", cwd: "/repo with spaces", inboxRevision: 1, retainedCount: 1, discardedCount: 0, highestSeverity: "warning" };
@@ -426,22 +406,13 @@ describe("session API compatibility", () => {
 });
 
 describe("machine-scoped file suggestion API", () => {
-  it("uses the workspace-scoped route when the caller has enabled workspace-scoped suggestions", async () => {
+  it("uses the workspace-scoped route", async () => {
     const fetchMock = stubJsonFetch([]);
 
-    await filesApi.files("/repo", "README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a", workspaceScoped: true });
+    await filesApi.files("README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a" });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/projects/p%201/workspaces/w%2F1/files?q=README&scope=tracked");
-  });
-
-  it("falls back to the legacy cwd route when workspace-scoped suggestions are not enabled", async () => {
-    const fetchMock = stubJsonFetch([]);
-
-    await filesApi.files("/repo", "README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a" });
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/files?q=README&scope=tracked&cwd=%2Frepo");
   });
 });
 

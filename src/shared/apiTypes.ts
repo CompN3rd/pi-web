@@ -1,22 +1,13 @@
 export type MachineKind = "local" | "remote";
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
-export const PI_WEB_CAPABILITIES = {
-  sessionsDeleteArchived: "sessions.deleteArchived",
-  sessionsBulkMutations: "sessions.bulkMutations",
-  sessionsCleanup: "sessions.cleanup",
-  sessionsReload: "sessions.reload",
-  sessionsClearQueue: "sessions.clearQueue",
-  sessionsPersistedState: "sessions.persistedState",
-  sessionsNotifications: "sessions.notifications",
-  sessionsUnread: "sessions.unread",
-  sessionsAskUser: "sessions.askUser",
-  promptAttachments: "prompt.attachments",
-  workspaceFileSuggestions: "workspace.fileSuggestions",
-  piPackagesManage: "piPackages.manage",
-  selectedMachineSettings: "settings.selectedMachine",
-  agentProfileConfig: "settings.agentProfile",
-} as const;
+/**
+ * Registry of feature-gating capabilities. Currently empty: every component is
+ * expected to run the current version, so no capability is advertised. Add an
+ * entry here (plus the runtime/requirements entries in `capabilities.ts`) when
+ * a future feature needs rolling-version gating again.
+ */
+export const PI_WEB_CAPABILITIES = {} as const;
 
 export type PiWebCapability = typeof PI_WEB_CAPABILITIES[keyof typeof PI_WEB_CAPABILITIES];
 
@@ -210,8 +201,8 @@ export interface Workspace {
   isMain: boolean;
   isGitRepo: boolean;
   isGitWorktree: boolean;
-  /** Workspace-effective project/global settings needed by workspace UI features. */
-  effectiveConfig?: WorkspaceEffectiveConfig;
+  /** Workspace-effective project/global settings needed by workspace UI features. Always present on current server workspace responses. */
+  effectiveConfig: WorkspaceEffectiveConfig;
 }
 
 export interface SessionRef {
@@ -385,7 +376,7 @@ export interface ArchiveSessionsResponse {
 
 export interface SessionBulkMutationRef {
   id: string;
-  cwd?: string;
+  cwd: string;
 }
 
 export interface SessionBulkMutationRequest {
@@ -511,11 +502,6 @@ export interface AskUserQuestion {
   detail?: string;
   /** Offered options; may be empty when only free text makes sense. */
   options: AskUserQuestionOption[];
-  /**
-   * Compatibility marker for older clients. Canonical questions set this to
-   * true because every question offers a custom free-text answer.
-   */
-  allowOther?: boolean;
   /** When true, several options may be selected at once. */
   multiple?: boolean;
 }
@@ -791,7 +777,7 @@ export interface AuthProviderOption {
   name: string;
   authType: AuthType;
   status: AuthProviderStatus;
-  /** Additive hint: use the generic AuthInteraction transport instead of the legacy one-secret form. */
+  /** Present when the provider logs in through the generic AuthInteraction flow. */
   loginFlow?: "interactive";
 }
 
@@ -814,9 +800,7 @@ export interface OAuthFlowState {
     message: string;
     placeholder?: string;
     allowEmpty?: boolean;
-    /** Additive semantic detail; legacy peers continue to use `kind`. */
-    promptType?: "text" | "secret" | "manual_code";
-    kind: "prompt" | "manual";
+    promptType: "text" | "secret" | "manual_code";
   };
   select?: { requestId: string; message: string; options: CommandOption[] };
   progress: string[];
@@ -1266,7 +1250,7 @@ type SessionUiEventBody =
   | { type: "message.end"; message?: unknown }
   | { type: "status.update"; status: SessionStatus }
   | { type: "activity.update"; activity: SessionActivity }
-  | { type: "command.output"; level: "info" | "success" | "error"; message: string; notificationId?: string }
+  | { type: "command.output"; level: "info" | "success" | "error"; message: string }
   | SessionNotificationInboxEvent
   | { type: "session.error"; message: string }
   | { type: "ask.opened"; ask: PendingAskUser }

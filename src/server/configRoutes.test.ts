@@ -190,16 +190,11 @@ describe("config routes", () => {
     }
   });
 
-  it("defaults missing agent override fields from older config responses", () => {
-    const parsed = parsePiWebConfigResponseBody({
-      path: "/tmp/pi-web/config.json",
-      exists: true,
-      config: {},
-      effectiveConfig: {},
-      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false },
-    });
-
-    expect(parsed.envOverrides).toMatchObject({ agentCommand: false, agentDir: false, agentSessionDir: false });
+  it("rejects config responses missing a required agent override flag", () => {
+    for (const flag of ["askUser", "agentCommand", "agentDir", "agentSessionDir"] as const) {
+      const envOverrides = Object.fromEntries(Object.entries(responseFor({}, false).envOverrides).filter(([key]) => key !== flag));
+      expect(() => parsePiWebConfigResponseBody({ ...responseFor({}, false), envOverrides })).toThrow(`field must be a boolean: ${flag}`);
+    }
   });
 
   it("retains the agent directory environment source across federation responses", () => {

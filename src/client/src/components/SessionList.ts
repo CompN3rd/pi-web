@@ -36,12 +36,6 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) selected?: SessionInfo;
   @property({ type: Number }) startingCount = 0;
   @property({ type: Boolean }) canStart = false;
-  @property({ type: Boolean }) canDeleteArchived = false;
-  @property({ type: Boolean }) canReload = false;
-  @property({ type: Boolean }) canCleanup = false;
-  @property({ type: Boolean }) authoritativeSessionPersistence = false;
-  @property({ type: String }) archivedDeleteUnavailableMessage = "Update and restart Pi-Web on this machine to delete archived sessions.";
-  @property({ type: String }) cleanupUnavailableMessage = "Update and restart Pi-Web on this machine to clean up sessions.";
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ attribute: false }) onSelect?: (session: SessionInfo) => void;
@@ -193,7 +187,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   }
 
   private renderCleanupButton() {
-    return html`<button class="cleanup-entry" title=${this.canCleanup ? "Preview session cleanup" : this.cleanupUnavailableMessage} @click=${(event: MouseEvent) => { event.stopPropagation(); this.onCleanup?.(); }}>Clean up</button>`;
+    return html`<button class="cleanup-entry" title="Preview session cleanup" @click=${(event: MouseEvent) => { event.stopPropagation(); this.onCleanup?.(); }}>Clean up</button>`;
   }
 
   private renderStartButton() {
@@ -228,7 +222,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (visibleSessions.length === 0 || !this.selectionScopes.has("current")) return null;
 
     const selectedSessions = this.selectedSessions("current");
-    const archivableSessions = selectedSessions.filter((session) => isArchivableSessionInfo(session, this.statuses[session.id], this.sessionPersistenceOptions()));
+    const archivableSessions = selectedSessions.filter((session) => isArchivableSessionInfo(session, this.statuses[session.id]));
     const unreadSelectedSessions = selectedSessions.filter((session) => this.unreadSessionIds.has(session.id));
     return html`
       <div class="bulk-row selecting">
@@ -246,8 +240,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     return html`
       <div class="bulk-row selecting">
         ${this.renderSelectionControls("archived", visibleSessions)}
-        <button class="danger" title=${this.canDeleteArchived ? "Permanently delete selected archived sessions" : this.archivedDeleteUnavailableMessage} ?disabled=${selectedSessions.length === 0 || !this.canDeleteArchived} @click=${() => { this.confirmDeleteSelectedArchived(); }}>Delete</button>
-        ${this.canDeleteArchived ? null : html`<small class="capability-hint">${this.archivedDeleteUnavailableMessage}</small>`}
+        <button class="danger" title="Permanently delete selected archived sessions" ?disabled=${selectedSessions.length === 0} @click=${() => { this.confirmDeleteSelectedArchived(); }}>Delete</button>
       </div>
     `;
   }
@@ -281,10 +274,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const activity = this.activities[session.id];
     const indicatorKind = sessionRowActivityKind(session, status, activity, this.sending[session.id] === true);
     const unread = sessionRowUnread(session, this.unreadSessionIds);
-    const persistenceOptions = this.sessionPersistenceOptions();
-    const canArchive = isArchivableSessionInfo(session, status, persistenceOptions);
-    const canDeleteTransient = isTransientNewSessionInfo(session, status, persistenceOptions);
-    const canReloadSession = canArchive && this.canReload;
+    const canArchive = isArchivableSessionInfo(session, status);
+    const canDeleteTransient = isTransientNewSessionInfo(session, status);
     return html`
       <div
         class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${unread ? "unread" : ""}"
@@ -306,7 +297,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
               ${session.archived === true
                 ? html`
                   <button title="Restore session" @click=${() => { this.openMenuSessionId = undefined; this.onRestore?.(session); }}>Restore</button>
-                  <button class="danger" title=${this.canDeleteArchived ? "Permanently delete archived session" : this.archivedDeleteUnavailableMessage} ?disabled=${!this.canDeleteArchived} @click=${() => { this.openMenuSessionId = undefined; this.confirmDeleteArchived(session); }}>Delete archived session</button>
+                  <button class="danger" title="Permanently delete archived session" @click=${() => { this.openMenuSessionId = undefined; this.confirmDeleteArchived(session); }}>Delete archived session</button>
                 `
                 : canDeleteTransient
                   ? html`<button title="Delete transient new session" @click=${() => { this.openMenuSessionId = undefined; this.onDelete?.(session); }}>Delete</button>`
@@ -318,7 +309,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
                     ` : null}
                     ${this.renderGoToParentMenuItem(row)}
                     ${session.parentSessionPath !== undefined ? html`<button title="Detach from parent" @click=${() => { this.openMenuSessionId = undefined; this.onDetachParent?.(session); }}>Detach from parent</button>` : null}
-                    ${canReloadSession ? html`<button title=${isSessionActive(this.statuses[session.id], this.activities[session.id]) ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isSessionActive(this.statuses[session.id], this.activities[session.id])} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
+                    ${canArchive ? html`<button title=${isSessionActive(this.statuses[session.id], this.activities[session.id]) ? "Stop current session activity before reloading from disk" : "Reload session from disk without refreshing Pi runtime resources"} ?disabled=${isSessionActive(this.statuses[session.id], this.activities[session.id])} @click=${() => { this.openMenuSessionId = undefined; this.onReload?.(session); }}>Reload from disk</button>` : null}
                   `}
             </div>
           ` : null}
@@ -396,12 +387,10 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   }
 
   private confirmDeleteArchived(session: SessionInfo): void {
-    if (!this.canDeleteArchived) return;
     if (confirm(`Permanently delete archived session “${sessionLabel(session)}”? This cannot be undone.`)) void this.onDeleteArchived?.(session);
   }
 
   private confirmDeleteSelectedArchived(): void {
-    if (!this.canDeleteArchived) return;
     const archived = this.selectedSessions("archived");
     if (archived.length === 0) return;
     const noun = archived.length === 1 ? "archived session" : "archived sessions";
@@ -417,7 +406,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   }
 
   private archiveSelectedCurrent(): void {
-    const sessions = this.selectedSessions("current").filter((session) => isArchivableSessionInfo(session, this.statuses[session.id], this.sessionPersistenceOptions()));
+    const sessions = this.selectedSessions("current").filter((session) => isArchivableSessionInfo(session, this.statuses[session.id]));
     this.selectedSessionIds = removeSessionIds(this.selectedSessionIds, sessions.map((session) => session.id));
     void this.onArchiveMany?.(sessions);
   }
@@ -492,17 +481,13 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   }
 
   private renderSessionMetaPrefix(session: SessionInfo, status: SessionStatus | undefined, activity: SessionActivity | undefined) {
-    if (isTransientNewSessionInfo(session, status, this.sessionPersistenceOptions())) {
+    if (isTransientNewSessionInfo(session, status)) {
       if (activity?.phase === "active") return "creating · ";
       if (activity?.phase === "error") return "error · ";
       return "new · ";
     }
     if (session.archived === true) return "read-only · ";
     return "";
-  }
-
-  private sessionPersistenceOptions() {
-    return { authoritative: this.authoritativeSessionPersistence };
   }
 
   private renderActivity(kind: ActivityIndicatorKind | undefined, unread: boolean) {
@@ -530,7 +515,6 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .row-badges .badge { margin-left: 0; white-space: nowrap; }
     /* Same glyph as a normal child marker, dimmed: the row is a child whose parent is not displayed here. */
     .orphan-marker { color: var(--pi-dim); opacity: .65; }
-    .bulk-row .capability-hint { flex: 1 0 100%; color: var(--pi-warning); }
     .bulk-row.selecting { padding: 6px; border: 1px solid var(--pi-border-muted); border-radius: 8px; background: color-mix(in srgb, var(--pi-surface) 65%, transparent); }
     button.danger, .action-menu-panel button.danger { color: var(--pi-danger); }
     button.danger:hover, .action-menu-panel button.danger:hover { background: color-mix(in srgb, var(--pi-danger) 14%, transparent); }

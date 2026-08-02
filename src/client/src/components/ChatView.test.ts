@@ -51,20 +51,16 @@ describe("chatQueuedSectionShowsClearAction", () => {
   const serverSection = requireSection(chatQueuedMessageSections([], [{ kind: "steer", text: "server queued" }])[0]);
   const clientSection = requireSection(chatQueuedMessageSections([{ kind: "followUp", text: "waiting" }], [])[0]);
 
-  it("shows the action for the server queue when clearing is supported and wired", () => {
-    expect(chatQueuedSectionShowsClearAction(serverSection, true, true)).toBe(true);
-  });
-
-  it("hides the action when the runtime does not support clearing", () => {
-    expect(chatQueuedSectionShowsClearAction(serverSection, false, true)).toBe(false);
+  it("shows the action for the server queue when a clear handler is wired", () => {
+    expect(chatQueuedSectionShowsClearAction(serverSection, true)).toBe(true);
   });
 
   it("hides the action when no clear handler is wired", () => {
-    expect(chatQueuedSectionShowsClearAction(serverSection, true, false)).toBe(false);
+    expect(chatQueuedSectionShowsClearAction(serverSection, false)).toBe(false);
   });
 
   it("never shows the server action for the separate client pending-start queue", () => {
-    expect(chatQueuedSectionShowsClearAction(clientSection, true, true)).toBe(false);
+    expect(chatQueuedSectionShowsClearAction(clientSection, true)).toBe(false);
   });
 });
 
@@ -78,7 +74,6 @@ describe("ChatView queued-message clear wiring", () => {
     const view = new ChatView();
     const onClearServerQueue = vi.fn();
     view.status = queuedStatus([{ kind: "steer", text: "server queued" }]);
-    view.canClearServerQueue = true;
     view.onClearServerQueue = onClearServerQueue;
 
     templateEventHandlerNearMarker(renderQueuedMessages(view), "Clear queue")(new Event("click"));

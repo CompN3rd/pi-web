@@ -7,7 +7,7 @@ import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, runtimeCreato
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 const ACTIVE_SESSION_ID = "session-1";
 
-const questions = [{ id: "db", question: "Which database?", options: [{ value: "pg", label: "Postgres" }], allowOther: true }];
+const questions = [{ id: "db", question: "Which database?", options: [{ value: "pg", label: "Postgres" }] }];
 
 /**
  * Service over a clocked store with sequential ask ids, so asks are named
@@ -78,7 +78,7 @@ describe("PiSessionService.openAsk", () => {
     const { service, store } = askService();
     await service.openAsk({ sessionId: "session-1", questions });
 
-    const result = await service.openAsk({ sessionId: "session-1", questions: [{ id: "again", question: "Still?", options: [], allowOther: true }] });
+    const result = await service.openAsk({ sessionId: "session-1", questions: [{ id: "again", question: "Still?", options: [] }] });
 
     expect(result.ask.askId).toBe("ask-2");
     expect(result.superseded).toMatchObject({ askId: "ask-1", reason: "superseded", answeredCount: 0, unansweredIds: ["db"] });
@@ -103,7 +103,7 @@ describe("PiSessionService.openAsk", () => {
 
     const result = await service.openAsk({ sessionId: "session-1", questions: [{ id: "empty", question: "Anything else?", options: [] }] });
 
-    expect(result.ask.questions).toEqual([{ id: "empty", question: "Anything else?", options: [], allowOther: true }]);
+    expect(result.ask.questions).toEqual([{ id: "empty", question: "Anything else?", options: [] }]);
     expect(store.pendingAsk("session-1")).toEqual(result.ask);
     expect(askEvents(events)).toHaveLength(1);
     await service.dispose();
@@ -124,12 +124,12 @@ describe("PiSessionService.openAsk", () => {
     const { service, events } = askService();
     await service.openAsk({ sessionId: ACTIVE_SESSION_ID, questions });
 
-    await service.openAsk({ sessionId: ACTIVE_SESSION_ID, questions: [{ id: "again", question: "Still?", options: [], allowOther: true }] });
+    await service.openAsk({ sessionId: ACTIVE_SESSION_ID, questions: [{ id: "again", question: "Still?", options: [] }] });
 
     expect(askEvents(events).map(({ event }) => event)).toEqual([
       { type: "ask.opened", ask: { askId: "ask-1", askedAt: "2026-02-01T10:00:00.000Z", questions } },
       { type: "ask.closed", askId: "ask-1", reason: "superseded" },
-      { type: "ask.opened", ask: { askId: "ask-2", askedAt: "2026-02-01T10:00:00.000Z", questions: [{ id: "again", question: "Still?", options: [], allowOther: true }] } },
+      { type: "ask.opened", ask: { askId: "ask-2", askedAt: "2026-02-01T10:00:00.000Z", questions: [{ id: "again", question: "Still?", options: [] }] } },
     ]);
     await service.dispose();
   });
@@ -168,7 +168,7 @@ describe("PiSessionService.submitAsk", () => {
     const { service, store, events, fake } = askService({ withActiveSession: true });
     await service.openAsk({
       sessionId: ACTIVE_SESSION_ID,
-      questions: [{ id: "db", question: "Which database?", options: [{ value: "pg", label: "Postgres" }], allowOther: false }],
+      questions: [{ id: "db", question: "Which database?", options: [{ value: "pg", label: "Postgres" }] }],
     });
 
     const response = await service.submitAsk(sessionRef(ACTIVE_SESSION_ID), "ask-1", {

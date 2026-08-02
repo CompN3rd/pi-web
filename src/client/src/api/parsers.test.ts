@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
 import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
 
 describe("API parsers", () => {
-  it("preserves additive interactive API-key flow hints and defaults legacy options", () => {
+  it("preserves interactive API-key flow hints and defaults providers without one", () => {
     const base = { id: "openai", name: "OpenAI", authType: "api_key", status: { configured: false } };
 
     expect(parseAuthProvidersResponse({ providers: [{ ...base, loginFlow: "interactive" }, base] }).providers).toEqual([
@@ -13,7 +12,7 @@ describe("API parsers", () => {
     ]);
   });
 
-  it("preserves additive OAuth interaction semantics", () => {
+  it("preserves OAuth interaction semantics", () => {
     expect(parseOAuthFlowState({
       flowId: "flow-1",
       providerId: "provider",
@@ -24,19 +23,19 @@ describe("API parsers", () => {
         instructions: "Enter code",
         deviceCode: { userCode: "ABCD", intervalSeconds: 5, expiresInSeconds: 900 },
       },
-      prompt: { requestId: "prompt-1", message: "Secret", kind: "prompt", promptType: "secret", allowEmpty: false, placeholder: "token" },
+      prompt: { requestId: "prompt-1", message: "Secret", promptType: "secret", allowEmpty: false, placeholder: "token" },
       select: { requestId: "select-1", message: "Choose", options: [{ value: "work", label: "Work", description: "Company account" }] },
       progress: ["Read the guide"],
       info: [{ message: "Read the guide", links: [{ url: "https://example.test/docs", label: "Guide" }] }],
     })).toMatchObject({
       auth: { deviceCode: { userCode: "ABCD", intervalSeconds: 5, expiresInSeconds: 900 } },
-      prompt: { kind: "prompt", promptType: "secret", allowEmpty: false },
+      prompt: { promptType: "secret", allowEmpty: false },
       select: { options: [{ value: "work", description: "Company account" }] },
       info: [{ links: [{ url: "https://example.test/docs", label: "Guide" }] }],
     });
   });
 
-  it("defaults semantic prompt types from legacy OAuth wire kinds", () => {
+  it("requires semantic prompt types on OAuth wire prompts", () => {
     const flow = {
       flowId: "flow-1",
       providerId: "provider",
@@ -45,14 +44,8 @@ describe("API parsers", () => {
       progress: [],
     };
 
-    expect(parseOAuthFlowState({ ...flow, prompt: { requestId: "text", message: "Value", kind: "prompt" } }).prompt).toMatchObject({
-      kind: "prompt",
-      promptType: "text",
-    });
-    expect(parseOAuthFlowState({ ...flow, prompt: { requestId: "manual", message: "Code", kind: "manual" } }).prompt).toMatchObject({
-      kind: "manual",
-      promptType: "manual_code",
-    });
+    expect(() => parseOAuthFlowState({ ...flow, prompt: { requestId: "text", message: "Value" } })).toThrow("Invalid OAuth prompt type");
+    expect(() => parseOAuthFlowState({ ...flow, prompt: { requestId: "text", message: "Value", promptType: "kind" } })).toThrow("Invalid OAuth prompt type");
   });
 
   it("parses PI WEB config responses", () => {
@@ -76,13 +69,13 @@ describe("API parsers", () => {
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",
       components: {
-        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.piPackagesManage, "future.capability"] },
+        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: ["piPackages.manage", "future.capability"] },
         sessiond: {
           component: "sessiond",
           label: "Session daemon",
           runtimeVersion: "1.0.0",
           available: true,
-          capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived],
+          capabilities: [],
           activeAgentProfile: {
             schemaVersion: 1,
             revision: `sha256:${"a".repeat(64)}`,
@@ -92,9 +85,9 @@ describe("API parsers", () => {
           },
         },
       },
-      capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.piPackagesManage, "future.capability"],
+      capabilities: ["piPackages.manage", "future.capability"],
     })).toMatchObject({
-      capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.piPackagesManage],
+      capabilities: [],
       components: { sessiond: { activeAgentProfile: { command: "agent-lab", dir: "/srv/agent-lab" } } },
     });
   });
@@ -138,8 +131,22 @@ describe("API parsers", () => {
       exists: true,
       config: {},
       effectiveConfig: {},
-      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, agentDirSource: "future" },
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false, agentCommand: false, agentDir: false, agentSessionDir: false, agentDirSource: "future" },
     })).toThrow("Invalid PI WEB agentDirSource field");
+  });
+
+  it("rejects config responses missing a required agent override flag", () => {
+    const envOverrides = { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false, agentCommand: false, agentDir: false, agentSessionDir: false };
+    for (const flag of ["askUser", "agentCommand", "agentDir", "agentSessionDir"] as const) {
+      const incomplete = Object.fromEntries(Object.entries(envOverrides).filter(([key]) => key !== flag));
+      expect(() => parsePiWebConfigResponse({
+        path: "/tmp/config.json",
+        exists: true,
+        config: {},
+        effectiveConfig: {},
+        envOverrides: incomplete,
+      })).toThrow(`Expected boolean field: ${flag}`);
+    }
   });
 
   it("parses Pi package list and mutation responses", () => {
@@ -199,9 +206,9 @@ describe("API parsers", () => {
     });
   });
 
-  it("accepts legacy array message pages and paged message responses", () => {
-    expect(parseMessagePage(["a", "b"])).toEqual({ messages: ["a", "b"], start: 0, total: 2 });
+  it("parses paged message responses and rejects legacy array message pages", () => {
     expect(parseMessagePage({ messages: ["c"], start: 3, total: 9 })).toEqual({ messages: ["c"], start: 3, total: 9 });
+    expect(() => parseMessagePage(["a", "b"])).toThrow("Expected array response");
   });
 
   it("parses a session stream snapshot, defaulting a missing partial to null", () => {
@@ -510,8 +517,8 @@ describe("API parsers", () => {
     });
   });
 
-  it("accepts legacy workspace responses without effective config", () => {
-    expect(parseWorkspace({
+  it("rejects workspace responses without effective config", () => {
+    expect(() => parseWorkspace({
       id: "w1",
       projectId: "p1",
       path: "/repo",
@@ -519,15 +526,7 @@ describe("API parsers", () => {
       isMain: true,
       isGitRepo: false,
       isGitWorktree: false,
-    })).toEqual({
-      id: "w1",
-      projectId: "p1",
-      path: "/repo",
-      label: "main",
-      isMain: true,
-      isGitRepo: false,
-      isGitWorktree: false,
-    });
+    })).toThrow("Expected workspace effectiveConfig field");
   });
 
   it("parses workspace activity snapshots", () => {
@@ -723,15 +722,15 @@ describe("API parsers", () => {
     })).toThrow("Invalid notification clear reason");
   });
 
-  it("parses an open ask and normalizes every question to allow custom answers", () => {
+  it("parses an open ask", () => {
     const parsed = parseSessionStatus({ ...statusWire(), pendingAsk: pendingAskWire() });
 
     expect(parsed.pendingAsk).toEqual({
       askId: "ask-1",
       askedAt: "2026-07-20T00:00:00.000Z",
       questions: [
-        { id: "q1", question: "Which database?", detail: "Pick the primary store", options: [{ value: "pg", label: "Postgres", detail: "Relational" }, { value: "sqlite", label: "SQLite" }], allowOther: true },
-        { id: "q2", question: "Which extras?", options: [{ value: "metrics", label: "Metrics" }], allowOther: true, multiple: true },
+        { id: "q1", question: "Which database?", detail: "Pick the primary store", options: [{ value: "pg", label: "Postgres", detail: "Relational" }, { value: "sqlite", label: "SQLite" }] },
+        { id: "q2", question: "Which extras?", options: [{ value: "metrics", label: "Metrics" }], multiple: true },
       ],
     });
   });
@@ -747,8 +746,7 @@ describe("API parsers", () => {
     expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [first, first] } })).toThrow("Duplicate ask question id");
     expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, askId: "" } })).toThrow("Expected non-empty string field: askId");
     expect(parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "Anything?", options: [] }] } }).pendingAsk?.questions[0])
-      .toEqual({ id: "q1", question: "Anything?", options: [], allowOther: true });
-    expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "Anything?", options: [], allowOther: "yes" }] } })).toThrow("Expected optional boolean field: allowOther");
+      .toEqual({ id: "q1", question: "Anything?", options: [] });
     expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "Which?", options: [{ value: "a", label: "A" }, { value: "a", label: "Also A" }] }] } })).toThrow("Duplicate ask option value");
     expect(() => parseSessionStatus({ ...statusWire(), pendingAsk: { ...ask, questions: [{ id: "q1", question: "x".repeat(ASK_USER_TEXT_MAX_LENGTH + 1), options: [{ value: "a", label: "A" }] }] } })).toThrow("String field exceeds limit: question");
   });
@@ -875,8 +873,8 @@ function pendingAskWire() {
     askId: "ask-1",
     askedAt: "2026-07-20T00:00:00.000Z",
     questions: [
-      { id: "q1", question: "Which database?", detail: "Pick the primary store", options: [{ value: "pg", label: "Postgres", detail: "Relational" }, { value: "sqlite", label: "SQLite" }], allowOther: false },
-      { id: "q2", question: "Which extras?", options: [{ value: "metrics", label: "Metrics" }], allowOther: true, multiple: true },
+      { id: "q1", question: "Which database?", detail: "Pick the primary store", options: [{ value: "pg", label: "Postgres", detail: "Relational" }, { value: "sqlite", label: "SQLite" }] },
+      { id: "q2", question: "Which extras?", options: [{ value: "metrics", label: "Metrics" }], multiple: true },
     ],
   };
 }

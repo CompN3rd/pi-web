@@ -81,7 +81,7 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
       heartbeatIntervalMs: 60_000,
     });
 
-    await expect(service.prompt("prompt-session", undefined)).rejects.toThrow("Prompt text is required");
+    await expect(service.prompt(sessionRef("prompt-session"), undefined)).rejects.toThrow("Prompt text is required");
 
     expect(createCalls).toBe(0);
     expect(fake.calls.prompt).toEqual([]);

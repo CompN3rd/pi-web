@@ -975,7 +975,7 @@ describe("PiSessionService", () => {
       child.session.isStreaming = false;
       parent.calls.sendCustomMessage.length = 0;
 
-      await service.archive("child-1");
+      await service.archive(sessionRef("child-1", "/workspace-feature"));
       // Let any pending notification settle, then confirm the archived child
       // never notified the parent.
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -989,7 +989,7 @@ describe("PiSessionService", () => {
       await service.start("/workspace");
       await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", cwd: "/workspace-feature" });
 
-      await service.archive("child-1");
+      await service.archive(sessionRef("child-1", "/workspace-feature"));
 
       await expect(service.listSubsessions("parent-1")).resolves.toEqual([
         { sessionId: "child-1", cwd: "/workspace-feature", status: "unknown" },

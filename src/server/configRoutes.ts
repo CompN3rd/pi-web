@@ -248,12 +248,11 @@ function parsePiWebConfigEnvOverridesResponse(value: unknown, source: string): P
     allowedHosts: requireResponseBoolean(record, "allowedHosts", source),
     spawnSessions: requireResponseBoolean(record, "spawnSessions", source),
     subsessions: requireResponseBoolean(record, "subsessions", source),
-    // Older responses predate the ask_user tool; treat a missing flag as "not overridden".
-    askUser: optionalResponseBoolean(record, "askUser", source) ?? false,
-    agentCommand: optionalResponseBoolean(record, "agentCommand", source) ?? false,
-    agentDir: optionalResponseBoolean(record, "agentDir", source) ?? false,
+    askUser: requireResponseBoolean(record, "askUser", source),
+    agentCommand: requireResponseBoolean(record, "agentCommand", source),
+    agentDir: requireResponseBoolean(record, "agentDir", source),
     ...optionalAgentDirSource(record, source),
-    agentSessionDir: optionalResponseBoolean(record, "agentSessionDir", source) ?? false,
+    agentSessionDir: requireResponseBoolean(record, "agentSessionDir", source),
   };
 }
 
@@ -270,13 +269,6 @@ function requireResponseString(record: Record<string, unknown>, key: string, sou
 
 function requireResponseBoolean(record: Record<string, unknown>, key: string, source: string): boolean {
   const value = record[key];
-  if (typeof value !== "boolean") throw new Error(`${source} field must be a boolean: ${key}`);
-  return value;
-}
-
-function optionalResponseBoolean(record: Record<string, unknown>, key: string, source: string): boolean | undefined {
-  const value = record[key];
-  if (value === undefined) return undefined;
   if (typeof value !== "boolean") throw new Error(`${source} field must be a boolean: ${key}`);
   return value;
 }

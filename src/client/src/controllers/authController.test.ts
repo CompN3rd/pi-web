@@ -23,15 +23,34 @@ describe("parseAuthSlashCommand", () => {
 
 describe("AuthController", () => {
   it("uses auth type to disambiguate provider options with the same id", async () => {
-    const providers = [authProvider("anthropic", "oauth"), authProvider("anthropic", "api_key")];
-    const { controller, getState } = createController({ authDialog: { step: "providers", mode: "login", providers } });
+    vi.stubGlobal("window", { setInterval: () => 1, clearInterval: () => undefined });
+    const providers = [authProvider("anthropic", "oauth"), { ...authProvider("anthropic", "api_key"), loginFlow: "interactive" as const }];
+    const calls: string[] = [];
+    const { controller } = createController(
+      { authDialog: { step: "providers", mode: "login", providers } },
+      {
+        startOAuthLogin: (providerId) => {
+          calls.push(`oauth:${providerId}`);
+          return Promise.resolve(oauthFlow({ providerId, providerName: "Anthropic oauth" }));
+        },
+        startInteractiveApiKeyLogin: (providerId) => {
+          calls.push(`interactive:${providerId}`);
+          return Promise.resolve(oauthFlow({ providerId, providerName: "Anthropic api_key" }));
+        },
+      },
+    );
 
-    await controller.selectLoginProvider("anthropic", "api_key");
+    try {
+      await controller.selectLoginProvider("anthropic", "api_key");
 
-    expect(getState().authDialog).toMatchObject({ step: "apiKey", provider: { id: "anthropic", authType: "api_key" } });
+      expect(calls).toEqual(["interactive:anthropic"]);
+    } finally {
+      controller.dispose();
+      vi.unstubAllGlobals();
+    }
   });
 
-  it("starts provider-driven API-key interactions instead of opening the legacy one-secret form", async () => {
+  it("starts provider-driven API-key interactions for interactive providers", async () => {
     vi.stubGlobal("window", { setInterval: () => 1, clearInterval: () => undefined });
     const provider: AuthProviderOption = { ...authProvider("amazon-bedrock", "api_key"), loginFlow: "interactive" };
     const calls: { providerId: string; machineId: string | undefined }[] = [];
@@ -60,10 +79,10 @@ describe("AuthController", () => {
   });
 
   it("keeps OAuth prompt input and submit state across poll refreshes for the same request", async () => {
-    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } });
     const { controller, getState } = createController(
       { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback", responding: true } },
-      { respondOAuthFlow: () => Promise.resolve(oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" }, progress: ["Still waiting"] })) },
+      { respondOAuthFlow: () => Promise.resolve(oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", promptType: "manual_code" }, progress: ["Still waiting"] })) },
     );
 
     await controller.respondOAuth();
@@ -73,7 +92,7 @@ describe("AuthController", () => {
 
   it("submits an allowed blank OAuth text response without client-side rejection", async () => {
     const flow = oauthFlow({
-      prompt: { requestId: "request-1", message: "GitHub Enterprise URL/domain (blank for github.com)", kind: "prompt", promptType: "text", allowEmpty: true },
+      prompt: { requestId: "request-1", message: "GitHub Enterprise URL/domain (blank for github.com)", promptType: "text", allowEmpty: true },
     });
     const respondCalls: string[] = [];
     const { controller } = createController(
@@ -92,7 +111,7 @@ describe("AuthController", () => {
   });
 
   it("resets OAuth prompt input and submit state when the request id changes", async () => {
-    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } });
     const { controller, getState } = createController(
       { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback", responding: true } },
       {
@@ -114,7 +133,7 @@ describe("AuthController", () => {
   });
 
   it("closes the OAuth dialog and refreshes selected session status when the flow completes", async () => {
-    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } });
     const session = sessionInfo("session-1");
     const refreshedStatus = sessionStatus(session.id);
     const respondCalls: { flowId: string; requestId: string; value: string; machineId: string | undefined }[] = [];
@@ -145,7 +164,7 @@ describe("AuthController", () => {
   });
 
   it("does not refresh a session from another selected machine when a flow completes", async () => {
-    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Enter secret", kind: "prompt", promptType: "secret" } });
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Enter secret", promptType: "secret" } });
     const respondMachines: (string | undefined)[] = [];
     const statusMachines: (string | undefined)[] = [];
     const appliedStatuses: SessionStatus[] = [];
@@ -177,7 +196,7 @@ describe("AuthController", () => {
   });
 
   it("does not apply an auth status refresh after the selected session changes", async () => {
-    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Enter secret", kind: "prompt", promptType: "secret" } });
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Enter secret", promptType: "secret" } });
     const originalSession = sessionInfo("session-1");
     const statusResponse = deferred<SessionStatus>();
     const statusCalls: { session: Parameters<typeof defaultApi.status>[0]; machineId: string | undefined }[] = [];
@@ -208,7 +227,7 @@ describe("AuthController", () => {
   });
 
   it("leaves the OAuth dialog ready to retry if responding fails", async () => {
-    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } });
     const { controller, getState } = createController(
       { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback", responding: true } },
       { respondOAuthFlow: () => Promise.reject(new Error("Invalid callback")) },
@@ -226,7 +245,7 @@ describe("AuthController", () => {
   });
 
   it("does not recreate an OAuth dialog when a pending response settles during cancellation", async () => {
-    const prompt = { requestId: "request-1", message: "Paste callback", kind: "manual" } as const;
+    const prompt = { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } as const;
     const flow = oauthFlow({ prompt });
     const response = deferred<OAuthFlowState>();
     const cancellation = deferred<OAuthFlowState>();
@@ -283,7 +302,7 @@ describe("AuthController", () => {
   });
 
   it("keeps prompt responses and cancellation bound to the flow's originating machine", async () => {
-    const prompt = { requestId: "request-1", message: "Enter secret", kind: "prompt", promptType: "secret" } as const;
+    const prompt = { requestId: "request-1", message: "Enter secret", promptType: "secret" } as const;
     const flow = oauthFlow({ providerId: "amazon-bedrock", prompt });
     const respondCalls: { value: string; machineId: string | undefined }[] = [];
     const cancelCalls: { flowId: string; machineId: string | undefined }[] = [];
@@ -320,7 +339,7 @@ describe("AuthController", () => {
       },
       clearInterval: () => undefined,
     });
-    const prompt = { requestId: "request-1", message: "Enter secret", kind: "prompt", promptType: "secret" } as const;
+    const prompt = { requestId: "request-1", message: "Enter secret", promptType: "secret" } as const;
     const flow = oauthFlow({ providerId: "amazon-bedrock", prompt });
     const provider: AuthProviderOption = { ...authProvider("amazon-bedrock", "api_key"), loginFlow: "interactive" };
     const pollMachines: (string | undefined)[] = [];
@@ -356,9 +375,9 @@ describe("AuthController", () => {
 
   it("does not let a stale OAuth response overwrite a newer flow", async () => {
     vi.stubGlobal("window", { setInterval: () => 1, clearInterval: () => undefined });
-    const oldPrompt = { requestId: "request-1", message: "Paste callback", kind: "manual" } as const;
+    const oldPrompt = { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } as const;
     const oldFlow = oauthFlow({ prompt: oldPrompt });
-    const newFlow = oauthFlow({ flowId: "flow-2", prompt: { requestId: "request-2", message: "Paste callback", kind: "manual" } });
+    const newFlow = oauthFlow({ flowId: "flow-2", prompt: { requestId: "request-2", message: "Paste callback", promptType: "manual_code" } });
     const response = deferred<OAuthFlowState>();
     const providers = [authProvider("anthropic", "oauth")];
     const { controller, getState } = createController(
@@ -390,7 +409,7 @@ describe("AuthController", () => {
   it("does not let an older poll restore a running flow after a newer poll stops polling", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("window", { setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval });
-    const prompt = { requestId: "request-1", message: "Paste callback", kind: "manual" } as const;
+    const prompt = { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } as const;
     const runningFlow = oauthFlow({ prompt });
     const stalePoll = deferred<OAuthFlowState>();
     const providers = [authProvider("anthropic", "oauth")];
@@ -428,7 +447,7 @@ describe("AuthController", () => {
   });
 
   it("cancels the active OAuth flow and closes the dialog even when cancellation fails", async () => {
-    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } });
     const cancelCalls: { flowId: string; machineId: string | undefined }[] = [];
     const { controller, getState } = createController(
       { authDialog: { step: "oauth", flow, machineId: "local" } },
@@ -444,77 +463,6 @@ describe("AuthController", () => {
 
     expect(cancelCalls).toEqual([{ flowId: "flow-1", machineId: "local" }]);
     expect(getState().authDialog).toBeUndefined();
-  });
-
-  it("validates API key input before saving and clears the validation error when edited", async () => {
-    const saveCalls: { providerId: string; key: string; machineId: string | undefined }[] = [];
-    const provider = authProvider("openai", "api_key");
-    const { controller, getState } = createController(
-      { authDialog: { step: "apiKey", provider, value: "   " } },
-      {
-        saveApiKey: (providerId, key, machineId) => {
-          saveCalls.push({ providerId, key, machineId });
-          return Promise.resolve({ accepted: true });
-        },
-      },
-    );
-
-    await controller.saveApiKey();
-
-    expect(saveCalls).toEqual([]);
-    expect(getState().authDialog).toMatchObject({ step: "apiKey", error: "API key is required" });
-
-    controller.updateApiKey("sk-live");
-
-    expect(getState().authDialog).toMatchObject({ step: "apiKey", value: "sk-live" });
-    expect(getState().authDialog).not.toHaveProperty("error");
-  });
-
-  it("saves a trimmed API key on the selected machine and refreshes selected session status", async () => {
-    const saveCalls: { providerId: string; key: string; machineId: string | undefined }[] = [];
-    const statusCalls: { session: Parameters<typeof defaultApi.status>[0]; machineId: string | undefined }[] = [];
-    const appliedStatuses: SessionStatus[] = [];
-    const provider = authProvider("openai", "api_key");
-    const session = sessionInfo("session-1");
-    const refreshedStatus = sessionStatus(session.id);
-    const { controller, getState } = createController(
-      {
-        selectedMachine: remoteMachine("remote-1"),
-        selectedSession: session,
-        authDialog: { step: "apiKey", provider, value: "  sk-live  " },
-      },
-      {
-        saveApiKey: (providerId, key, machineId) => {
-          saveCalls.push({ providerId, key, machineId });
-          return Promise.resolve({ accepted: true });
-        },
-        status: (sessionArg, machineId) => {
-          statusCalls.push({ session: sessionArg, machineId });
-          return Promise.resolve(refreshedStatus);
-        },
-      },
-      (status) => { appliedStatuses.push(status); },
-    );
-
-    await controller.saveApiKey();
-    await flushMicrotasks();
-
-    expect(saveCalls).toEqual([{ providerId: "openai", key: "sk-live", machineId: "remote-1" }]);
-    expect(getState().authDialog).toBeUndefined();
-    expect(statusCalls).toEqual([{ session, machineId: "remote-1" }]);
-    expect(appliedStatuses).toEqual([refreshedStatus]);
-  });
-
-  it("keeps the API key dialog open with an error if saving fails", async () => {
-    const provider = authProvider("openai", "api_key");
-    const { controller, getState } = createController(
-      { authDialog: { step: "apiKey", provider, value: "sk-live" } },
-      { saveApiKey: () => Promise.reject(new Error("Denied")) },
-    );
-
-    await controller.saveApiKey();
-
-    expect(getState().authDialog).toMatchObject({ step: "apiKey", value: "sk-live", saving: false, error: "Error: Denied" });
   });
 });
 

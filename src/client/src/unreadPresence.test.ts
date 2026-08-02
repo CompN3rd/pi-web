@@ -49,9 +49,9 @@ describe("machineUnreadPresence", () => {
     const projections = new Map<string, SessionUnreadProjectionView | undefined>([
       ["local", projection([summary("session-1", "/unmapped")])],
       ["empty", projection()],
-      ["unsupported", undefined],
+      ["unloaded", undefined],
     ]);
-    const present = machineUnreadPresence(["local", "empty", "unsupported"], (machineId) => projections.get(machineId));
+    const present = machineUnreadPresence(["local", "empty", "unloaded"], (machineId) => projections.get(machineId));
     expect([...present]).toEqual(["local"]);
   });
 
@@ -176,7 +176,7 @@ function projection(summaries: SessionUnreadSummary[] = [], status: "fresh" | "s
 }
 
 function workspace(id: string, projectId: string, path: string): Workspace {
-  return { id, projectId, path, label: id, isMain: false, isGitRepo: true, isGitWorktree: false };
+  return { id, projectId, path, label: id, isMain: false, isGitRepo: true, isGitWorktree: false, effectiveConfig: {} };
 }
 
 function project(id: string, path = `/${id}`): Project {

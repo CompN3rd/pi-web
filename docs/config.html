@@ -119,9 +119,7 @@
                 Each PI WEB machine has its own config. When using Fleet/machine federation, Settings uses the selected
                 machine for config that affects work running there: the Pi-compatible agent profile and companion CLI,
                 session daemon tools, PI WEB plugin enablement, external path access, and upload defaults. Gateway/browser-only settings stay local to the gateway:
-                keyboard shortcuts, remote machine registry/tokens, and gateway host/port/allowed-hosts. Remote servers
-                that do not advertise selected-machine settings support report those settings as unavailable instead of
-                silently falling back to the gateway.
+                keyboard shortcuts, remote machine registry/tokens, and gateway host/port/allowed-hosts.
               </p>
               <p>
                 Pi package settings are separate from PI WEB config. They live in Pi's package-manager settings on the
@@ -256,9 +254,8 @@
               </p>
               <p>
                 Project-local <code>uploads.defaultFolder</code> overrides the global upload destination for workspaces in
-                that project. Current PI WEB servers include this workspace-effective value on local and federated
-                workspace responses; older remote servers may omit it and the browser falls back to the global/default
-                upload folder.
+                that project. PI WEB servers always include this workspace-effective value on local and federated
+                workspace responses.
               </p>
               <p>
                 Plugins may own separate project files, such as <code>.pi-web/tasks.json</code> for the built-in Workspace
@@ -563,9 +560,9 @@
                 batch/file, and conflicts or errors stay visible in the upload progress UI.
               </p>
               <p>
-                For machine federation, Settings saves the global upload default on the selected machine. Current remote
-                PI WEB servers also return workspace-effective upload defaults on workspace responses; older remote
-                servers may omit them and the browser falls back to the global/default upload folder.
+                For machine federation, Settings saves the global upload default on the selected machine. Remote
+                PI WEB servers always return workspace-effective upload defaults on workspace responses, and the Files
+                panel uses them as the default upload destination.
               </p>
             </section>
 
@@ -624,9 +621,8 @@
                 If the session daemon cannot report a valid active profile, profile-dependent Pi package and PI WEB plugin
                 operations report unavailable instead of falling back to independently resolved config. A package-managed
                 update command is shown only when PI WEB can preserve the active profile with a recognized, safe Pi
-                companion CLI; otherwise the command is omitted. Remote profile editing likewise requires advertised
-                support, and the gateway rejects a remote save if the target does not return the requested profile.
-                Restart the session daemon on the selected machine to establish the next active profile.
+                companion CLI; otherwise the command is omitted. Restart the session daemon on the selected machine to
+                establish the next active profile.
               </div>
             </section>
 

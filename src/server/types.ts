@@ -1,6 +1,9 @@
+import type { Workspace } from "../shared/apiTypes.js";
+
 export type {
   Project,
   Workspace,
+  WorkspaceEffectiveConfig,
   SessionRef as ClientSessionRef,
   SessionInfo as ClientSession,
   ArchiveSessionsResponse as ClientArchiveSessionsResponse,
@@ -24,3 +27,6 @@ export type {
   SessionUiEvent,
   GlobalSessionEvent,
 } from "../shared/apiTypes.js";
+
+/** Workspace as listed by the workspace service, before the route layer attaches the wire-required effectiveConfig. */
+export type WorkspaceListing = Omit<Workspace, "effectiveConfig">;

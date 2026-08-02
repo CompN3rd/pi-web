@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initialAppState } from "../appState";
 import { SessionController } from "./sessionController";
-import { defaultApi, deferred, EmitSocket, oldSession, runPendingAnimationFrames, status, workspace, type AppState, type MessagePage, type SessionStatus, type SessionStreamSnapshot } from "./sessionController.testSupport";
+import { defaultApi, deferred, EmitSocket, oldSession, runPendingAnimationFrames, status, workspace, type AppState, type MessagePage, type SessionInfo, type SessionStatus, type SessionStreamSnapshot } from "./sessionController.testSupport";
 
 function assistantPartial(text: string): SessionStreamSnapshot["partial"] {
   return { role: "assistant", content: [{ type: "text", text }] };
@@ -146,14 +146,18 @@ describe("SessionController stream seed + watermark reconciliation", () => {
     expect(updatedToolLine?.parts[0]).toMatchObject({ resultText: "fresh output" });
   });
 
-  it("loads the transcript and streams live even when the snapshot fetch fails (older/un-restarted peer)", async () => {
+  it("fails the join refresh honestly when the snapshot fetch fails", async () => {
+    // A session id unique to this test, so no transcript cache from earlier
+    // tests can mask whether the failed join applied history.
+    const session: SessionInfo = { ...oldSession, id: "snapshot-failure-session", path: "/tmp/snapshot-failure-session.jsonl" };
     const socket = new EmitSocket();
-    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] };
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [session] };
     const api: typeof defaultApi = {
       ...defaultApi,
       messages: () => Promise.resolve({ messages: [{ role: "user", content: "question" }], start: 0, total: 1 }),
-      status: () => Promise.resolve({ ...status(oldSession.id), isStreaming: true }),
-      // A session daemon / remote pi-web without the stream-snapshot route 404s.
+      status: () => Promise.resolve({ ...status(session.id), isStreaming: true }),
+      // No route-level fallback: a failing stream-snapshot fetch rejects the
+      // join refresh like any other join request failure.
       streamSnapshot: () => Promise.reject(new Error("Not Found")),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
@@ -165,18 +169,19 @@ describe("SessionController stream seed + watermark reconciliation", () => {
       { api, socket },
     );
 
-    await controller.selectSession(oldSession, { updateUrl: false });
+    await controller.selectSession(session, { updateUrl: false });
 
-    // The core transcript still loads (no error banner, no dropped history).
-    expect(state.error).toBeFalsy();
-    expect(state.messages).toEqual([{ role: "user", parts: [{ type: "text", text: "question" }] }]);
+    // The failure surfaces instead of being swallowed as "no partial to seed":
+    // no history is applied and no watermark is recorded.
+    expect(state.error).toContain("Not Found");
+    expect(state.messages).toEqual([]);
 
-    // With a fallback watermark of 0, fresh live deltas still stream in.
+    // The failed join still leaves the socket live (selectSession's recovery
+    // path), and with no watermark nothing is filtered.
     socket.emit({ type: "assistant.delta", text: "live answer", seq: 1 });
     runPendingAnimationFrames();
 
     expect(state.messages).toEqual([
-      { role: "user", parts: [{ type: "text", text: "question" }] },
       { role: "assistant", parts: [{ type: "text", text: "live answer" }] },
     ]);
   });

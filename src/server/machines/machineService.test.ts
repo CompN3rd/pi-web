@@ -3,7 +3,6 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PiWebRuntimeResponse } from "../../shared/apiTypes.js";
-import { PI_WEB_CAPABILITIES } from "../../shared/capabilities.js";
 import type { MachineClient } from "./machineClient.js";
 import { MachineService } from "./machineService.js";
 import { MachineStore, machineStorePath } from "./machineStore.js";
@@ -263,17 +262,17 @@ function remoteRuntimeBody(): PiWebRuntimeResponse {
         label: "Remote Web",
         runtimeVersion: "1.0.0",
         available: true,
-        capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.piPackagesManage],
+        capabilities: [],
       },
       sessiond: {
         component: "sessiond",
         label: "Remote Session daemon",
         runtimeVersion: "1.0.0",
         available: true,
-        capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived],
+        capabilities: [],
       },
     },
-    capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived, PI_WEB_CAPABILITIES.piPackagesManage],
+    capabilities: [],
   };
 }
 
