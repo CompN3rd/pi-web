@@ -68,11 +68,13 @@ export interface ChatLine {
   meta?: {
     timestamp?: string;
     model?: { provider?: string; id?: string; responseId?: string };
+    /** Thinking level the assistant message was generated with, when known. */
+    thinkingLevel?: string;
   };
 }
 
 export interface CompletionItem {
-  kind: "command" | "file";
+  kind: "command" | "file" | "model";
   replaceFrom: number;
   replaceTo: number;
   insertText: string;

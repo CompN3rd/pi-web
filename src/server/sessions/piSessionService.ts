@@ -120,6 +120,30 @@ function spawnTargetError(decision: Extract<SpawnTargetDecision, { allowed: fals
   return new Error(`cwd must be a workspace of this project. Allowed: ${decision.allowedCwds.join(", ")}`);
 }
 
+function modelSpecOf(model: { provider: string; id: string }): string {
+  return `${model.provider}/${model.id}`;
+}
+
+/**
+ * Parse a strict `provider/model-id` spec: split on the first `/` (model ids
+ * may themselves contain `/`) and require both parts to be non-empty.
+ */
+function parseModelSpec(spec: string): { provider: string; modelId: string } | undefined {
+  const slash = spec.indexOf("/");
+  if (slash <= 0 || slash === spec.length - 1) return undefined;
+  return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) };
+}
+
+/**
+ * Error for a spawn-tool model spec that matched nothing. States the facts —
+ * the bad spec and the required format — with deliberately no model list
+ * (a list would invite guesses). The agent loop turns the throw into an
+ * error tool result; how to recover is the agent's call.
+ */
+function unknownSpawnModelError(modelSpec: string): Error {
+  return new Error(`Unknown model "${modelSpec}". Pass an exact "provider/model-id".`);
+}
+
 function authLossWarningKey(sessionId: string, provider: string, modelId: string): string {
   return `${sessionId}:${provider}/${modelId}`;
 }
@@ -211,6 +235,11 @@ type SessionCreationProvenance = "tracked-subsession";
 interface StartSessionOptions {
   parentSession?: string;
   initialModel?: AgentModel;
+  /**
+   * Thinking level for the brand new session; omit to resolve from settings
+   * and pi defaults. Pi clamps it to the initial model's capabilities.
+   */
+  initialThinkingLevel?: ClientThinkingLevel;
   /**
    * Opaque label, echoed on this construction's startup progress so a browser
    * row with no session id yet can recognise its own.
@@ -405,7 +434,7 @@ interface PendingSessionOpen {
   promise: Promise<ActiveSession<PiSessionRuntime>>;
 }
 
-interface CreateSessionRuntimeOptions extends Pick<InternalStartSessionOptions, "initialModel" | "creationProvenance" | "startupToken"> {
+interface CreateSessionRuntimeOptions extends Pick<InternalStartSessionOptions, "initialModel" | "initialThinkingLevel" | "creationProvenance" | "startupToken"> {
   notificationGeneration?: SessionNotificationGeneration;
   notifications?: "enabled" | "disabled";
   /**
@@ -573,11 +602,13 @@ interface CreateAgentRuntimeOptions {
   sessionManager: PiSessionManager;
   delegationToolsEnabled: boolean;
   initialModel?: AgentModel;
+  initialThinkingLevel?: ClientThinkingLevel;
 }
 
 type PiWebRuntimeFactoryOptions = Parameters<CreateAgentSessionRuntimeFactory>[0] & {
   delegationToolsEnabled?: boolean;
   initialModel?: AgentModel;
+  initialThinkingLevel?: ClientThinkingLevel;
 };
 
 type PiWebCreateAgentSessionRuntimeFactory = (
@@ -588,7 +619,7 @@ type CreateAgentRuntime = (createRuntime: PiWebCreateAgentSessionRuntimeFactory,
 
 function defaultCreateAgentRuntime(createRuntime: PiWebCreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions): Promise<PiSessionRuntime> {
   if (!(options.sessionManager instanceof SessionManager)) throw new Error("Default runtime creation requires an SDK SessionManager");
-  const runtimeFactory = createRuntimeWithOneShotSessionOptions(createRuntime, options.initialModel, options.delegationToolsEnabled);
+  const runtimeFactory = createRuntimeWithOneShotSessionOptions(createRuntime, options.initialModel, options.initialThinkingLevel, options.delegationToolsEnabled);
   return createAgentSessionRuntime(runtimeFactory, {
     cwd: options.cwd,
     agentDir: options.agentDir,
@@ -599,20 +630,26 @@ function defaultCreateAgentRuntime(createRuntime: PiWebCreateAgentSessionRuntime
 function createRuntimeWithOneShotSessionOptions(
   createRuntime: PiWebCreateAgentSessionRuntimeFactory,
   initialModel: AgentModel | undefined,
+  initialThinkingLevel: ClientThinkingLevel | undefined,
   delegationToolsEnabled: boolean,
 ): CreateAgentSessionRuntimeFactory {
   // These inputs belong only to the session being opened. A later runtime
-  // replacement resolves its own model and delegation capability.
+  // replacement resolves its own model and delegation capability, and restores
+  // the thinking level from the existing session file.
   let pendingInitialModel = initialModel;
+  let pendingInitialThinkingLevel = initialThinkingLevel;
   let pendingDelegationToolsEnabled: boolean | undefined = delegationToolsEnabled;
   return async (options) => {
     const model = pendingInitialModel;
+    const thinkingLevel = pendingInitialThinkingLevel;
     const toolsEnabled = pendingDelegationToolsEnabled;
     pendingInitialModel = undefined;
+    pendingInitialThinkingLevel = undefined;
     pendingDelegationToolsEnabled = undefined;
     return createRuntime({
       ...options,
       ...(model === undefined ? {} : { initialModel: model }),
+      ...(thinkingLevel === undefined ? {} : { initialThinkingLevel: thinkingLevel }),
       ...(toolsEnabled === undefined ? {} : { delegationToolsEnabled: toolsEnabled }),
     });
   };
@@ -644,7 +681,7 @@ function createDefaultRuntimeFactory(
   subsessions?: SubsessionToolDeps,
   askUser?: AskUserToolDeps,
 ): PiWebCreateAgentSessionRuntimeFactory {
-  return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, delegationToolsEnabled }) => {
+  return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, initialThinkingLevel, delegationToolsEnabled }) => {
     const services: AgentSessionServices = await createAgentSessionServices({ cwd, agentDir, modelRuntime });
     const resolvedDelegationToolsEnabled = delegationToolsEnabled
       ?? await sessionAllowsDelegationTools(sessionManager, sessionManagers);
@@ -655,6 +692,7 @@ function createDefaultRuntimeFactory(
       customTools,
       ...(sessionStartEvent === undefined ? {} : { sessionStartEvent }),
       ...(initialModel === undefined ? {} : { model: initialModel }),
+      ...(initialThinkingLevel === undefined ? {} : { thinkingLevel: initialThinkingLevel }),
     });
     return { ...result, services, diagnostics: services.diagnostics };
   };
@@ -1131,6 +1169,7 @@ export class PiSessionService implements SessionRouteService {
         startupIntent: "create",
         ...(options.startupToken === undefined ? {} : { startupToken: options.startupToken }),
         ...(options.initialModel === undefined ? {} : { initialModel: options.initialModel }),
+        ...(options.initialThinkingLevel === undefined ? {} : { initialThinkingLevel: options.initialThinkingLevel }),
         ...(options.creationProvenance === undefined ? {} : { creationProvenance: options.creationProvenance }),
       },
     );
@@ -1163,13 +1202,26 @@ export class PiSessionService implements SessionRouteService {
     if (this.spawnTargets === undefined) throw new Error("Spawning sessions is disabled");
     const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, input.cwd);
     if (!decision.allowed) throw spawnTargetError(decision);
-    const created = await this.start(decision.cwd, input.model === undefined ? {} : { initialModel: input.model });
+    // A model spec overrides the inherited model. Only a spec resolves
+    // against the spawning session; the default path must not depend on it.
+    const model = input.modelSpec === undefined
+      ? input.model
+      : await this.resolveSpawnModel({ id: input.spawningSessionId, cwd: input.spawningCwd }, input.modelSpec);
+    const created = await this.start(decision.cwd, {
+      ...(model === undefined ? {} : { initialModel: model }),
+      ...(input.thinkingLevel === undefined ? {} : { initialThinkingLevel: input.thinkingLevel }),
+    });
+    const modelUsed = this.active.get(created.id)?.runtime.session.model;
     await this.prompt(created, input.prompt);
     this.logger.info(
       { spawningCwd: input.spawningCwd, sessionId: created.id, cwd: decision.cwd, promptLength: input.prompt.length },
       "spawn_session started a new session",
     );
-    return { sessionId: created.id, cwd: decision.cwd };
+    return {
+      sessionId: created.id,
+      cwd: decision.cwd,
+      ...(modelUsed === undefined ? {} : { model: modelSpecOf(modelUsed) }),
+    };
   }
 
   /**
@@ -1182,11 +1234,18 @@ export class PiSessionService implements SessionRouteService {
     if (this.spawnTargets === undefined) throw new Error("Spawning sessions is disabled");
     const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, input.cwd);
     if (!decision.allowed) throw spawnTargetError(decision);
+    // A model spec overrides the inherited model and is resolved against the
+    // parent's model runtime; only a spec resolves against the parent.
+    const model = input.modelSpec === undefined
+      ? input.model
+      : await this.resolveSpawnModel({ id: input.parentSessionId, cwd: input.spawningCwd }, input.modelSpec);
     const created = await this.startSession(decision.cwd, {
       ...(input.parentSessionFile === undefined ? {} : { parentSession: input.parentSessionFile }),
-      ...(input.model === undefined ? {} : { initialModel: input.model }),
+      ...(model === undefined ? {} : { initialModel: model }),
+      ...(input.thinkingLevel === undefined ? {} : { initialThinkingLevel: input.thinkingLevel }),
       creationProvenance: "tracked-subsession",
     });
+    const modelUsed = this.active.get(created.id)?.runtime.session.model;
     const parentSessionFile = nonEmptyString(input.parentSessionFile);
     const link: TrackedSubsessionLink = {
       parentSessionId: input.parentSessionId,
@@ -1203,7 +1262,42 @@ export class PiSessionService implements SessionRouteService {
       { parentSessionId: input.parentSessionId, sessionId: created.id, cwd: decision.cwd, promptLength: input.prompt.length },
       "spawn_subsession started a tracked child session",
     );
-    return { sessionId: created.id, cwd: decision.cwd };
+    return {
+      sessionId: created.id,
+      cwd: decision.cwd,
+      ...(modelUsed === undefined ? {} : { model: modelSpecOf(modelUsed) }),
+    };
+  }
+
+  /**
+   * The models a session may pick from: its scoped set when model-scoped,
+   * otherwise the runtime's available snapshot. Refreshes the runtime catalog
+   * first so callers see newly configured providers and models.
+   */
+  private async sessionModelCandidates(session: PiAgentSession): Promise<readonly AgentModel[]> {
+    await session.modelRuntime.refresh();
+    return session.scopedModels.length > 0
+      ? session.scopedModels.map((scoped) => scoped.model)
+      : session.modelRuntime.getAvailableSnapshot();
+  }
+
+  /**
+   * Resolve a strict `provider/model-id` spec from a spawn tool against the
+   * *spawning* session's model runtime, using the same candidates
+   * {@link setModel} offers plus a direct runtime lookup as fallback. Unknown
+   * or malformed specs throw; the agent loop turns that into an error tool
+   * result the spawning agent can retry from.
+   */
+  private async resolveSpawnModel(spawningRef: PiSessionRef, modelSpec: string): Promise<AgentModel> {
+    const session = await this.getOrOpen(spawningRef);
+    const parsed = parseModelSpec(modelSpec);
+    const candidates = await this.sessionModelCandidates(session);
+    const model = parsed === undefined
+      ? undefined
+      : candidates.find((candidate) => candidate.provider === parsed.provider && candidate.id === parsed.modelId)
+        ?? session.modelRuntime.getModel(parsed.provider, parsed.modelId);
+    if (model === undefined) throw unknownSpawnModelError(modelSpec);
+    return model;
   }
 
   /**
@@ -1801,16 +1895,13 @@ export class PiSessionService implements SessionRouteService {
     const streamingMessage = session.state.streamingMessage;
     const partial = streamingMessage === undefined || streamingMessage === null
       ? null
-      : projectBrowserMessage(streamingMessage);
+      : annotateAssistantThinkingLevel(projectBrowserMessage(streamingMessage), session.thinkingLevel);
     return { seq, partial };
   }
 
   async availableModels(ref: PiSessionRef): Promise<ClientSessionModel[]> {
     const session = await this.getOrOpen(ref);
-    await session.modelRuntime.refresh();
-    const models = session.scopedModels.length > 0
-      ? session.scopedModels.map((scoped) => scoped.model)
-      : session.modelRuntime.getAvailableSnapshot();
+    const models = await this.sessionModelCandidates(session);
     return models.map(modelToClientModel);
   }
 
@@ -1818,11 +1909,8 @@ export class PiSessionService implements SessionRouteService {
     await this.assertWritable(ref);
     const session = await this.getOrOpen(ref);
     this.assertTreeNavigationInactive(session, "change models");
-    await session.modelRuntime.refresh();
+    const candidates = await this.sessionModelCandidates(session);
     this.assertTreeNavigationInactive(session, "change models");
-    const candidates = session.scopedModels.length > 0
-      ? session.scopedModels.map((scoped) => scoped.model)
-      : session.modelRuntime.getAvailableSnapshot();
     const model = candidates.find((candidate) => candidate.provider === provider && candidate.id === modelId)
       ?? session.modelRuntime.getModel(provider, modelId);
     if (model === undefined) throw new Error(`Model not found: ${provider}/${modelId}`);
@@ -2712,6 +2800,7 @@ export class PiSessionService implements SessionRouteService {
       sessionManager,
       delegationToolsEnabled,
       ...(options.initialModel === undefined ? {} : { initialModel: options.initialModel }),
+      ...(options.initialThinkingLevel === undefined ? {} : { initialThinkingLevel: options.initialThinkingLevel }),
     });
     const active: ActiveSession<PiSessionRuntime> = { runtime, unsubscribe: noop };
     let boundSession = runtime.session;
@@ -3041,7 +3130,7 @@ export class PiSessionService implements SessionRouteService {
       }
     }
     active.unsubscribe = session.subscribe((event) => {
-      this.events.publish(session.sessionId, toClientEvent(event));
+      this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
       this.publishActivityForEvent(session, event);
       const eventType = getString(event, "type");
       if (eventType === "agent_end") this.abortRunScopedExtensionDialogs(session.sessionId);
@@ -3939,11 +4028,30 @@ function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+/**
+ * Attach the thinking level in effect when an assistant message was generated,
+ * so chat bubbles can show it next to the model. Non-assistant messages pass
+ * through by reference; assistant messages are copied only when a level is set.
+ * "off" is the absence of thinking, not a level worth labeling on every bubble.
+ */
+function annotateAssistantThinkingLevel(message: unknown, thinkingLevel: string | undefined): unknown {
+  if (thinkingLevel === undefined || thinkingLevel === "" || thinkingLevel === "off") return message;
+  if (!isRecord(message) || message["role"] !== "assistant") return message;
+  return { ...message, thinkingLevel };
+}
+
 function historyMessages(session: PiAgentSession): unknown[] {
   const messages: unknown[] = [];
+  // Pi records the initial level at session creation and every later change, so
+  // walking the branch yields the level in effect for each assistant message.
+  let thinkingLevel: string | undefined;
   for (const entry of session.sessionManager.getBranch()) {
     if (!isRecord(entry)) continue;
-    if (entry["type"] === "message") messages.push(entry["message"]);
+    if (entry["type"] === "message") messages.push(annotateAssistantThinkingLevel(entry["message"], thinkingLevel));
+    else if (entry["type"] === "thinking_level_change") {
+      const level = getString(entry, "thinkingLevel");
+      if (level !== undefined) thinkingLevel = level;
+    }
     else if (entry["type"] === "custom_message" && entry["display"] === true) messages.push({ role: "custom", content: entry["content"], customType: entry["customType"], details: entry["details"] });
     else if (entry["type"] === "compaction") messages.push({ role: "system", source: "compaction", content: `Compacted history:\n\n${stringValue(entry["summary"])}` });
     else if (entry["type"] === "branch_summary") messages.push({ role: "system", source: "branch_summary", content: `Branch summary:\n\n${stringValue(entry["summary"])}` });
@@ -3987,7 +4095,7 @@ function finalAssistantText(messages: readonly unknown[]): string {
   return "";
 }
 
-function toClientEvent(event: unknown): SessionUiEvent {
+function toClientEvent(event: unknown, thinkingLevel?: string): SessionUiEvent {
   const eventType = getString(event, "type");
   const assistantMessageEvent = getProperty(event, "assistantMessageEvent");
   if (eventType === "message_update" && getString(assistantMessageEvent, "type") === "text_delta") {
@@ -4012,7 +4120,8 @@ function toClientEvent(event: unknown): SessionUiEvent {
   if (eventType === "agent_end") return { type: "agent.end" };
   if (eventType === "message_end") {
     const message = getProperty(event, "message");
-    return message === undefined ? { type: "message.end" } : { type: "message.end", message };
+    if (message === undefined) return { type: "message.end" };
+    return { type: "message.end", message: annotateAssistantThinkingLevel(message, thinkingLevel) };
   }
   return { type: "pi.event", eventType: eventType ?? "unknown" };
 }

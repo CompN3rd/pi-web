@@ -103,6 +103,7 @@
             <a href="#catalog-refresh">Model catalog refresh</a>
             <a href="#session-tools">Session tools</a>
             <a href="#extension-dialogs">Extension dialogs</a>
+            <a href="#prompt-completions">Prompt completions</a>
             <a href="#completion-tools">Completion tools</a>
           </aside>
 
@@ -802,6 +803,16 @@
                 after PI WEB guidance.
               </p>
               <p>
+                Both <code>spawn_session</code> and <code>spawn_subsession</code> accept an optional
+                <code>model</code> parameter, given as an exact <code>provider/model-id</code> such as
+                <code>anthropic/claude-sonnet-4-5</code>. When set, the new session starts on that model instead of
+                inheriting the dispatching session's model. The match is strict: an unknown or malformed value is
+                rejected with an error. A <code>#provider/model-id</code> reference in the prompt (see
+                <a href="#prompt-completions">Prompt completions</a>) is how users ask for a specific model; agents
+                forward that reference as this parameter. The new session also inherits the dispatching session's
+                thinking level, clamped to its model's capabilities.
+              </p>
+              <p>
                 In <strong>Settings → Session daemon</strong>, these keys are saved on the selected machine. Restart the
                 session daemon on that machine after changing them.
               </p>
@@ -874,6 +885,25 @@
               </div>
             </section>
 
+
+            <section id="prompt-completions">
+              <h2>Prompt completions</h2>
+              <p>The chat composer opens completion menus on three trigger characters:</p>
+              <ul>
+                <li><code>/</code> at the very start of the draft completes session commands.</li>
+                <li>
+                  <code>@</code> completes file paths: <code>@</code> for tracked files, <code>@ </code> (at, then
+                  space) or <code>!@</code> for all files. Picking one inserts an <code>@path</code> reference into the
+                  draft, quoted automatically when the path contains spaces.
+                </li>
+                <li>
+                  <code>#</code> completes the models available to the session, filtered case-insensitively as you type
+                  (at most 12 entries). Picking one inserts a <code>#provider/model-id</code> reference into the draft,
+                  which tells agents the request should run on that model — for example as the <code>model</code>
+                  parameter of <code>spawn_session</code>.
+                </li>
+              </ul>
+            </section>
 
             <section id="completion-tools">
               <h2>Optional completion tools</h2>

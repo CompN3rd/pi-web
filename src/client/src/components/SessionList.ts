@@ -224,16 +224,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const selectedSessions = this.selectedSessions("current");
     const archivableSessions = selectedSessions.filter((session) => isArchivableSessionInfo(session, this.statuses[session.id]));
     const unreadSelectedSessions = selectedSessions.filter((session) => this.unreadSessionIds.has(session.id));
-    const allVisibleSelected = visibleSessions.length > 0 && visibleSessions.every((session) => this.selectedSessionIds.has(session.id));
-    const visibleSelectedCount = visibleSessions.filter((session) => this.selectedSessionIds.has(session.id)).length;
     return html`
       <div class="bulk-row selecting">
-        <button ?disabled=${visibleSessions.length === 0} @click=${() => { this.toggleVisibleSelection(visibleSessions, !allVisibleSelected); }}>${allVisibleSelected ? "Clear visible" : "Select visible"}</button>
-        <small>${selectedSessions.length} selected${visibleSelectedCount !== selectedSessions.length ? html` · ${visibleSelectedCount} visible` : null}</small>
-        <button ?disabled=${archivableSessions.length === 0} @click=${() => { this.archiveSelectedCurrent(); }}>Archive selected</button>
+        ${this.renderSelectionControls("current", visibleSessions)}
+        <button ?disabled=${archivableSessions.length === 0} @click=${() => { this.archiveSelectedCurrent(); }}>Archive</button>
         <button ?disabled=${unreadSelectedSessions.length === 0} @click=${() => { this.markSelectedCurrentRead(); }}>Mark read</button>
-        <button @click=${() => { this.clearSelection("current"); }}>Clear</button>
-        <button @click=${() => { this.closeSelection("current"); }}>Done</button>
       </div>
     `;
   }
@@ -242,16 +237,29 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (visibleSessions.length === 0 || !this.selectionScopes.has("archived")) return null;
 
     const selectedSessions = this.selectedSessions("archived");
-    const allVisibleSelected = visibleSessions.length > 0 && visibleSessions.every((session) => this.selectedSessionIds.has(session.id));
-    const visibleSelectedCount = visibleSessions.filter((session) => this.selectedSessionIds.has(session.id)).length;
     return html`
       <div class="bulk-row selecting">
-        <button ?disabled=${visibleSessions.length === 0} @click=${() => { this.toggleVisibleSelection(visibleSessions, !allVisibleSelected); }}>${allVisibleSelected ? "Clear visible" : "Select visible"}</button>
-        <small>${selectedSessions.length} selected${visibleSelectedCount !== selectedSessions.length ? html` · ${visibleSelectedCount} visible` : null}</small>
-        <button class="danger" title="Permanently delete selected archived sessions" ?disabled=${selectedSessions.length === 0} @click=${() => { this.confirmDeleteSelectedArchived(); }}>Delete selected</button>
-        <button @click=${() => { this.clearSelection("archived"); }}>Clear</button>
-        <button @click=${() => { this.closeSelection("archived"); }}>Done</button>
+        ${this.renderSelectionControls("archived", visibleSessions)}
+        <button class="danger" title="Permanently delete selected archived sessions" ?disabled=${selectedSessions.length === 0} @click=${() => { this.confirmDeleteSelectedArchived(); }}>Delete</button>
       </div>
+    `;
+  }
+
+  /**
+   * Shared selection toggle and count for both scopes. The toggle is binary:
+   * an empty selection offers to select every visible session, and any
+   * existing selection offers to clear the whole scope. Selection mode itself
+   * is exited from the same ☑ heading button that opened it, so the toolbar
+   * carries no separate Done or Clear buttons.
+   */
+  private renderSelectionControls(scope: SessionSelectionScope, visibleSessions: SessionInfo[]) {
+    const selectedCount = this.selectedSessions(scope).length;
+    const visibleSelectedCount = visibleSessions.filter((session) => this.selectedSessionIds.has(session.id)).length;
+    return html`
+      ${selectedCount === 0
+        ? html`<button @click=${() => { this.selectVisibleSessions(visibleSessions); }}>Select visible</button>`
+        : html`<button @click=${() => { this.clearSelection(scope); }}>Clear selected</button>`}
+      <small>${selectedCount} selected${visibleSelectedCount !== selectedCount ? html` · ${visibleSelectedCount} visible` : null}</small>
     `;
   }
 
@@ -434,13 +442,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     this.selectedSessionIds = next;
   }
 
-  private toggleVisibleSelection(sessions: SessionInfo[], selected: boolean): void {
-    const next = new Set(this.selectedSessionIds);
-    for (const session of sessions) {
-      if (selected) next.add(session.id);
-      else next.delete(session.id);
-    }
-    this.selectedSessionIds = next;
+  private selectVisibleSessions(sessions: SessionInfo[]): void {
+    this.selectedSessionIds = new Set([...this.selectedSessionIds, ...sessions.map((session) => session.id)]);
   }
 
   private selectedSessions(scope: SessionSelectionScope): SessionInfo[] {

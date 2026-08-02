@@ -163,7 +163,7 @@ export function chatMessageMetadataLabel(message: ChatLine): string {
   const timestamp = message.meta?.timestamp;
   const time = timestamp === undefined ? undefined : formatMessageTimestamp(timestamp);
   const model = chatMessageModelLabel(message);
-  const parts = [time, model].filter((part): part is string => part !== undefined && part !== "");
+  const parts = [time, model, message.meta?.thinkingLevel].filter((part): part is string => part !== undefined && part !== "");
   return parts.length === 0 ? "No Pi message metadata available" : parts.join(" · ");
 }
 
