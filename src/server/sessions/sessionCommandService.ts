@@ -114,15 +114,28 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
     const pending = this.pendingSelects.get(requestId);
     if (pending?.sessionId !== sessionId) return { type: "unsupported", message: "Command request expired" };
     this.pendingSelects.delete(requestId);
+    return this.forkEntry(sessionId, value);
+  }
 
+  /**
+   * Forks the session from a specific tree entry into a new session file, leaving
+   * the original session untouched. Shared by the `/fork` select response and the
+   * session-tree fork-from-entry path. User entries fork from "before" so their
+   * text returns as a prompt draft; every other entry forks "at" so the forked
+   * file includes it.
+   */
+  async forkEntry(sessionId: string, entryId: string): Promise<ClientCommandResult> {
     const active = await this.getActive(sessionId);
     if (this.lifecycle.isTreeNavigationActive?.(active.runtime.session) === true) return treeNavigationActiveUnsupported();
     if (this.hasActiveWork(active.runtime.session)) return forkActiveUnsupported("fork");
     const relatedName = await this.nextRelatedSessionName(active, "fork");
     if (this.lifecycle.isTreeNavigationActive?.(active.runtime.session) === true) return treeNavigationActiveUnsupported();
     if (this.hasActiveWork(active.runtime.session)) return forkActiveUnsupported("fork");
+    // The entry set may differ from what callers saw, so resolve the fork
+    // position from the session state that is current when the replacement begins.
+    const position = this.forkPosition(active.runtime.session, entryId);
     const result = await this.runSessionReplacement(active.runtime, async () => {
-      const forkResult = await active.runtime.fork(value);
+      const forkResult = await active.runtime.fork(entryId, { position });
       if (!forkResult.cancelled) this.tryNameRelatedSession(active.runtime.session, relatedName);
       return forkResult;
     });
@@ -223,6 +236,10 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
 
   private hasActiveWork(session: TSession): boolean {
     return sessionHasActiveWork(session) || this.lifecycle.hasActiveWork?.(session) === true;
+  }
+
+  private forkPosition(session: TSession, entryId: string): "before" | "at" {
+    return session.getUserMessagesForForking().some((message) => message.entryId === entryId) ? "before" : "at";
   }
 
   private runSessionReplacement<T>(runtime: CommandRuntime<TSession>, operation: () => Promise<T>): Promise<T> {
