@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const pluginRoot = "pi-web-plugins";
@@ -49,7 +49,7 @@ describe("bundled PI WEB plugins", () => {
           continue;
         }
         const dependency = resolve(dirname(file), specifier.replace(/\.js$/u, ".ts"));
-        if (dependency !== root && !dependency.startsWith(`${root}/`)) {
+        if (dependency !== root && !dependency.startsWith(`${root}${sep}`)) {
           violations.push(`${relative(process.cwd(), file)}: browser import escapes the Git package (${specifier})`);
           continue;
         }

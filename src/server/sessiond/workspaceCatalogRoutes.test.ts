@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderWorkspace, WorkspaceProvider } from "../../server-plugin-api.js";
@@ -12,9 +13,17 @@ import { registerWorkspaceCatalogRoutes } from "./workspaceCatalogRoutes.js";
 const project: Project = {
   id: "p1",
   name: "Project",
-  path: "/repo",
+  path: hostPath("/repo"),
   createdAt: "2026-07-27T00:00:00.000Z",
 };
+
+/**
+ * The registry resolves every project/provider path into the host's absolute
+ * form, so fixture paths must be compared in their resolved platform form.
+ */
+function hostPath(path: string): string {
+  return resolve(path);
+}
 
 let app: FastifyInstance;
 
@@ -28,7 +37,7 @@ afterEach(async () => {
 
 describe("session daemon workspace catalog routes", () => {
   it("serves the same live provider registry used by spawned-session validation", async () => {
-    let listed: ProviderWorkspace[] = [providerWorkspace("root", "/repo", true)];
+    let listed: ProviderWorkspace[] = [providerWorkspace("root", hostPath("/repo"), true)];
     const registry = registryFor({
       probe: () => Promise.resolve("claim"),
       list: () => Promise.resolve(listed),
@@ -41,31 +50,31 @@ describe("session daemon workspace catalog routes", () => {
     });
     const spawnTargets = new ProjectScopedSpawnTargetResolver({ projects, workspaces: registry });
 
-    await expect(spawnTargets.resolveSpawnTarget("/repo", "/linked")).resolves.toEqual({
+    await expect(spawnTargets.resolveSpawnTarget(hostPath("/repo"), hostPath("/linked"))).resolves.toEqual({
       allowed: false,
       reason: "out-of-project",
-      allowedCwds: ["/repo"],
+      allowedCwds: [hostPath("/repo")],
     });
 
-    listed = [providerWorkspace("root", "/repo", true), providerWorkspace("linked", "/linked", false)];
+    listed = [providerWorkspace("root", hostPath("/repo"), true), providerWorkspace("linked", hostPath("/linked"), false)];
     const [response, spawnDecision] = await Promise.all([
       app.inject({ method: "GET", url: "/workspace-catalog/projects/p1/workspaces" }),
-      spawnTargets.resolveSpawnTarget("/repo", "/linked"),
+      spawnTargets.resolveSpawnTarget(hostPath("/repo"), hostPath("/linked")),
     ]);
 
     expect(response.statusCode).toBe(200);
     const resolution = response.json<{ status: string; ownerPluginId: string; workspaces: Workspace[] }>();
     expect(resolution).toMatchObject({ status: "provider", ownerPluginId: "owner" });
-    expect(resolution.workspaces.map(({ path }) => path)).toEqual(["/repo", "/linked"]);
-    expect(spawnDecision).toEqual({ allowed: true, cwd: "/linked" });
+    expect(resolution.workspaces.map(({ path }) => path)).toEqual([hostPath("/repo"), hostPath("/linked")]);
+    expect(spawnDecision).toEqual({ allowed: true, cwd: hostPath("/linked") });
 
-    const linked = resolution.workspaces.find(({ path }) => path === "/linked");
+    const linked = resolution.workspaces.find(({ path }) => path === hostPath("/linked"));
     if (linked === undefined) throw new Error("Expected linked workspace");
     const current = await app.inject({ method: "GET", url: `/workspace-catalog/projects/p1/workspaces/${linked.id}` });
     expect(current.statusCode).toBe(200);
-    expect(current.json<Workspace>()).toMatchObject({ id: linked.id, path: "/linked" });
+    expect(current.json<Workspace>()).toMatchObject({ id: linked.id, path: hostPath("/linked") });
 
-    listed = [providerWorkspace("root", "/repo", true)];
+    listed = [providerWorkspace("root", hostPath("/repo"), true)];
     const stale = await app.inject({ method: "GET", url: `/workspace-catalog/projects/p1/workspaces/${linked.id}` });
     expect(stale.statusCode).toBe(404);
     expect(stale.json()).toEqual({ error: "Workspace not found" });
@@ -82,7 +91,7 @@ describe("session daemon workspace catalog routes", () => {
         contribution("fallback", {
           fallback: true,
           probe: fallbackProbe,
-          list: () => Promise.resolve([providerWorkspace("fallback", "/fallback", true)]),
+          list: () => Promise.resolve([providerWorkspace("fallback", hostPath("/fallback"), true)]),
         }),
       ],
       logger: { warn: vi.fn() },
@@ -101,7 +110,7 @@ describe("session daemon workspace catalog routes", () => {
     expect(degraded.json()).toMatchObject({
       status: "degraded",
       ownerPluginId: "owner",
-      workspaces: [{ projectId: "p1", path: "/repo", isMain: true }],
+      workspaces: [{ projectId: "p1", path: hostPath("/repo"), isMain: true }],
       diagnostics: [{ code: "list-failed", pluginId: "owner" }],
     });
     expect(fallbackProbe).not.toHaveBeenCalled();

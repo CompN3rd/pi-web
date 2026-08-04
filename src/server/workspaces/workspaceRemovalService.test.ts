@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ProviderRemoveContext,
@@ -21,9 +22,17 @@ import {
 const project: Project = {
   id: "project-1",
   name: "Roadmap",
-  path: "/repo",
+  path: hostPath("/repo"),
   createdAt: "2026-07-27T00:00:00.000Z",
 };
+
+/**
+ * Registry-driven flows resolve every project/provider path into the host's
+ * absolute form, so those fixture paths must use the resolved platform form.
+ */
+function hostPath(path: string): string {
+  return resolve(path);
+}
 
 describe("WorkspaceRemovalService", () => {
   it("runs a neutral provider's non-file-deleting plan after every validation and preserves host metadata", async () => {
@@ -34,8 +43,8 @@ describe("WorkspaceRemovalService", () => {
       list: () => {
         calls.push("list");
         return Promise.resolve([
-          providerWorkspace("main", "/repo", true),
-          providerWorkspace("roadmap", "/board-views/roadmap", false, {
+          providerWorkspace("main", hostPath("/repo"), true),
+          providerWorkspace("roadmap", hostPath("/board-views/roadmap"), false, {
             data: { viewId: "private-roadmap" },
             removal: {
               actionLabel: "Disconnect view",
@@ -58,7 +67,7 @@ describe("WorkspaceRemovalService", () => {
     };
     const registry = registryFor(provider);
     const resolution = await registry.resolve(project);
-    const target = resolution.workspaces.find(({ path }) => path === "/board-views/roadmap");
+    const target = resolution.workspaces.find(({ path }) => path === hostPath("/board-views/roadmap"));
     const commandWorkspace = resolution.workspaces.find(({ isMain }) => isMain);
     if (target === undefined || commandWorkspace === undefined) throw new Error("Expected neutral removable workspace");
     expect(target.removal).toMatchObject({
@@ -75,7 +84,7 @@ describe("WorkspaceRemovalService", () => {
     expect(preparedContext).toMatchObject({
       project: { id: project.id, path: project.path },
       workspace: {
-        path: "/board-views/roadmap",
+        path: hostPath("/board-views/roadmap"),
         data: { viewId: "private-roadmap" },
         removal: {
           actionLabel: "Disconnect view",
@@ -88,18 +97,18 @@ describe("WorkspaceRemovalService", () => {
       confirmation: "Disconnect the Roadmap view without deleting board files?",
     });
     expect(preparedContext?.signal.aborted).toBe(true);
-    expect(terminals.closedCwds).toEqual(["/board-views/roadmap"]);
+    expect(terminals.closedCwds).toEqual([hostPath("/board-views/roadmap")]);
     expect(terminals.runOptions).toEqual([{
       origin: "core",
       projectId: project.id,
       workspaceId: commandWorkspace.id,
-      cwd: "/repo",
+      cwd: hostPath("/repo"),
       title: "Disconnect board view: Roadmap",
       command: "boardctl view disconnect roadmap --keep-files",
       metadata: {
         "pi.operation": "workspace.delete",
         "target.workspaceId": target.id,
-        "target.workspacePath": "/board-views/roadmap",
+        "target.workspacePath": hostPath("/board-views/roadmap"),
       },
     }]);
     expect(run).toMatchObject({

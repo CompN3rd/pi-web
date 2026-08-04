@@ -71,11 +71,17 @@ describe("sessiond persisted server plugin recovery", () => {
     const exit = await waitForExit(child, 10_000);
     children.delete(child);
 
-    expect(exit).toEqual({ code: 0, signal: null });
+    // Windows has no POSIX signal delivery: SIGTERM force-terminates the
+    // child, so the graceful-shutdown exit code only holds on POSIX hosts.
+    expect(exit).toEqual(
+      process.platform === "win32" ? { code: null, signal: "SIGTERM" } : { code: 0, signal: null },
+    );
     expect(existsSync(markerPath)).toBe(false);
   }, 30_000);
 
-  it("stops activated plugins when SIGTERM arrives during sessiond startup", async () => {
+  // Plugin stop on SIGTERM requires POSIX signal delivery; Windows
+  // force-terminates the child without running shutdown handlers.
+  it.skipIf(process.platform === "win32")("stops activated plugins when SIGTERM arrives during sessiond startup", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-web-sessiond-plugin-startup-signal-"));
     tempRoots.push(root);
     const configPath = join(root, "config.json");

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -71,7 +71,9 @@ describe("production build contents", () => {
   });
 
   it("resolves packaged plugin declaration subpaths for NodeNext consumers", async () => {
-    const fixtureRoot = await mkdtemp(join(tmpdir(), "pi-web-plugin-types-"));
+    // TypeScript resolves declaration paths through the real path; on Windows
+    // the temp dir may use an 8.3 short name, so anchor at the real path.
+    const fixtureRoot = await realpath(await mkdtemp(join(tmpdir(), "pi-web-plugin-types-")));
     try {
       const packageRoot = join(fixtureRoot, "node_modules", "@jmfederico", "pi-web");
       await mkdir(join(packageRoot, "dist", "plugin-api"), { recursive: true });

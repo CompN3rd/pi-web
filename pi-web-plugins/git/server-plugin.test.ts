@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -404,8 +404,11 @@ async function createRepository(name: string, trackedPath = "tracked.txt"): Prom
 
 async function temporaryDirectory(label: string): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), `pi-web-git-provider-${label.replaceAll(" ", "-")}-`));
-  tempRoots.push(path);
-  return path;
+  // Git reports canonical worktree paths; on Windows the temp dir may use an
+  // 8.3 short name, so compare against the real path.
+  const canonical = await realpath(path);
+  tempRoots.push(canonical);
+  return canonical;
 }
 
 function commit(cwd: string, message: string): void {
