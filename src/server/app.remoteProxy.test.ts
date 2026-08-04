@@ -198,8 +198,6 @@ describe("buildApp remote machine proxy routes", () => {
       path: "/repo",
       label: "main",
       isMain: true,
-      isGitRepo: false,
-      isGitWorktree: false,
       effectiveConfig: { uploads: { defaultFolder: "remote-project-uploads" } },
     }];
     const remoteResolution = {

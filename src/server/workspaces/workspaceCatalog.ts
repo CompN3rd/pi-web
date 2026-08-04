@@ -1,5 +1,5 @@
 import type { ServerPluginSafeStart } from "../../serverPluginRecovery.js";
-import type { Workspace, WorkspaceProviderResolution } from "../../shared/apiTypes.js";
+import type { WorkspaceListing, WorkspaceProviderAuthorityResolution } from "../../shared/apiTypes.js";
 import type {
   ServerPluginHealthInspection,
   ServerPluginRuntimeRecord,
@@ -11,10 +11,10 @@ export const WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION = 1;
 /** Web-side port for sessiond's authoritative, live workspace catalog. */
 export interface WorkspaceCatalog {
   /** Preserve the daemon authority's provider-neutral ownership and diagnostics. */
-  resolveProject(projectId: string): Promise<WorkspaceProviderResolution>;
+  resolveProject(projectId: string): Promise<WorkspaceProviderAuthorityResolution>;
   /** Explicit workspace-only adapter for filesystem/session consumers. */
-  list(projectId: string): Promise<Workspace[]>;
-  resolve(projectId: string, workspaceId: string): Promise<Workspace>;
+  list(projectId: string): Promise<WorkspaceListing[]>;
+  resolve(projectId: string, workspaceId: string): Promise<WorkspaceListing>;
 }
 
 /** Immutable sessiond startup snapshot used to reconcile desired web plugins. */
@@ -76,21 +76,17 @@ export function workspaceCatalogHttpStatus(error: unknown, fallbackStatus: numbe
 }
 
 /**
- * Browser plugin v1 requires Git-shaped fields. During the migration, an owner
- * may publish those deprecated values as public metadata; core does not branch
- * on provider identity and replacements are not required to publish them.
+ * Browser plugin v1 expects a top-level branch label. During the migration, an
+ * owner may publish that deprecated value as public metadata; core does not
+ * branch on provider identity and replacements are not required to publish it.
  */
-export function withBrowserV1WorkspaceCompatibility(workspace: Workspace): Workspace {
+export function withBrowserV1WorkspaceCompatibility(workspace: WorkspaceListing): WorkspaceListing {
   const metadata = workspace.provider?.metadata;
   if (metadata === undefined) return workspace;
 
   const branch = metadata["branch"];
-  const isGitRepo = metadata["isGitRepo"];
-  const isGitWorktree = metadata["isGitWorktree"];
   return {
     ...workspace,
     ...(typeof branch === "string" ? { branch } : {}),
-    ...(typeof isGitRepo === "boolean" ? { isGitRepo } : {}),
-    ...(typeof isGitWorktree === "boolean" ? { isGitWorktree } : {}),
   };
 }

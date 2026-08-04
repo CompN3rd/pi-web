@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { InMemoryCredentialStore, type AuthPrompt, type Credential } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type Credential } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthFlowState } from "../../shared/apiTypes.js";
 import { AuthService, createModelRuntimeForAgentDir, type AuthChange, type AuthServiceLogger } from "./authService.js";
@@ -22,20 +22,6 @@ afterEach(async () => {
 });
 
 describe("AuthService", () => {
-  it("saves API keys and emits a global auth change after the runtime refreshes", async () => {
-    const { auth, runtime, credentials, changes } = await createAuthService();
-    // Pi 0.82 merged reloadConfig() into refresh(), so the provider lookup and
-    // the post-login refresh both land on refresh(): one call each.
-    const refresh = vi.spyOn(runtime, "refresh");
-
-    await expect(auth.saveApiKey("anthropic", "sk-test")).resolves.toEqual({ accepted: true });
-
-    await expect(credentials.read("anthropic")).resolves.toEqual({ type: "api_key", key: "sk-test" });
-    expect(refresh).toHaveBeenCalledTimes(2);
-    expect(changes).toEqual([{}]);
-    auth.dispose();
-  });
-
   it("logs out providers and emits the removed provider id after the runtime refreshes", async () => {
     const { auth, runtime, credentials, changes } = await createAuthService({ anthropic: { type: "api_key", key: "sk-test" } });
     const refresh = vi.spyOn(runtime, "refresh");
@@ -64,7 +50,10 @@ describe("AuthService", () => {
       attempts.push("healthy");
     });
 
-    await expect(auth.saveApiKey("anthropic", "sk-test")).resolves.toEqual({ accepted: true });
+    const state = await auth.startApiKeyLogin("anthropic");
+    if (state.prompt === undefined) throw new Error("Expected Anthropic key prompt");
+    auth.respondToOAuthFlow(state.flowId, state.prompt.requestId, "sk-test");
+    await vi.waitFor(() => { expect(auth.oauthFlow(state.flowId).status).toBe("complete"); });
 
     await expect(credentials.read("anthropic")).resolves.toEqual({ type: "api_key", key: "sk-test" });
     expect(changes).toEqual([{}]);
@@ -94,50 +83,6 @@ describe("AuthService", () => {
       { err: failure, operation: "logout", providerId: "anthropic" },
       "auth-change listener failed",
     );
-    auth.dispose();
-  });
-
-  it("rejects blank API keys", async () => {
-    const { auth, changes } = await createAuthService();
-
-    await expect(auth.saveApiKey("anthropic", "   ")).rejects.toThrow("API key is required");
-    expect(changes).toEqual([]);
-    auth.dispose();
-  });
-
-  it("keeps existing file-backed credentials unchanged when legacy Cloudflare setup cannot finish", async () => {
-    const seed = {
-      "cloudflare-ai-gateway": {
-        type: "api_key" as const,
-        key: "existing-secret",
-        env: { CLOUDFLARE_ACCOUNT_ID: "existing-account", CLOUDFLARE_GATEWAY_ID: "existing-gateway" },
-      },
-    };
-    const { auth, authPath, changes } = await createFileBackedAuthService(seed);
-    const before = await readFile(authPath, "utf8");
-
-    await expect(auth.saveApiKey("cloudflare-ai-gateway", "new-secret")).rejects.toThrow(
-      "Cloudflare AI Gateway requires interactive setup; use Pi's generic /login flow",
-    );
-
-    await expect(readFile(authPath, "utf8")).resolves.toBe(before);
-    expect(changes).toEqual([]);
-    auth.dispose();
-  });
-
-  it.each([
-    { providerId: "amazon-bedrock", providerName: "Amazon Bedrock" },
-    { providerId: "google-vertex", providerName: "Google Vertex AI" },
-  ])("keeps an empty file-backed store unchanged when legacy $providerName setup starts with a selection", async ({ providerId, providerName }) => {
-    const { auth, authPath, changes } = await createFileBackedAuthService({});
-    const before = await readFile(authPath, "utf8");
-
-    await expect(auth.saveApiKey(providerId, "submitted-secret")).rejects.toThrow(
-      `${providerName} requires interactive setup; use Pi's generic /login flow`,
-    );
-
-    await expect(readFile(authPath, "utf8")).resolves.toBe(before);
-    expect(changes).toEqual([]);
     auth.dispose();
   });
 
@@ -235,65 +180,11 @@ describe("AuthService", () => {
     auth.dispose();
   });
 
-  it.each([
-    { label: "text", prompt: { type: "text", message: "Account" } satisfies AuthPrompt },
-    {
-      label: "select",
-      prompt: { type: "select", message: "Region", options: [{ id: "us", label: "US" }] } satisfies AuthPrompt,
-    },
-    { label: "manual-code", prompt: { type: "manual_code", message: "Code" } satisfies AuthPrompt },
-  ])("rejects a first $label prompt before credential persistence", async ({ prompt }) => {
-    const { auth, runtime, credentials, changes } = await createAuthService();
-    const login = mockLoginPromptsBeforePersistence(runtime, credentials, [prompt]);
-
-    await expect(auth.saveApiKey("anthropic", "sk-test")).rejects.toThrow(
-      "Anthropic requires interactive setup; use Pi's generic /login flow",
-    );
-
-    expect(login).toHaveBeenCalledOnce();
-    await expect(credentials.read("anthropic")).resolves.toBeUndefined();
-    expect(changes).toEqual([]);
-    auth.dispose();
-  });
-
-  it("rejects a repeated secret prompt before credential persistence", async () => {
-    const { auth, runtime, credentials, changes } = await createAuthService();
-    const login = mockLoginPromptsBeforePersistence(runtime, credentials, [
-      { type: "secret", message: "API key" },
-      { type: "secret", message: "API key again" },
-    ]);
-
-    await expect(auth.saveApiKey("anthropic", "sk-test")).rejects.toThrow(
-      "Anthropic requires interactive setup; use Pi's generic /login flow",
-    );
-
-    expect(login).toHaveBeenCalledOnce();
-    await expect(credentials.read("anthropic")).resolves.toBeUndefined();
-    expect(changes).toEqual([]);
-    auth.dispose();
-  });
-
-  it("rejects an aborted secret prompt before credential persistence", async () => {
-    const { auth, runtime, credentials, changes } = await createAuthService();
-    const abort = new AbortController();
-    abort.abort();
-    const login = mockLoginPromptsBeforePersistence(runtime, credentials, [
-      { type: "secret", message: "API key", signal: abort.signal },
-    ]);
-
-    await expect(auth.saveApiKey("anthropic", "sk-test")).rejects.toThrow("Login cancelled");
-
-    expect(login).toHaveBeenCalledOnce();
-    await expect(credentials.read("anthropic")).resolves.toBeUndefined();
-    expect(changes).toEqual([]);
-    auth.dispose();
-  });
-
   it("rejects unknown providers before starting API-key login", async () => {
     const { auth, runtime, credentials, changes } = await createAuthService();
     const login = vi.spyOn(runtime, "login");
 
-    await expect(auth.saveApiKey("unknown-provider", "sk-test")).rejects.toThrow(
+    await expect(auth.startApiKeyLogin("unknown-provider")).rejects.toThrow(
       "API key provider not found: unknown-provider",
     );
 
@@ -319,7 +210,7 @@ describe("AuthService", () => {
     vi.spyOn(runtime, "getProviders").mockReturnValue([...providers, ambientProvider]);
     const login = vi.spyOn(runtime, "login");
 
-    await expect(auth.saveApiKey("ambient-only", "sk-test")).rejects.toThrow(
+    await expect(auth.startApiKeyLogin("ambient-only")).rejects.toThrow(
       "Ambient Only does not support interactive API-key setup",
     );
 
@@ -365,7 +256,10 @@ describe("AuthService", () => {
     const runtime = await createModelRuntimeForAgentDir(agentDir);
     const auth = await AuthService.create({ runtime });
 
-    await auth.saveApiKey("anthropic", "sk-test");
+    const state = await auth.startApiKeyLogin("anthropic");
+    if (state.prompt === undefined) throw new Error("Expected Anthropic key prompt");
+    auth.respondToOAuthFlow(state.flowId, state.prompt.requestId, "sk-test");
+    await vi.waitFor(() => { expect(auth.oauthFlow(state.flowId).status).toBe("complete"); });
 
     await expect(readFile(join(agentDir, "auth.json"), "utf8")).resolves.toContain("sk-test");
     auth.dispose();
@@ -561,21 +455,6 @@ async function createFileBackedAuthService(seed: Record<string, Credential>) {
   const changes: AuthChange[] = [];
   auth.subscribe((change) => { changes.push(change); });
   return { auth, runtime, authPath, changes };
-}
-
-function mockLoginPromptsBeforePersistence(
-  runtime: ModelRuntime,
-  credentials: InMemoryCredentialStore,
-  prompts: readonly AuthPrompt[],
-) {
-  return vi.spyOn(runtime, "login").mockImplementation(async (providerId, _authType, interaction) => {
-    let key: string | undefined;
-    for (const prompt of prompts) key = await interaction.prompt(prompt);
-    if (key === undefined) throw new Error("Expected at least one login prompt");
-    const credential: Credential = { type: "api_key", key };
-    await credentials.modify(providerId, () => Promise.resolve(credential));
-    return credential;
-  });
 }
 
 async function tempAgentDir(): Promise<string> {

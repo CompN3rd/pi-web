@@ -15,8 +15,6 @@ const gitWorkspace: Workspace = {
   path: "/repo",
   label: "main",
   isMain: true,
-  isGitRepo: true,
-  isGitWorktree: false,
   provider: { pluginId: "git", capabilities: { request: true, remove: false } },
 };
 
@@ -292,6 +290,7 @@ function panelContext(request: WorkspaceBackend["request"] | undefined, workspac
     state: { selectedWorkspace: workspace, workspaceTool: "git:workspace.git", mainView: "git:workspace.git" },
     files: {
       readFile: () => Promise.reject(new Error("not implemented")),
+      listFiles: () => Promise.reject(new Error("not implemented")),
       writeFile: () => Promise.reject(new Error("not implemented")),
       deleteFile: () => Promise.reject(new Error("not implemented")),
       moveFile: () => Promise.reject(new Error("not implemented")),
@@ -319,7 +318,6 @@ function runtimeContext(patch: Partial<PluginRuntimeContext> = {}): PluginRuntim
     openTerminal: noop,
     refreshFiles: noop,
     refreshWorkspacePanels: noop,
-    refreshGit: noop,
     refreshAppData: noop,
     reloadPage: noop,
     startSession: noop,

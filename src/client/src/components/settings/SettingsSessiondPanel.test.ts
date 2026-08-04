@@ -61,12 +61,12 @@ describe("session daemon panel notices", () => {
   it("reports only the blocking error and no activation guidance when config is unavailable", () => {
     const notices = sessiondPanelNotices(undefined, noticeContext({
       activeProfile: undefined,
-      error: "Selected-machine settings are not available on Lab Mac.",
+      error: "Could not reach Lab Mac for selected-machine settings. Check the machine connection and try again.",
       targetLabel: "Lab Mac (remote machine)",
     }));
 
     expect(notices).toEqual([
-      { type: "error", content: "Selected-machine settings are not available on Lab Mac." },
+      { type: "error", content: "Could not reach Lab Mac for selected-machine settings. Check the machine connection and try again." },
     ]);
   });
 });
@@ -111,7 +111,6 @@ function noticeContext(overrides: Partial<SessiondPanelNoticeContext>): Sessiond
     savedMessage: "",
     activeProfile: undefined,
     targetLabel: "local (local gateway)",
-    profileEditingSupported: true,
     ...overrides,
   };
 }

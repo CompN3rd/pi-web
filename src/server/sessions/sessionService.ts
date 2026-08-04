@@ -1,6 +1,8 @@
 import type {
   AskUserCloseResponse,
   AskUserSubmission,
+  ExtensionDialogAnswer,
+  ExtensionDialogCloseResponse,
   SavedPromptAttachment,
   SessionBulkArchiveResponse,
   SessionBulkDeleteArchivedResponse,
@@ -31,7 +33,6 @@ import type {
 import type { NormalizedSessionCleanupRequest } from "./sessionCleanup.js";
 
 export type SessionRouteRef = ClientSessionRef;
-export type SessionRouteLookup = string | SessionRouteRef;
 
 /**
  * Route-facing session contract for PI WEB's HTTP/WebSocket API.
@@ -48,42 +49,43 @@ export interface SessionRouteService {
    * echoes it and never interprets it.
    */
   start(cwd: string, options?: { startupToken?: string }): Promise<ClientSession>;
-  messages(ref: SessionRouteLookup, page?: { before?: number; limit?: number }): Promise<unknown[] | ClientMessagePage>;
-  status(ref: SessionRouteLookup): Promise<ClientSessionStatus>;
-  streamSnapshot(ref: SessionRouteLookup): Promise<SessionStreamSnapshot>;
+  messages(ref: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage>;
+  status(ref: SessionRouteRef): Promise<ClientSessionStatus>;
+  streamSnapshot(ref: SessionRouteRef): Promise<SessionStreamSnapshot>;
   notificationCatalog(): SessionNotificationCatalogSnapshot | Promise<SessionNotificationCatalogSnapshot>;
   unreadCatalog(): Promise<SessionUnreadCatalogSnapshot>;
   acknowledgeUnread(sessionId: string, request: SessionUnreadAcknowledgeRequest): Promise<SessionUnreadCatalogSnapshot>;
   notificationInbox(ref: SessionRouteRef): SessionNotificationInboxSnapshot | Promise<SessionNotificationInboxSnapshot>;
   dismissNotification(ref: SessionRouteRef, request: Omit<SessionNotificationDismissRequest, "cwd">): SessionNotificationInboxSnapshot | Promise<SessionNotificationInboxSnapshot>;
   dismissAllNotifications(ref: SessionRouteRef, request: Omit<SessionNotificationDismissAllRequest, "cwd">): SessionNotificationInboxSnapshot | Promise<SessionNotificationInboxSnapshot>;
-  clearQueue(ref: SessionRouteLookup): Promise<ClientSessionStatus>;
-  submitAsk(ref: SessionRouteLookup, askId: string, submission: AskUserSubmission): Promise<AskUserCloseResponse>;
-  cancelAsk(ref: SessionRouteLookup, askId: string): Promise<AskUserCloseResponse>;
-  dismissWarning(ref: SessionRouteLookup, dismissId: string): Promise<ClientSessionStatus>;
-  availableModels(ref: SessionRouteLookup): Promise<ClientSessionModel[]>;
-  setModel(ref: SessionRouteLookup, provider: string, modelId: string): Promise<ClientSessionStatus>;
-  cycleModel(ref: SessionRouteLookup, direction: "forward" | "backward"): Promise<ClientSessionStatus>;
-  availableThinkingLevels(ref: SessionRouteLookup): Promise<ClientThinkingLevel[]>;
-  setThinkingLevel(ref: SessionRouteLookup, level: string): Promise<ClientSessionStatus>;
-  cycleThinkingLevel(ref: SessionRouteLookup): Promise<ClientSessionStatus>;
-  commands(ref: SessionRouteLookup): Promise<ClientCommand[]>;
-  prompt(ref: SessionRouteLookup, text: unknown, streamingBehavior?: unknown, attachments?: unknown): Promise<void>;
-  saveAttachments(ref: SessionRouteLookup, attachments: unknown, folder?: string): Promise<SavedPromptAttachment[]>;
+  clearQueue(ref: SessionRouteRef): Promise<ClientSessionStatus>;
+  submitAsk(ref: SessionRouteRef, askId: string, submission: AskUserSubmission): Promise<AskUserCloseResponse>;
+  cancelAsk(ref: SessionRouteRef, askId: string): Promise<AskUserCloseResponse>;
+  answerDialog(ref: SessionRouteRef, dialogId: string, value: ExtensionDialogAnswer): Promise<ExtensionDialogCloseResponse>;
+  cancelDialog(ref: SessionRouteRef, dialogId: string): Promise<ExtensionDialogCloseResponse>;
+  dismissWarning(ref: SessionRouteRef, dismissId: string): Promise<ClientSessionStatus>;
+  availableModels(ref: SessionRouteRef): Promise<ClientSessionModel[]>;
+  setModel(ref: SessionRouteRef, provider: string, modelId: string): Promise<ClientSessionStatus>;
+  cycleModel(ref: SessionRouteRef, direction: "forward" | "backward"): Promise<ClientSessionStatus>;
+  availableThinkingLevels(ref: SessionRouteRef): Promise<ClientThinkingLevel[]>;
+  setThinkingLevel(ref: SessionRouteRef, level: string): Promise<ClientSessionStatus>;
+  cycleThinkingLevel(ref: SessionRouteRef): Promise<ClientSessionStatus>;
+  commands(ref: SessionRouteRef): Promise<ClientCommand[]>;
+  prompt(ref: SessionRouteRef, text: unknown, streamingBehavior?: unknown, attachments?: unknown): Promise<void>;
+  saveAttachments(ref: SessionRouteRef, attachments: unknown, folder?: string): Promise<SavedPromptAttachment[]>;
   cleanupPreview(request: NormalizedSessionCleanupRequest): Promise<ClientSessionCleanupPreviewResponse>;
   cleanup(request: NormalizedSessionCleanupRequest): Promise<ClientSessionCleanupExecuteResponse>;
   archiveMany(refs: readonly SessionBulkMutationRef[]): Promise<SessionBulkArchiveResponse>;
   deleteArchivedMany(refs: readonly SessionBulkMutationRef[]): Promise<SessionBulkDeleteArchivedResponse>;
-  shell(ref: SessionRouteLookup, text: string): Promise<void>;
-  runCommand(ref: SessionRouteLookup, text: string): Promise<ClientCommandResult>;
-  respondToCommand(ref: SessionRouteLookup, requestId: string, value: string): Promise<ClientCommandResult>;
-  navigateTree(ref: SessionRouteLookup, request: ClientSessionTreeNavigateRequest): Promise<ClientSessionTreeNavigateResult>;
-  abort(ref: SessionRouteLookup): Promise<void>;
-  stop(ref: SessionRouteLookup): void | Promise<void>;
-  archive(ref: SessionRouteLookup): Promise<void>;
-  archiveTree(ref: SessionRouteLookup): Promise<ClientArchiveSessionsResponse>;
-  restore(ref: SessionRouteLookup): Promise<void>;
-  deleteArchived(ref: SessionRouteLookup): Promise<void>;
-  reload(ref: SessionRouteLookup): Promise<void>;
-  detachParent(ref: SessionRouteLookup): Promise<void>;
+  shell(ref: SessionRouteRef, text: string): Promise<void>;
+  runCommand(ref: SessionRouteRef, text: string): Promise<ClientCommandResult>;
+  respondToCommand(ref: SessionRouteRef, requestId: string, value: string): Promise<ClientCommandResult>;
+  navigateTree(ref: SessionRouteRef, request: ClientSessionTreeNavigateRequest): Promise<ClientSessionTreeNavigateResult>;
+  abort(ref: SessionRouteRef): Promise<void>;
+  stop(ref: SessionRouteRef): void | Promise<void>;
+  archive(ref: SessionRouteRef): Promise<void>;
+  archiveTree(ref: SessionRouteRef): Promise<ClientArchiveSessionsResponse>;
+  restore(ref: SessionRouteRef): Promise<void>;
+  reload(ref: SessionRouteRef): Promise<void>;
+  detachParent(ref: SessionRouteRef): Promise<void>;
 }

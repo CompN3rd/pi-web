@@ -117,29 +117,6 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     }
   });
 
-  it("opens legacy id-only lookups from the default session store gateway", async () => {
-    const hub = new CapturingSessionEventHub();
-    const fake = fakeRuntime("legacy-session");
-    const open = vi.fn(() => fakeSessionManager());
-    const service = new PiSessionService(hub, {
-      agentDir: TEST_AGENT_DIR,
-      modelRuntime: testModelRuntime,
-      createAgentRuntime: runtimeCreator(fake.runtime),
-      sessionManager: {
-        create: () => fakeSessionManager(),
-        list: () => Promise.resolve([]),
-        listAll: () => Promise.resolve([sessionRecord("legacy-session")]),
-        open,
-      },
-      heartbeatIntervalMs: 60_000,
-    });
-
-    await expect(service.status("legacy")).resolves.toMatchObject({ sessionId: "legacy-session" });
-    expect(open).toHaveBeenCalledWith("/sessions/legacy-session.jsonl");
-
-    await service.dispose();
-  });
-
   it("shares one runtime when concurrent cold lookups resolve to the same session", async () => {
     const sessionId = "single-flight-session";
     const createStarted = deferred();
@@ -195,7 +172,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     expect(createCalls).toBe(1);
     expect(open).toHaveBeenCalledOnce();
     expect(activeCount).toBe(1);
-    expect(messages).toEqual([{ role: "user", content: "shared runtime" }]);
+    expect(messages).toEqual({ messages: [{ role: "user", content: "shared runtime" }], start: 0, total: 1 });
     expect(status).toMatchObject({ sessionId });
     expect(winnerSubscribe).toHaveBeenCalledOnce();
     expect(winnerUnsubscribe).toHaveBeenCalledOnce();
@@ -246,10 +223,15 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     const outcomes = await failedLookups;
     expect(callsWhileOpening).toBe(1);
     expect(outcomes).toHaveLength(2);
-    for (const outcome of outcomes) {
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status === "rejected") expect(outcome.reason).toBe(openingError);
-    }
+    const [messagesOutcome, statusOutcome] = outcomes;
+    expect(messagesOutcome.status).toBe("rejected");
+    if (messagesOutcome.status === "rejected") expect(messagesOutcome.reason).toBe(openingError);
+    // Status no longer parks behind the in-flight open: a session still
+    // binding its extensions is statusable (its session_start dialogs must
+    // stay answerable for startup to be unblockable at all), so the lookup
+    // resolves from the startup window rather than sharing the open's fate.
+    expect(statusOutcome.status).toBe("fulfilled");
+    if (statusOutcome.status === "fulfilled") expect(statusOutcome.value).toMatchObject({ sessionId });
     expect(service.activeCount()).toBe(0);
     expect(failed.calls.abort).toBe(1);
     expect(failed.calls.dispose).toBe(1);
@@ -324,7 +306,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     expect(replacement.calls.bindExtensions).toHaveLength(1);
     expect(replacementSessionStartText).toBe("replacement started");
     expect(service.activeCount()).toBe(1);
-    expect(await service.status("session-2")).toMatchObject({ sessionId: "session-2" });
+    expect(await service.status(sessionRef("session-2"))).toMatchObject({ sessionId: "session-2" });
 
     await service.dispose();
   });
@@ -392,12 +374,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await expect(service.runCommand(sessionRef("extension-command-session"), "/ctx-stats")).resolves.toEqual({ type: "done" });
 
     expect(extensionMode).toBe("rpc");
-    const legacyEvent = hub.sessionEvents.find(({ event }) => event.type === "command.output" && event.message === "context-mode stats");
-    expect(legacyEvent).toMatchObject({
-      sessionId: "extension-command-session",
-      event: { type: "command.output", level: "info", message: "context-mode stats" },
-    });
-    expect(legacyEvent?.event.type === "command.output" ? typeof legacyEvent.event.notificationId : undefined).toBe("string");
+    expect(hub.sessionEvents.filter(({ event }) => event.type === "command.output")).toHaveLength(0);
     const inboxEvent = hub.sessionEvents.find(({ event }) => event.type === "notifications.inbox");
     expect(inboxEvent).toMatchObject({
       sessionId: "extension-command-session",
@@ -448,7 +425,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     ]);
     expect(fake.session.sessionManager.getBranch()).toBe(branch);
     expect(fake.session.messages).toEqual([]);
-    expect(hub.sessionEvents.filter(({ event }) => event.type === "command.output")).toHaveLength(2);
+    expect(hub.sessionEvents.filter(({ event }) => event.type === "command.output")).toHaveLength(0);
     expect(hub.sessionEvents.filter(({ event }) => event.type === "notifications.inbox")).toHaveLength(2);
 
     await service.dispose();
@@ -705,7 +682,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
       archiveStore: {
         list: () => Promise.resolve([{ sessionId: "archived", cwd: "/workspace", archivedAt: "2026-01-01T00:00:00.000Z" }]),
         get: () => Promise.resolve(undefined),
-        archive: () => Promise.resolve({ sessionId: "archived", cwd: "/workspace", archivedAt: "2026-01-01T00:00:00.000Z" }),
+        archive: () => { throw new Error("archive should not be called when listing"); },
         restore: () => Promise.resolve(),
         isArchived: () => Promise.resolve(false),
       },
@@ -715,6 +692,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
           { ...sessionRecord("active"), messageCount: 1, firstMessage: "hello", allMessagesText: "hello" },
           { ...sessionRecord("archived"), messageCount: 2, firstMessage: "bye", allMessagesText: "bye" },
         ]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -743,6 +721,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([{ ...sessionRecord("active"), messageCount: 1, firstMessage: "hello", allMessagesText: "hello" }]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -1018,6 +997,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
       sessionManager: {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([]),
+        listAll: () => Promise.resolve([]),
         open: () => fakeSessionManager(),
       },
       workspaceActivity: {

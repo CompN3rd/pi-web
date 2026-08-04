@@ -32,7 +32,7 @@ describe("session daemon settings config helpers", () => {
     expect(agentDirFieldOverridden({ ...baseOverrides, agentDir: true, agentDirSource: "pi-compatibility" }, "pi.exe")).toBe(true);
     expect(agentDirFieldOverridden({ ...baseOverrides, agentDir: true, agentDirSource: "pi-compatibility" }, "alternate-agent")).toBe(false);
     expect(agentDirFieldOverridden({ ...baseOverrides, agentDir: true, agentDirSource: "pi-web" }, "alternate-agent")).toBe(true);
-    expect(agentDirFieldOverridden({ ...baseOverrides, agentDir: true }, "alternate-agent")).toBe(true);
+    expect(agentDirFieldOverridden({ ...baseOverrides, agentDir: true }, "alternate-agent")).toBe(false);
   });
 
   it("does not leak the gateway agent directory source into a selected-machine response", () => {

@@ -4,10 +4,10 @@ import type { ServerPluginSafeStart } from "../../serverPluginRecovery.js";
 import type {
   JsonObject,
   JsonValue,
-  Workspace,
+  WorkspaceListing,
+  WorkspaceProviderAuthorityResolution,
   WorkspaceProviderDiagnostic,
   WorkspaceProviderDiagnosticCode,
-  WorkspaceProviderResolution,
   WorkspaceProviderResolutionStatus,
   WorkspaceProviderTier,
 } from "../../shared/apiTypes.js";
@@ -36,16 +36,16 @@ const WORKSPACE_CATALOG_PATH = "/workspace-catalog";
 export class SessionDaemonWorkspaceCatalog implements WorkspaceCatalog {
   constructor(private readonly daemon: SessionDaemonRequestClient) {}
 
-  async resolveProject(projectId: string): Promise<WorkspaceProviderResolution> {
+  async resolveProject(projectId: string): Promise<WorkspaceProviderAuthorityResolution> {
     const value = await this.requestJson(`${WORKSPACE_CATALOG_PATH}/projects/${encodedId(projectId, "project")}/workspaces`);
     return parseWorkspaceProviderResolution(value, projectId);
   }
 
-  async list(projectId: string): Promise<Workspace[]> {
+  async list(projectId: string): Promise<WorkspaceListing[]> {
     return [...(await this.resolveProject(projectId)).workspaces];
   }
 
-  async resolve(projectId: string, workspaceId: string): Promise<Workspace> {
+  async resolve(projectId: string, workspaceId: string): Promise<WorkspaceListing> {
     const value = await this.requestJson(
       `${WORKSPACE_CATALOG_PATH}/projects/${encodedId(projectId, "project")}/workspaces/${encodedId(workspaceId, "workspace")}`,
     );
@@ -93,7 +93,7 @@ export class SessionDaemonWorkspaceCatalog implements WorkspaceCatalog {
   }
 }
 
-function parseWorkspaceProviderResolution(value: unknown, expectedProjectId: string): WorkspaceProviderResolution {
+function parseWorkspaceProviderResolution(value: unknown, expectedProjectId: string): WorkspaceProviderAuthorityResolution {
   if (!isRecord(value)) throw protocolError("workspace resolution response must be an object");
   const status = parseWorkspaceProviderResolutionStatus(value["status"]);
   const projectId = requireString(value, "projectId", "workspace resolution response");
@@ -165,7 +165,7 @@ function parsePluginIds(value: unknown, label: string): string[] {
   });
 }
 
-function parseWorkspaceList(value: unknown, projectId: string): Workspace[] {
+function parseWorkspaceList(value: unknown, projectId: string): WorkspaceListing[] {
   if (!Array.isArray(value) || value.length === 0) throw protocolError("workspace list must be a non-empty array");
   const ids = new Set<string>();
   const paths = new Set<string>();
@@ -183,7 +183,7 @@ function parseWorkspaceList(value: unknown, projectId: string): Workspace[] {
   return workspaces;
 }
 
-function parseWorkspace(value: unknown, label: string): Workspace {
+function parseWorkspace(value: unknown, label: string): WorkspaceListing {
   if (!isRecord(value)) throw protocolError(`${label} must be an object`);
   const path = requireString(value, "path", label);
   if (!isAbsolute(path)) throw protocolError(`${label} path must be absolute`);
@@ -197,14 +197,12 @@ function parseWorkspace(value: unknown, label: string): Workspace {
     label: requireString(value, "label", label),
     ...(branch === undefined ? {} : { branch }),
     isMain: requireBoolean(value, "isMain", label),
-    isGitRepo: requireBoolean(value, "isGitRepo", label),
-    isGitWorktree: requireBoolean(value, "isGitWorktree", label),
     ...(provider === undefined ? {} : { provider }),
     ...(removal === undefined ? {} : { removal }),
   };
 }
 
-function parseProvider(value: unknown, workspaceLabel: string): NonNullable<Workspace["provider"]> {
+function parseProvider(value: unknown, workspaceLabel: string): NonNullable<WorkspaceListing["provider"]> {
   const label = `${workspaceLabel} provider`;
   if (!isRecord(value)) throw protocolError(`${label} must be an object`);
   const capabilities = value["capabilities"];
@@ -220,7 +218,7 @@ function parseProvider(value: unknown, workspaceLabel: string): NonNullable<Work
   };
 }
 
-function parseRemoval(value: unknown, workspaceLabel: string): NonNullable<Workspace["removal"]> {
+function parseRemoval(value: unknown, workspaceLabel: string): NonNullable<WorkspaceListing["removal"]> {
   const label = `${workspaceLabel} removal`;
   if (!isRecord(value)) throw protocolError(`${label} must be an object`);
   return {

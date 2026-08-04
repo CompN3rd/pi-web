@@ -36,9 +36,10 @@ function panelContext(machineId: string, projectId: string, workspaceId: string)
   const noop = () => undefined;
   return {
     machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
-    workspace: { id: workspaceId, projectId, path: "/repo", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false },
+    workspace: { id: workspaceId, projectId, path: "/repo", label: "main", isMain: true },
     files: {
       readFile: () => Promise.reject(new Error("not implemented")),
+      listFiles: () => Promise.reject(new Error("not implemented")),
       writeFile: () => Promise.reject(new Error("not implemented")),
       deleteFile: () => Promise.reject(new Error("not implemented")),
       moveFile: () => Promise.reject(new Error("not implemented")),

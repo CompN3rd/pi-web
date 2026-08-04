@@ -94,12 +94,7 @@ class GitUiController {
   constructor(private readonly route: GitDiffRoute) {}
 
   isOwnedWorkspace(workspace: Workspace | undefined): boolean {
-    if (workspace === undefined) return false;
-    if (workspace.provider !== undefined) return workspace.provider.pluginId === GIT_PROVIDER_ID;
-    // Browser-v1 compatibility for an older workspace payload. New providers
-    // use `provider.pluginId`; a declared non-Git owner always wins above.
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
-    return workspace.isGitRepo;
+    return workspace?.provider?.pluginId === GIT_PROVIDER_ID;
   }
 
   state(context: WorkspacePanelContext): GitWorkspaceUiState {

@@ -16,6 +16,7 @@ import { registerSessionRoutes } from "./sessions/sessionRoutes.js";
 import { SessionNotificationStore } from "./sessions/sessionNotificationStore.js";
 import { FileSessionUnreadPersistence, SessionUnreadStore } from "./sessions/sessionUnreadStore.js";
 import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver.js";
+import { RegisteredProjectWorkspaceCwds } from "./workspaces/projectWorkspaceCwds.js";
 import { ProjectService } from "./projects/projectService.js";
 import { ProjectStore } from "./storage/projectStore.js";
 import {
@@ -34,7 +35,6 @@ import { PiWebPluginCatalog } from "./piWebPluginCatalog.js";
 import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
 import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
 import { runSessionDaemonShutdown } from "./sessiond/sessionDaemonShutdown.js";
-import { runSessionDaemonStartup } from "./sessiond/sessionDaemonStartup.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
 import { registerWorkspaceCatalogRoutes } from "./sessiond/workspaceCatalogRoutes.js";
 import { registerPluginBackendRoutes } from "./sessiond/pluginBackendRoutes.js";
@@ -89,164 +89,182 @@ async function requestShutdown(signal: NodeJS.Signals): Promise<void> {
 process.once("SIGINT", (signal) => { void requestShutdown(signal); });
 process.once("SIGTERM", (signal) => { void requestShutdown(signal); });
 
-await runSessionDaemonStartup({
-  logger: app.log,
-  async createRuntime() {
-    const serverPlugins = await createServerPluginRuntime({
-      catalog: serverPluginCatalog,
-      ...(serverPluginRecovery.safeStart === undefined ? {} : { safeStart: serverPluginRecovery.safeStart }),
-      logger: app.log,
-      execFile: createServerPluginExecFile({ env: daemonEnvironment }),
-    });
-    try {
-      const eventHub = new SessionEventHub();
-      const notificationStore = new SessionNotificationStore();
-      const unreadStore = new SessionUnreadStore({
-        persistence: new FileSessionUnreadPersistence(),
-        onPersistenceError(operation, error) {
-          app.log.error({ err: error, operation }, "session unread persistence failed");
-        },
-      });
-      await unreadStore.load();
-      const workspaceActivity = new WorkspaceActivityService(eventHub);
-      const auth = await AuthService.create({ agentDir: activeAgentProfile.dir, logger: app.log });
-      // Capture providers registered by global extensions while the runtime is
-      // still mutable, then freeze every later extension-provider mutation before
-      // any real session can load project resources.
-      await bootstrapAndFreezeGlobalExtensionProviders(auth.runtime, activeAgentProfile.dir, app.log);
-      // The shared model runtime is constructed offline so request paths never
-      // wait on provider-catalog fetches; this is the single bounded network
-      // refresher, and auth changes (login/logout) ask it for a prompt run. It
-      // stays fully inert when the operator asked for offline behavior.
-      const catalogRefresher = new ModelCatalogRefresher({
-        runtime: auth.runtime,
-        logger: app.log,
-        offline: offlineModeEnabled(daemonEnvironment),
-      });
-      catalogRefresher.start();
-      auth.subscribe(() => { catalogRefresher.requestRefresh(); });
-      const projects = new ProjectService(new ProjectStore());
-      const providerHealth = await serverPlugins.inspectHealth();
-      const workspaceProviders = new WorkspaceProviderRegistry({
-        contributions: eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth),
-        logger: app.log,
-      });
-      const workspaceProviderRuntime = createWorkspaceProviderRuntimeSnapshot(
-        serverPlugins.healthRecords(),
-        providerHealth,
-        serverPlugins.safeStartLevel(),
-        serverPlugins.catalogDiagnostics(),
-      );
-      const spawnTargets = config.spawnSessions
-        ? new ProjectScopedSpawnTargetResolver({ projects, workspaces: workspaceProviders })
-        : undefined;
-      const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
-        modelRuntime: auth.runtime,
-        agentDir: activeAgentProfile.dir,
-        workspaceActivity,
-        logger: app.log,
-        ...(spawnTargets === undefined ? {} : { spawnTargets }),
-        subsessionsEnabled: config.subsessions,
-        askUserEnabled: config.askUser,
-        notificationStore,
-        unreadStore,
-        catalogRefreshStatus: catalogRefresher,
-        sessionManager: createPiSessionManagerGateway({
-          agentDir: activeAgentProfile.dir,
-          env: daemonEnvironment,
-          sessionDirEnvKeys: activeAgentProfile.sessionDirEnvKeys,
-        }),
-      }));
-      auth.subscribe((change) => { sessions.applyAuthChange(change); });
-      const terminals = new TerminalService(eventHub, workspaceActivity);
-      const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals);
-      const runtimeComponent = Object.freeze({
-        ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES),
-        activeAgentProfile,
-      });
-      let disposed = false;
-      const shutdown = async (): Promise<void> => {
-        if (disposed) return;
-        disposed = true;
-        await runSessionDaemonShutdown({
-          logger: app.log,
-          dependencies: {
-            quiesceServer: () => { serverQuiescing = true; },
-            serverPlugins,
-            terminals,
-            catalogRefresher,
-            auth,
-            sessions,
-            unreadStore,
-            closeServer: () => app.close(),
-          },
-          onFailure: () => { process.exitCode = 1; },
-        });
-      };
-      return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals, shutdown };
-    } catch (error) {
-      try {
-        await serverPlugins.stop();
-      } catch (disposeError) {
-        app.log.error({ err: disposeError }, "session daemon construction failed and server plugin disposal was incomplete");
-      }
-      throw error;
-    }
-  },
-  registerRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals }) {
-    registerWorkspaceActivityRoutes(app, workspaceActivity);
-    registerAuthRoutes(app, auth);
-    registerSessionRoutes(app, sessions, eventHub);
-    registerTerminalRoutes(app, terminals);
-    registerWorkspaceCatalogRoutes(app, {
-      projects,
-      workspaces: workspaceProviders,
-      providerRuntime: workspaceProviderRuntime,
-    });
-    registerPluginBackendRoutes(app, {
-      projects,
-      backends: workspaceProviders,
-    });
-    registerWorkspaceRemovalRoutes(app, {
-      projects,
-      removals: workspaceRemovals,
-    });
+const runtime = await createSessionDaemonRuntime();
+try {
+  registerSessionDaemonRoutes(runtime);
+  await listenSessionDaemon(runtime);
+} catch (error) {
+  try {
+    await runtime.shutdown();
+  } catch (disposeError) {
+    app.log.error({ err: disposeError }, "session daemon startup failed and runtime disposal was incomplete");
+  }
+  throw error;
+}
 
-    app.get("/health", () => ({
-      ok: true,
-      activeSessions: sessions.activeCount(),
-      checkedAt: new Date().toISOString(),
-      version: {
-        component: runtimeComponent.component,
-        label: runtimeComponent.label,
-        ...(runtimeComponent.runtimeVersion === undefined ? {} : { runtimeVersion: runtimeComponent.runtimeVersion }),
-        stale: false,
-        available: runtimeComponent.available,
+type SessionDaemonRuntime = Awaited<ReturnType<typeof createSessionDaemonRuntime>>;
+
+async function createSessionDaemonRuntime() {
+  const serverPlugins = await createServerPluginRuntime({
+    catalog: serverPluginCatalog,
+    ...(serverPluginRecovery.safeStart === undefined ? {} : { safeStart: serverPluginRecovery.safeStart }),
+    logger: app.log,
+    execFile: createServerPluginExecFile({ env: daemonEnvironment }),
+  });
+  try {
+    const eventHub = new SessionEventHub();
+    const notificationStore = new SessionNotificationStore();
+    const unreadStore = new SessionUnreadStore({
+      persistence: new FileSessionUnreadPersistence(),
+      onPersistenceError(operation, error) {
+        app.log.error({ err: error, operation }, "session unread persistence failed");
       },
+    });
+    await unreadStore.load();
+    const workspaceActivity = new WorkspaceActivityService(eventHub);
+    const auth = await AuthService.create({ agentDir: activeAgentProfile.dir, logger: app.log });
+    // Capture providers registered by global extensions while the runtime is
+    // still mutable, then freeze every later extension-provider mutation before
+    // any real session can load project resources.
+    await bootstrapAndFreezeGlobalExtensionProviders(auth.runtime, activeAgentProfile.dir, app.log);
+    // The shared model runtime is constructed offline so request paths never
+    // wait on provider-catalog fetches; this is the single bounded network
+    // refresher, and auth changes (login/logout) ask it for a prompt run. It
+    // stays fully inert when the operator asked for offline behavior.
+    const catalogRefresher = new ModelCatalogRefresher({
+      runtime: auth.runtime,
+      logger: app.log,
+      offline: offlineModeEnabled(daemonEnvironment),
+    });
+    catalogRefresher.start();
+    auth.subscribe(() => { catalogRefresher.requestRefresh(); });
+    const projects = new ProjectService(new ProjectStore());
+    const providerHealth = await serverPlugins.inspectHealth();
+    const workspaceProviders = new WorkspaceProviderRegistry({
+      contributions: eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth),
+      logger: app.log,
+    });
+    const workspaceProviderRuntime = createWorkspaceProviderRuntimeSnapshot(
+      serverPlugins.healthRecords(),
+      providerHealth,
+      serverPlugins.safeStartLevel(),
+      serverPlugins.catalogDiagnostics(),
+    );
+    // Cross-workspace session relationships are reported regardless of whether
+    // agents may spawn sessions: children can predate a config change, and the
+    // session tree should stay honest about them either way.
+    const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
+    const projectWorkspaces = new RegisteredProjectWorkspaceCwds(projectWorkspaceDeps);
+    const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
+    const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
+      modelRuntime: auth.runtime,
+      agentDir: activeAgentProfile.dir,
+      workspaceActivity,
+      logger: app.log,
+      ...(spawnTargets === undefined ? {} : { spawnTargets }),
+      projectWorkspaces,
+      subsessionsEnabled: config.subsessions,
+      askUserEnabled: config.askUser,
+      extensionDialogsTimeoutMs: config.extensionDialogsTimeoutMs,
+      notificationStore,
+      unreadStore,
+      catalogRefreshStatus: catalogRefresher,
+      sessionManager: createPiSessionManagerGateway({
+        agentDir: activeAgentProfile.dir,
+        env: daemonEnvironment,
+        sessionDirEnvKeys: activeAgentProfile.sessionDirEnvKeys,
+      }),
     }));
-
-    app.get("/runtime", () => runtimeComponent);
-  },
-  async listen({ shutdown }) {
-    runtimeShutdown = shutdown;
-    if (pendingShutdownSignal !== undefined) {
-      await requestShutdown(pendingShutdownSignal);
-      return;
+    auth.subscribe((change) => { sessions.applyAuthChange(change); });
+    const terminals = new TerminalService(eventHub, workspaceActivity);
+    const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals);
+    const runtimeComponent = Object.freeze({
+      ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES),
+      activeAgentProfile,
+    });
+    let disposed = false;
+    const shutdown = async (): Promise<void> => {
+      if (disposed) return;
+      disposed = true;
+      await runSessionDaemonShutdown({
+        logger: app.log,
+        dependencies: {
+          quiesceServer: () => { serverQuiescing = true; },
+          serverPlugins,
+          terminals,
+          catalogRefresher,
+          auth,
+          sessions,
+          unreadStore,
+          closeServer: () => app.close(),
+        },
+        onFailure: () => { process.exitCode = 1; },
+      });
+    };
+    return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals, shutdown };
+  } catch (error) {
+    try {
+      await serverPlugins.stop();
+    } catch (disposeError) {
+      app.log.error({ err: disposeError }, "session daemon construction failed and server plugin disposal was incomplete");
     }
+    throw error;
+  }
+}
 
-    const portValue = daemonEnvironment["PI_WEB_SESSIOND_PORT"];
-    const port = portValue !== undefined && portValue !== "" ? Number(portValue) : undefined;
-    const host = daemonEnvironment["PI_WEB_SESSIOND_HOST"] ?? "127.0.0.1";
+function registerSessionDaemonRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+  registerWorkspaceActivityRoutes(app, workspaceActivity);
+  registerAuthRoutes(app, auth);
+  registerSessionRoutes(app, sessions, eventHub);
+  registerTerminalRoutes(app, terminals);
+  registerWorkspaceCatalogRoutes(app, {
+    projects,
+    workspaces: workspaceProviders,
+    providerRuntime: workspaceProviderRuntime,
+  });
+  registerPluginBackendRoutes(app, {
+    projects,
+    backends: workspaceProviders,
+  });
+  registerWorkspaceRemovalRoutes(app, {
+    projects,
+    removals: workspaceRemovals,
+  });
 
-    if (port !== undefined) {
-      await app.listen({ port, host });
-    } else {
-      const path = sessiondSocketPath();
-      await mkdir(dirname(path), { recursive: true });
-      await rm(path, { force: true });
-      await app.listen({ path });
-      process.on("exit", () => void rm(path, { force: true }));
-    }
-  },
-  disposeRuntime: (runtime) => runtime.shutdown(),
-});
+  app.get("/health", () => ({
+    ok: true,
+    activeSessions: sessions.activeCount(),
+    checkedAt: new Date().toISOString(),
+    version: {
+      component: runtimeComponent.component,
+      label: runtimeComponent.label,
+      ...(runtimeComponent.runtimeVersion === undefined ? {} : { runtimeVersion: runtimeComponent.runtimeVersion }),
+      stale: false,
+      available: runtimeComponent.available,
+    },
+  }));
+
+  app.get("/runtime", () => runtimeComponent);
+}
+
+async function listenSessionDaemon({ shutdown }: SessionDaemonRuntime): Promise<void> {
+  runtimeShutdown = shutdown;
+  if (pendingShutdownSignal !== undefined) {
+    await requestShutdown(pendingShutdownSignal);
+    return;
+  }
+
+  const portValue = daemonEnvironment["PI_WEB_SESSIOND_PORT"];
+  const port = portValue !== undefined && portValue !== "" ? Number(portValue) : undefined;
+  const host = daemonEnvironment["PI_WEB_SESSIOND_HOST"] ?? "127.0.0.1";
+
+  if (port !== undefined) {
+    await app.listen({ port, host });
+  } else {
+    const path = sessiondSocketPath();
+    await mkdir(dirname(path), { recursive: true });
+    await rm(path, { force: true });
+    await app.listen({ path });
+    process.on("exit", () => void rm(path, { force: true }));
+  }
+}

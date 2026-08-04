@@ -1,6 +1,6 @@
 import type { TemplateResult } from "lit";
 import type { AppAction } from "../actions";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeEntry, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, RunTerminalCommandInput, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeEntry, FileTreeResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, RunTerminalCommandInput, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { AppState } from "../appState";
 import type { SettingsSection } from "../settingsRoute";
 import type { LocalContributionId, PluginId, QualifiedContributionId } from "./ids";
@@ -57,6 +57,7 @@ export interface PluginMachine {
 
 export interface WorkspaceFiles {
   readFile(path: string): Promise<FileContentResponse>;
+  listFiles(path: string): Promise<FileTreeResponse>;
   writeFile(path: string, content: string | Uint8Array, options?: WriteWorkspaceFileOptions): Promise<WriteWorkspaceFileResponse>;
   deleteFile(path: string): Promise<DeleteWorkspaceFileResponse>;
   moveFile(fromPath: string, toPath: string, options?: MoveWorkspaceFileOptions): Promise<MoveWorkspaceFileResponse>;
@@ -126,8 +127,6 @@ export interface PluginRuntimeContext {
   refreshFiles: () => void | Promise<void>;
   /** Invalidate plugin workspace-panel data for the selected workspace. */
   refreshWorkspacePanels: (panelId?: QualifiedContributionId) => void | Promise<void>;
-  /** @deprecated Browser-v1 compatibility alias. Use `refreshWorkspacePanels()` or `WorkspacePanelContribution.onInvalidate`. */
-  refreshGit: () => void | Promise<void>;
   refreshAppData: () => void | Promise<void>;
   checkForPiWebUpdates?: () => void | Promise<void>;
   reloadPage: () => void;

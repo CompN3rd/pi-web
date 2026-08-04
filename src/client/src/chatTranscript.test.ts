@@ -12,12 +12,12 @@ const askUserOutcome: AskUserOutcome = {
   closedAt: "2026-07-20T10:05:00.000Z",
   questions: [
     {
-      question: { id: "editor", question: "Which editor?", options: [{ value: "vim", label: "Vim" }], allowOther: true },
+      question: { id: "editor", question: "Which editor?", options: [{ value: "vim", label: "Vim" }] },
       answered: true,
       values: ["vim"],
     },
     {
-      question: { id: "region", question: "Which region?", options: [{ value: "eu", label: "Europe" }], allowOther: true },
+      question: { id: "region", question: "Which region?", options: [{ value: "eu", label: "Europe" }] },
       answered: false,
       values: [],
     },

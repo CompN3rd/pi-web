@@ -14,8 +14,7 @@ const workspace: Workspace = {
   path: "/repo",
   label: "main",
   isMain: true,
-  isGitRepo: false,
-  isGitWorktree: false,
+  effectiveConfig: {},
 };
 
 beforeEach(() => {
@@ -28,25 +27,6 @@ afterEach(() => {
 });
 
 describe("PiWebApp plugin host", () => {
-  it("backs the deprecated refreshGit runtime field with generic panel invalidation", async () => {
-    const app = createApp();
-    setAppState(app, { ...initialAppState(), selectedWorkspace: workspace, workspaces: [workspace] });
-    const invalidated = vi.fn<(context: WorkspacePanelContext) => void>();
-    appPluginRegistry(app).register({
-      id: "browser-only",
-      plugin: pluginWithPanel("Browser only", invalidated),
-    });
-
-    const context = createPluginRuntimeContext(app);
-    // This compatibility contract intentionally exercises the deprecated field.
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
-    await context.refreshGit();
-
-    expect(invalidated).toHaveBeenCalledOnce();
-    expect(invalidated.mock.calls[0]?.[0].workspace).toBe(workspace);
-    expect(invalidated.mock.calls[0]?.[0].backend).toBeUndefined();
-  });
-
   it("routes selected-panel, route, activity, and refresh-current invalidation through the generic seam", async () => {
     const app = createApp();
     setAppState(app, {
@@ -196,7 +176,7 @@ async function ensureGatewayPluginsLoaded(app: PiWebApp): Promise<void> {
 
 function isPluginRuntimeContext(value: unknown): value is PluginRuntimeContext {
   if (typeof value !== "object" || value === null) return false;
-  return "refreshGit" in value && typeof value.refreshGit === "function";
+  return "refreshWorkspacePanels" in value && typeof value.refreshWorkspacePanels === "function";
 }
 
 function stubPluginLoadRendering(app: PiWebApp): void {

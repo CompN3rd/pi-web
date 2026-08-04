@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Project } from "../types.js";
-import type { WorkspaceProviderResolution } from "../workspaces/workspaceProviderRegistry.js";
+import type { WorkspaceProviderAuthorityResolution } from "../workspaces/workspaceProviderRegistry.js";
 import type { WorkspaceProviderRuntimeSnapshot } from "../workspaces/workspaceCatalog.js";
 
 export interface WorkspaceCatalogProjectReader {
@@ -8,7 +8,7 @@ export interface WorkspaceCatalogProjectReader {
 }
 
 export interface WorkspaceCatalogResolver {
-  resolve(project: Project): Promise<WorkspaceProviderResolution>;
+  resolve(project: Project): Promise<WorkspaceProviderAuthorityResolution>;
 }
 
 export interface WorkspaceCatalogRouteDependencies {

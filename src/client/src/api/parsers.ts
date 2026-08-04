@@ -1,4 +1,4 @@
-import { PI_WEB_PLUGIN_LIFECYCLE_VERSION, ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceActivity, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
+import { PI_WEB_PLUGIN_LIFECYCLE_VERSION, ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_ID_MAX_LENGTH, EXTENSION_DIALOG_INPUT_MAX_LENGTH, EXTENSION_DIALOG_OPTION_LIMIT, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type PendingExtensionDialog, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type ExtensionDialogAnswer, type ExtensionDialogCloseReason, type ExtensionDialogCloseResponse, type ExtensionDialogKind, type ExtensionDialogOutcome, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type GlobalSessionEvent, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionUiEvent, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type TerminalUiEvent, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceEffectiveConfig, type WorkspaceActivity, type WorkspaceActivityUiEvent, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
 import type { JsonValue, PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot, WorkspaceProviderDiagnostic, WorkspaceProviderDiagnosticCode, WorkspaceProviderResolution, WorkspaceProviderResolutionStatus, WorkspaceProviderTier } from "../../../shared/apiTypes";
 import { parseActiveAgentProfileDescriptor } from "../../../shared/activeAgentProfile";
 import { parseKnownPiWebCapabilities } from "../../../shared/capabilities";
@@ -56,7 +56,6 @@ function arrayOfString(value: unknown, key: string): string[] {
 }
 
 export function parseMessagePage(value: unknown): MessagePage {
-  if (Array.isArray(value)) return { messages: value, start: 0, total: value.length };
   const record = requireRecord(value);
   return { messages: parseUnknownArray(record["messages"]), start: requireNumber(record, "start"), total: requireNumber(record, "total") };
 }
@@ -142,11 +141,9 @@ export function parseWorkspace(value: unknown): Workspace {
     label: requireString(record, "label"),
     ...(branch === undefined ? {} : { branch }),
     isMain: requireBoolean(record, "isMain"),
-    isGitRepo: requireBoolean(record, "isGitRepo"),
-    isGitWorktree: requireBoolean(record, "isGitWorktree"),
     ...optionalField("provider", optionalWorkspaceProviderMetadata(record["provider"])),
     ...optionalField("removal", optionalWorkspaceRemovalPresentation(record["removal"])),
-    ...optionalField("effectiveConfig", optionalWorkspaceEffectiveConfig(record["effectiveConfig"])),
+    effectiveConfig: requireWorkspaceEffectiveConfig(record["effectiveConfig"]),
   };
 }
 
@@ -240,9 +237,8 @@ function parseJsonValue(value: unknown, field: string): JsonValue {
   throw new Error(`Invalid ${field} field`);
 }
 
-function optionalWorkspaceEffectiveConfig(value: unknown): Workspace["effectiveConfig"] | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid workspace effectiveConfig field");
+function requireWorkspaceEffectiveConfig(value: unknown): WorkspaceEffectiveConfig {
+  if (!isRecord(value) || Array.isArray(value)) throw new Error("Expected workspace effectiveConfig field");
   return {
     ...optionalField("uploads", optionalUploads(value["uploads"])),
   };
@@ -253,6 +249,9 @@ export function parseSessionInfo(value: unknown): SessionInfo {
   const name = optionalString(record, "name");
   const persisted = parseOptionalBoolean(record["persisted"], "persisted");
   const parentSessionPath = optionalString(record, "parentSessionPath");
+  const parentSessionCwd = optionalString(record, "parentSessionCwd");
+  const parentSessionId = optionalString(record, "parentSessionId");
+  const childSessionsElsewhere = parseOptionalCount(record["childSessionsElsewhere"], "childSessionsElsewhere");
   const archivedAt = optionalString(record, "archivedAt");
   return {
     id: requireString(record, "id"),
@@ -265,6 +264,9 @@ export function parseSessionInfo(value: unknown): SessionInfo {
     messageCount: requireNumber(record, "messageCount"),
     firstMessage: requireString(record, "firstMessage"),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
+    ...(parentSessionCwd === undefined ? {} : { parentSessionCwd }),
+    ...(parentSessionId === undefined ? {} : { parentSessionId }),
+    ...(childSessionsElsewhere === undefined ? {} : { childSessionsElsewhere }),
     ...(record["archived"] === true ? { archived: true } : {}),
     ...(archivedAt === undefined ? {} : { archivedAt }),
   };
@@ -311,16 +313,12 @@ function parseAskUserQuestion(value: unknown): AskUserQuestion {
   const record = requireRecord(value);
   const options = boundedArrayOf(record["options"], parseAskUserQuestionOption, ASK_USER_OPTION_LIMIT, "options");
   assertUniqueStrings(options.map((option) => option.value), "ask option value");
-  // Validate the legacy wire field when present, but normalize every question to
-  // the current invariant: the browser always offers a custom answer.
-  parseOptionalBoolean(record["allowOther"], "allowOther");
   const multiple = parseOptionalBoolean(record["multiple"], "multiple");
   return {
     id: requireBoundedNonEmptyString(record, "id", ASK_USER_ID_MAX_LENGTH),
     question: requireBoundedNonEmptyString(record, "question", ASK_USER_TEXT_MAX_LENGTH),
     ...optionalField("detail", optionalBoundedNonEmptyString(record, "detail", ASK_USER_TEXT_MAX_LENGTH)),
     options,
-    allowOther: true,
     ...(multiple === undefined ? {} : { multiple }),
   };
 }
@@ -419,8 +417,124 @@ export function parseAskUserCloseResponse(value: unknown): AskUserCloseResponse 
   };
 }
 
+export function parseExtensionDialogCloseResponse(value: unknown): ExtensionDialogCloseResponse {
+  const record = requireRecord(value);
+  const result = record["result"];
+  if (result !== "closed" && result !== "stale") throw new Error("Invalid dialog close result");
+  const outcome = record["outcome"] === undefined ? undefined : parseExtensionDialogOutcome(record["outcome"]);
+  // Only the call that actually closed the dialog carries an outcome; a stale
+  // close reports none and is trusted for the session status alone.
+  if ((result === "closed") !== (outcome !== undefined)) throw new Error("Dialog close response outcome mismatch");
+  return {
+    result,
+    ...(outcome === undefined ? {} : { outcome }),
+    sessionStatus: parseSessionStatus(record["sessionStatus"]),
+  };
+}
+
 function assertUniqueStrings(values: readonly string[], label: string): void {
   if (new Set(values).size !== values.length) throw new Error(`Duplicate ${label}`);
+}
+
+function parseExtensionDialogKind(value: unknown): ExtensionDialogKind {
+  if (value !== "confirm" && value !== "select" && value !== "input") throw new Error("Invalid extension dialog kind");
+  return value;
+}
+
+function parseExtensionDialogCloseReason(value: unknown): ExtensionDialogCloseReason {
+  if (value !== "answered" && value !== "cancelled" && value !== "timeout" && value !== "aborted" && value !== "session-ended") {
+    throw new Error("Invalid extension dialog close reason");
+  }
+  return value;
+}
+
+function parseExtensionDialogAnswer(value: unknown): ExtensionDialogAnswer {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string" && value.length <= EXTENSION_DIALOG_INPUT_MAX_LENGTH) return value;
+  throw new Error("Invalid extension dialog answer");
+}
+
+function parseExtensionDialogOption(value: unknown): string {
+  const option = parseNonEmptyString(value);
+  if (option.length > EXTENSION_DIALOG_TEXT_MAX_LENGTH) throw new Error("String field exceeds limit: option");
+  return option;
+}
+
+/**
+ * Validate one open extension dialog. A malformed dialog must be dropped rather
+ * than rendered: the card parks an extension's blocking wait on the user's
+ * answer, so a choice list or prompt the daemon did not really send must never
+ * appear.
+ */
+function parsePendingExtensionDialog(value: unknown): PendingExtensionDialog {
+  const record = requireRecord(value);
+  const kind = parseExtensionDialogKind(record["kind"]);
+  const options = record["options"] === undefined
+    ? undefined
+    : boundedArrayOf(record["options"], parseExtensionDialogOption, EXTENSION_DIALOG_OPTION_LIMIT, "options");
+  if (options !== undefined) assertUniqueStrings(options, "dialog option");
+  if (kind === "select" && (options === undefined || options.length === 0)) throw new Error("Select dialog has no options");
+  return {
+    dialogId: requireBoundedNonEmptyString(record, "dialogId", EXTENSION_DIALOG_ID_MAX_LENGTH),
+    kind,
+    title: requireBoundedNonEmptyString(record, "title", EXTENSION_DIALOG_TEXT_MAX_LENGTH),
+    ...optionalField("message", optionalBoundedNonEmptyString(record, "message", EXTENSION_DIALOG_TEXT_MAX_LENGTH)),
+    ...(options === undefined ? {} : { options }),
+    ...optionalField("placeholder", optionalBoundedNonEmptyString(record, "placeholder", EXTENSION_DIALOG_TEXT_MAX_LENGTH)),
+    askedAt: requireNonEmptyString(record, "askedAt"),
+    ...optionalField("timeoutAt", optionalNonEmptyString(record, "timeoutAt")),
+    runScoped: requireBoolean(record, "runScoped"),
+  };
+}
+
+function optionalPendingDialogs(value: unknown): Pick<SessionStatus, "pendingDialogs"> | object {
+  if (value === undefined) return {};
+  const dialogs = arrayOf(parsePendingExtensionDialog)(value);
+  assertUniqueStrings(dialogs.map((dialog) => dialog.dialogId), "dialog id");
+  return { pendingDialogs: dialogs };
+}
+
+export function parseSessionDialogOpenedEvent(value: unknown): { type: "dialog.opened"; dialog: PendingExtensionDialog } {
+  const record = requireRecord(value);
+  if (record["type"] !== "dialog.opened") throw new Error("Invalid dialog opened event type");
+  return { type: "dialog.opened", dialog: parsePendingExtensionDialog(record["dialog"]) };
+}
+
+export function parseSessionDialogClosedEvent(value: unknown): { type: "dialog.closed"; dialogId: string; reason: ExtensionDialogCloseReason; answer?: ExtensionDialogAnswer } {
+  const record = requireRecord(value);
+  if (record["type"] !== "dialog.closed") throw new Error("Invalid dialog closed event type");
+  const reason = parseExtensionDialogCloseReason(record["reason"]);
+  const answer = record["answer"] === undefined ? undefined : parseExtensionDialogAnswer(record["answer"]);
+  // Only an answered close carries a value; any other combination cannot be
+  // rendered honestly as the dialog's result.
+  if ((reason === "answered") !== (answer !== undefined)) throw new Error("Dialog closed event answer mismatch");
+  return {
+    type: "dialog.closed",
+    dialogId: requireBoundedNonEmptyString(record, "dialogId", EXTENSION_DIALOG_ID_MAX_LENGTH),
+    reason,
+    ...(answer === undefined ? {} : { answer }),
+  };
+}
+
+export function parseExtensionDialogOutcome(value: unknown): ExtensionDialogOutcome {
+  const record = requireRecord(value);
+  const reason = parseExtensionDialogCloseReason(record["reason"]);
+  const answer = record["answer"] === undefined ? undefined : parseExtensionDialogAnswer(record["answer"]);
+  if ((reason === "answered") !== (answer !== undefined)) throw new Error("Dialog outcome answer mismatch");
+  return {
+    dialogId: requireBoundedNonEmptyString(record, "dialogId", EXTENSION_DIALOG_ID_MAX_LENGTH),
+    reason,
+    ...(answer === undefined ? {} : { answer }),
+    askedAt: requireNonEmptyString(record, "askedAt"),
+    closedAt: requireNonEmptyString(record, "closedAt"),
+  };
+}
+
+function optionalNonEmptyString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = optionalString(record, key);
+  if (value === undefined) return undefined;
+  if (value === "") throw new Error(`Expected non-empty string field: ${key}`);
+  return value;
 }
 
 export function parseSessionStatus(value: unknown): SessionStatus {
@@ -441,6 +555,7 @@ export function parseSessionStatus(value: unknown): SessionStatus {
     ...optionalField("thinkingLevel", optionalString(record, "thinkingLevel")),
     ...optionalWarnings(record["warnings"]),
     ...optionalPendingAsk(record["pendingAsk"]),
+    ...optionalPendingDialogs(record["pendingDialogs"]),
   };
 }
 
@@ -539,6 +654,160 @@ function requireSessionActivityPhase(record: Record<string, unknown>, key: strin
   const value = requireString(record, key);
   if (value !== "active" && value !== "idle" && value !== "error") throw new Error(`Expected session activity phase field: ${key}`);
   return value;
+}
+
+/**
+ * Socket stream frame validation. The session and realtime sockets accept only
+ * the frame types validated here: these frames render transcript content,
+ * status, and workspace state straight into the UI, so a malformed frame must
+ * be dropped at the socket boundary rather than trusted on its type name
+ * alone. Each validator rebuilds the event from checked fields only, so stray
+ * fields do not pass the boundary either.
+ */
+export function parseSessionStreamEvent(value: unknown): SessionUiEvent {
+  const record = requireRecord(value);
+  switch (record["type"]) {
+    case "message.append":
+      // The message payload is a projected Pi message; only its presence is
+      // guaranteed at this boundary.
+      return { type: "message.append", message: requirePresent(record, "message") };
+    case "assistant.delta":
+      return { type: "assistant.delta", text: requireString(record, "text") };
+    case "assistant.thinking.delta":
+      return { type: "assistant.thinking.delta", text: requireString(record, "text") };
+    case "tool.start":
+      return {
+        type: "tool.start",
+        toolName: requireString(record, "toolName"),
+        toolCallId: requireString(record, "toolCallId"),
+        summary: requireString(record, "summary"),
+        ...optionalField("args", record["args"]),
+      };
+    case "tool.update":
+      return {
+        type: "tool.update",
+        toolName: requireString(record, "toolName"),
+        toolCallId: requireString(record, "toolCallId"),
+        text: requireString(record, "text"),
+        ...optionalField("content", record["content"]),
+        ...optionalField("details", record["details"]),
+      };
+    case "tool.end":
+      return {
+        type: "tool.end",
+        toolName: requireString(record, "toolName"),
+        toolCallId: requireString(record, "toolCallId"),
+        text: requireString(record, "text"),
+        isError: requireBoolean(record, "isError"),
+        ...optionalField("content", record["content"]),
+        ...optionalField("details", record["details"]),
+      };
+    case "shell.start":
+      return {
+        type: "shell.start",
+        command: requireString(record, "command"),
+        ...optionalField("excludeFromContext", parseOptionalBoolean(record["excludeFromContext"], "excludeFromContext")),
+      };
+    case "shell.chunk":
+      return { type: "shell.chunk", chunk: requireString(record, "chunk") };
+    case "shell.end":
+      return {
+        type: "shell.end",
+        ...optionalField("output", optionalString(record, "output")),
+        ...optionalField("exitCode", optionalNumberOrNull(record, "exitCode")),
+        ...optionalField("cancelled", parseOptionalBoolean(record["cancelled"], "cancelled")),
+        ...optionalField("truncated", parseOptionalBoolean(record["truncated"], "truncated")),
+        ...optionalField("fullOutputPath", optionalString(record, "fullOutputPath")),
+        ...optionalField("isError", parseOptionalBoolean(record["isError"], "isError")),
+      };
+    case "agent.start":
+      return { type: "agent.start" };
+    case "agent.end":
+      return { type: "agent.end" };
+    case "message.end":
+      return { type: "message.end", ...optionalField("message", record["message"]) };
+    case "status.update":
+      return { type: "status.update", status: parseSessionStatus(record["status"]) };
+    case "activity.update":
+      return { type: "activity.update", activity: parseSessionActivity(record["activity"]) };
+    case "command.output":
+      return parseCommandOutputEvent(record);
+    case "session.error":
+      return { type: "session.error", message: requireString(record, "message") };
+    case "session.name":
+      return parseSessionNameEvent(record);
+    case "session.created":
+      return { type: "session.created", session: parseSessionInfo(record["session"]) };
+    case "pi.event":
+      return { type: "pi.event", eventType: requireString(record, "eventType") };
+    default:
+      throw new Error("Unsupported session stream event type");
+  }
+}
+
+type RealtimeStreamEvent =
+  | Extract<GlobalSessionEvent, { type: "status.update" | "activity.update" | "session.name" | "session.created" }>
+  | TerminalUiEvent
+  | WorkspaceActivityUiEvent;
+
+export function parseRealtimeStreamEvent(value: unknown): RealtimeStreamEvent {
+  const record = requireRecord(value);
+  switch (record["type"]) {
+    case "status.update":
+      return { type: "status.update", status: parseSessionStatus(record["status"]) };
+    case "activity.update":
+      return { type: "activity.update", activity: parseSessionActivity(record["activity"]) };
+    case "session.name":
+      return parseSessionNameEvent(record);
+    case "session.created":
+      return { type: "session.created", session: parseSessionInfo(record["session"]) };
+    case "terminal.created":
+      return { type: "terminal.created", terminal: parseTerminalInfo(record["terminal"]) };
+    case "terminal.exited":
+      return { type: "terminal.exited", terminal: parseTerminalInfo(record["terminal"]) };
+    case "terminal.closed":
+      return {
+        type: "terminal.closed",
+        terminalId: requireNonEmptyString(record, "terminalId"),
+        cwd: requireNonEmptyString(record, "cwd"),
+      };
+    case "workspace.activity":
+      return { type: "workspace.activity", activity: parseWorkspaceActivity(record["activity"]) };
+    default:
+      throw new Error("Unsupported realtime stream event type");
+  }
+}
+
+function requirePresent(record: Record<string, unknown>, key: string): unknown {
+  const value = record[key];
+  if (value === undefined) throw new Error(`Expected field: ${key}`);
+  return value;
+}
+
+function optionalNumberOrNull(record: Record<string, unknown>, key: string): number | null | undefined {
+  const value = record[key];
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "number") throw new Error(`Expected optional number|null field: ${key}`);
+  return value;
+}
+
+function parseCommandOutputEvent(record: Record<string, unknown>): Extract<SessionUiEvent, { type: "command.output" }> {
+  const level = requireString(record, "level");
+  if (level !== "info" && level !== "success" && level !== "error") throw new Error("Invalid command output level");
+  return {
+    type: "command.output",
+    level,
+    message: requireString(record, "message"),
+  };
+}
+
+function parseSessionNameEvent(record: Record<string, unknown>): Extract<SessionUiEvent, { type: "session.name" }> {
+  return {
+    type: "session.name",
+    sessionId: requireNonEmptyString(record, "sessionId"),
+    ...optionalField("name", optionalString(record, "name")),
+  };
 }
 
 function parseSessionUnreadSummary(value: unknown): SessionUnreadSummary {
@@ -980,14 +1249,10 @@ function optionalOAuthDeviceCode(value: unknown): NonNullable<OAuthFlowState["au
 function optionalOAuthPrompt(value: unknown): OAuthFlowState["prompt"] | undefined {
   if (value === undefined) return undefined;
   const record = requireRecord(value);
-  const kind = requireString(record, "kind");
-  if (kind !== "prompt" && kind !== "manual") throw new Error("Invalid OAuth prompt kind");
-  const promptType = record["promptType"] === undefined ? (kind === "manual" ? "manual_code" : "text") : parseOAuthPromptType(record["promptType"]);
   return {
     requestId: requireString(record, "requestId"),
     message: requireString(record, "message"),
-    kind,
-    promptType,
+    promptType: parseOAuthPromptType(record["promptType"]),
     ...optionalField("placeholder", optionalString(record, "placeholder")),
     ...optionalField("allowEmpty", optionalBoolean(record, "allowEmpty")),
   };
@@ -1251,12 +1516,11 @@ function parsePiWebConfigEnvOverrides(value: unknown): PiWebConfigEnvOverrides {
     allowedHosts: requireBoolean(record, "allowedHosts"),
     spawnSessions: requireBoolean(record, "spawnSessions"),
     subsessions: requireBoolean(record, "subsessions"),
-    // Older servers predate the ask_user tool; a missing flag means "not overridden".
-    askUser: optionalBoolean(record, "askUser") ?? false,
-    agentCommand: optionalBoolean(record, "agentCommand") ?? false,
-    agentDir: optionalBoolean(record, "agentDir") ?? false,
+    askUser: requireBoolean(record, "askUser"),
+    agentCommand: requireBoolean(record, "agentCommand"),
+    agentDir: requireBoolean(record, "agentDir"),
     ...optionalAgentDirSource(record),
-    agentSessionDir: optionalBoolean(record, "agentSessionDir") ?? false,
+    agentSessionDir: requireBoolean(record, "agentSessionDir"),
   };
 }
 
@@ -1446,6 +1710,13 @@ function parseOptionalBoolean(value: unknown, key: string): boolean | undefined 
   if (value === undefined) return undefined;
   if (typeof value !== "boolean") throw new Error(`Expected optional boolean field: ${key}`);
   return value;
+}
+
+/** Optional non-negative integer count; zero is normalized away so absent and none read alike. */
+function parseOptionalCount(value: unknown, key: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error(`Expected optional count field: ${key}`);
+  return value === 0 ? undefined : value;
 }
 
 export function parsePiWebStatusResponse(value: unknown): PiWebStatusResponse {
@@ -1735,12 +2006,6 @@ export function parseRestored(value: unknown): { restored: true } {
   const record = requireRecord(value);
   if (record["restored"] !== true) throw new Error("Expected restored response");
   return { restored: true };
-}
-
-export function parseDeleted(value: unknown): { deleted: true } {
-  const record = requireRecord(value);
-  if (record["deleted"] !== true) throw new Error("Expected deleted response");
-  return { deleted: true };
 }
 
 export function parseDetached(value: unknown): { detached: true } {

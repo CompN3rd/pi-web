@@ -103,6 +103,8 @@
             <a href="#catalog-refresh">Model catalog refresh</a>
             <a href="#session-tools">Session tools</a>
             <a href="#plugin-config">Plugin config and recovery</a>
+            <a href="#extension-dialogs">Extension dialogs</a>
+            <a href="#prompt-completions">Prompt completions</a>
             <a href="#completion-tools">Completion tools</a>
           </aside>
 
@@ -117,10 +119,8 @@
               <p>
                 Each PI WEB machine has its own config. When using Fleet/machine federation, Settings uses the selected
                 machine for config that affects work running there: the Pi-compatible agent profile and companion CLI,
-                session daemon tools, desired PI WEB plugin state, external path access, and upload defaults. Gateway/browser-only settings stay local to the gateway:
-                keyboard shortcuts, remote machine registry/tokens, and gateway host/port/allowed-hosts. Remote servers
-                that do not advertise selected-machine settings support report those settings as unavailable instead of
-                silently falling back to the gateway.
+                session daemon tools, desired PI WEB plugin enablement/settings, external path access, and upload defaults. Gateway/browser-only settings stay local to the gateway:
+                keyboard shortcuts, remote machine registry/tokens, and gateway host/port/allowed-hosts.
               </p>
               <p>
                 Pi package settings are separate from PI WEB config. They live in Pi's package-manager settings on the
@@ -174,7 +174,7 @@
               <ul>
                 <li><code>host</code> / <code>port</code>: restart the gateway web/API service or process.</li>
                 <li><code>maxUploadBytes</code>: restart both the web/API process and the session daemon on that machine.</li>
-                <li><code>agent.command</code> / <code>agent.dir</code> / <code>spawnSessions</code> / <code>subsessions</code> / <code>askUser</code>: restart the session daemon on that machine.</li>
+                <li><code>agent.command</code> / <code>agent.dir</code> / <code>spawnSessions</code> / <code>subsessions</code> / <code>askUser</code> / <code>extensionDialogsTimeoutMs</code>: restart the session daemon on that machine.</li>
                 <li><code>pathAccess</code>: applies on the next request; existing file views may need a browser refresh.</li>
                 <li><code>uploads.defaultFolder</code>: applies to newly opened Files upload dialogs and new direct drag/drop batches after config/workspace refresh.</li>
                 <li><code>plugins</code>: browser-only changes apply after a tab reload. Any enablement, settings, source, or package-revision change affecting a <code>serverModule</code> requires a manual sessiond restart, then a tab reload for its paired UI.</li>
@@ -215,6 +215,7 @@
   "spawnSessions": true,
   "subsessions": false,
   "askUser": true,
+  "extensionDialogsTimeoutMs": 300000,
   "plugins": {
     "workspace-tasks": { "enabled": true },
     "updates": { "enabled": true },
@@ -255,9 +256,8 @@
               </p>
               <p>
                 Project-local <code>uploads.defaultFolder</code> overrides the global upload destination for workspaces in
-                that project. Current PI WEB servers include this workspace-effective value on local and federated
-                workspace responses; older remote servers may omit it and the browser falls back to the global/default
-                upload folder.
+                that project. PI WEB servers always include this workspace-effective value on local and federated
+                workspace responses.
               </p>
               <p>
                 Plugins may own separate project files, such as <code>.pi-web/tasks.json</code> for the built-in Workspace
@@ -379,6 +379,14 @@
                       <td>Restart session daemon on that machine</td>
                     </tr>
                     <tr>
+                      <td>Extension dialog auto-cancel timeout</td>
+                      <td><code>extensionDialogsTimeoutMs</code></td>
+                      <td>—</td>
+                      <td>Global/session daemon</td>
+                      <td>Not supported locally</td>
+                      <td>Restart session daemon on that machine</td>
+                    </tr>
+                    <tr>
                       <td>PI WEB plugin desired enablement/settings</td>
                       <td><code>plugins.&lt;id&gt;.enabled</code>, <code>plugins.&lt;id&gt;.settings</code></td>
                       <td>—</td>
@@ -425,7 +433,7 @@
                       <td><code>PI_WEB_DATA_DIR</code></td>
                       <td>Process/env</td>
                       <td>Not supported locally</td>
-                      <td>Restart services before changing; moves managed state location</td>
+                      <td>Restart services before changing; existing state stays in the previous data directory</td>
                     </tr>
                     <tr>
                       <td>Session daemon socket</td>
@@ -562,9 +570,9 @@
                 batch/file, and conflicts or errors stay visible in the upload progress UI.
               </p>
               <p>
-                For machine federation, Settings saves the global upload default on the selected machine. Current remote
-                PI WEB servers also return workspace-effective upload defaults on workspace responses; older remote
-                servers may omit them and the browser falls back to the global/default upload folder.
+                For machine federation, Settings saves the global upload default on the selected machine. Remote
+                PI WEB servers always return workspace-effective upload defaults on workspace responses, and the Files
+                panel uses them as the default upload destination.
               </p>
             </section>
 
@@ -623,9 +631,8 @@
                 If the session daemon cannot report a valid active profile, profile-dependent Pi package and PI WEB plugin
                 operations report unavailable instead of falling back to independently resolved config. A package-managed
                 update command is shown only when PI WEB can preserve the active profile with a recognized, safe Pi
-                companion CLI; otherwise the command is omitted. Remote profile editing likewise requires advertised
-                support, and the gateway rejects a remote save if the target does not return the requested profile.
-                Restart the session daemon on the selected machine to establish the next active profile.
+                companion CLI; otherwise the command is omitted. Restart the session daemon on the selected machine to
+                establish the next active profile.
               </div>
             </section>
 
@@ -808,6 +815,16 @@
                 after PI WEB guidance.
               </p>
               <p>
+                Both <code>spawn_session</code> and <code>spawn_subsession</code> accept an optional
+                <code>model</code> parameter, given as an exact <code>provider/model-id</code> such as
+                <code>anthropic/claude-sonnet-4-5</code>. When set, the new session starts on that model instead of
+                inheriting the dispatching session's model. The match is strict: an unknown or malformed value is
+                rejected with an error. A <code>#provider/model-id</code> reference in the prompt (see
+                <a href="#prompt-completions">Prompt completions</a>) is how users ask for a specific model; agents
+                forward that reference as this parameter. The new session also inherits the dispatching session's
+                thinking level, clamped to its model's capabilities.
+              </p>
+              <p>
                 In <strong>Settings → Session daemon</strong>, these keys are saved on the selected machine. Restart the
                 session daemon on that machine after changing them.
               </p>
@@ -842,6 +859,10 @@
                 can be open per session: a later <code>ask_user</code> call supersedes the earlier one, reports that fact
                 and its unanswered questions to the model, and turns the earlier card into a read-only transcript record.
                 Submitted and cancelled asks likewise remain readable in the transcript.
+              </p>
+              <p>
+                Sending an ordinary chat message while a form is open voids the form: the card closes as cancelled and
+                the model is told its questions went unanswered as part of the turn the message itself starts.
               </p>
               <div class="callout warning">
                 <strong>Restart required:</strong> restart the session daemon after changing <code>askUser</code> or after
@@ -942,6 +963,51 @@
                 sessiond's event loop, and are not crash-isolated. <code>bundled-only</code> bypasses external plugin
                 failures; <code>none</code> also bypasses bundled server plugins.
               </p>
+            </section>
+
+            <section id="extension-dialogs">
+              <h2>Extension dialogs</h2>
+              <p>
+                Pi extensions can ask the user questions from <code>ctx.ui.confirm()</code>,
+                <code>ctx.ui.select()</code>, and <code>ctx.ui.input()</code> — including from
+                <code>session_start</code> hooks and in-flight <code>tool_call</code> hooks. PI WEB renders these dialogs
+                inline in the session transcript and answers them through a dedicated session-daemon channel, never the
+                prompt queue, so a dialog parked inside a <code>tool_call</code> hook cannot deadlock the run. Dialog
+                support is always on; there is no enable flag. See
+                <a href="plugins#pi-extension-dialogs">Pi extension dialogs in PI WEB</a> for behavior details and author
+                guidance.
+              </p>
+              <p>
+                <code>extensionDialogsTimeoutMs</code> is the unattended-dialog safety valve: how long the session daemon
+                waits for an answer before settling the dialog with its kind's cancel value (<code>false</code> for
+                confirm, <code>undefined</code> for select and input). It defaults to <code>300000</code> (5 minutes);
+                set it to <code>0</code> to wait forever. An extension's own <code>timeout</code> option still applies,
+                and the effective deadline is the sooner of the two.
+              </p>
+              <div class="callout warning">
+                <strong>Restart required:</strong> <code>extensionDialogsTimeoutMs</code> is edited directly in the global
+                config file. Restart the session daemon after changing it — for the systemd user service, run
+                <code>systemctl --user restart pi-web-sessiond</code>.
+              </div>
+            </section>
+
+            <section id="prompt-completions">
+              <h2>Prompt completions</h2>
+              <p>The chat composer opens completion menus on three trigger characters:</p>
+              <ul>
+                <li><code>/</code> at the very start of the draft completes session commands.</li>
+                <li>
+                  <code>@</code> completes file paths: <code>@</code> for tracked files, <code>@ </code> (at, then
+                  space) or <code>!@</code> for all files. Picking one inserts an <code>@path</code> reference into the
+                  draft, quoted automatically when the path contains spaces.
+                </li>
+                <li>
+                  <code>#</code> completes the models available to the session, filtered case-insensitively as you type
+                  (at most 12 entries). Picking one inserts a <code>#provider/model-id</code> reference into the draft,
+                  which tells agents the request should run on that model — for example as the <code>model</code>
+                  parameter of <code>spawn_session</code>.
+                </li>
+              </ul>
             </section>
 
             <section id="completion-tools">

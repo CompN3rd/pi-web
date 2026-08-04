@@ -1,5 +1,5 @@
 import { isAbsolute, parse, relative, resolve, sep } from "node:path";
-import type { TerminalCommandRun, Workspace } from "../../shared/apiTypes.js";
+import type { TerminalCommandRun, WorkspaceListing } from "../../shared/apiTypes.js";
 import { workspaceDeletionMetadata } from "../../shared/workspaceDeletion.js";
 import {
   requireWorkspaceRemovalPrecondition,
@@ -206,7 +206,7 @@ function validateCurrentRemoval(
   workspaceId: string,
   precondition: string,
   current: WorkspaceProviderRemovalTarget,
-): { target: Workspace; commandWorkspace: Workspace } {
+): { target: WorkspaceListing; commandWorkspace: WorkspaceListing } {
   const target = current.workspaces.find((workspace) => workspace.id === workspaceId);
   if (target?.id !== current.target.id || target.path !== current.target.path) {
     throw new WorkspaceRemovalError("Workspace is no longer current", 409);

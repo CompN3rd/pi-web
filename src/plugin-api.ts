@@ -1,5 +1,5 @@
 import type { TemplateResult } from "lit";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, JsonValue, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/apiTypes.js";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/apiTypes.js";
 
 export type {
   FileContentMediaType,
@@ -72,6 +72,8 @@ export interface PluginMachine {
 }
 
 export interface PluginRuntimeState {
+  /** Identity of the currently selected machine. Undefined only on older hosts or before machines load. */
+  selectedMachine?: PluginMachine;
   selectedWorkspace?: Workspace;
   selectedSession?: unknown;
   workspaceTool?: string;
@@ -105,8 +107,6 @@ export interface PluginRuntimeContext {
   refreshFiles: () => void | Promise<void>;
   /** Invalidate plugin workspace-panel data for the selected workspace, optionally targeting one qualified panel id. */
   refreshWorkspacePanels: (panelId?: QualifiedContributionId) => void | Promise<void>;
-  /** @deprecated Browser-v1 compatibility alias. Use `refreshWorkspacePanels()` or `WorkspacePanelContribution.onInvalidate`. */
-  refreshGit: () => void | Promise<void>;
   refreshAppData: () => void | Promise<void>;
   /** Force a fresh PI WEB release check on the selected machine. Optional for compatibility with older hosts. */
   checkForPiWebUpdates?: () => void | Promise<void>;
@@ -138,10 +138,6 @@ export interface Workspace {
   /** @deprecated Provider-neutral browser integrations should use provider metadata. */
   branch?: string;
   isMain: boolean;
-  /** @deprecated Git is not required by the workspace provider contract. */
-  isGitRepo: boolean;
-  /** @deprecated Git is not required by the workspace provider contract. */
-  isGitWorktree: boolean;
   provider?: WorkspaceProviderMetadata;
   removal?: WorkspaceRemovalPresentation;
 }
@@ -149,6 +145,10 @@ export interface Workspace {
 export interface WorkspaceFiles {
   /** Read a file from the workspace. Works for local and federated machines. */
   readFile(path: string): Promise<FileContentResponse>;
+  /** List the entries of a workspace directory. Pass "" for the workspace root.
+   *  Works for local and federated machines. Rejects when the directory does not
+   *  exist or cannot be read, matching readFile error behavior. */
+  listFiles(path: string): Promise<FileTreeResponse>;
   /** Write content to a workspace file. Creates intermediate directories by default.
    *  Works for local and federated machines. Auto-refreshes the file explorer after success. */
   writeFile(path: string, content: string | Uint8Array, options?: WriteWorkspaceFileOptions): Promise<WriteWorkspaceFileResponse>;

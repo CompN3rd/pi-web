@@ -14,8 +14,6 @@ const providerWorkspace = {
   path: "/repo linked",
   label: "feature/one",
   isMain: true,
-  isGitRepo: false,
-  isGitWorktree: false,
   provider: {
     pluginId: "replacement",
     capabilities: { request: false, remove: true },
@@ -56,8 +54,6 @@ describe("SessionDaemonWorkspaceCatalog", () => {
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({
       branch: "feature/one",
-      isGitRepo: true,
-      isGitWorktree: true,
       provider: { pluginId: "replacement", metadata: { detached: false } },
       removal: { precondition: "v1.confirmed" },
     });

@@ -19,10 +19,13 @@ export interface SessionServiceDependencyInput {
   catalogRefreshStatus: NonNullable<PiSessionServiceDependencies["catalogRefreshStatus"]>;
   /** Omitted when the operator has not enabled session spawning. */
   spawnTargets?: NonNullable<PiSessionServiceDependencies["spawnTargets"]>;
+  projectWorkspaces?: NonNullable<PiSessionServiceDependencies["projectWorkspaces"]>;
   /** The operator's subsessions preference, which also requires spawning. */
   subsessionsEnabled: boolean;
   /** Whether agents may post structured question sets to the browser. */
   askUserEnabled: boolean;
+  /** Auto-cancel delay for extension dialogs whose extension set no timeout; `0` waits forever. */
+  extensionDialogsTimeoutMs: number;
 }
 
 /**
@@ -42,10 +45,12 @@ export function sessionServiceDependencies(input: SessionServiceDependencyInput)
     workspaceActivity: input.workspaceActivity,
     logger: input.logger,
     ...(input.spawnTargets === undefined ? {} : { spawnTargets: input.spawnTargets }),
+    ...(input.projectWorkspaces === undefined ? {} : { projectWorkspaces: input.projectWorkspaces }),
     // Tracked subsessions share the spawn capability's project-scope resolver,
     // so they stay off unless spawning is configured too.
     subsessionsEnabled: input.spawnTargets !== undefined && input.subsessionsEnabled,
     askUserEnabled: input.askUserEnabled,
+    extensionDialogsTimeoutMs: input.extensionDialogsTimeoutMs,
     notificationStore: input.notificationStore,
     unreadStore: input.unreadStore,
     // Read-only, so session startup can tell a waiting user that provider

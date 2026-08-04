@@ -1,21 +1,12 @@
 export type MachineKind = "local" | "remote";
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
+/**
+ * Registry of feature-gating capabilities. Add an entry here (plus the
+ * runtime/requirements entries in `capabilities.ts`) when a feature needs
+ * rolling-version gating.
+ */
 export const PI_WEB_CAPABILITIES = {
-  sessionsDeleteArchived: "sessions.deleteArchived",
-  sessionsBulkMutations: "sessions.bulkMutations",
-  sessionsCleanup: "sessions.cleanup",
-  sessionsReload: "sessions.reload",
-  sessionsClearQueue: "sessions.clearQueue",
-  sessionsPersistedState: "sessions.persistedState",
-  sessionsNotifications: "sessions.notifications",
-  sessionsUnread: "sessions.unread",
-  sessionsAskUser: "sessions.askUser",
-  promptAttachments: "prompt.attachments",
-  workspaceFileSuggestions: "workspace.fileSuggestions",
-  piPackagesManage: "piPackages.manage",
-  selectedMachineSettings: "settings.selectedMachine",
-  agentProfileConfig: "settings.agentProfile",
   pluginLifecycle: "plugins.lifecycle",
 } as const;
 
@@ -104,6 +95,13 @@ export interface PiWebConfigValues {
    * tool. On by default; set to `false` to remove the tool from the runtime.
    */
   askUser?: boolean;
+  /**
+   * How long an extension dialog may wait for an answer before the daemon
+   * auto-cancels it, in milliseconds. Applies only when the extension set no
+   * `timeout` of its own (the sooner of the two wins); `0` waits forever.
+   * Tuning knob only — extension dialogs are always enabled.
+   */
+  extensionDialogsTimeoutMs?: number;
   /** Desired Pi-compatible agent profile and companion CLI (Pi by default). */
   agent?: PiWebAgentConfig;
 }
@@ -313,15 +311,19 @@ export interface Workspace {
   /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
   branch?: string;
   isMain: boolean;
-  /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
-  isGitRepo: boolean;
-  /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
-  isGitWorktree: boolean;
   provider?: WorkspaceProviderMetadata;
   removal?: WorkspaceRemovalPresentation;
-  /** Workspace-effective project/global settings needed by workspace UI features. */
-  effectiveConfig?: WorkspaceEffectiveConfig;
+  /** Workspace-effective project/global settings needed by workspace UI features. Always present on current server workspace responses. */
+  effectiveConfig: WorkspaceEffectiveConfig;
 }
+
+/** Workspace as listed by the workspace authority, before the browser route layer attaches the wire-required effectiveConfig. */
+export type WorkspaceListing = Omit<Workspace, "effectiveConfig">;
+
+/** Provider resolution as served by the sessiond workspace authority; the browser route layer attaches effectiveConfig to every workspace before responding. */
+export type WorkspaceProviderAuthorityResolution = Omit<WorkspaceProviderResolution, "workspaces"> & {
+  workspaces: readonly WorkspaceListing[];
+};
 
 export interface SessionRef {
   id: string;
@@ -466,6 +468,21 @@ export interface SessionInfo extends SessionRef {
   messageCount: number;
   firstMessage: string;
   parentSessionPath?: string;
+  /**
+   * Working directory of the parent session, read from the parent session file
+   * header. Only populated when the parent is outside this listing's cwd, so a
+   * child whose parent lives in another worktree can point at it instead of
+   * only reporting that the parent is unavailable here.
+   */
+  parentSessionCwd?: string;
+  /** Session id of an out-of-cwd parent, so the browser can select it after switching workspace. */
+  parentSessionId?: string;
+  /**
+   * Number of sessions in other workspaces of the same project that record this
+   * session as their parent. Only set when non-zero, so a parent can show that
+   * it has children which are not nested beneath it in this workspace.
+   */
+  childSessionsElsewhere?: number;
   archived?: boolean;
   archivedAt?: string;
 }
@@ -479,7 +496,7 @@ export interface ArchiveSessionsResponse {
 
 export interface SessionBulkMutationRef {
   id: string;
-  cwd?: string;
+  cwd: string;
 }
 
 export interface SessionBulkMutationRequest {
@@ -605,11 +622,6 @@ export interface AskUserQuestion {
   detail?: string;
   /** Offered options; may be empty when only free text makes sense. */
   options: AskUserQuestionOption[];
-  /**
-   * Compatibility marker for older clients. Canonical questions set this to
-   * true because every question offers a custom free-text answer.
-   */
-  allowOther?: boolean;
   /** When true, several options may be selected at once. */
   multiple?: boolean;
 }
@@ -689,6 +701,109 @@ export interface AskUserCloseResponse {
   result: "closed" | "stale";
   /** Present only when this call is the one that closed the ask. */
   outcome?: AskUserOutcome;
+  sessionStatus: SessionStatus;
+}
+
+/** Length bound for extension-dialog ids. */
+export const EXTENSION_DIALOG_ID_MAX_LENGTH = 128;
+/** Length bound for extension-authored dialog prose: titles, messages, options, placeholders. */
+export const EXTENSION_DIALOG_TEXT_MAX_LENGTH = 1_000;
+/** Largest option list one `select` dialog may offer. */
+export const EXTENSION_DIALOG_OPTION_LIMIT = 24;
+/** Length bound for the text a user types into an `input` dialog. */
+export const EXTENSION_DIALOG_INPUT_MAX_LENGTH = 4_000;
+
+/** Which extension UI dialog primitive a pending dialog belongs to. */
+export type ExtensionDialogKind = "confirm" | "select" | "input";
+
+/**
+ * The value a user gave in an extension dialog: a boolean for `confirm`, the
+ * chosen option for `select`, the typed text for `input`. Absent when the
+ * dialog closed without an answer.
+ */
+export type ExtensionDialogAnswer = boolean | string;
+
+/**
+ * Why a dialog stopped being open. `"answered"` carries an
+ * {@link ExtensionDialogAnswer}; every other reason is a close without one.
+ */
+export type ExtensionDialogCloseReason = "answered" | "cancelled" | "timeout" | "aborted" | "session-ended";
+
+/**
+ * One open extension dialog of a session, opened by `ctx.ui.confirm()`,
+ * `ctx.ui.select()`, or `ctx.ui.input()`. Daemon-owned and reported in
+ * {@link SessionStatus.pendingDialogs}, so a reconnecting or reloading browser
+ * rehydrates it without depending on having seen the `dialog.opened` event.
+ *
+ * Unlike asks, several dialogs may be open per session at once: each dialog is
+ * an independent blocking wait inside extension code, so opening never
+ * supersedes an existing one.
+ */
+export interface PendingExtensionDialog {
+  dialogId: string;
+  kind: ExtensionDialogKind;
+  title: string;
+  /** Supporting line of a `confirm` dialog. */
+  message?: string;
+  /** Offered choices of a `select` dialog. */
+  options?: string[];
+  /** Placeholder text of an `input` dialog. */
+  placeholder?: string;
+  askedAt: string;
+  /**
+   * When the dialog auto-cancels, as ISO: the sooner of the extension's own
+   * `timeout` and the daemon's `extensionDialogsTimeoutMs` default. Absent
+   * when the dialog waits forever.
+   */
+  timeoutAt?: string;
+  /** Opened while a run was in flight, so `agent_end` settles it as `"aborted"`. */
+  runScoped: boolean;
+}
+
+/**
+ * The complete result of a closed extension dialog. Unlike an ask outcome it
+ * stays small — the dialog itself is not embedded, because a settled card is a
+ * browser-local record that stays until the user dismisses it; reloads
+ * rehydrate open dialogs from {@link SessionStatus.pendingDialogs} alone.
+ */
+export interface ExtensionDialogOutcome {
+  dialogId: string;
+  reason: ExtensionDialogCloseReason;
+  /** Present only when `reason` is `"answered"`. */
+  answer?: ExtensionDialogAnswer;
+  askedAt: string;
+  closedAt: string;
+}
+
+/**
+ * Browser request to answer an open extension dialog with the user's value.
+ * `cwd` rides along as the standard session-lookup field, as on every other
+ * session route; whether the value fits the dialog's kind is the store's call,
+ * so an ill-fitting answer is a 400 that leaves the dialog open.
+ */
+export interface ExtensionDialogAnswerRequest {
+  cwd?: string;
+  dialogId: string;
+  value: ExtensionDialogAnswer;
+}
+
+/** Browser request to dismiss an open extension dialog without an answer. */
+export interface ExtensionDialogCancelRequest {
+  cwd?: string;
+  dialogId: string;
+}
+
+/**
+ * Result of the browser answering or cancelling an extension dialog. Mirrors
+ * {@link AskUserCloseResponse}: `"stale"` is an ordinary lost race — another
+ * browser, a timeout, or a teardown closed the dialog first — not an error.
+ * The browser drops its card and trusts `sessionStatus`, which is returned in
+ * both cases so closing a dialog needs no follow-up status request.
+ */
+export interface ExtensionDialogCloseResponse {
+  result: "closed" | "stale";
+  /** Present only when this call is the one that closed the dialog. */
+  outcome?: ExtensionDialogOutcome;
   sessionStatus: SessionStatus;
 }
 
@@ -782,7 +897,7 @@ export interface AuthProviderOption {
   name: string;
   authType: AuthType;
   status: AuthProviderStatus;
-  /** Additive hint: use the generic AuthInteraction transport instead of the legacy one-secret form. */
+  /** Present when the provider logs in through the generic AuthInteraction flow. */
   loginFlow?: "interactive";
 }
 
@@ -805,9 +920,7 @@ export interface OAuthFlowState {
     message: string;
     placeholder?: string;
     allowEmpty?: boolean;
-    /** Additive semantic detail; legacy peers continue to use `kind`. */
-    promptType?: "text" | "secret" | "manual_code";
-    kind: "prompt" | "manual";
+    promptType: "text" | "secret" | "manual_code";
   };
   select?: { requestId: string; message: string; options: CommandOption[] };
   progress: string[];
@@ -874,6 +987,12 @@ export interface SessionStatus {
    * user. Daemon-owned, so it survives browser reload and web/API restarts.
    */
   pendingAsk?: PendingAskUser;
+  /**
+   * The session's open extension dialogs, oldest first, when any are waiting
+   * for the user. Daemon-owned, so they survive browser reload and web/API
+   * restarts. Several may be open at once; the UI presents them as a queue.
+   */
+  pendingDialogs?: PendingExtensionDialog[];
 }
 
 export interface WorkspaceActivity {
@@ -1215,11 +1334,13 @@ type SessionUiEventBody =
   | { type: "message.end"; message?: unknown }
   | { type: "status.update"; status: SessionStatus }
   | { type: "activity.update"; activity: SessionActivity }
-  | { type: "command.output"; level: "info" | "success" | "error"; message: string; notificationId?: string }
+  | { type: "command.output"; level: "info" | "success" | "error"; message: string }
   | SessionNotificationInboxEvent
   | { type: "session.error"; message: string }
   | { type: "ask.opened"; ask: PendingAskUser }
   | { type: "ask.closed"; askId: string; reason: AskUserCloseReason }
+  | { type: "dialog.opened"; dialog: PendingExtensionDialog }
+  | { type: "dialog.closed"; dialogId: string; reason: ExtensionDialogCloseReason; answer?: ExtensionDialogAnswer }
   | { type: "session.name"; sessionId: string; name?: string }
   | { type: "session.created"; session: SessionInfo }
   | { type: "pi.event"; eventType: string };

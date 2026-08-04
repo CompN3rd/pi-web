@@ -12,9 +12,9 @@ import type {
   JsonObject,
   JsonValue,
   Project,
-  Workspace,
+  WorkspaceListing,
+  WorkspaceProviderAuthorityResolution,
   WorkspaceProviderDiagnostic,
-  WorkspaceProviderResolution,
   WorkspaceProviderTier,
   WorkspaceRemovalPresentation as PublicWorkspaceRemovalPresentation,
 } from "../../shared/apiTypes.js";
@@ -33,9 +33,9 @@ import type {
 } from "../plugins/serverPluginRuntime.js";
 
 export type {
+  WorkspaceProviderAuthorityResolution,
   WorkspaceProviderDiagnostic,
   WorkspaceProviderDiagnosticCode,
-  WorkspaceProviderResolution,
 } from "../../shared/apiTypes.js";
 
 const DEFAULT_PROVIDER_TIMEOUT_MS = PLUGIN_BACKEND_REQUEST_TIMEOUT_MS;
@@ -71,8 +71,8 @@ export interface WorkspaceProviderRequest {
 /** Current owner snapshot used by the host-owned workspace removal orchestrator. */
 export interface WorkspaceProviderRemovalTarget {
   ownerPluginId: string;
-  target: Workspace;
-  workspaces: readonly Workspace[];
+  target: WorkspaceListing;
+  workspaces: readonly WorkspaceListing[];
   /** Invoke the current owner's bounded native validation and command planner. */
   prepare(): Promise<WorkspaceRemovePlan>;
 }
@@ -154,7 +154,7 @@ interface TierSelectionConflict {
 }
 
 interface ValidatedProviderWorkspace {
-  workspace: Workspace;
+  workspace: WorkspaceListing;
   providerWorkspace: ProviderWorkspace;
 }
 
@@ -182,7 +182,7 @@ export class WorkspaceProviderRegistry {
   private readonly providerTimeoutMs: number;
   private readonly requestTimeoutMs: number;
   private readonly pathInspector: WorkspacePathInspector;
-  private readonly pendingResolutions = new Map<string, Promise<WorkspaceProviderResolution>>();
+  private readonly pendingResolutions = new Map<string, Promise<WorkspaceProviderAuthorityResolution>>();
 
   constructor(private readonly options: WorkspaceProviderRegistryOptions) {
     this.contributions = Object.freeze([...options.contributions]
@@ -193,7 +193,7 @@ export class WorkspaceProviderRegistry {
   }
 
   /** Workspace-lister adapter used by spawned-session target validation. */
-  async list(project: Project): Promise<Workspace[]> {
+  async list(project: Project): Promise<WorkspaceListing[]> {
     const resolution = await this.resolve(project);
     return [...resolution.workspaces];
   }
@@ -203,7 +203,7 @@ export class WorkspaceProviderRegistry {
    * Only identical work already in flight is shared; the entry is removed before
    * callers observe completion so ownership and topology are never cached.
    */
-  async resolve(project: Project): Promise<WorkspaceProviderResolution> {
+  async resolve(project: Project): Promise<WorkspaceProviderAuthorityResolution> {
     const input = snapshotProject(project);
     const key = workspaceResolutionKey(input);
     const existing = this.pendingResolutions.get(key);
@@ -218,7 +218,7 @@ export class WorkspaceProviderRegistry {
     }
   }
 
-  private async resolveSnapshot(input: ProjectInput): Promise<WorkspaceProviderResolution> {
+  private async resolveSnapshot(input: ProjectInput): Promise<WorkspaceProviderAuthorityResolution> {
     const diagnostics: WorkspaceProviderDiagnostic[] = [];
 
     for (const tier of ["primary", "fallback"] as const) {
@@ -581,7 +581,7 @@ export class WorkspaceProviderRegistry {
     tier: ProviderTier,
     contribution: ServerPluginProviderContribution,
     diagnostics: WorkspaceProviderDiagnostic[],
-  ): Promise<WorkspaceProviderResolution> {
+  ): Promise<WorkspaceProviderAuthorityResolution> {
     try {
       const listed: unknown = await runBoundedProviderOperation(
         contribution.pluginId,
@@ -658,16 +658,12 @@ async function validateProviderWorkspaces(
     const publicRemoval = removal === undefined
       ? undefined
       : hostRemovalPresentation(project, contribution, candidate.key, path, removal);
-    const workspace: Workspace = {
+    const workspace: WorkspaceListing = {
       id: workspaceId(project.id, candidate.key),
       projectId: project.id,
       path,
       label: candidate.label,
       isMain: candidate.isMain,
-      // Browser v1 keeps these required transition fields. Provider-neutral
-      // registry resolution never infers integration-specific values.
-      isGitRepo: false,
-      isGitWorktree: false,
       provider: {
         pluginId: contribution.pluginId,
         capabilities: {
@@ -764,7 +760,7 @@ function degradedResolution(
   project: ProjectInput,
   diagnostics: WorkspaceProviderDiagnostic[],
   ownerPluginId?: string,
-): WorkspaceProviderResolution {
+): WorkspaceProviderAuthorityResolution {
   return Object.freeze({
     status: "degraded",
     projectId: project.id,
@@ -774,15 +770,13 @@ function degradedResolution(
   });
 }
 
-function folderWorkspace(project: ProjectInput): Workspace {
+function folderWorkspace(project: ProjectInput): WorkspaceListing {
   return Object.freeze({
     id: workspaceId(project.id, project.path),
     projectId: project.id,
     path: project.path,
     label: project.name,
     isMain: true,
-    isGitRepo: false,
-    isGitWorktree: false,
   });
 }
 

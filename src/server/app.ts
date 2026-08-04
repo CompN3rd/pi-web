@@ -7,14 +7,10 @@ import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { ProjectStore } from "./storage/projectStore.js";
 import { ProjectService } from "./projects/projectService.js";
-import { isAbsoluteishFileSuggestionQuery, listFileSuggestions, listPathSuggestions } from "./workspaces/fileSuggestions.js";
-import { pathAccessForWorkspaceContext } from "./workspaces/effectivePathAccess.js";
-import { resolveWorkspaceContextForCwd } from "./workspaces/workspaceContext.js";
 import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
 import { SessionDaemonWorkspaceCatalog } from "./workspaces/sessionDaemonWorkspaceCatalog.js";
 import { sendWorkspaceRequestError } from "./workspaces/workspaceRouteErrors.js";
 import { loadEffectiveProjectUploadsConfig } from "./workspaces/projectPiWebConfig.js";
-import { normalizeRequestCwd } from "./workingDirectory.js";
 import { listDirectorySuggestions } from "./projects/directorySuggestions.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
@@ -39,7 +35,7 @@ import { registerMachineRoutes } from "./machines/machineRoutes.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
 import { registerPluginBackendProxyRoutes } from "./plugins/pluginBackendProxyRoutes.js";
 import { proxyMachinePluginAsset, registerMachinePluginProxyRoutes } from "./machines/machinePluginProxyRoutes.js";
-import type { Project, Workspace, WorkspaceProviderResolution } from "./types.js";
+import type { Project, WorkspaceEffectiveConfig, WorkspaceProviderResolution } from "./types.js";
 
 export interface AppDependencies {
   projects?: ProjectService;
@@ -114,29 +110,9 @@ async function resolveWorkspacesWithEffectiveConfig(
   };
 }
 
-async function workspaceEffectiveConfig(projectPath: string, config?: Pick<PiWebConfigService, "read">): Promise<NonNullable<Workspace["effectiveConfig"]>> {
+async function workspaceEffectiveConfig(projectPath: string, config?: Pick<PiWebConfigService, "read">): Promise<WorkspaceEffectiveConfig> {
   const globalConfig = config === undefined ? {} : (await config.read()).effectiveConfig;
   return { uploads: await loadEffectiveProjectUploadsConfig(projectPath, globalConfig) };
-}
-
-interface LocalFileSuggestionRouteOptions {
-  config?: Pick<PiWebConfigService, "read">;
-}
-
-function registerLocalFileSuggestionRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceCatalog, prefix: string, options: LocalFileSuggestionRouteOptions = {}): void {
-  app.get<{ Querystring: { cwd?: string; q?: string; kind?: "tracked" | "untracked" | "other"; mode?: "file" | "path"; scope?: "tracked" | "all" } }>(`${prefix}/files`, async (request, reply) => {
-    if (request.query.cwd === undefined || request.query.cwd === "") return reply.code(400).send({ error: "cwd query parameter is required" });
-    try {
-      const cwd = normalizeRequestCwd(request.query.cwd);
-      const context = await resolveWorkspaceContextForCwd(projects, workspaces, cwd);
-      const query = request.query.q ?? "";
-      const pathAccess = isAbsoluteishFileSuggestionQuery(query) ? await pathAccessForWorkspaceContext(context, options.config) : undefined;
-      if (request.query.mode === "path") return await listPathSuggestions(context.root, query, pathAccess);
-      return await listFileSuggestions(context.root, query, { kind: request.query.kind, scope: request.query.scope, pathAccess });
-    } catch (error) {
-      return sendWorkspaceRequestError(reply, error, 400);
-    }
-  });
 }
 
 async function readEffectiveConfig(config: Pick<PiWebConfigService, "read">) {
@@ -263,9 +239,6 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerTerminalProxyRoutes(app, projects, workspaces, sessionDaemon, "/api/machines/local");
   registerWorkspaceDeletionRoutes(app, sessionDaemon);
   registerWorkspaceDeletionRoutes(app, sessionDaemon, "/api/machines/local");
-
-  registerLocalFileSuggestionRoutes(app, projects, workspaces, "/api", { config: configService });
-  registerLocalFileSuggestionRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
 
   registerMachineProxyRoutes(app, machines);
 

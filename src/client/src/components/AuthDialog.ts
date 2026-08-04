@@ -9,8 +9,6 @@ export class AuthDialog extends LitElement {
   @property({ attribute: false }) state?: AuthDialogState;
   @property({ attribute: false }) onChooseMethod?: (authType: "oauth" | "api_key") => void;
   @property({ attribute: false }) onSelectProvider?: (providerId: string, authType: "oauth" | "api_key") => void;
-  @property({ attribute: false }) onApiKeyInput?: (value: string) => void;
-  @property({ attribute: false }) onSaveApiKey?: () => void;
   @property({ attribute: false }) onLogoutProvider?: (providerId: string) => void;
   @property({ attribute: false }) onOAuthInput?: (value: string) => void;
   @property({ attribute: false }) onOAuthRespond?: (value?: string) => void;
@@ -43,7 +41,6 @@ export class AuthDialog extends LitElement {
     switch (state.step) {
       case "method": return "Configure provider authentication";
       case "providers": return state.authType === undefined ? "Select provider authentication" : state.authType === "oauth" ? "Select subscription provider" : "Select credential provider";
-      case "apiKey": return `API key for ${state.provider.name}`;
       case "oauth": return `Login to ${state.flow.providerName}`;
       case "logout": return "Remove stored provider authentication";
     }
@@ -58,14 +55,6 @@ export class AuthDialog extends LitElement {
         </div>
       `;
       case "providers": return html`<div class="options">${state.providers.length === 0 ? html`<div class="empty">No providers available.</div>` : state.providers.map((provider) => this.renderProviderButton(provider))}</div>`;
-      case "apiKey": return html`
-        <div class="form">
-          <p>Enter the API key for <strong>${state.provider.name}</strong>. It will be stored in the active Pi-compatible profile's <code>auth.json</code>.</p>
-          <input type="password" autocomplete="off" placeholder="API key" .value=${state.value} @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) this.onApiKeyInput?.(event.target.value); }}>
-          ${state.error !== undefined && state.error !== "" ? html`<div class="error-text">${state.error}</div>` : null}
-          <div class="actions"><button @click=${() => { this.cancel(); }}>Cancel</button><button class="primary" ?disabled=${state.saving === true} @click=${() => { this.onSaveApiKey?.(); }}>${state.saving === true ? "Saving…" : "Save API key"}</button></div>
-        </div>
-      `;
       case "oauth": return this.renderOAuth(state);
       case "logout": return html`<div class="options">${state.providers.length === 0 ? html`<div class="empty">No stored credentials. Environment variables and models.json settings are unchanged.</div>` : state.providers.map((provider) => html`
         <button @click=${() => { this.onLogoutProvider?.(provider.id); }}><span>${provider.name}</span><small>${provider.id} · ${authTypeLabel(provider.authType)}</small></button>
@@ -86,7 +75,7 @@ export class AuthDialog extends LitElement {
     const flow = state.flow;
     const prompt = flow.prompt;
     const select = flow.select;
-    const promptInputType = oauthPromptInputType(prompt?.promptType);
+    const promptInputType = prompt === undefined ? undefined : oauthPromptInputType(prompt.promptType);
     return html`
       <div class="form">
         ${flow.auth !== undefined ? html`
@@ -142,10 +131,7 @@ export class AuthDialog extends LitElement {
     }
     if (event.key !== "Enter") return;
     const state = this.state;
-    if (state?.step === "apiKey") {
-      event.preventDefault();
-      this.onSaveApiKey?.();
-    } else if (state?.step === "oauth" && state.flow.prompt !== undefined) {
+    if (state?.step === "oauth" && state.flow.prompt !== undefined) {
       event.preventDefault();
       this.onOAuthRespond?.();
     }
@@ -187,7 +173,6 @@ function authTypeLabel(authType: "oauth" | "api_key"): string {
 }
 
 function focusKey(state: AuthDialogState | undefined): string | undefined {
-  if (state?.step === "apiKey") return `api-key:${state.provider.authType}:${state.provider.id}`;
   if (state?.step === "oauth" && state.flow.prompt !== undefined) return `oauth:${state.flow.flowId}:${state.flow.prompt.requestId}`;
   return undefined;
 }

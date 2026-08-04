@@ -118,13 +118,22 @@ export class PendingAskStore {
   }
 
   /**
-   * Close the ask without a submission. The outcome reports every question as
+   * Close the session's open ask without a submission. The outcome reports every question as
    * unanswered, because answers only ever reach the daemon through a submit.
    */
   cancel(sessionId: string, askId: string): PendingAskCloseResult {
     const ask = this.openBySessionId.get(requireSessionId(sessionId));
     if (ask?.askId !== askId) return { status: "stale" };
     return { status: "closed", outcome: this.requireClose(sessionId, "cancelled", new Map()) };
+  }
+
+  /**
+   * Close whatever ask the session currently has open, e.g. because the user sent
+   * an ordinary chat message instead of answering the form. Returns the outcome,
+   * or `undefined` when the session has no open ask.
+   */
+  cancelOpen(sessionId: string): AskUserOutcome | undefined {
+    return this.close(requireSessionId(sessionId), "cancelled", this.timestamp(), new Map());
   }
 
   /** Drop the open ask of a session that is going away, without reporting an outcome. */
@@ -253,9 +262,6 @@ function validateQuestion(question: AskUserQuestion, id: string): AskUserQuestio
     question: requireText(question.question, `text of question ${id}`),
     ...(detail === undefined ? {} : { detail: requireText(detail, `detail of question ${id}`) }),
     options,
-    // Every question accepts a custom answer. Retain the marker so older web
-    // clients also expose the field when connected to this daemon.
-    allowOther: true,
     ...(question.multiple === true ? { multiple: true } : {}),
   };
 }

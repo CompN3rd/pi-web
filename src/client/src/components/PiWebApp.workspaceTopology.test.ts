@@ -62,7 +62,6 @@ function createApp(): PiWebApp {
 function stubBackgroundRefreshes(app: PiWebApp): void {
   const result = () => Promise.resolve();
   for (const name of [
-    "renegotiateUnreadMachines",
     "refreshMachineActivities",
     "refreshWorkspaceDeletionRuns",
     "loadClientConfig",

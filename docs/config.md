@@ -11,7 +11,7 @@ PI WEB uses two config files:
 - **Global PI WEB config:** `$PI_WEB_CONFIG`, or `$XDG_CONFIG_HOME/pi-web/config.json`, or `~/.config/pi-web/config.json`.
 - **Project-local PI WEB config:** `<project>/.pi-web/config.json` for commit-able project settings.
 
-Each PI WEB machine has its own config. When using Fleet/machine federation, Settings uses the selected machine for config that affects work running there: the Pi-compatible agent profile and companion CLI, session daemon tools, desired PI WEB plugin state, external path access, and upload defaults. Gateway/browser-only settings stay local to the gateway: keyboard shortcuts, remote machine registry/tokens, and gateway host/port/allowed-hosts. Remote servers that do not advertise selected-machine settings support report those settings as unavailable instead of silently falling back to the gateway.
+Each PI WEB machine has its own config. When using Fleet/machine federation, Settings uses the selected machine for config that affects work running there: the Pi-compatible agent profile and companion CLI, session daemon tools, desired PI WEB plugin enablement/settings, external path access, and upload defaults. Gateway/browser-only settings stay local to the gateway: keyboard shortcuts, remote machine registry/tokens, and gateway host/port/allowed-hosts.
 
 Pi package settings are separate from PI WEB config. They live in Pi's package-manager settings on the target machine and are managed by Pi (`pi install`, `pi remove`, `pi update`) or **Settings → Pi packages**. In a federated setup, **Settings → Pi packages** targets the currently selected machine. The PI WEB `plugins` config key controls desired enablement/settings for discovered browser-only, server-only, and dual-entry PI WEB plugins on that machine; it does not install, remove, or update Pi packages.
 
@@ -39,7 +39,7 @@ Process restarts depend on the key:
 
 - `host` / `port`: restart the gateway web/API service or process.
 - `maxUploadBytes`: restart both the web/API process and the session daemon on that machine.
-- `agent.command` / `agent.dir` / `spawnSessions` / `subsessions` / `askUser`: restart the session daemon on that machine.
+- `agent.command` / `agent.dir` / `spawnSessions` / `subsessions` / `askUser` / `extensionDialogsTimeoutMs`: restart the session daemon on that machine.
 - `pathAccess`: applies on the next request; existing file views may need a browser refresh.
 - `uploads.defaultFolder`: applies to newly opened Files upload dialogs and new direct drag/drop batches after config/workspace refresh.
 - `plugins`: browser-only changes apply after a browser-tab reload. Any enablement, settings, package-source, or package-revision change affecting a `serverModule` requires a manual session-daemon restart, then a browser reload for its paired UI.
@@ -67,6 +67,7 @@ Process restarts depend on the key:
   "spawnSessions": true,
   "subsessions": false,
   "askUser": true,
+  "extensionDialogsTimeoutMs": 300000,
   "plugins": {
     "workspace-tasks": { "enabled": true },
     "updates": { "enabled": true },
@@ -97,7 +98,7 @@ Project-local config lives at `<project>/.pi-web/config.json`. Use it for settin
 
 Project-local `pathAccess.allowedPaths` entries are merged after the global list and deduplicated. Paths must still be host-absolute or `~`-prefixed; relative roots are not supported.
 
-Project-local `uploads.defaultFolder` overrides the global upload destination for workspaces in that project. Current PI WEB servers include this workspace-effective value on the existing workspace responses used locally and through machine federation. Older remote servers may omit the optional field; the browser falls back to the global/default upload folder.
+Project-local `uploads.defaultFolder` overrides the global upload destination for workspaces in that project. PI WEB servers always include this workspace-effective value on the workspace responses used locally and through machine federation.
 
 Plugins may own separate project files, such as `.pi-web/tasks.json` for the built-in Workspace Tasks plugin.
 
@@ -119,6 +120,7 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | Agent can spawn sessions | `spawnSessions` | `PI_WEB_SPAWN_SESSIONS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Tracked subsessions (beta) | `subsessions` | `PI_WEB_SUBSESSIONS` | Global/session daemon | Not supported locally; also requires `spawnSessions` | Restart session daemon on that machine |
 | Agent can post question forms | `askUser` | `PI_WEB_ASK_USER` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
+| Extension dialog auto-cancel timeout | `extensionDialogsTimeoutMs` | — | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | PI WEB plugin desired enablement/settings | `plugins.<id>.enabled`, `plugins.<id>.settings` | — | Global + sessiond startup snapshot for server entries | Not core local config; plugins may read their own project files | Browser-only: reload tab. Server-backed: manually restart sessiond, then reload tab |
 | Server-plugin safe start | `serverPlugins.safeStart` | — | Global/offline recovery | Not supported locally; manage with `pi-web plugins safe-start ...` | Applied before discovery/import on next sessiond start |
 | Keyboard shortcuts | `shortcuts.<actionId>` | — | Global | Not supported locally | Applies after settings save/config refresh |
@@ -142,6 +144,8 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 ### Managed data directory
 
 `PI_WEB_DATA_DIR` sets the root for PI WEB-managed runtime state and defaults to `~/.pi-web`. Unless a more specific path override is configured, PI WEB stores its project and machine registries, locally discovered plugins, default session-daemon socket, and session archives beneath this root.
+
+Each data directory is independent: after pointing PI WEB at a new root, it starts there with empty registries and no session archives. To carry session archives over, stop PI WEB, then copy `archived-sessions.json` and the `archived-sessions/` directory from the old data directory into the new one before starting it again.
 
 This setting does not change the PI WEB config file selected by `PI_WEB_CONFIG` or Pi-owned state such as the active session files selected by `PI_CODING_AGENT_SESSION_DIR`.
 
@@ -184,7 +188,7 @@ The value must be a non-empty workspace-relative folder. PI WEB normalizes repea
 
 Manual uploads use the workspace file-write path: paths stay workspace-relative, parent folder creation is enabled by default, and overwrite is disabled by default. Direct drag/drop always keeps `overwrite` off; the review dialog lets you explicitly enable overwrite when needed. Browser-owned XHR progress is shown per batch/file, conflicts and errors stay visible in the upload progress UI, and the final file-write response is the source of truth.
 
-For machine federation, Settings saves the global upload default on the selected machine. Current remote PI WEB servers also return `workspace.effectiveConfig.uploads.defaultFolder` on the existing workspace-list response. Older remote servers can omit that optional field without breaking clients; the Files panel falls back to the global/default upload folder.
+For machine federation, Settings saves the global upload default on the selected machine. Remote PI WEB servers always return `workspace.effectiveConfig.uploads.defaultFolder` on the workspace-list response, and the Files panel uses it as the default upload destination.
 
 The per-request size limit is still controlled by `maxUploadBytes` / `PI_WEB_MAX_UPLOAD_BYTES` on the machine serving the upload.
 
@@ -209,7 +213,7 @@ Environment variables take precedence over the config file. `PI_WEB_AGENT_COMMAN
 
 The session daemon resolves the persisted desired values plus its environment once at startup. That secret-free active profile stays fixed for the daemon lifetime. **Settings → Session daemon** saves command and directory together as desired configuration and shows whether the profile is active, needs a restart, or cannot be compared. Until the daemon restarts, sessions, Pi package operations, Pi-package-backed PI WEB plugin discovery, status/install detection, and update planning continue to use the daemon-owned active profile; a web/API restart recovers that same active profile instead of applying the newly saved values.
 
-If the session daemon cannot report a valid active profile, profile-dependent Pi package and PI WEB plugin operations report unavailable instead of falling back to independently resolved config. A package-managed update command is shown only when PI WEB can preserve the active profile with a recognized, safe Pi companion CLI; otherwise the command is omitted. Remote profile editing likewise requires advertised support, and the gateway rejects a remote save if the target does not return the requested profile. Restart the session daemon on the selected machine to establish the next active profile.
+If the session daemon cannot report a valid active profile, profile-dependent Pi package and PI WEB plugin operations report unavailable instead of falling back to independently resolved config. A package-managed update command is shown only when PI WEB can preserve the active profile with a recognized, safe Pi companion CLI; otherwise the command is omitted. Restart the session daemon on the selected machine to establish the next active profile.
 
 ### Pi extension provider baseline
 
@@ -271,6 +275,8 @@ A completion notice wakes an idle parent or queues behind in-flight work. Each n
 
 `list_subsessions`, `check_subsession`, and `read_subsession` never yield or change control flow. They are for deliberate inspection or recovery, not completion polling. While a child works, agent-facing `check_subsession` and `read_subsession` withhold partial output and direct the parent to continue independent work or yield at the join point. Output becomes available when the child stops. Included output and transcripts follow a labeled marker and come last, after PI WEB guidance.
 
+Both `spawn_session` and `spawn_subsession` accept an optional `model` parameter, given as an exact `provider/model-id` such as `anthropic/claude-sonnet-4-5`. When set, the new session starts on that model instead of inheriting the dispatching session's model. The match is strict: an unknown or malformed value is rejected with an error. A `#provider/model-id` reference in the prompt (see [Prompt completions](#prompt-completions)) is how users ask for a specific model; agents forward that reference as this parameter. The new session also inherits the dispatching session's thinking level, clamped to its model's capabilities.
+
 In **Settings → Session daemon**, these keys are saved on the selected machine. Restart the session daemon on that machine after changing them.
 
 #### `askUser` and `ask_user`
@@ -285,7 +291,17 @@ Calling `ask_user` posts the whole set as one browser form and ends the current 
 
 PI WEB confirms a partial submission before sending it and names the unanswered questions. Only one ask can be open per session: a later `ask_user` call supersedes the earlier one, reports that fact and its unanswered questions to the model, and turns the earlier card into a read-only transcript record. Submitted and cancelled asks likewise remain readable in the transcript.
 
+Sending an ordinary chat message while a form is open voids the form: the card closes as cancelled and the model is told its questions went unanswered as part of the turn the message itself starts.
+
 Restart the session daemon after changing `askUser` or after upgrading PI WEB to a version that introduces this tool. For the systemd user service, run `systemctl --user restart pi-web-sessiond`.
+
+### Extension dialogs
+
+Pi extensions can ask the user questions from `ctx.ui.confirm()`, `ctx.ui.select()`, and `ctx.ui.input()` — including from `session_start` hooks and in-flight `tool_call` hooks. PI WEB renders these dialogs inline in the session transcript and answers them through a dedicated session-daemon channel, never the prompt queue, so a dialog parked inside a `tool_call` hook cannot deadlock the run. Dialog support is always on; there is no enable flag. See [Pi extension dialogs in PI WEB](https://pi-web.dev/plugins#pi-extension-dialogs) for behavior details and author guidance.
+
+`extensionDialogsTimeoutMs` is the unattended-dialog safety valve: how long the session daemon waits for an answer before settling the dialog with its kind's cancel value (`false` for confirm, `undefined` for select and input). It defaults to `300000` (5 minutes); set it to `0` to wait forever. An extension's own `timeout` option still applies, and the effective deadline is the sooner of the two.
+
+The key is edited directly in the global config file. Restart the session daemon after changing it — for the systemd user service, run `systemctl --user restart pi-web-sessiond`.
 
 ### PI WEB plugin config and recovery
 
@@ -309,9 +325,9 @@ Sessiond is the single workspace authority and resolves one immutable server-plu
 
 **Settings → PI WEB plugins** shows desired and active state separately, including active, failed, incompatible, disabled, not-active/missing, unknown, conflict, stale-revision, health, safe-mode, and restart-required state. Desired config remains editable when sessiond is unavailable as long as the selected machine's config endpoint works, but PI WEB reports active state as unavailable rather than constructing a second workspace authority.
 
-For machine federation, the panel targets the selected machine. Remote desired state is saved in that target's config and active state comes from that target's sessiond through the gateway. If selected-machine settings, the versioned plugin lifecycle, the remote manifest, or provider backend routes are unavailable/incompatible, PI WEB reports an explicit unsupported or compatibility error and does not silently use gateway config/code.
+For machine federation, the panel targets the selected machine. Remote desired state is saved in that target's config and active state comes from that target's sessiond through the gateway. If the versioned plugin lifecycle, the remote manifest, or provider backend routes are unavailable/incompatible, PI WEB reports an explicit unsupported or compatibility error and does not silently use gateway config/code.
 
-Mixed-version plugin/provider operation is not supported in either upgrade order. A newer gateway rejects an older target's whole remote plugin manifest, including browser-only contributions, when the target lacks the current lifecycle contract; its Git panel is therefore unavailable. An older gateway still calls legacy core Git routes removed by an updated target, so remote Git status/diff returns `404`. Upgrade gateway and target together, restart their updated web/API processes and the target session daemon, then reload the browser. Other selected-machine settings and features keep their own capability negotiation.
+Mixed-version plugin/provider operation is not supported in either upgrade order. A newer gateway rejects an older target's whole remote plugin manifest, including browser-only contributions, when the target lacks the current lifecycle contract; its Git panel is therefore unavailable. An older gateway still calls legacy core Git routes removed by an updated target, so remote Git status/diff returns `404`. Upgrade gateway and target together, restart their updated web/API processes and the target session daemon, then reload the browser. Other selected-machine settings and features report their own explicit errors.
 
 Apply changes in this order:
 
@@ -354,6 +370,14 @@ Shortcut values are keyed by action id. Values are shortcut strings such as `mod
 ```
 
 Prefer Settings → Keyboard for editing shortcuts interactively.
+
+## Prompt completions
+
+The chat composer opens completion menus on three trigger characters:
+
+- `/` at the very start of the draft completes session commands.
+- `@` completes file paths: `@` for tracked files, `@ ` (at, then space) or `!@` for all files. Picking one inserts an `@path` reference into the draft, quoted automatically when the path contains spaces.
+- `#` completes the models available to the session, filtered case-insensitively as you type (at most 12 entries). Picking one inserts a `#provider/model-id` reference into the draft, which tells agents the request should run on that model — for example as the `model` parameter of `spawn_session`.
 
 ## Optional completion tools
 

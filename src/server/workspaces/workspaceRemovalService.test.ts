@@ -4,7 +4,7 @@ import type {
   ProviderWorkspace,
   WorkspaceProvider,
 } from "../../server-plugin-api.js";
-import type { TerminalCommandRun, Workspace } from "../../shared/apiTypes.js";
+import type { TerminalCommandRun, WorkspaceListing } from "../../shared/apiTypes.js";
 import type { ServerPluginProviderContribution } from "../plugins/serverPluginRuntime.js";
 import type { Project } from "../types.js";
 import type { RunTerminalCommandOptions } from "../terminals/terminalService.js";
@@ -360,15 +360,13 @@ function providerWorkspace(
   return { key, path, label: key === "roadmap" ? "Roadmap" : key, isMain, ...extras };
 }
 
-function hostWorkspace(id: string, path: string, isMain: boolean): Workspace {
+function hostWorkspace(id: string, path: string, isMain: boolean): WorkspaceListing {
   return {
     id,
     projectId: project.id,
     path,
     label: id,
     isMain,
-    isGitRepo: false,
-    isGitWorktree: false,
     provider: { pluginId: "neutral", capabilities: { request: false, remove: true } },
     removal: {
       actionLabel: "Disconnect",
@@ -382,7 +380,7 @@ function removalProvider(target: WorkspaceProviderRemovalTarget): WorkspaceRemov
   return { resolveRemoval: () => Promise.resolve(target) };
 }
 
-function removalPrecondition(workspace: Workspace): string {
+function removalPrecondition(workspace: WorkspaceListing): string {
   const precondition = workspace.removal?.precondition;
   if (precondition === undefined) throw new Error("Expected removal precondition");
   return precondition;

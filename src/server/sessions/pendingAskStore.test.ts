@@ -45,7 +45,6 @@ describe("PendingAskStore validation", () => {
           question: "Which database?",
           detail: "Only the primary store matters here.",
           options: [{ value: "pg", label: "Postgres", detail: "Existing cluster" }],
-          allowOther: false,
           multiple: false,
         },
       ],
@@ -60,7 +59,6 @@ describe("PendingAskStore validation", () => {
           question: "Which database?",
           detail: "Only the primary store matters here.",
           options: [{ value: "pg", label: "Postgres", detail: "Existing cluster" }],
-          allowOther: true,
         },
       ],
     });
@@ -89,10 +87,10 @@ describe("PendingAskStore validation", () => {
     expect(store.pendingAsk(sessionId)).toBeUndefined();
   });
 
-  it("accepts an optionless question and adds the custom-answer compatibility marker", () => {
+  it("accepts an optionless question", () => {
     const store = testStore();
     const { ask } = store.open({ sessionId, questions: [question("q1", { options: [] })] });
-    expect(ask.questions[0]).toEqual({ id: "q1", question: "Question q1?", options: [], allowOther: true });
+    expect(ask.questions[0]).toEqual({ id: "q1", question: "Question q1?", options: [] });
   });
 });
 
@@ -269,6 +267,17 @@ describe("PendingAskStore close transitions", () => {
       outcome: { reason: "cancelled", answeredCount: 0, unansweredIds: ["q1", "q2"] },
     });
     expect(store.pendingAsk(sessionId)).toBeUndefined();
+  });
+
+  it("cancels whatever ask is open without naming its id", () => {
+    const store = testStore();
+    openTwoQuestions(store);
+
+    const outcome = store.cancelOpen(sessionId);
+
+    expect(outcome).toMatchObject({ askId: "ask-1", reason: "cancelled", answeredCount: 0, unansweredIds: ["q1", "q2"] });
+    expect(store.pendingAsk(sessionId)).toBeUndefined();
+    expect(store.cancelOpen(sessionId)).toBeUndefined();
   });
 
   it("forgets the open ask of a session that goes away without reporting an outcome", () => {

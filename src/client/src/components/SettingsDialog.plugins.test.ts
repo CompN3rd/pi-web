@@ -41,7 +41,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
       machineId: remoteMachine.id,
       ok: true,
       checkedAt: "now",
-      capabilities: [PI_WEB_CAPABILITIES.selectedMachineSettings],
+      capabilities: [],
     };
 
     await callDialogPromise(dialog, "loadPluginsForTarget");
@@ -61,7 +61,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
     expect(getDialogProperty(dialog, "pluginError")).toContain("Plugin lifecycle diagnostics are not available on Lab Mac");
   });
 
-  it("loads same-version remote lifecycle data when both settings and plugin capabilities are advertised", async () => {
+  it("loads remote lifecycle data when the plugin lifecycle capability is advertised", async () => {
     const config = configResponse({ plugins: { info: { enabled: true } } });
     const plugins = pluginsResponse([pluginInfo("info", true)]);
     vi.spyOn(configApi, "config").mockResolvedValue(config);
@@ -72,7 +72,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
       machineId: remoteMachine.id,
       ok: true,
       checkedAt: "now",
-      capabilities: [PI_WEB_CAPABILITIES.selectedMachineSettings, PI_WEB_CAPABILITIES.pluginLifecycle],
+      capabilities: [PI_WEB_CAPABILITIES.pluginLifecycle],
     };
 
     await callDialogPromise(dialog, "loadPluginsForTarget");
@@ -82,7 +82,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
     expect(getDialogProperty(dialog, "pluginError")).toBe("");
   });
 
-  it("keeps fulfilled plugin config when the selected machine plugin list is unsupported", async () => {
+  it("keeps fulfilled plugin config when the selected machine plugin list fails to load", async () => {
     const config = configResponse({ plugins: { info: { enabled: true } } });
     vi.spyOn(configApi, "config").mockResolvedValue(config);
     vi.spyOn(pluginsApi, "plugins").mockRejectedValue(new Error("route GET:/api/plugins not found"));
@@ -93,7 +93,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
 
     expect(getDialogProperty(dialog, "selectedPluginConfigResponse")).toBe(config);
     expect(getDialogProperty(dialog, "selectedPluginsResponse")).toBeUndefined();
-    expect(getDialogProperty(dialog, "pluginError")).toBe("Failed to load PI WEB plugin settings from Lab Mac (remote machine): PI WEB plugins: Selected-machine settings are not available on Lab Mac. Update and restart PI WEB on that machine, then try again.");
+    expect(getDialogProperty(dialog, "pluginError")).toBe("Failed to load PI WEB plugin settings from Lab Mac (remote machine): PI WEB plugins: route GET:/api/plugins not found");
     expect(getDialogProperty(dialog, "pluginLoading")).toBe(false);
   });
 

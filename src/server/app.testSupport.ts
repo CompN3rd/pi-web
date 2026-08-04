@@ -14,8 +14,7 @@ import { MachineStore } from "./machines/machineStore.js";
 import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
 import type { PiPackageService } from "./piPackageService.js";
 import type { SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
-import { PI_WEB_CAPABILITIES } from "../shared/capabilities.js";
-import type { ActiveAgentProfileDescriptor, PiPackageInfo, PiWebConfigResponse, PiWebConfigValues, Workspace, WorkspaceProviderResolution } from "../shared/apiTypes.js";
+import type { ActiveAgentProfileDescriptor, PiPackageInfo, PiWebConfigResponse, PiWebConfigValues, WorkspaceListing, WorkspaceProviderAuthorityResolution } from "../shared/apiTypes.js";
 import type { SessionDaemonAgentProfileResult } from "../sessiond/sessionDaemonClient.js";
 
 interface AppTestContext {
@@ -107,10 +106,10 @@ export function registerAppTestHooks(): void {
           packageName: "@jmfederico/pi-web",
           generatedAt: "2026-05-25T00:00:00.000Z",
           components: {
-            web: { component: "web", label: "PI WEB", available: true, capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived] },
-            sessiond: { component: "sessiond", label: "PI WEB Session Daemon", available: true, capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived] },
+            web: { component: "web", label: "PI WEB", available: true, capabilities: [] },
+            sessiond: { component: "sessiond", label: "PI WEB Session Daemon", available: true, capabilities: [] },
           },
-          capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived],
+          capabilities: [],
         }),
       }),
       sessionDaemon: fakeSessionDaemon(),
@@ -167,13 +166,13 @@ function fakePiWebPluginAsset(pluginId: string, assetPath: string): Promise<{ co
 }
 
 export class AppTestWorkspaceCatalog implements WorkspaceCatalog {
-  private readonly overrides = new Map<string, readonly Workspace[]>();
-  private readonly resolutionOverrides = new Map<string, WorkspaceProviderResolution>();
+  private readonly overrides = new Map<string, readonly WorkspaceListing[]>();
+  private readonly resolutionOverrides = new Map<string, WorkspaceProviderAuthorityResolution>();
   private failure: Error | undefined;
 
   constructor(private readonly projects: ProjectService) {}
 
-  async resolveProject(projectId: string): Promise<WorkspaceProviderResolution> {
+  async resolveProject(projectId: string): Promise<WorkspaceProviderAuthorityResolution> {
     if (this.failure !== undefined) throw this.failure;
     const configuredResolution = this.resolutionOverrides.get(projectId);
     if (configuredResolution !== undefined) return cloneWorkspaceResolution(configuredResolution);
@@ -189,22 +188,22 @@ export class AppTestWorkspaceCatalog implements WorkspaceCatalog {
     };
   }
 
-  async list(projectId: string): Promise<Workspace[]> {
+  async list(projectId: string): Promise<WorkspaceListing[]> {
     return [...(await this.resolveProject(projectId)).workspaces];
   }
 
-  async resolve(projectId: string, workspaceId: string): Promise<Workspace> {
+  async resolve(projectId: string, workspaceId: string): Promise<WorkspaceListing> {
     const workspace = (await this.list(projectId)).find((candidate) => candidate.id === workspaceId);
     if (workspace === undefined) throw new Error("Workspace not found");
     return workspace;
   }
 
-  set(projectId: string, workspaces: readonly Workspace[]): void {
+  set(projectId: string, workspaces: readonly WorkspaceListing[]): void {
     this.resolutionOverrides.delete(projectId);
     this.overrides.set(projectId, workspaces.map((workspace) => ({ ...workspace })));
   }
 
-  setResolution(resolution: WorkspaceProviderResolution): void {
+  setResolution(resolution: WorkspaceProviderAuthorityResolution): void {
     this.overrides.delete(resolution.projectId);
     this.resolutionOverrides.set(resolution.projectId, cloneWorkspaceResolution(resolution));
   }
@@ -213,7 +212,7 @@ export class AppTestWorkspaceCatalog implements WorkspaceCatalog {
     this.failure = error;
   }
 
-  private async workspaceList(projectId: string): Promise<Workspace[]> {
+  private async workspaceList(projectId: string): Promise<WorkspaceListing[]> {
     const configured = this.overrides.get(projectId);
     if (configured !== undefined) return configured.map((workspace) => ({ ...workspace }));
     const project = await this.projects.requireProject(projectId);
@@ -223,20 +222,18 @@ export class AppTestWorkspaceCatalog implements WorkspaceCatalog {
       path: project.path,
       label: project.name,
       isMain: true,
-      isGitRepo: false,
-      isGitWorktree: false,
     }];
   }
 }
 
-function commonWorkspaceOwner(workspaces: readonly Workspace[]): string | undefined {
+function commonWorkspaceOwner(workspaces: readonly WorkspaceListing[]): string | undefined {
   const owner = workspaces[0]?.provider?.pluginId;
   return owner !== undefined && workspaces.every((workspace) => workspace.provider?.pluginId === owner)
     ? owner
     : undefined;
 }
 
-function cloneWorkspaceResolution(resolution: WorkspaceProviderResolution): WorkspaceProviderResolution {
+function cloneWorkspaceResolution(resolution: WorkspaceProviderAuthorityResolution): WorkspaceProviderAuthorityResolution {
   return {
     ...resolution,
     workspaces: resolution.workspaces.map((workspace) => ({ ...workspace })),

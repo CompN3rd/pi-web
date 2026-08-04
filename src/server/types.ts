@@ -1,6 +1,8 @@
 export type {
   Project,
   Workspace,
+  WorkspaceListing,
+  WorkspaceEffectiveConfig,
   WorkspaceProviderResolution,
   SessionRef as ClientSessionRef,
   SessionInfo as ClientSession,

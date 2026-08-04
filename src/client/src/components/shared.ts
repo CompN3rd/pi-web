@@ -68,11 +68,13 @@ export interface ChatLine {
   meta?: {
     timestamp?: string;
     model?: { provider?: string; id?: string; responseId?: string };
+    /** Thinking level the assistant message was generated with, when known. */
+    thinkingLevel?: string;
   };
 }
 
 export interface CompletionItem {
-  kind: "command" | "file";
+  kind: "command" | "file" | "model";
   replaceFrom: number;
   replaceTo: number;
   insertText: string;
@@ -269,17 +271,23 @@ export const listStyles = css`
   .workspace-detail-row { display: grid; grid-template-columns: minmax(58px, max-content) minmax(0, 1fr); gap: 8px; align-items: baseline; }
   .workspace-detail-row dt { color: var(--pi-muted); font-size: 12px; white-space: normal; }
   .workspace-detail-row dd { min-width: 0; margin: 0; overflow-wrap: anywhere; white-space: normal; }
+  .action-menu-panel .detail-copy { box-sizing: border-box; display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; padding: 0; border: 1px solid var(--pi-border); border-radius: 5px; background: transparent; color: var(--pi-muted); font-size: 11px; line-height: 1; cursor: pointer; vertical-align: middle; }
+  .action-menu-panel .detail-copy:hover, .action-menu-panel .detail-copy:focus { color: var(--pi-text); border-color: var(--pi-accent); background: var(--pi-surface-hover); }
   .tree-marker { color: var(--pi-dim); margin-right: 5px; }
   .badge { display: inline-block; margin-left: 5px; border: 1px solid var(--pi-border); border-radius: 999px; color: var(--pi-muted); padding: 0 5px; font-size: 11px; font-weight: 400; }
   .action-activity { position: absolute; top: 5px; right: 6px; z-index: 1; display: grid; place-items: center; width: 10px; height: 10px; }
   .action-activity .activity-indicator { margin: 0; vertical-align: 0; }
-  .activity-indicator { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--pi-success); animation: pulse 1s ease-in-out infinite; vertical-align: 1px; }
+  .activity-indicator { flex: 0 0 auto; display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--pi-success); animation: pulse 1s ease-in-out infinite; vertical-align: 1px; }
   .activity-indicator.session { border-radius: 50%; background: var(--pi-success); }
   .activity-indicator.terminal { border-radius: 2px; background: var(--pi-accent); }
   /* Client-side sending (upload in flight); distinct from server activity, which propagates to workspace/machine rows. */
   .activity-indicator.sending { border-radius: 50%; background: var(--pi-warning); }
   /* Unread is a stable state, not ongoing work: keep it static and accent-colored. */
   .activity-indicator.unread { border-radius: 50%; background: var(--pi-accent); animation: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--pi-accent) 20%, transparent); }
+  /* Unread + ongoing work: a static accent ring wraps the still-pulsing work dot. */
+  .unread-ring { flex: 0 0 auto; box-sizing: border-box; display: inline-grid; place-items: center; width: 9px; height: 9px; margin-right: 6px; border: 1.5px solid var(--pi-accent); border-radius: 50%; vertical-align: 1px; }
+  .unread-ring .activity-indicator { width: 5px; height: 5px; margin: 0; vertical-align: 0; }
+  .action-activity .unread-ring { margin: 0; vertical-align: 0; }
   .action-menu { position: relative; align-self: stretch; }
   .action-menu-toggle { display: grid; place-items: center; height: 100%; min-width: 32px; padding: 0; color: var(--pi-muted); border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
   .action-menu-toggle:hover { color: var(--pi-text); background: var(--pi-surface-hover); }
@@ -411,6 +419,7 @@ export const chatStyles = css`
   .queued-message { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--pi-border); }
   .queued-message:first-of-type { padding-top: 0; border-top: 0; }
   .queued-kind { color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
+  .queued-dialogs { margin: -8px 0 14px; padding: 0 4px; color: var(--pi-muted); font-size: 12px; text-align: center; }
   .session-activity { max-width: 100%; min-width: 0; box-sizing: border-box; display: grid; gap: 4px; margin: 0 0 14px; padding: 12px; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); color: var(--pi-text); overflow: hidden; }
   .session-activity.compacting { border-color: var(--pi-purple-border); background: var(--pi-purple-surface); }
   .session-activity strong { color: var(--pi-purple); }

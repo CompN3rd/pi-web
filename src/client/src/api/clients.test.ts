@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import type { PiWebConfigValues, TerminalCommandRun, Workspace } from "../../../shared/apiTypes";
 import { configApi, filesApi, machinesApi, piPackagesApi, piWebApi, pluginsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 
@@ -9,8 +8,7 @@ const workspace: Workspace = {
   path: "/repo",
   label: "repo",
   isMain: true,
-  isGitRepo: true,
-  isGitWorktree: true,
+  effectiveConfig: {},
 };
 
 function piWebStatusResponse() {
@@ -80,7 +78,7 @@ describe("machine-scoped runtime API", () => {
   });
 
   it("reads machine runtime through the gateway route", async () => {
-    const response = { machineId: "remote a", ok: true, checkedAt: "now", capabilities: [PI_WEB_CAPABILITIES.sessionsDeleteArchived] };
+    const response = { machineId: "remote a", ok: true, checkedAt: "now", capabilities: [] };
     const fetchMock = stubSequenceFetch([jsonResponse(response), jsonResponse(response)]);
 
     await machinesApi.runtime("remote a");
@@ -241,13 +239,13 @@ describe("session API compatibility", () => {
     const deleted = { deleted: true, deletedSessionIds: ["s 1"], failures: [], generatedAt: "later" };
     const fetchMock = stubSequenceFetch([jsonResponse(archived), jsonResponse(deleted)]);
 
-    await expect(sessionsApi.archiveMany([{ id: "s 1", cwd: "/repo" }, "s 2"], "remote a")).resolves.toEqual(archived);
+    await expect(sessionsApi.archiveMany([{ id: "s 1", cwd: "/repo" }, { id: "s 2", cwd: "/repo" }], "remote a")).resolves.toEqual(archived);
     await expect(sessionsApi.deleteArchivedMany([{ id: "s 1", cwd: "/repo" }], "remote a")).resolves.toEqual(deleted);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/bulk/archive");
     expect(fetchCall(fetchMock, 0)[1]?.method).toBe("POST");
-    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }, { id: "s 2" }] });
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }, { id: "s 2", cwd: "/repo" }] });
     expect(fetchCall(fetchMock, 1)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/bulk/delete-archived");
     expect(fetchCall(fetchMock, 1)[1]?.method).toBe("POST");
     expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ sessions: [{ id: "s 1", cwd: "/repo" }] });
@@ -267,17 +265,6 @@ describe("session API compatibility", () => {
     // The token is optional, so a caller with no row to label sends none rather
     // than an empty one.
     expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ cwd: "/repo" });
-  });
-
-  it("keeps legacy session-id calls free of cwd context", async () => {
-    const fetchMock = stubJsonFetch({ accepted: true });
-
-    await sessionsApi.prompt("s 1", "hello", "followUp", "remote a");
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchCall(fetchMock, 0);
-    expect(url).toBe("https://pi.example.test/api/machines/remote%20a/sessions/s%201/prompt");
-    expect(JSON.parse(requestBody(init))).toEqual({ text: "hello", streamingBehavior: "followUp" });
   });
 
   it("adds cwd context when session refs include a workspace", async () => {
@@ -319,6 +306,34 @@ describe("session API compatibility", () => {
     expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/queue/clear");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces" });
+  });
+
+  it("answers and cancels extension dialogs through encoded machine routes", async () => {
+    const answered = {
+      result: "closed",
+      outcome: { dialogId: "dialog 1", reason: "answered", answer: true, askedAt: "2026-07-20T00:00:00.000Z", closedAt: "2026-07-20T00:01:00.000Z" },
+      sessionStatus: dialogStatusWire(),
+    };
+    const cancelled = { result: "stale", sessionStatus: dialogStatusWire() };
+    const fetchMock = stubSequenceFetch([jsonResponse(answered), jsonResponse(cancelled)]);
+    const ref = { id: "s /?", cwd: "/repo with spaces" };
+
+    await expect(sessionsApi.answerDialog(ref, "dialog 1", true, "remote /?")).resolves.toEqual({
+      result: "closed",
+      outcome: { dialogId: "dialog 1", reason: "answered", answer: true, askedAt: "2026-07-20T00:00:00.000Z", closedAt: "2026-07-20T00:01:00.000Z" },
+      sessionStatus: parsedDialogStatus(),
+    });
+    await expect(sessionsApi.cancelDialog(ref, "dialog 1", "remote /?")).resolves.toEqual({ result: "stale", sessionStatus: parsedDialogStatus() });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [answerUrl, answerInit] = fetchCall(fetchMock, 0);
+    expect(answerUrl).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/dialogs/answer");
+    expect(answerInit?.method).toBe("POST");
+    expect(JSON.parse(requestBody(answerInit))).toEqual({ cwd: "/repo with spaces", dialogId: "dialog 1", value: true });
+    const [cancelUrl, cancelInit] = fetchCall(fetchMock, 1);
+    expect(cancelUrl).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/dialogs/cancel");
+    expect(cancelInit?.method).toBe("POST");
+    expect(JSON.parse(requestBody(cancelInit))).toEqual({ cwd: "/repo with spaces", dialogId: "dialog 1" });
   });
 
   it("posts session tree navigation through an encoded cwd-scoped machine route", async () => {
@@ -363,15 +378,6 @@ describe("session API compatibility", () => {
     expect(init?.method ?? "GET").toBe("GET");
   });
 
-  it("reads a session stream snapshot for a legacy session-id ref without cwd context", async () => {
-    const fetchMock = stubJsonFetch({ seq: 0, partial: null });
-
-    await expect(sessionsApi.streamSnapshot("s 1", "remote a")).resolves.toEqual({ seq: 0, partial: null });
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/s%201/stream-snapshot");
-  });
-
   it("uses encoded selected-session notification routes, cwd queries, and authoritative mutation cutoffs", async () => {
     const notification = { id: "daemon-a:1", message: "notice", truncated: false, severity: "warning", receivedAt: "2026-07-18T00:00:00.000Z", order: 1 };
     const summary = { sessionId: "s /?", cwd: "/repo with spaces", inboxRevision: 1, retainedCount: 1, discardedCount: 0, highestSeverity: "warning" };
@@ -398,22 +404,13 @@ describe("session API compatibility", () => {
 });
 
 describe("machine-scoped file suggestion API", () => {
-  it("uses the workspace-scoped route when the caller has enabled workspace-scoped suggestions", async () => {
+  it("uses the workspace-scoped route", async () => {
     const fetchMock = stubJsonFetch([]);
 
-    await filesApi.files("/repo", "README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a", workspaceScoped: true });
+    await filesApi.files("README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a" });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/projects/p%201/workspaces/w%2F1/files?q=README&scope=tracked");
-  });
-
-  it("falls back to the legacy cwd route when workspace-scoped suggestions are not enabled", async () => {
-    const fetchMock = stubJsonFetch([]);
-
-    await filesApi.files("/repo", "README", { projectId: "p 1", workspaceId: "w/1", scope: "tracked", machineId: "remote a" });
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/files?q=README&scope=tracked&cwd=%2Frepo");
   });
 });
 
@@ -608,6 +605,23 @@ function requestBody(init: RequestInit | undefined): string {
 
 function sessionInfoResponse(id: string) {
   return { id, path: `/tmp/${id}.jsonl`, cwd: "/repo", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
+}
+
+function dialogStatusWire() {
+  return {
+    sessionId: "s /?",
+    isStreaming: true,
+    isCompacting: false,
+    isBashRunning: false,
+    pendingMessageCount: 0,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    cost: 0,
+  };
+}
+
+// The parsed status normalizes the wire shape (queuedMessages defaults to []).
+function parsedDialogStatus() {
+  return { ...dialogStatusWire(), queuedMessages: [] };
 }
 
 function piWebConfigResponse(config: PiWebConfigValues) {

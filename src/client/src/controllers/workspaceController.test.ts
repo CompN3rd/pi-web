@@ -20,8 +20,7 @@ function workspace(projectId: string, path: string, options: Partial<Workspace> 
     path,
     label: path,
     isMain: false,
-    isGitRepo: true,
-    isGitWorktree: true,
+    effectiveConfig: {},
     ...options,
   };
 }

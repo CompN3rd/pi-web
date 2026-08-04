@@ -8,8 +8,7 @@ const workspace: Workspace = {
   path: "/repo",
   label: "main",
   isMain: true,
-  isGitRepo: false,
-  isGitWorktree: false,
+  effectiveConfig: {},
   provider: {
     pluginId: "changes.owner",
     capabilities: { request: true, remove: false },

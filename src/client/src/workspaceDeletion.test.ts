@@ -8,8 +8,7 @@ const workspace: Workspace = {
   path: "/repo/worktree",
   label: "worktree",
   isMain: false,
-  isGitRepo: false,
-  isGitWorktree: false,
+  effectiveConfig: {},
   removal: {
     actionLabel: "Disconnect view",
     confirmation: "Disconnect this view without deleting files?",
@@ -37,9 +36,9 @@ describe("workspace deletion state", () => {
     expect(canDeleteWorkspace(workspace)).toBe(true);
     expect(workspaceRemovalConfirmation(workspace)).toBe("Disconnect this view without deleting files?");
     expect(canDeleteWorkspace({ ...workspace, isMain: true })).toBe(false);
-    const gitWorkspace = { ...workspace, isGitRepo: true, isGitWorktree: true };
-    delete gitWorkspace.removal;
-    expect(canDeleteWorkspace(gitWorkspace)).toBe(false);
+    const withoutRemoval = { ...workspace };
+    delete withoutRemoval.removal;
+    expect(canDeleteWorkspace(withoutRemoval)).toBe(false);
   });
 
   it("builds command-run metadata for workspace deletion", () => {

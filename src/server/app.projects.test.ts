@@ -67,8 +67,6 @@ describe("buildApp project routes", () => {
         path: appTestContext.projectDir,
         label: "Plain",
         isMain: true,
-        isGitRepo: false,
-        isGitWorktree: false,
       })],
     });
   });

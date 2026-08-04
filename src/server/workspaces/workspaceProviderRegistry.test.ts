@@ -50,8 +50,6 @@ describe("WorkspaceProviderRegistry", () => {
         path: "/repo",
         label: "root",
         isMain: true,
-        isGitRepo: false,
-        isGitWorktree: false,
         provider: {
           pluginId: "primary",
           capabilities: { request: true, remove: true },
@@ -760,8 +758,6 @@ describe("WorkspaceProviderRegistry", () => {
         path: "/repo",
         label: "Project",
         isMain: true,
-        isGitRepo: false,
-        isGitWorktree: false,
       }],
       diagnostics: [],
     });
