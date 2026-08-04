@@ -40,8 +40,11 @@ describe("production build contents", () => {
     try {
       const fixtureDist = join(fixtureRoot, "dist", "server");
       await mkdir(fixtureDist, { recursive: true });
+      // npm 10 runs `prepare` even under `pack --ignore-scripts`; the hook installer exits 0 without a .git directory.
+      await mkdir(join(fixtureRoot, "scripts"), { recursive: true });
       await Promise.all([
         copyFile(join(repoRoot, "package.json"), join(fixtureRoot, "package.json")),
+        copyFile(join(repoRoot, "scripts", "install-git-hooks.mjs"), join(fixtureRoot, "scripts", "install-git-hooks.mjs")),
         copyFile(join(repoRoot, "plugin-api.d.ts"), join(fixtureRoot, "plugin-api.d.ts")),
         copyFile(join(repoRoot, "server-plugin-api.d.ts"), join(fixtureRoot, "server-plugin-api.d.ts")),
         writeFile(join(fixtureRoot, "dist", "plugin-api.d.ts"), "export {};\n", "utf8"),
@@ -192,6 +195,8 @@ async function createCleanPluginBuildFixture(fixtureRoot: string): Promise<void>
     copyFile(join(repoRoot, "tsconfig.json"), join(fixtureRoot, "tsconfig.json")),
     copyFile(join(repoRoot, "tsconfig.plugins.json"), join(fixtureRoot, "tsconfig.plugins.json")),
     copyFile(join(repoRoot, "scripts", "build-plugins.mjs"), join(fixtureRoot, "scripts", "build-plugins.mjs")),
+    // npm 10 runs `prepare` even under `pack --ignore-scripts`; the hook installer exits 0 without a .git directory.
+    copyFile(join(repoRoot, "scripts", "install-git-hooks.mjs"), join(fixtureRoot, "scripts", "install-git-hooks.mjs")),
     symlink(
       join(repoRoot, "node_modules"),
       join(fixtureRoot, "node_modules"),
