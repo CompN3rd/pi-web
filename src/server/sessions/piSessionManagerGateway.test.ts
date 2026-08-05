@@ -229,6 +229,41 @@ describe("gateway header-only parent paths", () => {
 
     await expect(gateway.listParentSessionPaths(cwd, readSessionHeaderSummary)).resolves.toEqual([]);
   });
+
+  it("reads headers with bounded concurrency and still collects every parent", async () => {
+    // Unbounded concurrent opens could exhaust the daemon's file-descriptor
+    // budget on a directory with many sessions; EMFILE would then surface as
+    // "unreadable" headers and silently drop children from the counts.
+    const sharedSessionDir = join(tempDir, "bounded-sessions");
+    const fileCount = 25;
+    for (let index = 0; index < fileCount; index += 1) {
+      const suffix = String(index).padStart(2, "0");
+      await writeNamedSessionFile(sharedSessionDir, `child-${suffix}.jsonl`, {
+        id: `child-${suffix}`,
+        cwd,
+        parentSession: `/parents/child-${suffix}.jsonl`,
+      });
+    }
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    const readHeader = async (sessionFile: string) => {
+      activeReads += 1;
+      maxActiveReads = Math.max(maxActiveReads, activeReads);
+      try {
+        return await readSessionHeaderSummary(sessionFile);
+      } finally {
+        activeReads -= 1;
+      }
+    };
+
+    const parents = await gateway.listParentSessionPaths(cwd, readHeader);
+
+    expect(parents).toHaveLength(fileCount);
+    expect(maxActiveReads).toBeLessThanOrEqual(10);
+    // The bound must not serialize the scan: workers really overlap.
+    expect(maxActiveReads).toBeGreaterThan(1);
+  });
 });
 
 describe("gateway session-file resolution by id", () => {

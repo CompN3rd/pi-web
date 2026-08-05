@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
+import type { SessionHeaderSummary } from "./sessionFileHeader.js";
 import type { SessionHeaderReader } from "./parentSessionLocator.js";
 import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
 import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
@@ -61,6 +62,14 @@ export class SessionDirResolver {
 }
 
 export type PiSessionManagerGatewayOptions = SessionDirResolverOptions;
+
+/**
+ * Same bound as the summary scanner's: concurrent header opens are capped so
+ * a directory with many sessions cannot exhaust file descriptors. Exhaustion
+ * (EMFILE) would surface as "unreadable" headers and silently drop children
+ * from the sibling counts.
+ */
+const MAX_CONCURRENT_HEADER_READS = 10;
 
 export function createPiSessionManagerGateway(options: PiSessionManagerGatewayOptions): PiSessionManagerGateway {
   return new SettingsAwarePiSessionManagerGateway(new SessionDirResolver(options));
@@ -168,7 +177,7 @@ export function filterSessionsForCwd(sessions: readonly PiSessionListEntry[], cw
  */
 export async function listParentSessionPathsInDir(sessionDir: string, cwd: string, readHeader: SessionHeaderReader): Promise<string[]> {
   const sessionFiles = await listSessionFiles(sessionDir);
-  const headers = await Promise.all(sessionFiles.map((sessionFile) => readHeader(sessionFile)));
+  const headers = await readSessionHeadersWithBoundedConcurrency(sessionFiles, readHeader);
   const parentSessionPaths: string[] = [];
   for (const header of headers) {
     // A header without a cwd (very old session files) would also be dropped by
@@ -177,6 +186,29 @@ export async function listParentSessionPathsInDir(sessionDir: string, cwd: strin
     parentSessionPaths.push(header.parentSession);
   }
   return parentSessionPaths;
+}
+
+/**
+ * Read every header with bounded concurrency (see MAX_CONCURRENT_HEADER_READS),
+ * preserving input order. Every file is read even when earlier reads fail.
+ */
+async function readSessionHeadersWithBoundedConcurrency(
+  sessionFiles: readonly string[],
+  readHeader: SessionHeaderReader,
+): Promise<(SessionHeaderSummary | undefined)[]> {
+  const headers: (SessionHeaderSummary | undefined)[] = Array.from({ length: sessionFiles.length }, () => undefined);
+  let nextIndex = 0;
+  const workerCount = Math.min(MAX_CONCURRENT_HEADER_READS, sessionFiles.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const index = nextIndex++;
+      const sessionFile = sessionFiles[index];
+      if (sessionFile === undefined) return;
+      headers[index] = await readHeader(sessionFile);
+    }
+  });
+  await Promise.all(workers);
+  return headers;
 }
 
 /**

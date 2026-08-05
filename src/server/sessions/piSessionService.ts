@@ -864,6 +864,8 @@ export class PiSessionService implements SessionRouteService {
    * time. Headers are written once, so identity-verified reads are cached.
    */
   private readonly sessionHeaderCache = new Map<string, CachedSessionHeader>();
+  /** Session file path -> its in-flight header read, so concurrent scans share one read per file. */
+  private readonly pendingSessionHeaderReads = new Map<string, Promise<SessionHeaderSummary | undefined>>();
   /**
    * Tracked subsession id -> whether a completion notification is armed.
    * Armed when the child starts working; firing on completion disarms it so a
@@ -1099,6 +1101,7 @@ export class PiSessionService implements SessionRouteService {
     this.subsessionHydratedParents.clear();
     this.subsessionNotifyArmed.clear();
     this.sessionHeaderCache.clear();
+    this.pendingSessionHeaderReads.clear();
     this.notificationStore.clearAll("service-dispose");
     await Promise.all(activeSessions.map(async (active) => {
       active.unsubscribe();
@@ -1188,17 +1191,29 @@ export class PiSessionService implements SessionRouteService {
   }
 
   /**
-   * Read a session file header, memoized per path. Pi writes the header once
-   * at session creation, so a successful read stays valid as long as the path
-   * still holds the same file: every hit re-checks the file's identity
-   * (dev/ino), and a replacement landed at a cached path is re-read instead
-   * of serving the previous file's header — the summary scanner detects such
+   * Read a session file header, memoized per path, with one in-flight read
+   * per path: concurrent scans of a shared session directory share the read
+   * instead of each opening the file. Pi writes the header once at session
+   * creation, so a successful read stays valid as long as the path still
+   * holds the same file: every hit re-checks the file's identity (dev/ino),
+   * and a replacement landed at a cached path is re-read instead of serving
+   * the previous file's header — the summary scanner detects such
    * replacements, so the listing and the header reads must agree. The one
-   * thing identity cannot detect is an in-place rewrite that keeps the inode;
-   * detach, the only such writer, deletes the entry itself. Failures are not
-   * cached so a session file that appears later is picked up.
+   * thing identity cannot detect is an in-place rewrite that keeps the
+   * inode; detach, the only such writer, deletes the entry itself. Failures
+   * are not cached so a session file that appears later is picked up.
    */
-  private readonly readCachedSessionHeader: SessionHeaderReader = async (sessionFile) => {
+  private readonly readCachedSessionHeader: SessionHeaderReader = (sessionFile) => {
+    const pending = this.pendingSessionHeaderReads.get(sessionFile);
+    if (pending !== undefined) return pending;
+    const read = this.loadSessionHeader(sessionFile).finally(() => {
+      this.pendingSessionHeaderReads.delete(sessionFile);
+    });
+    this.pendingSessionHeaderReads.set(sessionFile, read);
+    return read;
+  };
+
+  private async loadSessionHeader(sessionFile: string): Promise<SessionHeaderSummary | undefined> {
     let stats: Stats;
     try {
       stats = await stat(sessionFile);
@@ -1216,7 +1231,7 @@ export class PiSessionService implements SessionRouteService {
     }
     this.sessionHeaderCache.set(sessionFile, { header, dev: stats.dev, ino: stats.ino });
     return header;
-  };
+  }
 
   async start(cwd: string, options: StartSessionOptions = {}): Promise<ClientSession> {
     return this.startSession(cwd, options);

@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PiSessionService, type PiSessionListEntry } from "./piSessionService.js";
 import { createPiSessionManagerGateway, listParentSessionPathsInDir } from "./piSessionManagerGateway.js";
+import type { SessionHeaderReader } from "./parentSessionLocator.js";
 import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionRecord, sessionRef, testModelRuntime, type SessionGateway } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
@@ -101,6 +102,44 @@ describe("PiSessionService.list parent locations", () => {
     const [child] = await service.list(CHILD_CWD);
 
     expect(child).not.toHaveProperty("parentSessionCwd");
+  });
+});
+
+describe("PiSessionService header read deduplication", () => {
+  it("shares one in-flight header read across concurrent scans of the same path", async () => {
+    // Sibling workspaces can share one session directory; concurrent scans of
+    // it must open each file once, not once per scan.
+    const parentFile = await parentSessionFile({ id: "parent-id", cwd: PARENT_CWD });
+    let capturedReader: SessionHeaderReader | undefined;
+    const gateway: SessionGateway = {
+      create: () => fakeSessionManager(),
+      list: () => Promise.resolve([sessionRecord("child", CHILD_CWD)]),
+      listAll: () => Promise.resolve([]),
+      listParentSessionPaths: (_siblingCwd, readHeader) => {
+        capturedReader = readHeader;
+        return Promise.resolve([]);
+      },
+      invalidateSessionFile: () => undefined,
+      resolveSessionFile: () => Promise.resolve(undefined),
+      open: () => fakeSessionManager(),
+    };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      archiveStore: emptyArchiveStore(),
+      sessionManager: gateway,
+      heartbeatIntervalMs: 60_000,
+      projectWorkspaces: { forCwd: () => Promise.resolve([CHILD_CWD, PARENT_CWD]) },
+    });
+    await service.list(CHILD_CWD);
+    if (capturedReader === undefined) throw new Error("sibling scan did not receive the header reader");
+
+    // Two concurrent reads of the same path resolve to the very same header
+    // object; independent reads could not produce identical references.
+    const [first, second] = await Promise.all([capturedReader(parentFile), capturedReader(parentFile)]);
+    expect(first).toMatchObject({ id: "parent-id", cwd: PARENT_CWD });
+    expect(second).toBe(first);
+    await service.dispose();
   });
 });
 
