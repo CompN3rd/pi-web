@@ -1,9 +1,15 @@
-import { appendFile, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { scanSessionFileSummary, scanSessionSummariesInDir, SessionSummaryScanner } from "./sessionSummaryScanner.js";
+
+// Route node:fs/promises through a plain copy of the real module: Node's
+// builtin namespaces are frozen, so vi.spyOn cannot redefine their exports
+// directly. Tests replay the memo's stat/open race by spying on `stat` here.
+vi.mock("node:fs/promises", async (importOriginal) => ({ ...(await importOriginal<typeof fsPromises>()) }));
 
 const WORKSPACE = "/workspace/project";
 
@@ -452,6 +458,79 @@ describe("session summary scanner memo", () => {
     expect(warm[0]).not.toHaveProperty("parentSessionPath");
     expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
+
+  it("re-parses from the start when the file is replaced between the memo and the growth scan", async () => {
+    const path = await writeSession("raced.jsonl", [
+      headerLine({ id: "original", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("old first") }),
+    ]);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "original", messageCount: 1 }]);
+    const memoizedStats = await stat(path);
+
+    // A concurrent writer replaces the file atomically: write the successor
+    // alongside, pin its mtime, then rename over the path (new inode).
+    const replacementPath = await writeSession("raced-replacement.jsonl", [
+      headerLine({ id: "replacement", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("new first") }),
+      messageLine({ role: "assistant", content: textContent("new second") }),
+      messageLine({ role: "user", content: textContent("new third") }),
+    ]);
+    const replacementMtime = new Date("2026-02-03T04:05:06.000Z");
+    await utimes(replacementPath, replacementMtime, replacementMtime);
+    await rename(replacementPath, path);
+
+    // Replay the stat/open race: the pathname stat still reports the
+    // memoized identity at a grown size, as it did before the replacement
+    // landed. The growth path must then notice the new dev/ino on the
+    // opened handle and re-parse from the start — folding the replacement's
+    // tail into the old summary would keep the original id.
+    const statSpy = vi.spyOn(fsPromises, "stat").mockResolvedValue(statWithSize(memoizedStats, memoizedStats.size + 1));
+    try {
+      const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+      expect(warm).toMatchObject([{ id: "replacement", messageCount: 3, firstMessage: "new first" }]);
+      // Metadata comes from the opened handle, not the stale pathname stat.
+      expect(warm[0]?.modified.getTime()).toBe(replacementMtime.getTime());
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    // The memo now describes the replacement: later listings stay consistent.
+    const settled = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(settled).toMatchObject([{ id: "replacement", messageCount: 3 }]);
+    expect(settled).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("re-parses from the start when the file shrunk between the memo and the growth scan", async () => {
+    // Same inode, smaller file: the truncate + rewrite lands after the
+    // pathname stat reported growth, so only the handle's fstat can catch it.
+    const path = await writeSession("raced-shrink.jsonl", [
+      headerLine({ id: "raced-shrink", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("old first") }),
+      messageLine({ role: "assistant", content: textContent("old second") }),
+      sessionInfoLine("Old name"),
+    ]);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "raced-shrink", messageCount: 2, name: "Old name" }]);
+    const memoizedStats = await stat(path);
+
+    await writeFile(path, `${[headerLine({ id: "rewritten", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("new first") })].join("\n")}\n`, "utf8");
+
+    const statSpy = vi.spyOn(fsPromises, "stat").mockResolvedValue(statWithSize(memoizedStats, memoizedStats.size + 1));
+    try {
+      const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+      // Folding from the cached offset would read past the new end of file
+      // and keep the old summary; the handle check forces a full re-parse.
+      expect(warm).toMatchObject([{ id: "rewritten", messageCount: 1, firstMessage: "new first" }]);
+      expect(warm[0]?.name).toBeUndefined();
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    const settled = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(settled).toMatchObject([{ id: "rewritten", messageCount: 1 }]);
+    expect(settled).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
 });
 
 function nextEntryId(): string {
@@ -499,6 +578,14 @@ async function rewriteHeaderWithoutParentSession(path: string): Promise<void> {
   if (!isRecord(parsed)) throw new Error("Invalid session file header");
   delete parsed["parentSession"];
   await writeFile(path, `${JSON.stringify(parsed)}${content.slice(newlineIndex)}`, "utf8");
+}
+
+/**
+ * The memoized stat replayed at a different size: the race stub reports the
+ * identity the scanner cached, at a size that selects the growth branch.
+ */
+function statWithSize(stats: Awaited<ReturnType<typeof stat>>, size: number): Awaited<ReturnType<typeof stat>> {
+  return Object.assign({}, stats, { size });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

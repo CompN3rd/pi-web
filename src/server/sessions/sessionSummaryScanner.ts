@@ -1,5 +1,6 @@
 import { open, readdir, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { join, sep } from "node:path";
 import type { PiSessionListEntry } from "./piSessionService.js";
 
@@ -70,10 +71,9 @@ export async function scanSessionSummariesInDir(sessionDir: string): Promise<PiS
  * or first parseable entry is not a session header), matching the SDK.
  */
 export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buffer): Promise<PiSessionListEntry | undefined> {
-  const fold = createEmptyFold();
-  const outcome = await foldSessionFileRange(filePath, fold, 0, chunkBuffer ?? Buffer.allocUnsafe(SCAN_CHUNK_BYTES));
-  if (outcome === undefined) return undefined;
-  return buildSummaryFromFold(fold, filePath, outcome.mtime);
+  const scanned = await foldWholeSessionFile(filePath, chunkBuffer ?? Buffer.allocUnsafe(SCAN_CHUNK_BYTES));
+  if (scanned === undefined) return undefined;
+  return buildSummaryFromFold(scanned.fold, filePath, scanned.outcome.mtime);
 }
 
 /**
@@ -92,6 +92,9 @@ export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buf
  *   only the appended tail is read and folded into the cached summary state.
  *   A trailing line that was still being written when it was cached is
  *   re-folded from its start, so completed lines are never counted twice.
+ *   Identity here is re-verified on the opened file handle, not just the
+ *   pathname stat: a replacement that lands between the two is fully
+ *   re-parsed instead of being folded into the old summary.
  * - Identity changed or the file shrunk → cached state is dropped and the
  *   file is fully re-parsed.
  * - File gone (ENOENT) → its entry is dropped; entries for files that no
@@ -101,7 +104,8 @@ export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buf
  *   cold but correct.
  *
  * The one thing the key cannot detect is an in-place rewrite that keeps the
- * inode and never shrinks the file. The SDK never rewrites session files, but
+ * inode and never shrinks the file — including the equal-size rewrite served
+ * by the stat-only fast path. The SDK never rewrites session files, but
  * PI WEB's detach does (it clears the header), so callers that rewrite a file
  * in place must call {@link invalidate} for it; {@link clear} remains the
  * escape hatch for unknown external rewrites.
@@ -151,7 +155,7 @@ export class SessionSummaryScanner {
     const memoized = this.memo.get(filePath);
     if (memoized === undefined) return this.fullScan(filePath, chunkBuffer);
 
-    let stats: Awaited<ReturnType<typeof stat>>;
+    let stats: Stats;
     try {
       stats = await stat(filePath);
     } catch {
@@ -165,45 +169,73 @@ export class SessionSummaryScanner {
       return this.fullScan(filePath, chunkBuffer);
     }
     if (stats.size === memoized.size) {
+      // Stat-only fast path: nothing was appended, so no open or fold. Its
+      // one blind spot is an equal-size in-place rewrite that keeps the
+      // inode; identity + size cannot see it by design (see the class docs).
       return buildSummaryFromFold(memoized.completeFold, filePath, stats.mtime);
     }
 
     // Growth on the same identity: append-only session files can only have
     // gained a tail, so fold just the new bytes into the cached state.
-    const fold = { ...memoized.resumeFold };
-    const outcome = await foldSessionFileRange(filePath, fold, memoized.resumeOffset, chunkBuffer);
-    if (outcome === undefined) {
+    return this.foldGrowth(filePath, memoized, chunkBuffer);
+  }
+
+  /**
+   * Fold the appended tail of a memoized file into its cached summary,
+   * re-verifying identity on the opened handle. The pathname stat only
+   * selected this branch: if a replacement landed between that stat and the
+   * open, the handle carries a different dev/ino and the opened file is
+   * re-parsed from the start instead of folding its tail into the old
+   * summary (same for a file that shrunk below the cached size after the
+   * stat). All metadata memoized afterwards comes from the handle, so the
+   * memo only ever describes the file it actually read.
+   */
+  private async foldGrowth(filePath: string, memoized: MemoizedSessionSummary, chunkBuffer: Buffer): Promise<PiSessionListEntry | undefined> {
+    const opened = await openSessionFile(filePath);
+    if (opened === undefined) {
       // Became unreadable mid-scan: skip it (like the SDK) and forget it.
       this.memo.delete(filePath);
       return undefined;
     }
-    this.memo.set(filePath, {
-      dev: outcome.dev,
-      ino: outcome.ino,
-      size: outcome.size,
-      resumeOffset: outcome.resumeOffset,
-      resumeFold: outcome.resumeFold,
-      completeFold: fold,
-    });
-    return buildSummaryFromFold(fold, filePath, outcome.mtime);
+    try {
+      const { file, stats } = opened;
+      const cachedPrefixUsable = stats.dev === memoized.dev && stats.ino === memoized.ino && stats.size >= memoized.size;
+      const fold = cachedPrefixUsable ? { ...memoized.resumeFold } : createEmptyFold();
+      const startOffset = cachedPrefixUsable ? memoized.resumeOffset : 0;
+      const outcome = await foldSessionFileRange(file, stats, fold, startOffset, chunkBuffer);
+      if (outcome === undefined) {
+        this.memo.delete(filePath);
+        return undefined;
+      }
+      this.memo.set(filePath, {
+        dev: outcome.dev,
+        ino: outcome.ino,
+        size: outcome.size,
+        resumeOffset: outcome.resumeOffset,
+        resumeFold: outcome.resumeFold,
+        completeFold: fold,
+      });
+      return buildSummaryFromFold(fold, filePath, outcome.mtime);
+    } finally {
+      await opened.file.close().catch(() => undefined);
+    }
   }
 
   private async fullScan(filePath: string, chunkBuffer: Buffer): Promise<PiSessionListEntry | undefined> {
-    const fold = createEmptyFold();
-    const outcome = await foldSessionFileRange(filePath, fold, 0, chunkBuffer);
-    if (outcome === undefined) {
+    const scanned = await foldWholeSessionFile(filePath, chunkBuffer);
+    if (scanned === undefined) {
       this.memo.delete(filePath);
       return undefined;
     }
     this.memo.set(filePath, {
-      dev: outcome.dev,
-      ino: outcome.ino,
-      size: outcome.size,
-      resumeOffset: outcome.resumeOffset,
-      resumeFold: outcome.resumeFold,
-      completeFold: fold,
+      dev: scanned.outcome.dev,
+      ino: scanned.outcome.ino,
+      size: scanned.outcome.size,
+      resumeOffset: scanned.outcome.resumeOffset,
+      resumeFold: scanned.outcome.resumeFold,
+      completeFold: scanned.fold,
     });
-    return buildSummaryFromFold(fold, filePath, outcome.mtime);
+    return buildSummaryFromFold(scanned.fold, filePath, scanned.outcome.mtime);
   }
 }
 
@@ -247,32 +279,53 @@ interface RangeFoldOutcome {
   resumeFold: SummaryFoldState;
 }
 
-/**
- * Fold the lines of `filePath` from `startOffset` to end-of-file into `fold`.
- *
- * On return, `fold` holds the state for the whole range including any
- * unterminated trailing line, while the returned `resumeFold`/`resumeOffset`
- * describe the range up to the last safe line boundary — the starting point
- * for an incremental tail parse once the file grows.
- *
- * Returns undefined when the file cannot be stat'ed, opened, or read
- * (missing, unreadable, or vanished mid-scan).
- */
-async function foldSessionFileRange(filePath: string, fold: SummaryFoldState, startOffset: number, chunkBuffer: Buffer): Promise<RangeFoldOutcome | undefined> {
-  let stats: Awaited<ReturnType<typeof stat>>;
-  try {
-    stats = await stat(filePath);
-  } catch {
-    return undefined;
-  }
-
+/** Open a session file for reading and fstat the opened handle. */
+async function openSessionFile(filePath: string): Promise<{ file: FileHandle; stats: Stats } | undefined> {
   let file: FileHandle | undefined;
   try {
     file = await open(filePath, "r");
   } catch {
     return undefined;
   }
+  try {
+    const stats = await file.stat();
+    return { file, stats };
+  } catch {
+    await file.close().catch(() => undefined);
+    return undefined;
+  }
+}
 
+/** Open `filePath` and fold its entire contents; undefined when unreadable. */
+async function foldWholeSessionFile(filePath: string, chunkBuffer: Buffer): Promise<{ outcome: RangeFoldOutcome; fold: SummaryFoldState } | undefined> {
+  const opened = await openSessionFile(filePath);
+  if (opened === undefined) return undefined;
+  try {
+    const fold = createEmptyFold();
+    const outcome = await foldSessionFileRange(opened.file, opened.stats, fold, 0, chunkBuffer);
+    if (outcome === undefined) return undefined;
+    return { outcome, fold };
+  } finally {
+    await opened.file.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Fold the lines of an open session file from `startOffset` to end-of-file
+ * into `fold`, reading through `file`. The caller owns the handle and keeps
+ * it open for the whole fold, so the fold always reads the file it was
+ * opened on, even if the path is replaced concurrently. `stats` must be that
+ * handle's own fstat: all identity and metadata in the outcome come from it.
+ *
+ * On return, `fold` holds the state for the whole range including any
+ * unterminated trailing line, while the returned `resumeFold`/`resumeOffset`
+ * describe the range up to the last safe line boundary — the starting point
+ * for an incremental tail parse once the file grows.
+ *
+ * Returns undefined when the file cannot be read (unreadable or vanished
+ * mid-scan).
+ */
+async function foldSessionFileRange(file: FileHandle, stats: Stats, fold: SummaryFoldState, startOffset: number, chunkBuffer: Buffer): Promise<RangeFoldOutcome | undefined> {
   try {
     const outcome = await foldFileLines(file, fold, startOffset, chunkBuffer);
     return { dev: stats.dev, ino: stats.ino, size: outcome.endOffset, mtime: stats.mtime, resumeOffset: outcome.resumeOffset, resumeFold: outcome.resumeFold };
@@ -280,8 +333,6 @@ async function foldSessionFileRange(filePath: string, fold: SummaryFoldState, st
     // One unreadable/corrupt file must not break the listing; the SDK skips
     // such files too.
     return undefined;
-  } finally {
-    await file.close().catch(() => undefined);
   }
 }
 
