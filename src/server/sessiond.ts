@@ -27,6 +27,7 @@ import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
 import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled } from "../config.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
+import { applyAgentHttpIdleTimeout } from "./sessiond/agentHttpDispatcher.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
@@ -46,6 +47,15 @@ await listenSessionDaemon(runtime);
 type SessionDaemonRuntime = Awaited<ReturnType<typeof createSessionDaemonRuntime>>;
 
 async function createSessionDaemonRuntime() {
+  // Apply the active agent profile's httpIdleTimeoutMs before any other
+  // startup work so even catalog-refresh fetches run under the configured
+  // HTTP idle timeouts (issue #113).
+  const appliedHttpIdleTimeout = applyAgentHttpIdleTimeout({ agentDir: activeAgentProfile.dir, cwd: process.cwd() });
+  if (appliedHttpIdleTimeout.warning !== undefined) {
+    app.log.warn({ httpIdleTimeoutMs: appliedHttpIdleTimeout.timeoutMs }, appliedHttpIdleTimeout.warning);
+  } else {
+    app.log.info({ httpIdleTimeoutMs: appliedHttpIdleTimeout.timeoutMs }, "applied agent profile HTTP idle timeout to the session daemon HTTP stack");
+  }
   const eventHub = new SessionEventHub();
   const notificationStore = new SessionNotificationStore();
   const unreadStore = new SessionUnreadStore({
