@@ -21,9 +21,15 @@ import { Client, EnvHttpProxyAgent, Pool, setGlobalDispatcher, type Dispatcher }
  * The SDK's own `configureHttpDispatcher` lives in
  * `@earendil-works/pi-coding-agent/dist/core/http-dispatcher.js`, but the
  * package `exports` map blocks deep imports (`ERR_PACKAGE_PATH_NOT_EXPORTED`)
- * and nothing equivalent is re-exported, so the semantics are mirrored here —
- * deliberately, without the SDK's Node 26 `undici.install()` workaround
- * (PI WEB engines are `>=22.19`). If the SDK ever exports
+ * and nothing equivalent is re-exported, so the semantics are mirrored here.
+ * The one deliberate deviation is skipping the SDK's `undici.install()` step,
+ * which replaces `globalThis.fetch` with npm undici's fetch to work around
+ * Node 26.0's bundled fetch failing to decompress responses read through an
+ * npm dispatcher. A long-lived shared daemon should change the dispatcher,
+ * not the fetch implementation every in-process consumer sees; built-in
+ * fetch on Node 22/24 honors the global dispatcher without it. If a future
+ * Node reintroduces the mismatch (symptom: `response.json()` failing on
+ * compressed bodies), revisit. If the SDK ever exports
  * `configureHttpDispatcher`, prefer delegating to it.
  *
  * The value is applied once, at daemon start; changing `httpIdleTimeoutMs`
