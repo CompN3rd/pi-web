@@ -28,7 +28,7 @@ const SESSION_INFO_TYPE_BYTES = Buffer.from("session_info");
 /** Same bound the SDK uses for its concurrent session-info builds. */
 const MAX_CONCURRENT_SESSION_SUMMARY_SCANS = 10;
 
-/** Read chunk size for the streaming pass. */
+/** Default read chunk size for the streaming pass; see SessionSummaryScannerOptions. */
 const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
 
 /** Types longer than this fall back to a full parse instead of byte classification. */
@@ -64,7 +64,7 @@ const MAX_CLASSIFIED_TYPE_LENGTH = 64;
  */
 export async function scanSessionSummariesInDir(sessionDir: string): Promise<PiSessionListEntry[]> {
   const files = await listSessionFilesInDir(sessionDir);
-  const summaries = await scanSessionFilesWithBoundedConcurrency(files, scanSessionFileSummary);
+  const summaries = await scanSessionFilesWithBoundedConcurrency(files, SCAN_CHUNK_BYTES, scanSessionFileSummary);
   return sortedSessionSummaries(summaries);
 }
 
@@ -85,6 +85,16 @@ export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buf
   const scanned = await foldWholeSessionFile(filePath, chunkBuffer ?? Buffer.allocUnsafe(SCAN_CHUNK_BYTES));
   if (scanned === undefined) return undefined;
   return buildSummaryFromFold(scanned.fold, filePath, scanned.outcome.mtime);
+}
+
+/** Construction options for {@link SessionSummaryScanner}. */
+export interface SessionSummaryScannerOptions {
+  /**
+   * Read chunk size for the streaming pass. Defaults to 4 MiB. Tests shrink
+   * this to exercise multi-chunk line folding and the memo's resume path
+   * with small files; production callers leave it unset.
+   */
+  readonly chunkBytes?: number;
 }
 
 /**
@@ -123,6 +133,15 @@ export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buf
  */
 export class SessionSummaryScanner {
   private readonly memo = new Map<string, MemoizedSessionSummary>();
+  private readonly chunkBytes: number;
+
+  constructor(options: SessionSummaryScannerOptions = {}) {
+    const chunkBytes = options.chunkBytes ?? SCAN_CHUNK_BYTES;
+    if (!Number.isInteger(chunkBytes) || chunkBytes <= 0) {
+      throw new TypeError(`SessionSummaryScanner options.chunkBytes must be a positive integer, got ${String(chunkBytes)}`);
+    }
+    this.chunkBytes = chunkBytes;
+  }
 
   /** Drop every cached summary, forcing full re-parses on the next listing. */
   clear(): void {
@@ -148,7 +167,7 @@ export class SessionSummaryScanner {
   async scanSessionSummariesInDir(sessionDir: string): Promise<PiSessionListEntry[]> {
     const files = await listSessionFilesInDir(sessionDir);
     this.pruneEntriesRemovedFrom(sessionDir, files);
-    const summaries = await scanSessionFilesWithBoundedConcurrency(files, (file, chunkBuffer) => this.scanFileWithMemo(file, chunkBuffer));
+    const summaries = await scanSessionFilesWithBoundedConcurrency(files, this.chunkBytes, (file, chunkBuffer) => this.scanFileWithMemo(file, chunkBuffer));
     return sortedSessionSummaries(summaries);
   }
 
@@ -611,6 +630,7 @@ function sortedSessionSummaries(summaries: readonly (PiSessionListEntry | undefi
 
 async function scanSessionFilesWithBoundedConcurrency(
   files: readonly string[],
+  chunkBytes: number,
   scan: (file: string, chunkBuffer: Buffer) => Promise<PiSessionListEntry | undefined>,
 ): Promise<(PiSessionListEntry | undefined)[]> {
   const results: (PiSessionListEntry | undefined)[] = Array.from({ length: files.length }, () => undefined);
@@ -619,7 +639,7 @@ async function scanSessionFilesWithBoundedConcurrency(
   const workers = Array.from({ length: workerCount }, async () => {
     // One reusable read buffer per worker instead of one per file: large
     // per-file allocations churn the heap on directories with many sessions.
-    const chunkBuffer = Buffer.allocUnsafe(SCAN_CHUNK_BYTES);
+    const chunkBuffer = Buffer.allocUnsafe(chunkBytes);
     for (;;) {
       const index = nextIndex++;
       const file = files[index];

@@ -595,6 +595,217 @@ describe("session summary scanner memo", () => {
   });
 });
 
+describe("session summary scanner multi-chunk folding with a small chunk seam", () => {
+  // The 4 MiB production chunk size would need gigabyte fixtures to span;
+  // the constructor seam shrinks it so lines spanning chunks, unterminated
+  // tails, and the memo's resumeOffset interplay are testable at byte scale.
+  const SMALL_CHUNK_BYTES = 64;
+
+  it("rejects chunk sizes that cannot drive a streaming read", () => {
+    expect(() => new SessionSummaryScanner({ chunkBytes: 0 })).toThrow(TypeError);
+    expect(() => new SessionSummaryScanner({ chunkBytes: -1 })).toThrow(TypeError);
+    expect(() => new SessionSummaryScanner({ chunkBytes: 1.5 })).toThrow(TypeError);
+  });
+
+  it("folds terminated lines that span many chunks", async () => {
+    // Every line here is longer than the chunk buffer, so the header, the
+    // messages, and the rename all exercise the pending-chunk join path.
+    await writeSession("spanning.jsonl", [
+      headerLine({ id: "spanning", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("first") }),
+      messageLine({ role: "assistant", content: [{ type: "toolResult", toolCallId: "call-1", content: "x".repeat(500) }] }),
+      sessionInfoLine("Renamed across chunks"),
+      messageLine({ role: "user", content: textContent("last") }),
+    ]);
+    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
+
+    const cold = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(cold).toMatchObject([{ id: "spanning", messageCount: 3, firstMessage: "first", name: "Renamed across chunks" }]);
+    expect(cold).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("counts a line longer than several chunks exactly once without scanning its body", async () => {
+    // The 3 MiB "huge" case at byte scale: the joined line must not be
+    // counted twice at chunk boundaries, and entry-shaped substrings inside
+    // its body must not leak into the summary.
+    const sessionInfoDecoy = '{"type":"session_info","name":"hijacked"}';
+    const messageDecoy = '{"type":"message","id":"fake"}';
+    const padding = "x".repeat(1024);
+    await writeSession("long-line.jsonl", [
+      headerLine({ id: "long-line", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("start") }),
+      messageLine({ role: "assistant", content: [{ type: "toolResult", toolCallId: "call-big", content: `${sessionInfoDecoy}\n${padding}\n${messageDecoy}` }] }),
+      messageLine({ role: "user", content: textContent("end") }),
+    ]);
+    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
+
+    const summary = (await scanner.scanSessionSummariesInDir(sessionDir))[0];
+    expect(summary).toMatchObject({ id: "long-line", messageCount: 3, firstMessage: "start" });
+    expect(summary?.name).toBeUndefined();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("re-folds an unterminated multi-chunk tail from its start when the file grows", async () => {
+    const path = await writeSession("unterminated-span.jsonl", [
+      headerLine({ id: "unterminated-span", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("start") }),
+    ]);
+    const longLine = messageLine({ role: "assistant", content: [{ type: "text", text: "s".repeat(300) }] });
+    // Land the long line in two writes, cut inside its body: the first scan
+    // sees a tail that both spans chunks and has no trailing newline, so the
+    // memo must resume at the line's start, not at a chunk boundary.
+    const cutAt = 200;
+    await appendFile(path, longLine.slice(0, cutAt), "utf8");
+    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
+
+    // Mid-JSON: not counted yet.
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "unterminated-span", messageCount: 1, firstMessage: "start" }]);
+
+    // The writer completes the long line and appends one more.
+    await appendFile(path, `${longLine.slice(cutAt)}\n${messageLine({ role: "user", content: textContent("after") })}\n`, "utf8");
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "unterminated-span", messageCount: 3, firstMessage: "start" }]);
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("does not double-count a chunk-spanning final line written without its newline", async () => {
+    const path = await writeSession("no-newline-span.jsonl", [
+      headerLine({ id: "no-newline-span", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("start") }),
+    ]);
+    // Complete JSON, no trailing newline, longer than one chunk: counted for
+    // this listing, but the memo must re-fold it whole once bytes follow.
+    const completeLine = messageLine({ role: "assistant", content: [{ type: "text", text: "y".repeat(300) }] });
+    await appendFile(path, completeLine, "utf8");
+    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "no-newline-span", messageCount: 2 }]);
+
+    await appendFile(path, `\n${messageLine({ role: "user", content: textContent("after") })}\n`, "utf8");
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "no-newline-span", messageCount: 3, firstMessage: "start" }]);
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("resumes grown files at the memoized line boundary across chunks", async () => {
+    // Clean termination: the memo resumes exactly at end-of-file and folds
+    // the appended multi-chunk tail into the cached state, then resumes again
+    // from the boundary its own fold memoized.
+    const path = await writeSession("resume.jsonl", [
+      headerLine({ id: "resume", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("first question") }),
+      messageLine({ role: "assistant", content: textContent("first answer") }),
+    ]);
+    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "resume", messageCount: 2, firstMessage: "first question" }]);
+
+    await appendFile(
+      path,
+      `${[
+        messageLine({ role: "user", content: [{ type: "toolResult", toolCallId: "call-1", content: "z".repeat(300) }] }),
+        sessionInfoLine("Renamed later"),
+        messageLine({ role: "user", content: textContent("second question") }),
+      ].join("\n")}\n`,
+      "utf8",
+    );
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "resume", messageCount: 4, firstMessage: "first question", name: "Renamed later" }]);
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+
+    // A second growth fold resumes from the boundary memoized by the first.
+    await appendFile(path, `${messageLine({ role: "assistant", content: textContent("second answer") })}\n`, "utf8");
+
+    const warmer = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warmer).toMatchObject([{ id: "resume", messageCount: 5, firstMessage: "first question", name: "Renamed later" }]);
+    expect(warmer).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+});
+
+describe("session summary scanner deliberate SDK divergences", () => {
+  it("skips headers with an empty, missing, or non-string id, where the SDK lists a broken entry", async () => {
+    // The SDK lists these sessions with whatever the header carries as id
+    // (undefined, "", or a number); downstream lookups then call .startsWith
+    // on it and crash. The scanner is deliberately stricter and skips them.
+    await writeSession("missing-id.jsonl", [
+      JSON.stringify({ type: "session", version: 3, timestamp: "2026-01-01T00:00:00.000Z", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("hi") }),
+    ]);
+    await writeSession("empty-id.jsonl", [
+      JSON.stringify({ type: "session", version: 3, id: "", timestamp: "2026-01-01T00:00:00.000Z", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("hi") }),
+    ]);
+    await writeSession("numeric-id.jsonl", [
+      JSON.stringify({ type: "session", version: 3, id: 123, timestamp: "2026-01-01T00:00:00.000Z", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("hi") }),
+    ]);
+
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+
+    // Divergence, locked in: the SDK lists all three broken headers.
+    expect(sdkSessions).toHaveLength(3);
+    expect(scannedSessions).toEqual([]);
+  });
+
+  it("skips scalar JSON lines before the header, where the SDK drops the file", async () => {
+    // JSON.parse accepts scalars: the SDK treats any parseable non-session
+    // entry before the header as a disqualifier, so one truthy scalar kills
+    // the whole file there. The scanner only accepts objects as entries and
+    // keeps looking for a header.
+    await writeSession("scalars.jsonl", [
+      "123",
+      '"scalar"',
+      "true",
+      "null",
+      headerLine({ id: "after-scalars", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("hi") }),
+    ]);
+
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+
+    expect(sdkSessions).toEqual([]);
+    expect(scannedSessions).toMatchObject([{ id: "after-scalars", messageCount: 1, firstMessage: "hi" }]);
+  });
+
+  it("tolerates a null message payload, where the SDK dies on the file", async () => {
+    // The SDK's isMessageWithContent reads message.role unguarded, so
+    // {"type":"message","message":null} throws inside its listing and the
+    // whole file is dropped. The scanner guards the payload and lists it.
+    await writeSession("null-message.jsonl", [
+      headerLine({ id: "null-message", cwd: WORKSPACE }),
+      JSON.stringify({ type: "message", id: nextEntryId(), parentId: "root", timestamp: "2026-01-01T00:01:00.000Z", message: null }),
+      messageLine({ role: "user", content: textContent("real first") }),
+      messageLine({ role: "user", content: textContent("after null") }),
+    ]);
+
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+
+    expect(sdkSessions).toEqual([]);
+    expect(scannedSessions).toMatchObject([{ id: "null-message", messageCount: 3, firstMessage: "real first" }]);
+  });
+
+  it("keeps the SDK's (no messages) fallback for sessions without user text", async () => {
+    await writeSession("assistant-only.jsonl", [
+      headerLine({ id: "assistant-only", cwd: WORKSPACE }),
+      messageLine({ role: "assistant", content: textContent("assistant speaks") }),
+    ]);
+    await writeSession("header-only.jsonl", [headerLine({ id: "header-only", cwd: WORKSPACE })]);
+
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+
+    const idAndFirstMessage = (sessions: { id: string; firstMessage: string }[]) => sessions.map((session) => [session.id, session.firstMessage]).sort();
+    expect(idAndFirstMessage(sdkSessions)).toEqual([
+      ["assistant-only", "(no messages)"],
+      ["header-only", "(no messages)"],
+    ]);
+    expect(idAndFirstMessage(scannedSessions)).toEqual([
+      ["assistant-only", "(no messages)"],
+      ["header-only", "(no messages)"],
+    ]);
+  });
+});
+
 function nextEntryId(): string {
   entryCounter += 1;
   return `entry-${String(entryCounter)}`;
