@@ -275,7 +275,10 @@ interface MemoizedSessionSummary {
   ino: number;
   /** Observed end-of-file offset when the fold below was completed. */
   size: number;
-  /** First byte not covered by `resumeFold`; always a line boundary. */
+  /**
+   * First byte not covered by `resumeFold`; always a line boundary — or the
+   * observed end of file for a rejected fold, which is never resumed.
+   */
   resumeOffset: number;
   /** Summary state folded up to `resumeOffset` (safe tail-parse start). */
   resumeFold: SummaryFoldState;
@@ -303,7 +306,10 @@ interface RangeFoldOutcome {
   /** Observed end-of-file offset after the read. */
   size: number;
   mtime: Date;
-  /** First byte not covered by `resumeFold`; always a line boundary. */
+  /**
+   * First byte not covered by `resumeFold`; always a line boundary — or the
+   * observed end of file for a rejected fold, which is never resumed.
+   */
   resumeOffset: number;
   /** Fold state excluding any unterminated trailing line. */
   resumeFold: SummaryFoldState;
@@ -358,6 +364,14 @@ async function foldWholeSessionFile(filePath: string, chunkBuffer: Buffer): Prom
 async function foldSessionFileRange(file: FileHandle, stats: Stats, fold: SummaryFoldState, startOffset: number, chunkBuffer: Buffer): Promise<RangeFoldOutcome | undefined> {
   try {
     const outcome = await foldFileLines(file, fold, startOffset, chunkBuffer);
+    if (fold.rejected) {
+      // Rejection is final — the first parseable line decides it — so a
+      // rejected fold is memoized at the observed end of file: later listings
+      // take the stat-only fast path instead of resuming from a mid-file
+      // offset and re-reading one chunk per listing.
+      const endSize = Math.max(stats.size, outcome.endOffset);
+      return { dev: stats.dev, ino: stats.ino, size: endSize, mtime: stats.mtime, resumeOffset: endSize, resumeFold: outcome.resumeFold };
+    }
     return { dev: stats.dev, ino: stats.ino, size: outcome.endOffset, mtime: stats.mtime, resumeOffset: outcome.resumeOffset, resumeFold: outcome.resumeFold };
   } catch {
     // One unreadable/corrupt file must not break the listing; the SDK skips

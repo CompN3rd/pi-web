@@ -721,6 +721,41 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
     expect(warmer).toMatchObject([{ id: "resume", messageCount: 5, firstMessage: "first question", name: "Renamed later" }]);
     expect(warmer).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
+
+  it("memoizes a rejected file at end-of-file instead of resuming it chunk by chunk", async () => {
+    // The first parseable line is not a session header, so the file is
+    // rejected. Rejection is final, so the memo must hold the observed
+    // end-of-file: resuming from a mid-file offset instead would re-read the
+    // rejected bytes one chunk per warm listing.
+    const filler = messageLine({ role: "assistant", content: textContent("filler") });
+    const lines = [messageLine({ role: "user", content: textContent("orphan first line") })];
+    for (let index = 0; index < 40; index += 1) lines.push(filler);
+    const path = await writeSession("rejected-many-chunks.jsonl", lines);
+    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
+
+    const openSpy = vi.spyOn(fsPromises, "open");
+    try {
+      expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual([]);
+      const coldOpens = openSpy.mock.calls.length;
+      expect(coldOpens).toBeGreaterThan(0);
+
+      // Warm listing: the stat-only fast path answers; the file is not opened again.
+      expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual([]);
+      expect(openSpy.mock.calls.length).toBe(coldOpens);
+
+      // Growth is folded once into the still-rejected fold...
+      await appendFile(path, `${filler}\n`, "utf8");
+      expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual([]);
+      expect(openSpy.mock.calls.length).toBe(coldOpens + 1);
+
+      // ...and the next warm listing is again answered without a read.
+      expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual([]);
+      expect(openSpy.mock.calls.length).toBe(coldOpens + 1);
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
 });
 
 describe("session summary scanner deliberate SDK divergences", () => {
