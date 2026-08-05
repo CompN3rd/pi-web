@@ -95,6 +95,7 @@
             <a href="#precedence">Precedence and reloads</a>
             <a href="#global-config">Global config</a>
             <a href="#project-config">Project config</a>
+            <a href="#worktree-pre-remove-hook">Pre-remove hook</a>
             <a href="#keys">Config matrix</a>
             <a href="#path-access">External path access</a>
             <a href="#manual-uploads">Manual uploads</a>
@@ -261,6 +262,66 @@
                 Plugins may own separate project files, such as <code>.pi-web/tasks.json</code> for the built-in Workspace
                 Tasks plugin.
               </p>
+              <p>PI WEB also honors one optional project hook; see <a href="#worktree-pre-remove-hook">Worktree pre-remove hook</a>.</p>
+            </section>
+
+            <section id="worktree-pre-remove-hook">
+              <h2>Worktree pre-remove hook</h2>
+              <p>
+                Before PI WEB deletes a workspace (a secondary Git worktree), it gives the repository one chance to tear
+                down project-owned infrastructure tied to that worktree. To use the hook, provide an executable script at
+                <code>.pi-web/hooks/worktree-pre-remove</code> relative to the workspace where the deletion command runs.
+                PI WEB runs the deletion command from the project's main workspace when it exists, so commit the hook
+                there and it follows the repository.
+              </p>
+              <p>
+                When the hook is present and executable, PI WEB dispatches the hook and the removal as one composed
+                terminal command:
+              </p>
+              <div class="code-card">
+                <pre><code>'&lt;hook path&gt;' '&lt;worktree path&gt;' &amp;&amp; git worktree remove '&lt;worktree path&gt;'</code></pre>
+              </div>
+              <ul>
+                <li><strong>Arguments:</strong> exactly one — the absolute path of the worktree being deleted.</li>
+                <li>
+                  <strong>Working directory:</strong> the workspace the deletion command runs in, not the worktree being
+                  deleted.
+                </li>
+                <li>
+                  <strong>Exit codes:</strong> <code>0</code> lets the removal proceed; any non-zero exit blocks it. The
+                  <code>&amp;&amp;</code> chain is the fail-closed guarantee — a failing hook keeps the worktree on disk.
+                </li>
+                <li>
+                  <strong>Absent hook:</strong> a missing file, or a file without the executable bit (for example after a
+                  checkout that lost it), is treated as no hook; PI WEB then runs a plain <code>git worktree remove</code>.
+                </li>
+              </ul>
+              <p>
+                The composed command is dispatched like any other workspace deletion — same
+                <code>Delete workspace: &lt;branch&gt;</code> terminal title — so hook output and failures are visible in
+                the terminal run. If PI WEB cannot probe the hook path because of an unexpected filesystem error, the
+                deletion request fails before any workspace terminals are closed.
+              </p>
+              <p>
+                Example: a hook that stops and removes local dev containers that bind-mount the worktree, so deletion
+                does not leave stale containers behind. The hook is an opaque extension point — the contract does not
+                assume any specific tooling, so use whatever the repository standardizes on:
+              </p>
+              <div class="code-card">
+                <div class="copy-row">
+                  <strong>.pi-web/hooks/worktree-pre-remove</strong>
+                  <button class="copy-button" data-copy="#worktree-pre-remove-hook-example">Copy</button>
+                </div>
+                <pre id="worktree-pre-remove-hook-example"><code>#!/bin/sh
+# .pi-web/hooks/worktree-pre-remove
+set -eu
+
+worktree_path="$1"
+
+# Stop/remove local dev containers bind-mounting "$worktree_path",
+# release other per-worktree resources, etc.
+# Exit non-zero to block the worktree removal.</code></pre>
+              </div>
             </section>
 
             <section id="keys">
