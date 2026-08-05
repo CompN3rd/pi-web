@@ -276,6 +276,13 @@ export interface PiSessionListEntry {
   cwd: string;
   created: Date;
   modified: Date;
+  /**
+   * Number of `message` entries in the transcript. The streaming summary
+   * scanner counts message lines by their leading bytes and a trailing `}`
+   * without validating the JSON, so a final write read mid-flight can add a
+   * transient +1; the count self-heals on the next listing once the line
+   * completes.
+   */
   messageCount: number;
   firstMessage: string;
   allMessagesText: string;

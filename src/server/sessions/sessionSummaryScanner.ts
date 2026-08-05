@@ -18,6 +18,12 @@ const TYPE_QUOTE = 0x22; // `"`
 const NEWLINE = 0x0a;
 const CARRIAGE_RETURN = 0x0d;
 const CLOSING_BRACE = 0x7d; // `}`
+const SPACE = 0x20;
+const TAB = 0x09;
+
+/** The entry types the byte fast path recognizes, as raw bytes: type names are never decoded. */
+const MESSAGE_TYPE_BYTES = Buffer.from("message");
+const SESSION_INFO_TYPE_BYTES = Buffer.from("session_info");
 
 /** Same bound the SDK uses for its concurrent session-info builds. */
 const MAX_CONCURRENT_SESSION_SUMMARY_SCANS = 10;
@@ -39,7 +45,7 @@ const MAX_CLASSIFIED_TYPE_LENGTH = 64;
  * `messageCount` counts every `message` entry, `firstMessage` is the first
  * user message with non-empty text content, `name` is the latest `session_info`
  * name (an empty or missing name clears it), and `created`/`id`/`cwd`/
- * `parentSessionPath` come from the header line. Two deliberate differences:
+ * `parentSessionPath` come from the header line. Three deliberate differences:
  *
  * - `modified` is the file mtime rather than the last message timestamp.
  *   Session files are append-only, so the mtime is a faithful "last activity"
@@ -47,6 +53,11 @@ const MAX_CLASSIFIED_TYPE_LENGTH = 64;
  * - `allMessagesText` is always empty. Building it required parsing every
  *   message body — the cost this scanner exists to remove — and PI WEB never
  *   consumes it.
+ * - `messageCount` can transiently include a final write read mid-flight: a
+ *   message-shaped line that ends with `}` counts even though its JSON is
+ *   never validated, where the SDK fails to parse such a torn line. The count
+ *   self-heals on the next listing once the line completes (an unterminated
+ *   final line is always re-folded from its start).
  *
  * Files whose header is missing, unreadable, or not a session header are
  * skipped, like the SDK does. Results are sorted by `modified` descending.
@@ -443,10 +454,12 @@ function processLineBytes(data: Buffer, start: number, end: number, state: Summa
     return;
   }
   if (entryType === "message") {
-    // A line still being written can be complete JSON only if it ends with
-    // `}`; treating anything else as malformed matches the SDK, which skips
-    // unparseable lines.
-    if (end === start || data[end - 1] !== CLOSING_BRACE) return;
+    // A line still being written can be complete JSON only if its last
+    // significant byte is `}`; treating anything else as malformed matches
+    // the SDK, which skips unparseable lines. Ending in `}` counts the line
+    // without validating its JSON — a torn final write adds a transient +1
+    // that self-heals when the line completes (see messageCount's contract).
+    if (!endsWithClosingBrace(data, start, end)) return;
     state.messageCount += 1;
     // The expensive part of a listing was parsing message bodies; decode and
     // parse only until the first user text message is known.
@@ -476,11 +489,17 @@ function processLineBytes(data: Buffer, start: number, end: number, state: Summa
 }
 
 /**
- * The entry type from a line's leading bytes, without decoding it. Returns
- * undefined when the line does not carry the SDK-style prefix (or the type is
- * unreasonably long), leaving classification to the parse fallback.
+ * The entry type from a line's leading bytes, without decoding it. The type
+ * bytes are compared directly against the known SDK entry types: decoding
+ * them first would mask each byte's high bit — `Buffer.toString("ascii")`
+ * turns bytes like `ed e5 f3 f3 e1 e7 e5` into "message" — fabricating
+ * matches for corrupt input. Returns "other" when the line carries the
+ * SDK-style prefix but not a known type (only message/session_info matter
+ * for the summary, so such lines need no parse), or undefined when the line
+ * does not carry the prefix (or the type is unreasonably long), leaving
+ * classification to the parse fallback.
  */
-function classifyLineType(data: Buffer, start: number, end: number): string | undefined {
+function classifyLineType(data: Buffer, start: number, end: number): "message" | "session_info" | "other" | undefined {
   const prefixLength = ENTRY_TYPE_PREFIX.length;
   if (end - start < prefixLength + 1) return undefined;
   for (let i = 0; i < prefixLength; i += 1) {
@@ -489,9 +508,30 @@ function classifyLineType(data: Buffer, start: number, end: number): string | un
   const searchLimit = Math.min(end, start + prefixLength + MAX_CLASSIFIED_TYPE_LENGTH);
   const closeAt = data.indexOf(TYPE_QUOTE, start + prefixLength);
   if (closeAt === -1 || closeAt > searchLimit) return undefined;
-  // Entry types are ASCII identifiers; ASCII decoding never fabricates a
-  // match for a non-ASCII byte.
-  return data.toString("ascii", start + prefixLength, closeAt);
+  if (sameBytes(data, start + prefixLength, closeAt, MESSAGE_TYPE_BYTES)) return "message";
+  if (sameBytes(data, start + prefixLength, closeAt, SESSION_INFO_TYPE_BYTES)) return "session_info";
+  return "other";
+}
+
+/** Whether `data[start, end)` holds exactly `expected`'s bytes. */
+function sameBytes(data: Buffer, start: number, end: number, expected: Buffer): boolean {
+  if (end - start !== expected.length) return false;
+  return expected.compare(data, start, end) === 0;
+}
+
+/**
+ * Whether the line's last significant byte is `}`, skipping trailing spaces,
+ * tabs, and carriage returns: JSON.parse (and therefore the SDK) tolerates
+ * that whitespace, so valid message lines with it still count.
+ */
+function endsWithClosingBrace(data: Buffer, start: number, end: number): boolean {
+  let last = end;
+  while (last > start) {
+    const byte = data[last - 1];
+    if (byte !== SPACE && byte !== TAB && byte !== CARRIAGE_RETURN) break;
+    last -= 1;
+  }
+  return last > start && data[last - 1] === CLOSING_BRACE;
 }
 
 /**

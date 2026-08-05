@@ -218,6 +218,44 @@ describe("session summary scanner edge cases", () => {
     expect(await scanSessionFileSummary(path)).toMatchObject({ id: "truncated", messageCount: 0, firstMessage: "(no messages)" });
   });
 
+  it("never classifies high-bit garbage bytes as a known entry type", async () => {
+    // Buffer.toString("ascii") masks each byte's high bit, so these byte
+    // sequences decode to "message" and "session_info": classification must
+    // compare raw bytes instead and skip the lines (no count, no rename).
+    const maskedType = (bytes: number[]) => Buffer.concat([Buffer.from('{"type":"'), Buffer.from(bytes), Buffer.from('"')]);
+    const path = join(sessionDir, "garbage-types.jsonl");
+    await writeFile(
+      path,
+      Buffer.concat([
+        Buffer.from(`${headerLine({ id: "garbage-types", cwd: WORKSPACE })}\n`),
+        maskedType([0xed, 0xe5, 0xf3, 0xf3, 0xe1, 0xe7, 0xe5]), // "message" under ASCII masking
+        Buffer.from(',"id":"m1"}\n'),
+        maskedType([0xf3, 0xe5, 0xf3, 0xf3, 0xe9, 0xef, 0xee, 0xdf, 0xe9, 0xee, 0xe6, 0xef]), // "session_info" under ASCII masking
+        Buffer.from(',"name":"Hijacked"}\n'),
+        Buffer.from(`${messageLine({ role: "user", content: textContent("real") })}\n`),
+      ]),
+    );
+
+    const summary = await scanSessionFileSummary(path);
+    expect(summary).toMatchObject({ id: "garbage-types", messageCount: 1, firstMessage: "real" });
+    expect(summary?.name).toBeUndefined();
+  });
+
+  it("counts message lines with trailing whitespace like the SDK", async () => {
+    // JSON.parse tolerates trailing whitespace, so the SDK counts such lines;
+    // the completeness check must look past it to the final `}`.
+    await writeSession("padded.jsonl", [
+      headerLine({ id: "padded", cwd: WORKSPACE }),
+      `${messageLine({ role: "user", content: textContent("padded") })} \t`,
+      `${messageLine({ role: "assistant", content: textContent("crlf") })}\r`,
+    ]);
+
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+
+    expect(sdkSessions).toMatchObject([{ id: "padded", messageCount: 2 }]);
+    expect(scannedSessions).toMatchObject([{ id: "padded", messageCount: 2, firstMessage: "padded" }]);
+  });
+
   it("falls back to parsing lines whose key order does not start with the type", async () => {
     const path = await writeSession("reordered.jsonl", [
       headerLine({ id: "reordered", cwd: WORKSPACE }),
@@ -343,6 +381,30 @@ describe("session summary scanner memo", () => {
 
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "partial", messageCount: 2, firstMessage: "start" }]);
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("counts a torn final write ending in an inner brace and self-heals when it completes", async () => {
+    // Performance contract: the fast path does not validate JSON, so a final
+    // write caught mid-flight counts as soon as it ends with `}` — a
+    // transient +1 that self-heals when the line completes, because the memo
+    // re-folds the unterminated final line from its start.
+    const path = await writeSession("torn.jsonl", [headerLine({ id: "torn", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("start") })]);
+    await appendFile(
+      path,
+      '{"type":"message","id":"torn-1","parentId":"root","timestamp":"2026-01-01T00:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"streaming"}]}',
+      "utf8",
+    );
+    const scanner = new SessionSummaryScanner();
+
+    // Ends in an inner `}` while the JSON is still incomplete: counted.
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "torn", messageCount: 2 }]);
+
+    // The writer completes the line: the transient count must not double.
+    await appendFile(path, "}\n", "utf8");
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "torn", messageCount: 2, firstMessage: "start" }]);
     expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
 
