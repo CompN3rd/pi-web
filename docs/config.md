@@ -188,6 +188,10 @@ Each data directory is independent: after pointing PI WEB at a new root, it star
 
 This setting does not change the PI WEB config file selected by `PI_WEB_CONFIG` or Pi-owned state such as the active session files selected by `PI_CODING_AGENT_SESSION_DIR`.
 
+### Agent process environment
+
+Agent shells, terminals, and spawned sessions do not inherit the session daemon's own configuration. When the daemon starts, it removes its `PI_WEB_*` configuration keys, `NODE_ENV`, `PORT`, and `PI_CODING_AGENT_SESSION_DIR` from the environment agent processes see, so development commands behave normally inside sessions — for example, `npm install` is not affected by a production `NODE_ENV` meant for the daemon, and a second PI WEB instance started from a session does not pick up the live daemon's data directory or socket. `PI_CODING_AGENT_DIR` and ordinary variables (`PATH`, `HOME`, proxy settings, and the like) remain visible. The daemon itself keeps using the values it captured at startup.
+
 ### External path access
 
 `pathAccess.allowedPaths` grants PI WEB's file explorer and absolute `@` path completions access to specific filesystem roots outside the current workspace.

@@ -16,6 +16,7 @@ const AGENT_DIR = "/tmp/pi-web-test-agent";
 function daemonCollaborators(patch: Partial<SessionServiceDependencyInput> = {}): SessionServiceDependencyInput {
   return {
     agentDir: AGENT_DIR,
+    archiveStore: emptyArchiveStore(),
     modelRuntime: testModelRuntime,
     sessionManager: sessionGateway([]),
     workspaceActivity: new WorkspaceActivityService(),
@@ -41,7 +42,6 @@ async function startupDetails(deps: PiSessionServiceDependencies): Promise<strin
   const fake = fakeRuntime();
   const service = new PiSessionService(hub, {
     ...deps,
-    archiveStore: emptyArchiveStore(),
     createAgentRuntime: () => Promise.resolve(fake.runtime),
     heartbeatIntervalMs: 60_000,
   });

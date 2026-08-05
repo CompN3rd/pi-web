@@ -14,11 +14,12 @@ import { PiSessionService } from "./sessions/piSessionService.js";
 import { createPiSessionManagerGateway } from "./sessions/piSessionManagerGateway.js";
 import { registerSessionRoutes } from "./sessions/sessionRoutes.js";
 import { SessionNotificationStore } from "./sessions/sessionNotificationStore.js";
-import { FileSessionUnreadPersistence, SessionUnreadStore } from "./sessions/sessionUnreadStore.js";
+import { SessionArchiveStore, defaultSessionArchiveFilePath } from "./sessions/sessionArchiveStore.js";
+import { FileSessionUnreadPersistence, SessionUnreadStore, defaultSessionUnreadFilePath } from "./sessions/sessionUnreadStore.js";
 import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver.js";
 import { RegisteredProjectWorkspaceCwds } from "./workspaces/projectWorkspaceCwds.js";
 import { ProjectService } from "./projects/projectService.js";
-import { ProjectStore } from "./storage/projectStore.js";
+import { ProjectStore, projectStorePath } from "./storage/projectStore.js";
 import { WorkspaceService } from "./workspaces/workspaceService.js";
 import { sessiondSocketPath } from "../sessiond/config.js";
 import { TerminalService } from "./terminals/terminalService.js";
@@ -29,6 +30,7 @@ import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes, offlineMo
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { applyAgentHttpIdleTimeout } from "./sessiond/agentHttpDispatcher.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
+import { scrubNonAgentVisibleEnvKeys } from "./sessiond/agentProcessEnvironment.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
 const { config } = effectivePiWebConfig({ env: daemonEnvironment });
@@ -39,6 +41,14 @@ const activeAgentProfile = createActiveAgentProfileDescriptor({
 });
 const app = Fastify({ logger: true, bodyLimit: maxUploadBytes(daemonEnvironment, config) });
 await app.register(fastifyWebsocket);
+
+// Agent-executed processes (bash tool, terminals, subsessions) are spawned from
+// this process and inherit its environment, so hide the daemon's own
+// configuration keys before any of them can start. The daemon keeps using the
+// captured daemonEnvironment above; its runtime stores resolve their paths from
+// it explicitly below.
+const scrubbedEnvKeys = scrubNonAgentVisibleEnvKeys(process.env);
+app.log.info({ scrubbedEnvKeys }, "daemon-only environment keys hidden from agent processes");
 
 const runtime = await createSessionDaemonRuntime();
 registerSessionDaemonRoutes(runtime);
@@ -59,7 +69,7 @@ async function createSessionDaemonRuntime() {
   const eventHub = new SessionEventHub();
   const notificationStore = new SessionNotificationStore();
   const unreadStore = new SessionUnreadStore({
-    persistence: new FileSessionUnreadPersistence(),
+    persistence: new FileSessionUnreadPersistence(defaultSessionUnreadFilePath(daemonEnvironment)),
     onPersistenceError(operation, error) {
       app.log.error({ err: error, operation }, "session unread persistence failed");
     },
@@ -85,12 +95,13 @@ async function createSessionDaemonRuntime() {
   // Cross-workspace session relationships are reported regardless of whether
   // agents may spawn sessions: children can predate a config change, and the
   // session tree should stay honest about them either way.
-  const projectWorkspaceDeps = { projects: new ProjectService(new ProjectStore()), workspaces: new WorkspaceService() };
+  const projectWorkspaceDeps = { projects: new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment))), workspaces: new WorkspaceService() };
   const projectWorkspaces = new RegisteredProjectWorkspaceCwds(projectWorkspaceDeps);
   const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
   const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
     modelRuntime: auth.runtime,
     agentDir: activeAgentProfile.dir,
+    archiveStore: new SessionArchiveStore(defaultSessionArchiveFilePath(daemonEnvironment)),
     workspaceActivity,
     logger: app.log,
     ...(spawnTargets === undefined ? {} : { spawnTargets }),
@@ -170,7 +181,7 @@ async function listenSessionDaemon({ auth, sessions, terminals, unreadStore, cat
   if (port !== undefined) {
     await app.listen({ port, host });
   } else {
-    const path = sessiondSocketPath();
+    const path = sessiondSocketPath(daemonEnvironment);
     await mkdir(dirname(path), { recursive: true });
     await rm(path, { force: true });
     await app.listen({ path });

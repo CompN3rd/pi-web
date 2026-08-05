@@ -572,6 +572,13 @@ worktree_path="$1"
                   </tbody>
                 </table>
               </div>
+              <p>
+                Agent shells, terminals, and spawned sessions do not inherit the session daemon's own configuration:
+                at startup the daemon removes its <code>PI_WEB_*</code> configuration keys, <code>NODE_ENV</code>, <code>PORT</code>,
+                and <code>PI_CODING_AGENT_SESSION_DIR</code> from the environment agent processes see, so commands like
+                <code>npm install</code> behave normally inside sessions. <code>PI_CODING_AGENT_DIR</code> and ordinary
+                variables stay visible; the daemon keeps using the values it captured at startup.
+              </p>
             </section>
 
             <section id="path-access">
