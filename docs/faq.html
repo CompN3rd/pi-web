@@ -103,6 +103,7 @@
             <a href="#plugins">Can I use local plugins?</a>
             <a href="#worktree-list-out-of-date">A worktree I created is missing</a>
             <a href="#sessions-stop">Sessions stop unexpectedly</a>
+            <a href="#model-response-terminated">Model responses fail with 'terminated'</a>
             <a href="#logs">Where are logs?</a>
           </aside>
 
@@ -326,6 +327,39 @@
                 </div>
                 <pre id="session-logs"><code><span class="prompt">$</span> pi-web status
 <span class="prompt">$</span> pi-web logs</code></pre>
+              </div>
+            </article>
+
+            <article id="model-response-terminated" class="faq-item">
+              <h2>Model responses fail with 'terminated' after about 5 minutes</h2>
+              <p>
+                A session transcript line like <code>(SYSTEM) Model response failed: terminated</code> at roughly
+                the five-minute mark means the model stream stayed idle longer than the HTTP idle timeout. The
+                session daemon applies the active agent profile's <code>httpIdleTimeoutMs</code> setting to every
+                model HTTP stream; it defaults to <code>300000</code> (5 minutes), and slow backends such as a
+                local vLLM server that emits one large final chunk can exceed it.
+              </p>
+              <p>
+                Raise or disable the timeout in the agent profile's <code>settings.json</code>
+                (<code>~/.pi/agent/settings.json</code> by default): <code>0</code> disables the idle timers. The
+                value is applied at daemon start, so restart the session daemon afterwards. See the
+                <a href="config#agent-runtime">configuration reference</a> for details.
+              </p>
+              <div class="code-card">
+                <div class="copy-row">
+                  <strong>~/.pi/agent/settings.json</strong>
+                  <button class="copy-button" data-copy="#http-idle-timeout-settings">Copy</button>
+                </div>
+                <pre id="http-idle-timeout-settings"><code>{
+  "httpIdleTimeoutMs": 0
+}</code></pre>
+              </div>
+              <div class="code-card">
+                <div class="copy-row">
+                  <strong>Restart the session daemon</strong>
+                  <button class="copy-button" data-copy="#http-idle-timeout-restart">Copy</button>
+                </div>
+                <pre id="http-idle-timeout-restart"><code><span class="prompt">$</span> systemctl --user restart pi-web-sessiond</code></pre>
               </div>
             </article>
 

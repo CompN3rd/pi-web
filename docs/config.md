@@ -213,6 +213,18 @@ The session daemon resolves the persisted desired values plus its environment on
 
 If the session daemon cannot report a valid active profile, profile-dependent Pi package and PI WEB plugin operations report unavailable instead of falling back to independently resolved config. A package-managed update command is shown only when PI WEB can preserve the active profile with a recognized, safe Pi companion CLI; otherwise the command is omitted. Restart the session daemon on the selected machine to establish the next active profile.
 
+#### HTTP idle timeout for embedded sessions
+
+The session daemon applies the active agent profile's `httpIdleTimeoutMs` Pi setting to the embedded Pi runtime's HTTP stack at daemon start, the same step the Pi CLI performs. The value comes from the profile's `settings.json` (`<agent.dir>/settings.json`; by default `~/.pi/agent/settings.json`), defaults to `300000` (5 minutes), and `0` disables the idle timers:
+
+```json
+{
+  "httpIdleTimeoutMs": 0
+}
+```
+
+A model stream that stays idle longer than the cap is terminated; see [Model responses fail with 'terminated' after about 5 minutes](https://pi-web.dev/faq#model-response-terminated). The value resolved at daemon start applies daemon-wide to all sessions; project-level `.pi/settings.json` files do not re-apply it per session. `retry.provider.timeoutMs` is an SDK request timeout and does not raise this socket-idle cap. After changing `httpIdleTimeoutMs`, manually restart `pi-web-sessiond.service` (`systemctl --user restart pi-web-sessiond`).
+
 ### Pi extension provider baseline
 
 This policy applies to **Pi runtime extensions**, not PI WEB browser plugins. Pi extensions are runtime modules loaded by the session daemon and can call `pi.registerProvider(...)`; PI WEB plugins are browser-side UI modules and never run in the session daemon.

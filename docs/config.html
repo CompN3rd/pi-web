@@ -624,6 +624,29 @@
                 companion CLI; otherwise the command is omitted. Restart the session daemon on the selected machine to
                 establish the next active profile.
               </div>
+
+              <h3>HTTP idle timeout for embedded sessions</h3>
+              <p>
+                The session daemon applies the active agent profile's <code>httpIdleTimeoutMs</code> Pi setting to the
+                embedded Pi runtime's HTTP stack at daemon start, the same step the Pi CLI performs. The value comes
+                from the profile's <code>settings.json</code> (<code>&lt;agent.dir&gt;/settings.json</code>; by
+                default <code>~/.pi/agent/settings.json</code>), defaults to <code>300000</code> (5 minutes), and
+                <code>0</code> disables the idle timers:
+              </p>
+              <div class="code-card">
+                <pre><code>{
+  "httpIdleTimeoutMs": 0
+}</code></pre>
+              </div>
+              <p>
+                A model stream that stays idle longer than the cap is terminated; see
+                <a href="faq#model-response-terminated">Model responses fail with 'terminated' after about 5
+                minutes</a>. The value resolved at daemon start applies daemon-wide to all sessions; project-level
+                <code>.pi/settings.json</code> files do not re-apply it per session.
+                <code>retry.provider.timeoutMs</code> is an SDK request timeout and does not raise this socket-idle
+                cap. After changing <code>httpIdleTimeoutMs</code>, manually restart
+                <code>pi-web-sessiond.service</code> (<code>systemctl --user restart pi-web-sessiond</code>).
+              </p>
             </section>
 
             <section id="pi-extension-provider-baseline">
