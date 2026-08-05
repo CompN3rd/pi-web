@@ -13,6 +13,7 @@ let daemonRequests: DaemonRequest[];
 let closeStatusCode: number;
 let hookProbePaths: string[];
 let hookExecutable: boolean;
+let hookProbeError: Error | undefined;
 
 const project: Project = {
   id: "p1",
@@ -81,6 +82,7 @@ beforeEach(() => {
   daemonRequests = [];
   hookProbePaths = [];
   hookExecutable = false;
+  hookProbeError = undefined;
   closeStatusCode = 200;
   registerApp();
 });
@@ -187,6 +189,17 @@ describe("workspace deletion routes", () => {
     expect(dispatch?.body).toMatchObject({ command: "git worktree remove '/my repo/wt '\\''x'\\'''" });
   });
 
+  it("fails the deletion before closing terminals when the hook probe hits an unexpected filesystem error", async () => {
+    hookProbeError = Object.assign(new Error("probe I/O error"), { code: "EIO" });
+
+    const response = await app.inject({ method: "DELETE", url: "/api/projects/p1/workspaces/feature" });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "probe I/O error" });
+    expect(hookProbePaths).toEqual(["/repo/.pi-web/hooks/worktree-pre-remove"]);
+    expect(daemonRequests).toEqual([]);
+  });
+
   it("does not start deletion when terminal cleanup fails", async () => {
     closeStatusCode = 500;
 
@@ -241,7 +254,7 @@ function fakePreRemoveHookProbe(): WorktreePreRemoveHookProbe {
   return {
     isExecutable: (path) => {
       hookProbePaths.push(path);
-      return Promise.resolve(hookExecutable);
+      return hookProbeError ? Promise.reject(hookProbeError) : Promise.resolve(hookExecutable);
     },
   };
 }
