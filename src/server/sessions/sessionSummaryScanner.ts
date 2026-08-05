@@ -64,7 +64,7 @@ const MAX_CLASSIFIED_TYPE_LENGTH = 64;
  */
 export async function scanSessionSummariesInDir(sessionDir: string): Promise<PiSessionListEntry[]> {
   const files = await listSessionFilesInDir(sessionDir);
-  const summaries = await scanSessionFilesWithBoundedConcurrency(files, SCAN_CHUNK_BYTES, scanSessionFileSummary);
+  const summaries = await scanSessionFilesWithBoundedConcurrency(files, SCAN_CHUNK_BYTES, summarizeWholeFile);
   return sortedSessionSummaries(summaries);
 }
 
@@ -82,7 +82,12 @@ export async function scanSessionSummariesInDir(sessionDir: string): Promise<PiS
  * or first parseable entry is not a session header), matching the SDK.
  */
 export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buffer): Promise<PiSessionListEntry | undefined> {
-  const scanned = await foldWholeSessionFile(filePath, chunkBuffer ?? Buffer.allocUnsafe(SCAN_CHUNK_BYTES));
+  return summarizeWholeFile(filePath, () => chunkBuffer ?? Buffer.allocUnsafe(SCAN_CHUNK_BYTES));
+}
+
+/** The streaming single-pass summary; `chunkBuffer` supplies the read buffer lazily. */
+async function summarizeWholeFile(filePath: string, chunkBuffer: () => Buffer): Promise<PiSessionListEntry | undefined> {
+  const scanned = await foldWholeSessionFile(filePath, chunkBuffer);
   if (scanned === undefined) return undefined;
   return buildSummaryFromFold(scanned.fold, filePath, scanned.outcome.mtime);
 }
@@ -181,7 +186,7 @@ export class SessionSummaryScanner {
     }
   }
 
-  private async scanFileWithMemo(filePath: string, chunkBuffer: Buffer): Promise<PiSessionListEntry | undefined> {
+  private async scanFileWithMemo(filePath: string, chunkBuffer: () => Buffer): Promise<PiSessionListEntry | undefined> {
     const memoized = this.memo.get(filePath);
     if (memoized === undefined) return this.fullScan(filePath, chunkBuffer);
 
@@ -220,7 +225,7 @@ export class SessionSummaryScanner {
    * stat). All metadata memoized afterwards comes from the handle, so the
    * memo only ever describes the file it actually read.
    */
-  private async foldGrowth(filePath: string, memoized: MemoizedSessionSummary, chunkBuffer: Buffer): Promise<PiSessionListEntry | undefined> {
+  private async foldGrowth(filePath: string, memoized: MemoizedSessionSummary, chunkBuffer: () => Buffer): Promise<PiSessionListEntry | undefined> {
     const opened = await openSessionFile(filePath);
     if (opened === undefined) {
       // Became unreadable mid-scan: skip it (like the SDK) and forget it.
@@ -232,7 +237,7 @@ export class SessionSummaryScanner {
       const cachedPrefixUsable = stats.dev === memoized.dev && stats.ino === memoized.ino && stats.size >= memoized.size;
       const fold = cachedPrefixUsable ? { ...memoized.resumeFold } : createEmptyFold();
       const startOffset = cachedPrefixUsable ? memoized.resumeOffset : 0;
-      const outcome = await foldSessionFileRange(file, stats, fold, startOffset, chunkBuffer);
+      const outcome = await foldSessionFileRange(file, stats, fold, startOffset, chunkBuffer());
       if (outcome === undefined) {
         this.memo.delete(filePath);
         return undefined;
@@ -251,7 +256,7 @@ export class SessionSummaryScanner {
     }
   }
 
-  private async fullScan(filePath: string, chunkBuffer: Buffer): Promise<PiSessionListEntry | undefined> {
+  private async fullScan(filePath: string, chunkBuffer: () => Buffer): Promise<PiSessionListEntry | undefined> {
     const scanned = await foldWholeSessionFile(filePath, chunkBuffer);
     if (scanned === undefined) {
       this.memo.delete(filePath);
@@ -333,12 +338,12 @@ async function openSessionFile(filePath: string): Promise<{ file: FileHandle; st
 }
 
 /** Open `filePath` and fold its entire contents; undefined when unreadable. */
-async function foldWholeSessionFile(filePath: string, chunkBuffer: Buffer): Promise<{ outcome: RangeFoldOutcome; fold: SummaryFoldState } | undefined> {
+async function foldWholeSessionFile(filePath: string, chunkBuffer: () => Buffer): Promise<{ outcome: RangeFoldOutcome; fold: SummaryFoldState } | undefined> {
   const opened = await openSessionFile(filePath);
   if (opened === undefined) return undefined;
   try {
     const fold = createEmptyFold();
-    const outcome = await foldSessionFileRange(opened.file, opened.stats, fold, 0, chunkBuffer);
+    const outcome = await foldSessionFileRange(opened.file, opened.stats, fold, 0, chunkBuffer());
     if (outcome === undefined) return undefined;
     return { outcome, fold };
   } finally {
@@ -645,20 +650,23 @@ function sortedSessionSummaries(summaries: readonly (PiSessionListEntry | undefi
 async function scanSessionFilesWithBoundedConcurrency(
   files: readonly string[],
   chunkBytes: number,
-  scan: (file: string, chunkBuffer: Buffer) => Promise<PiSessionListEntry | undefined>,
+  scan: (file: string, chunkBuffer: () => Buffer) => Promise<PiSessionListEntry | undefined>,
 ): Promise<(PiSessionListEntry | undefined)[]> {
   const results: (PiSessionListEntry | undefined)[] = Array.from({ length: files.length }, () => undefined);
   let nextIndex = 0;
   const workerCount = Math.min(MAX_CONCURRENT_SESSION_SUMMARY_SCANS, files.length);
   const workers = Array.from({ length: workerCount }, async () => {
-    // One reusable read buffer per worker instead of one per file: large
-    // per-file allocations churn the heap on directories with many sessions.
-    const chunkBuffer = Buffer.allocUnsafe(chunkBytes);
+    // One reusable read buffer per worker, allocated on first use: warm
+    // listings answer every file from the memo's stat-only fast path and
+    // must not pay a chunk-sized allocation per worker for reads that
+    // never happen.
+    let chunkBuffer: Buffer | undefined;
+    const readBuffer = (): Buffer => (chunkBuffer ??= Buffer.allocUnsafe(chunkBytes));
     for (;;) {
       const index = nextIndex++;
       const file = files[index];
       if (file === undefined) return;
-      results[index] = await scan(file, chunkBuffer).catch(() => undefined);
+      results[index] = await scan(file, readBuffer).catch(() => undefined);
     }
   });
   await Promise.all(workers);

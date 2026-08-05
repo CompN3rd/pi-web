@@ -756,6 +756,32 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
     }
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
+
+  it("allocates no read buffers for a fully warm listing", async () => {
+    await writeSession("2026-01-01T00-00-00-000Z_warm-a.jsonl", [
+      headerLine({ id: "warm-a", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("a") }),
+    ]);
+    await writeSession("2026-01-02T00-00-00-000Z_warm-b.jsonl", [
+      headerLine({ id: "warm-b", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("b") }),
+    ]);
+    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
+    const cold = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(cold).toHaveLength(2);
+
+    // The warm listing answers every file from the stat-only fast path, so it
+    // must not pay a chunk-sized buffer allocation per worker for reads that
+    // never happen.
+    const allocSpy = vi.spyOn(Buffer, "allocUnsafe");
+    try {
+      const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+      expect(warm).toEqual(cold);
+      expect(allocSpy.mock.calls.filter(([size]) => size === SMALL_CHUNK_BYTES)).toHaveLength(0);
+    } finally {
+      allocSpy.mockRestore();
+    }
+  });
 });
 
 describe("session summary scanner deliberate SDK divergences", () => {
