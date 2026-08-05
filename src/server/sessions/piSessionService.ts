@@ -337,6 +337,13 @@ export interface PiSessionManagerGateway {
    * injected so the caller's per-path header cache is reused.
    */
   resolveSessionFile(cwd: string, sessionId: string, readHeader: SessionHeaderReader): Promise<ResolvedSessionFile | undefined>;
+  /**
+   * Drop any cached listing summary for a session file that was rewritten in
+   * place (detach clears the header while keeping the inode): file identity
+   * and size checks cannot detect such rewrites, so the scanner memo must be
+   * told explicitly.
+   */
+  invalidateSessionFile(sessionFile: string): void;
   create(cwd: string, options?: { parentSession?: string }): PiSessionManager;
   /**
    * Cross-project listing of Pi's session stores (the default store plus any
@@ -2433,6 +2440,10 @@ export class PiSessionService implements SessionRouteService {
     // only flow that rewrites a header; drop the stale entry so sibling child
     // counts and parent locations observe the cleared parent immediately.
     this.sessionHeaderCache.delete(sessionFile);
+    // The same in-place rewrite is invisible to the gateway's summary memo
+    // (same inode, possibly grown file), which would otherwise keep listing
+    // the old parent link and a stale message count until restart.
+    this.sessionManager.invalidateSessionFile(sessionFile);
     clearParentSessionHeader(session.sessionManager);
     this.unregisterSubsession(session.sessionId);
     await this.forgetUnreadSessions([{ sessionId: session.sessionId, cwd: session.sessionManager.getCwd() }]);

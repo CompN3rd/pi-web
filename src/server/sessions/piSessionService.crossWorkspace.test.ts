@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PiSessionService, type PiSessionListEntry } from "./piSessionService.js";
-import { listParentSessionPathsInDir } from "./piSessionManagerGateway.js";
+import { createPiSessionManagerGateway, listParentSessionPathsInDir } from "./piSessionManagerGateway.js";
 import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionRecord, sessionRef, testModelRuntime, type SessionGateway } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
@@ -180,6 +180,7 @@ describe("PiSessionService.list children in sibling workspaces", () => {
         listParentSessionPaths: (siblingCwd: string, readHeader) => siblingCwd === PARENT_CWD
           ? listParentSessionPathsInDir(siblingDir, siblingCwd, readHeader)
           : Promise.resolve([]),
+        invalidateSessionFile: () => undefined,
         resolveSessionFile: (refCwd: string, sessionId: string) => Promise.resolve(
           sessionId === "child" && refCwd === PARENT_CWD ? { id: "child", cwd: PARENT_CWD, path: childFile } : undefined,
         ),
@@ -211,6 +212,69 @@ describe("PiSessionService.list children in sibling workspaces", () => {
     const [listed] = await service.list(CHILD_CWD);
 
     expect(listed).toMatchObject({ id: "middle", parentSessionCwd: PARENT_CWD, parentSessionId: "grandparent-id", childSessionsElsewhere: 1 });
+  });
+});
+
+describe("PiSessionService.detachParent summary memo", () => {
+  it("invalidates the gateway summary memo so warm listings re-read the rewritten header", async () => {
+    // The gateway keeps one memoized scanner for its lifetime. Detach rewrites
+    // the header in place (same inode), which the memo's identity+size key
+    // cannot detect, so detach must invalidate the entry or the warm listing
+    // serves the pre-detach parent link and message count forever. This test
+    // lists through the real gateway/scanner path on purpose: fakes cannot see
+    // the memo.
+    const sessionDir = join(tempDir, "detach-sessions");
+    await mkdir(sessionDir, { recursive: true });
+    const parentPath = join(sessionDir, "parent.jsonl");
+    await writeFile(parentPath, `${JSON.stringify({ type: "session", version: 3, id: "parent", timestamp: "2026-01-01T00:00:00.000Z", cwd: CHILD_CWD })}\n`, "utf8");
+    const childPath = join(sessionDir, "child.jsonl");
+    const message = (id: string, role: string, text: string) =>
+      JSON.stringify({ type: "message", id, parentId: "root", timestamp: "2026-01-01T00:01:00.000Z", message: { role, content: [{ type: "text", text }] } });
+    await writeFile(childPath, [
+      JSON.stringify({ type: "session", version: 3, id: "child", timestamp: "2026-01-01T00:00:00.000Z", cwd: CHILD_CWD, parentSession: parentPath }),
+      message("m1", "user", "hello"),
+      message("m2", "assistant", "hi there"),
+    ].join("\n") + "\n", "utf8");
+
+    const realGateway = createPiSessionManagerGateway({
+      agentDir: TEST_AGENT_DIR,
+      env: { PI_CODING_AGENT_SESSION_DIR: sessionDir },
+      sessionDirEnvKeys: ["PI_CODING_AGENT_SESSION_DIR"],
+    });
+    const child = fakeRuntime("child", { sessionFile: childPath });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(child.runtime),
+      archiveStore: emptyArchiveStore(),
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: (refCwd: string) => realGateway.list(refCwd),
+        listAll: () => realGateway.listAll(),
+        listParentSessionPaths: (refCwd: string, readHeader) => realGateway.listParentSessionPaths(refCwd, readHeader),
+        resolveSessionFile: (refCwd: string, sessionId: string, readHeader) => realGateway.resolveSessionFile(refCwd, sessionId, readHeader),
+        invalidateSessionFile: (sessionFile: string) => {
+          realGateway.invalidateSessionFile(sessionFile);
+        },
+        open: () => fakeSessionManager(CHILD_CWD, { getSessionId: () => "child" }),
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const before = await service.list(CHILD_CWD);
+    expect(before.find((session) => session.id === "child")).toMatchObject({ id: "child", messageCount: 2, parentSessionPath: parentPath });
+
+    // Grow the file after the cold listing so the memo takes its append-growth
+    // path — the shape in which the in-place rewrite went unnoticed.
+    await appendFile(childPath, `${message("m3", "user", "padding so the rewrite still grows the file")}\n`, "utf8");
+
+    await service.detachParent(sessionRef("child", CHILD_CWD));
+
+    const after = await service.list(CHILD_CWD);
+    const detached = after.find((session) => session.id === "child");
+    expect(detached).toMatchObject({ id: "child", messageCount: 3 });
+    expect(detached).not.toHaveProperty("parentSessionPath");
+    await service.dispose();
   });
 });
 
@@ -251,6 +315,7 @@ function serviceListing(
       options.scanCwd?.(cwd);
       return Promise.resolve((listings[cwd] ?? []).flatMap((entry) => entry.parentSessionPath === undefined ? [] : [entry.parentSessionPath]));
     },
+    invalidateSessionFile: () => undefined,
     resolveSessionFile: (cwd: string, sessionId: string) => {
       const match = Object.values(listings).flat().find((record) => record.id === sessionId || record.id.startsWith(sessionId));
       return Promise.resolve(match === undefined ? undefined : { id: match.id, cwd: match.cwd, path: match.path });

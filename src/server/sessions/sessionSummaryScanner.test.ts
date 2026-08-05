@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -419,6 +419,39 @@ describe("session summary scanner memo", () => {
     scanner.clear();
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "afters", firstMessage: "new text" }]);
   });
+
+  it("invalidate() drops one memo entry so an in-place header rewrite is re-read", async () => {
+    // Detach clears the parent link by rewriting the header in place (same
+    // inode) while appended entries can still grow the file — the one rewrite
+    // the identity+size memo key cannot detect. invalidate() is the targeted
+    // escape hatch; without it the warm scan stays stale: the growth path
+    // resumes at an offset that is now mid-file, never re-reads the header,
+    // and never counts the line that offset landed inside.
+    const parentPath = join(tempDir, "parents", "parent.jsonl");
+    const path = await writeSession("detached.jsonl", [
+      headerLine({ id: "detached", cwd: WORKSPACE, parentSession: parentPath }),
+      messageLine({ role: "user", content: textContent("first") }),
+      messageLine({ role: "assistant", content: textContent("second") }),
+    ]);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "detached", messageCount: 2, parentSessionPath: parentPath }]);
+
+    // Grow the file, then rewrite the header without the parent link the way
+    // clearParentSession does (truncate + write, same inode).
+    await appendFile(path, `${messageLine({ role: "user", content: textContent("padding so the rewrite still grows the file") })}\n`, "utf8");
+    await rewriteHeaderWithoutParentSession(path);
+
+    // No invalidation yet: the memo serves the stale summary — the old parent
+    // link, and a message count frozen at the memoized value even though the
+    // file now holds one more message.
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "detached", messageCount: 2, parentSessionPath: parentPath }]);
+
+    scanner.invalidate(path);
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "detached", messageCount: 3 }]);
+    expect(warm[0]).not.toHaveProperty("parentSessionPath");
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
 });
 
 function nextEntryId(): string {
@@ -453,4 +486,21 @@ async function writeSession(fileName: string, lines: readonly string[]): Promise
   const path = join(sessionDir, fileName);
   await writeFile(path, lines.length === 0 ? "" : `${lines.join("\n")}\n`, "utf8");
   return path;
+}
+
+/**
+ * Mimics piSessionService's clearParentSession: rewrite the header in place
+ * (truncate + write keeps the inode) with the parent link removed.
+ */
+async function rewriteHeaderWithoutParentSession(path: string): Promise<void> {
+  const content = await readFile(path, "utf8");
+  const newlineIndex = content.indexOf("\n");
+  const parsed: unknown = JSON.parse(content.slice(0, newlineIndex));
+  if (!isRecord(parsed)) throw new Error("Invalid session file header");
+  delete parsed["parentSession"];
+  await writeFile(path, `${JSON.stringify(parsed)}${content.slice(newlineIndex)}`, "utf8");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

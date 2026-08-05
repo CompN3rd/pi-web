@@ -101,8 +101,10 @@ export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buf
  *   cold but correct.
  *
  * The one thing the key cannot detect is an in-place rewrite that keeps the
- * inode and never shrinks the file. The SDK never rewrites session files, and
- * {@link clear} is the documented escape hatch if an external tool ever does.
+ * inode and never shrinks the file. The SDK never rewrites session files, but
+ * PI WEB's detach does (it clears the header), so callers that rewrite a file
+ * in place must call {@link invalidate} for it; {@link clear} remains the
+ * escape hatch for unknown external rewrites.
  */
 export class SessionSummaryScanner {
   private readonly memo = new Map<string, MemoizedSessionSummary>();
@@ -110,6 +112,16 @@ export class SessionSummaryScanner {
   /** Drop every cached summary, forcing full re-parses on the next listing. */
   clear(): void {
     this.memo.clear();
+  }
+
+  /**
+   * Drop the cached summary for one file, forcing a full re-parse of it on
+   * the next listing. Callers that rewrite a session file in place (keeping
+   * the inode) must invalidate it, since identity + size checks cannot detect
+   * such rewrites. Dropping a path that is not memoized is a no-op.
+   */
+  invalidate(filePath: string): void {
+    this.memo.delete(filePath);
   }
 
   /**

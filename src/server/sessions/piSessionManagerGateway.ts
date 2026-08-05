@@ -71,7 +71,8 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
    * One memoized scanner per gateway: its per-file summary memo lives as long
    * as the daemon, so repeated listings only stat unchanged files and parse
    * the appended tails of grown ones. Invalidation is automatic (file
-   * identity + size; see SessionSummaryScanner) plus a `clear()` escape hatch.
+   * identity + size; see SessionSummaryScanner), with `invalidateSessionFile`
+   * for in-place rewrites and a `clear()` escape hatch.
    */
   private readonly summaryScanner = new SessionSummaryScanner();
 
@@ -98,6 +99,13 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
   async resolveSessionFile(cwd: string, sessionId: string, readHeader: SessionHeaderReader): Promise<ResolvedSessionFile | undefined> {
     const resolution = this.resolver.resolve(cwd);
     return resolveSessionFileInDir(resolution.sessionDir, cwd, sessionId, readHeader);
+  }
+
+  invalidateSessionFile(sessionFile: string): void {
+    // Detach is the only flow that rewrites a session file in place (keeping
+    // the inode), and the summary memo cannot detect such rewrites from
+    // identity + size alone. Drop the entry so the next listing re-reads it.
+    this.summaryScanner.invalidate(sessionFile);
   }
 
   create(cwd: string, options?: { parentSession?: string }): PiSessionManager {
