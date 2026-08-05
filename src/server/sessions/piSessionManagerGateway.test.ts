@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -156,6 +156,23 @@ describe("Pi session manager gateway", () => {
     const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
 
     await expect(gateway.list(cwd)).resolves.toMatchObject([{ id: "session-rough", cwd, messageCount: 1, firstMessage: "hello" }]);
+  });
+
+  it("keeps repeated listings fresh by folding appended transcript tails", async () => {
+    // The gateway keeps one memoized scanner for its lifetime, so a second
+    // listing of the same directory must reflect appends, not stale cache.
+    const sharedSessionDir = join(tempDir, "memo-sessions");
+    const message = (id: string, role: string, text: string) =>
+      JSON.stringify({ type: "message", id, parentId: "root", timestamp: "2026-01-01T00:01:00.000Z", message: { role, content: [{ type: "text", text }] } });
+    const path = await writeNamedSessionFile(sharedSessionDir, "memo.jsonl", { id: "memo-session", cwd });
+    await appendFile(path, `${message("m1", "user", "hello")}\n`, "utf8");
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.list(cwd)).resolves.toMatchObject([{ id: "memo-session", cwd, messageCount: 1, firstMessage: "hello" }]);
+
+    await appendFile(path, `${message("m2", "assistant", "hi there")}\n${message("m3", "user", "follow-up")}\n`, "utf8");
+
+    await expect(gateway.list(cwd)).resolves.toMatchObject([{ id: "memo-session", cwd, messageCount: 3, firstMessage: "hello" }]);
   });
 });
 

@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { scanSessionFileSummary, scanSessionSummariesInDir } from "./sessionSummaryScanner.js";
+import { scanSessionFileSummary, scanSessionSummariesInDir, SessionSummaryScanner } from "./sessionSummaryScanner.js";
 
 const WORKSPACE = "/workspace/project";
 
@@ -257,6 +257,167 @@ describe("session summary scanner edge cases", () => {
 
   it("lists nothing when the session directory does not exist", async () => {
     expect(await scanSessionSummariesInDir(join(tempDir, "missing"))).toEqual([]);
+  });
+});
+
+describe("session summary scanner memo", () => {
+  it("answers repeated warm listings identically to the cold listing", async () => {
+    await writeSession("2026-01-03T00-00-00-000Z_named.jsonl", [
+      headerLine({ id: "named", cwd: WORKSPACE, parentSession: "/parents/named-parent.jsonl" }),
+      messageLine({ role: "user", content: textContent("hello") }),
+      sessionInfoLine("Named session"),
+    ]);
+    await writeSession("2026-01-02T00-00-00-000Z_bare.jsonl", [headerLine({ id: "bare", cwd: WORKSPACE })]);
+    await writeSession("2026-01-01T00-00-00-000Z_chatty.jsonl", [
+      headerLine({ id: "chatty", cwd: WORKSPACE }),
+      messageLine({ role: "assistant", content: textContent("assistant first") }),
+      messageLine({ role: "user", content: textContent("then user") }),
+      messageLine({ role: "assistant", content: textContent("reply") }),
+    ]);
+    // Pin the order deterministically instead of trusting write-time mtimes.
+    await utimes(join(sessionDir, "2026-01-03T00-00-00-000Z_named.jsonl"), new Date("2026-01-03T00:00:00Z"), new Date("2026-01-03T00:00:00Z"));
+    await utimes(join(sessionDir, "2026-01-02T00-00-00-000Z_bare.jsonl"), new Date("2026-01-02T00:00:00Z"), new Date("2026-01-02T00:00:00Z"));
+    await utimes(join(sessionDir, "2026-01-01T00-00-00-000Z_chatty.jsonl"), new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+    const scanner = new SessionSummaryScanner();
+
+    const cold = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(cold.map((session) => session.id)).toEqual(["named", "bare", "chatty"]);
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(cold);
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(cold);
+    // A warm memoized listing is field-for-field identical to a fresh scan.
+    expect(await scanSessionSummariesInDir(sessionDir)).toEqual(cold);
+  });
+
+  it("folds appended tails without re-deriving cached fields", async () => {
+    const path = await writeSession("grown.jsonl", [
+      headerLine({ id: "grown", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("first question") }),
+      messageLine({ role: "assistant", content: textContent("first answer") }),
+    ]);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "grown", messageCount: 2, firstMessage: "first question" }]);
+
+    await appendFile(
+      path,
+      `${[messageLine({ role: "user", content: [{ type: "toolResult", toolCallId: "call-1", content: "ok" }] }), messageLine({ role: "user", content: textContent("second question") }), sessionInfoLine("Renamed later")].join("\n")}\n`,
+      "utf8",
+    );
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "grown", messageCount: 4, firstMessage: "first question", name: "Renamed later" }]);
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("re-folds a complete trailing line that was still missing its newline when cached", async () => {
+    const inFlight = messageLine({ role: "assistant", content: textContent("streaming") });
+    const path = await writeSession("inflight.jsonl", [headerLine({ id: "inflight", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("start") })]);
+    await appendFile(path, inFlight, "utf8");
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "inflight", messageCount: 2 }]);
+
+    // The writer finishes the line and appends the next one.
+    await appendFile(path, `\n${messageLine({ role: "user", content: textContent("after") })}\n`, "utf8");
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "inflight", messageCount: 3, firstMessage: "start" }]);
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("does not double-count a partial trailing line completed by an append", async () => {
+    const path = await writeSession("partial.jsonl", [headerLine({ id: "partial", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("start") })]);
+    await appendFile(path, '{"type":"message","id":"half', "utf8");
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "partial", messageCount: 1 }]);
+
+    await appendFile(
+      path,
+      '-written","parentId":"root","timestamp":"2026-01-01T00:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n',
+      "utf8",
+    );
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "partial", messageCount: 2, firstMessage: "start" }]);
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("fully re-parses a file that shrunk", async () => {
+    const path = await writeSession("shrunk.jsonl", [
+      headerLine({ id: "shrunk", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("old first") }),
+      messageLine({ role: "assistant", content: textContent("old answer") }),
+      sessionInfoLine("Old name"),
+    ]);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "shrunk", messageCount: 2, name: "Old name" }]);
+
+    await writeFile(path, `${[headerLine({ id: "shrunk", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("new first") })].join("\n")}\n`, "utf8");
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "shrunk", messageCount: 1, firstMessage: "new first" }]);
+    expect(warm[0]?.name).toBeUndefined();
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("fully re-parses a replacement file at the same path even when it is larger", async () => {
+    const path = await writeSession("replaced.jsonl", [headerLine({ id: "original", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("small") })]);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "original", messageCount: 1 }]);
+
+    // Unlink + recreate changes the inode, so growth must not be read as an append.
+    await rm(path);
+    await writeSession("replaced.jsonl", [
+      headerLine({ id: "replacement", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("bigger first") }),
+      messageLine({ role: "assistant", content: textContent("padding to outgrow the original file") }),
+      messageLine({ role: "user", content: textContent("more") }),
+    ]);
+
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "replacement", messageCount: 3, firstMessage: "bigger first" }]);
+    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+  });
+
+  it("drops deleted sessions and does not resurrect stale entries at the same path", async () => {
+    await writeSession("kept.jsonl", [headerLine({ id: "kept", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("stays") })]);
+    const removedPath = await writeSession("removed.jsonl", [headerLine({ id: "removed", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("goes") })]);
+    const scanner = new SessionSummaryScanner();
+    expect((await scanner.scanSessionSummariesInDir(sessionDir)).map((session) => session.id).sort()).toEqual(["kept", "removed"]);
+
+    await rm(removedPath);
+    expect((await scanner.scanSessionSummariesInDir(sessionDir)).map((session) => session.id)).toEqual(["kept"]);
+
+    // A brand-new session at the old path is listed as itself, not its predecessor.
+    await writeSession("removed.jsonl", [headerLine({ id: "fresh", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("back") })]);
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject(expect.arrayContaining([expect.objectContaining({ id: "fresh", messageCount: 1 })]));
+  });
+
+  it("keeps skipping unusable files on warm listings until they change", async () => {
+    const path = await writeSession("not-a-session.jsonl", [messageLine({ role: "user", content: textContent("orphan") })]);
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual([]);
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual([]);
+
+    await rm(path);
+    await writeSession("not-a-session.jsonl", [headerLine({ id: "fixed", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("valid now") })]);
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "fixed" }]);
+  });
+
+  it("clear() drops the memo and recovers from an undetectable in-place rewrite", async () => {
+    // Same inode, same size, different bytes: invisible to the identity+size
+    // key by design. clear() is the documented escape hatch for it.
+    const version = (sessionId: string, text: string) => [
+      `{"type":"session","version":3,"id":"${sessionId}","timestamp":"2026-01-01T00:00:00.000Z","cwd":"${WORKSPACE}"}`,
+      `{"type":"message","id":"m1","parentId":"root","timestamp":"2026-01-01T00:01:00.000Z","message":{"role":"user","content":[{"type":"text","text":"${text}"}]}}`,
+    ];
+    const path = await writeSession("rewritten.jsonl", version("before", "old text"));
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "before", firstMessage: "old text" }]);
+
+    await writeFile(path, `${version("afters", "new text").join("\n")}\n`, "utf8");
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "before", firstMessage: "old text" }]);
+
+    scanner.clear();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "afters", firstMessage: "new text" }]);
   });
 });
 

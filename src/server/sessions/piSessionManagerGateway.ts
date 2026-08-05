@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
 import type { SessionHeaderReader } from "./parentSessionLocator.js";
-import { scanSessionSummariesInDir } from "./sessionSummaryScanner.js";
+import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
 import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
 
 type SessionDirSource = "env" | "settings" | "pi-default";
@@ -67,6 +67,14 @@ export function createPiSessionManagerGateway(options: PiSessionManagerGatewayOp
 }
 
 class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
+  /**
+   * One memoized scanner per gateway: its per-file summary memo lives as long
+   * as the daemon, so repeated listings only stat unchanged files and parse
+   * the appended tails of grown ones. Invalidation is automatic (file
+   * identity + size; see SessionSummaryScanner) plus a `clear()` escape hatch.
+   */
+  private readonly summaryScanner = new SessionSummaryScanner();
+
   constructor(private readonly resolver: SessionDirResolver) {}
 
   async list(cwd: string): Promise<PiSessionListEntry[]> {
@@ -75,7 +83,7 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
     // listing: same fields, but message bodies are never parsed once the first
     // user message is found. The cross-project cleanup listing (listAll) keeps
     // the SDK path.
-    const sessions = (await scanSessionSummariesInDir(resolution.sessionDir)).map((session) => ({
+    const sessions = (await this.summaryScanner.scanSessionSummariesInDir(resolution.sessionDir)).map((session) => ({
       ...session,
       cwd: canonicalizeStoredCwd(session.cwd),
     }));

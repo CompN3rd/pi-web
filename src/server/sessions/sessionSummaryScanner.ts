@@ -1,5 +1,6 @@
 import { open, readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import type { FileHandle } from "node:fs/promises";
+import { join, sep } from "node:path";
 import type { PiSessionListEntry } from "./piSessionService.js";
 
 /**
@@ -30,6 +31,9 @@ const MAX_CLASSIFIED_TYPE_LENGTH = 64;
  * List the sessions in one session directory with one lightweight streaming
  * pass per file, instead of the SDK's full-transcript listing.
  *
+ * Stateless: every call re-reads every file. Daemon listings should use
+ * {@link SessionSummaryScanner}, which memoizes these summaries across calls.
+ *
  * The summary fields mirror the SDK listing (`SessionManager.listAll`):
  * `messageCount` counts every `message` entry, `firstMessage` is the first
  * user message with non-empty text content, `name` is the latest `session_info`
@@ -47,28 +51,9 @@ const MAX_CLASSIFIED_TYPE_LENGTH = 64;
  * skipped, like the SDK does. Results are sorted by `modified` descending.
  */
 export async function scanSessionSummariesInDir(sessionDir: string): Promise<PiSessionListEntry[]> {
-  let fileNames: string[];
-  try {
-    fileNames = await readdir(sessionDir);
-  } catch {
-    // Matches the SDK listing behavior: an unreadable directory lists nothing.
-    return [];
-  }
-  const files = fileNames.filter((name) => name.endsWith(".jsonl")).map((name) => join(sessionDir, name));
+  const files = await listSessionFilesInDir(sessionDir);
   const summaries = await scanSessionFilesWithBoundedConcurrency(files, scanSessionFileSummary);
-  const sessions = summaries.filter((summary): summary is PiSessionListEntry => summary !== undefined);
-  sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-  return sessions;
-}
-
-interface ScanState {
-  header: Record<string, unknown> | undefined;
-  rejected: boolean;
-  messageCount: number;
-  firstMessageText: string | undefined;
-  name: string | undefined;
-  /** Reused across files scanned by the same worker; never escapes a scan. */
-  chunkBuffer: Buffer;
+  return sortedSessionSummaries(summaries);
 }
 
 /**
@@ -85,6 +70,183 @@ interface ScanState {
  * or first parseable entry is not a session header), matching the SDK.
  */
 export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buffer): Promise<PiSessionListEntry | undefined> {
+  const fold = createEmptyFold();
+  const outcome = await foldSessionFileRange(filePath, fold, 0, chunkBuffer ?? Buffer.allocUnsafe(SCAN_CHUNK_BYTES));
+  if (outcome === undefined) return undefined;
+  return buildSummaryFromFold(fold, filePath, outcome.mtime);
+}
+
+/**
+ * Session summary scanner with a per-file memo, so repeated listings of the
+ * same session directory do not re-read transcripts that did not change.
+ *
+ * The memo is a last resort on top of the lightweight streaming scan and is
+ * deliberately trivial to invalidate — it never holds anything the file
+ * itself cannot re-derive:
+ *
+ * - Key: absolute file path. Trusted value: file identity (dev/ino) plus the
+ *   size already parsed.
+ * - Identity and size unchanged → cached summary. The mtime is re-read from
+ *   the same stat, so `modified` stays faithful even on a cache hit.
+ * - Identity unchanged and the file grew → session files are append-only, so
+ *   only the appended tail is read and folded into the cached summary state.
+ *   A trailing line that was still being written when it was cached is
+ *   re-folded from its start, so completed lines are never counted twice.
+ * - Identity changed or the file shrunk → cached state is dropped and the
+ *   file is fully re-parsed.
+ * - File gone (ENOENT) → its entry is dropped; entries for files that no
+ *   longer appear in the directory listing are pruned on each scan.
+ * - {@link clear} drops every entry. There are no TTLs and nothing is
+ *   persisted: the memo is an in-process speedup, and a daemon restart starts
+ *   cold but correct.
+ *
+ * The one thing the key cannot detect is an in-place rewrite that keeps the
+ * inode and never shrinks the file. The SDK never rewrites session files, and
+ * {@link clear} is the documented escape hatch if an external tool ever does.
+ */
+export class SessionSummaryScanner {
+  private readonly memo = new Map<string, MemoizedSessionSummary>();
+
+  /** Drop every cached summary, forcing full re-parses on the next listing. */
+  clear(): void {
+    this.memo.clear();
+  }
+
+  /**
+   * The memoized equivalent of {@link scanSessionSummariesInDir}: same fields,
+   * same order, same skip rules, but files that have not changed since the
+   * previous scan of their directory are answered from the memo (one stat
+   * each), and grown files only parse their appended tail.
+   */
+  async scanSessionSummariesInDir(sessionDir: string): Promise<PiSessionListEntry[]> {
+    const files = await listSessionFilesInDir(sessionDir);
+    this.pruneEntriesRemovedFrom(sessionDir, files);
+    const summaries = await scanSessionFilesWithBoundedConcurrency(files, (file, chunkBuffer) => this.scanFileWithMemo(file, chunkBuffer));
+    return sortedSessionSummaries(summaries);
+  }
+
+  private pruneEntriesRemovedFrom(sessionDir: string, existingFiles: readonly string[]): void {
+    const dirPrefix = sessionDir.endsWith(sep) ? sessionDir : sessionDir + sep;
+    const existing = new Set(existingFiles);
+    for (const path of this.memo.keys()) {
+      // Deletion invalidates automatically: entries for the scanned directory
+      // whose file no longer exists are dropped, keeping the memo bounded.
+      if (path.startsWith(dirPrefix) && !existing.has(path)) this.memo.delete(path);
+    }
+  }
+
+  private async scanFileWithMemo(filePath: string, chunkBuffer: Buffer): Promise<PiSessionListEntry | undefined> {
+    const memoized = this.memo.get(filePath);
+    if (memoized === undefined) return this.fullScan(filePath, chunkBuffer);
+
+    let stats: Awaited<ReturnType<typeof stat>>;
+    try {
+      stats = await stat(filePath);
+    } catch {
+      // Went away between readdir and stat: drop it and skip, like the SDK.
+      this.memo.delete(filePath);
+      return undefined;
+    }
+
+    if (stats.dev !== memoized.dev || stats.ino !== memoized.ino || stats.size < memoized.size) {
+      // Replaced or shrunk: the cached prefix is no longer trustworthy.
+      return this.fullScan(filePath, chunkBuffer);
+    }
+    if (stats.size === memoized.size) {
+      return buildSummaryFromFold(memoized.completeFold, filePath, stats.mtime);
+    }
+
+    // Growth on the same identity: append-only session files can only have
+    // gained a tail, so fold just the new bytes into the cached state.
+    const fold = { ...memoized.resumeFold };
+    const outcome = await foldSessionFileRange(filePath, fold, memoized.resumeOffset, chunkBuffer);
+    if (outcome === undefined) {
+      // Became unreadable mid-scan: skip it (like the SDK) and forget it.
+      this.memo.delete(filePath);
+      return undefined;
+    }
+    this.memo.set(filePath, {
+      dev: outcome.dev,
+      ino: outcome.ino,
+      size: outcome.size,
+      resumeOffset: outcome.resumeOffset,
+      resumeFold: outcome.resumeFold,
+      completeFold: fold,
+    });
+    return buildSummaryFromFold(fold, filePath, outcome.mtime);
+  }
+
+  private async fullScan(filePath: string, chunkBuffer: Buffer): Promise<PiSessionListEntry | undefined> {
+    const fold = createEmptyFold();
+    const outcome = await foldSessionFileRange(filePath, fold, 0, chunkBuffer);
+    if (outcome === undefined) {
+      this.memo.delete(filePath);
+      return undefined;
+    }
+    this.memo.set(filePath, {
+      dev: outcome.dev,
+      ino: outcome.ino,
+      size: outcome.size,
+      resumeOffset: outcome.resumeOffset,
+      resumeFold: outcome.resumeFold,
+      completeFold: fold,
+    });
+    return buildSummaryFromFold(fold, filePath, outcome.mtime);
+  }
+}
+
+/** One memoized file: its identity, how far it was parsed, and the summary state. */
+interface MemoizedSessionSummary {
+  dev: number;
+  ino: number;
+  /** Observed end-of-file offset when the fold below was completed. */
+  size: number;
+  /** First byte not covered by `resumeFold`; always a line boundary. */
+  resumeOffset: number;
+  /** Summary state folded up to `resumeOffset` (safe tail-parse start). */
+  resumeFold: SummaryFoldState;
+  /** Summary state for the whole file, including any unterminated trailing line. */
+  completeFold: SummaryFoldState;
+}
+
+/** The summary-relevant state accumulated while folding a file's lines. */
+interface SummaryFoldState {
+  header: Record<string, unknown> | undefined;
+  rejected: boolean;
+  messageCount: number;
+  firstMessageText: string | undefined;
+  name: string | undefined;
+}
+
+function createEmptyFold(): SummaryFoldState {
+  return { header: undefined, rejected: false, messageCount: 0, firstMessageText: undefined, name: undefined };
+}
+
+/** Identity and resume bookkeeping from one folded range of a session file. */
+interface RangeFoldOutcome {
+  dev: number;
+  ino: number;
+  /** Observed end-of-file offset after the read. */
+  size: number;
+  mtime: Date;
+  /** First byte not covered by `resumeFold`; always a line boundary. */
+  resumeOffset: number;
+  /** Fold state excluding any unterminated trailing line. */
+  resumeFold: SummaryFoldState;
+}
+
+/**
+ * Fold the lines of `filePath` from `startOffset` to end-of-file into `fold`.
+ *
+ * On return, `fold` holds the state for the whole range including any
+ * unterminated trailing line, while the returned `resumeFold`/`resumeOffset`
+ * describe the range up to the last safe line boundary — the starting point
+ * for an incremental tail parse once the file grows.
+ *
+ * Returns undefined when the file cannot be stat'ed, opened, or read
+ * (missing, unreadable, or vanished mid-scan).
+ */
+async function foldSessionFileRange(filePath: string, fold: SummaryFoldState, startOffset: number, chunkBuffer: Buffer): Promise<RangeFoldOutcome | undefined> {
   let stats: Awaited<ReturnType<typeof stat>>;
   try {
     stats = await stat(filePath);
@@ -92,58 +254,16 @@ export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buf
     return undefined;
   }
 
-  let file: Awaited<ReturnType<typeof open>> | undefined;
+  let file: FileHandle | undefined;
   try {
     file = await open(filePath, "r");
   } catch {
     return undefined;
   }
 
-  const state: ScanState = {
-    header: undefined,
-    rejected: false,
-    messageCount: 0,
-    firstMessageText: undefined,
-    name: undefined,
-    chunkBuffer: chunkBuffer ?? Buffer.allocUnsafe(SCAN_CHUNK_BYTES),
-  };
   try {
-    let pendingChunks: Buffer[] = [];
-    for (;;) {
-      const { bytesRead } = await file.read(state.chunkBuffer, 0, state.chunkBuffer.length, null);
-      const reachedEnd = bytesRead === 0;
-      const data = state.chunkBuffer.subarray(0, bytesRead);
-      let lineStart = 0;
-      let newlineAt = data.indexOf(NEWLINE);
-      while (newlineAt !== -1) {
-        if (pendingChunks.length > 0) {
-          // A line longer than one chunk: join the saved pieces and finish it.
-          pendingChunks.push(Buffer.from(data.subarray(lineStart, newlineAt)));
-          const whole = Buffer.concat(pendingChunks);
-          pendingChunks = [];
-          processLineBytes(whole, 0, whole.length, state);
-        } else {
-          processLineBytes(data, lineStart, newlineAt, state);
-        }
-        if (state.rejected) break;
-        lineStart = newlineAt + 1;
-        newlineAt = data.indexOf(NEWLINE, lineStart);
-      }
-      if (state.rejected) break;
-      if (reachedEnd) {
-        // Final line without a trailing newline (foreign writers, or a line
-        // still being written when we read).
-        if (pendingChunks.length > 0) {
-          pendingChunks.push(Buffer.from(data.subarray(lineStart)));
-          const whole = Buffer.concat(pendingChunks);
-          processLineBytes(whole, 0, whole.length, state);
-        } else if (lineStart < data.length) {
-          processLineBytes(data, lineStart, data.length, state);
-        }
-        break;
-      }
-      if (lineStart < data.length) pendingChunks.push(Buffer.from(data.subarray(lineStart)));
-    }
+    const outcome = await foldFileLines(file, fold, startOffset, chunkBuffer);
+    return { dev: stats.dev, ino: stats.ino, size: outcome.endOffset, mtime: stats.mtime, resumeOffset: outcome.resumeOffset, resumeFold: outcome.resumeFold };
   } catch {
     // One unreadable/corrupt file must not break the listing; the SDK skips
     // such files too.
@@ -151,34 +271,94 @@ export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buf
   } finally {
     await file.close().catch(() => undefined);
   }
+}
 
-  if (state.rejected || state.header === undefined) return undefined;
-  const id = state.header["id"];
+/** The streaming line fold over an open file range; see foldSessionFileRange. */
+async function foldFileLines(file: FileHandle, fold: SummaryFoldState, startOffset: number, chunkBuffer: Buffer): Promise<{ resumeOffset: number; endOffset: number; resumeFold: SummaryFoldState }> {
+  let position = startOffset;
+  let pendingChunks: Buffer[] = [];
+  let pendingLineStart = startOffset;
+  for (;;) {
+    const { bytesRead } = await file.read(chunkBuffer, 0, chunkBuffer.length, position);
+    const reachedEnd = bytesRead === 0;
+    const data = chunkBuffer.subarray(0, bytesRead);
+    let lineStart = 0;
+    let newlineAt = data.indexOf(NEWLINE);
+    while (newlineAt !== -1) {
+      if (pendingChunks.length > 0) {
+        // A line longer than one chunk: join the saved pieces and finish it.
+        pendingChunks.push(Buffer.from(data.subarray(lineStart, newlineAt)));
+        const whole = Buffer.concat(pendingChunks);
+        pendingChunks = [];
+        processLineBytes(whole, 0, whole.length, fold);
+      } else {
+        processLineBytes(data, lineStart, newlineAt, fold);
+      }
+      if (fold.rejected) break;
+      lineStart = newlineAt + 1;
+      newlineAt = data.indexOf(NEWLINE, lineStart);
+    }
+    if (fold.rejected) {
+      const endOffset = position + data.length;
+      return { resumeOffset: endOffset, endOffset, resumeFold: fold };
+    }
+    if (reachedEnd) {
+      const endOffset = position + data.length;
+      if (pendingChunks.length === 0 && lineStart >= data.length) {
+        return { resumeOffset: endOffset, endOffset, resumeFold: fold };
+      }
+      // Final line without a trailing newline (foreign writers, or a line
+      // still being written when we read): fold it for this listing's result,
+      // but keep an un-folded copy and the line's start offset — appended
+      // bytes may complete this line, and it must then be re-folded whole.
+      const resumeOffset = pendingChunks.length > 0 ? pendingLineStart : position + lineStart;
+      const resumeFold = { ...fold };
+      if (pendingChunks.length > 0) {
+        pendingChunks.push(Buffer.from(data.subarray(lineStart)));
+        const whole = Buffer.concat(pendingChunks);
+        processLineBytes(whole, 0, whole.length, fold);
+      } else {
+        processLineBytes(data, lineStart, data.length, fold);
+      }
+      return { resumeOffset, endOffset, resumeFold };
+    }
+    if (lineStart < data.length) {
+      if (pendingChunks.length === 0) pendingLineStart = position + lineStart;
+      pendingChunks.push(Buffer.from(data.subarray(lineStart)));
+    }
+    position += bytesRead;
+  }
+}
+
+/** The listing entry for a fold, or undefined when the file is not a usable session. */
+function buildSummaryFromFold(fold: SummaryFoldState, filePath: string, mtime: Date): PiSessionListEntry | undefined {
+  if (fold.rejected || fold.header === undefined) return undefined;
+  const id = fold.header["id"];
   // The SDK would list a header without a usable id; downstream lookups then
   // call `.startsWith` on it and crash. Skip such files instead.
   if (typeof id !== "string" || id === "") return undefined;
 
-  const headerCwd = state.header["cwd"];
-  const parentSessionPath = state.header["parentSession"];
-  const headerTimestamp = state.header["timestamp"];
+  const headerCwd = fold.header["cwd"];
+  const parentSessionPath = fold.header["parentSession"];
+  const headerTimestamp = fold.header["timestamp"];
   return {
     path: filePath,
     id,
     cwd: typeof headerCwd === "string" ? headerCwd : "",
     created: typeof headerTimestamp === "string" || typeof headerTimestamp === "number" ? new Date(headerTimestamp) : new Date(Number.NaN),
-    modified: stats.mtime,
-    messageCount: state.messageCount,
-    firstMessage: state.firstMessageText ?? "(no messages)",
+    modified: mtime,
+    messageCount: fold.messageCount,
+    firstMessage: fold.firstMessageText ?? "(no messages)",
     // Never built: see the directory-level doc comment. Kept because SDK-built
     // entries (cleanup listing) still carry the field.
     allMessagesText: "",
-    ...(state.name === undefined ? {} : { name: state.name }),
+    ...(fold.name === undefined ? {} : { name: fold.name }),
     ...(typeof parentSessionPath === "string" ? { parentSessionPath } : {}),
   };
 }
 
 /** Classify and fold one line, addressed as bytes inside `data`. */
-function processLineBytes(data: Buffer, start: number, end: number, state: ScanState): void {
+function processLineBytes(data: Buffer, start: number, end: number, state: SummaryFoldState): void {
   // Readline parity: a CRLF file yields lines without their trailing `\r`.
   if (end > start && data[end - 1] === CARRIAGE_RETURN) end -= 1;
 
@@ -307,6 +487,23 @@ function tryParseEntry(line: string): Record<string, unknown> | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+async function listSessionFilesInDir(sessionDir: string): Promise<string[]> {
+  let fileNames: string[];
+  try {
+    fileNames = await readdir(sessionDir);
+  } catch {
+    // Matches the SDK listing behavior: an unreadable directory lists nothing.
+    return [];
+  }
+  return fileNames.filter((name) => name.endsWith(".jsonl")).map((name) => join(sessionDir, name));
+}
+
+function sortedSessionSummaries(summaries: readonly (PiSessionListEntry | undefined)[]): PiSessionListEntry[] {
+  const sessions = summaries.filter((summary): summary is PiSessionListEntry => summary !== undefined);
+  sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+  return sessions;
 }
 
 async function scanSessionFilesWithBoundedConcurrency(
