@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
 import type { SessionHeaderReader } from "./parentSessionLocator.js";
+import { scanSessionSummariesInDir } from "./sessionSummaryScanner.js";
 import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
 
 type SessionDirSource = "env" | "settings" | "pi-default";
@@ -70,7 +71,15 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
 
   async list(cwd: string): Promise<PiSessionListEntry[]> {
     const resolution = this.resolver.resolve(cwd);
-    return filterSessionsForCwd(await listSessionsInDir(resolution.sessionDir), cwd);
+    // Lightweight streaming summaries instead of the SDK's full-transcript
+    // listing: same fields, but message bodies are never parsed once the first
+    // user message is found. The cross-project cleanup listing (listAll) keeps
+    // the SDK path.
+    const sessions = (await scanSessionSummariesInDir(resolution.sessionDir)).map((session) => ({
+      ...session,
+      cwd: canonicalizeStoredCwd(session.cwd),
+    }));
+    return filterSessionsForCwd(sessions, cwd);
   }
 
   async listParentSessionPaths(cwd: string, readHeader: SessionHeaderReader): Promise<string[]> {

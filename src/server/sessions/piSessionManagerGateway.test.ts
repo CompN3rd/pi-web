@@ -141,6 +141,22 @@ describe("Pi session manager gateway", () => {
 
     await expect(gateway.list(cwd)).resolves.toMatchObject([{ id: "session-elsewhere", cwd }]);
   });
+
+  it("summarizes sessions whose transcript bodies contain unreadable lines", async () => {
+    // The lightweight listing reads header + summary fields only; a corrupt or
+    // half-written transcript line must not break the listing.
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    await mkdir(sharedSessionDir, { recursive: true });
+    const lines = [
+      JSON.stringify({ type: "session", version: 3, id: "session-rough", timestamp: "2026-01-01T00:00:00.000Z", cwd }),
+      '{"type":"message","id":"half-written"',
+      JSON.stringify({ type: "message", id: "m1", parentId: "root", timestamp: "2026-01-01T00:01:00.000Z", message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
+    ];
+    await writeFile(join(sharedSessionDir, "rough.jsonl"), `${lines.join("\n")}\n`, "utf8");
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.list(cwd)).resolves.toMatchObject([{ id: "session-rough", cwd, messageCount: 1, firstMessage: "hello" }]);
+  });
 });
 
 describe("gateway header-only parent paths", () => {
