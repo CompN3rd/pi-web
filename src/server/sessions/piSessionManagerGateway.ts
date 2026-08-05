@@ -1,10 +1,11 @@
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
-import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway } from "./piSessionService.js";
+import type { SessionHeaderReader } from "./parentSessionLocator.js";
+import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
 
 type SessionDirSource = "env" | "settings" | "pi-default";
 
@@ -72,6 +73,16 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
     return filterSessionsForCwd(await listSessionsInDir(resolution.sessionDir), cwd);
   }
 
+  async listParentSessionPaths(cwd: string, readHeader: SessionHeaderReader): Promise<string[]> {
+    const resolution = this.resolver.resolve(cwd);
+    return listParentSessionPathsInDir(resolution.sessionDir, cwd, readHeader);
+  }
+
+  async resolveSessionFile(cwd: string, sessionId: string, readHeader: SessionHeaderReader): Promise<ResolvedSessionFile | undefined> {
+    const resolution = this.resolver.resolve(cwd);
+    return resolveSessionFileInDir(resolution.sessionDir, cwd, sessionId, readHeader);
+  }
+
   create(cwd: string, options?: { parentSession?: string }): PiSessionManager {
     const resolution = this.resolver.resolve(cwd);
     return SessionManager.create(cwd, resolution.sessionDir, options?.parentSession === undefined ? undefined : { parentSession: options.parentSession });
@@ -118,6 +129,90 @@ export function filterSessionsForCwd(sessions: readonly PiSessionListEntry[], cw
   // Sessions with an empty cwd (old session files) are excluded: resolve("") would
   // resolve to this process's cwd and produce false matches.
   return sessions.filter((session) => session.cwd !== "" && cwdPathsEqual(session.cwd, cwd));
+}
+
+/**
+ * Collect the `parentSessionPath` values recorded in a session directory's
+ * files, reading only each file's single-line JSON header — never the
+ * transcripts. The header is the only place a child records its parent, so
+ * this yields exactly what a full listing would report for the relationship.
+ *
+ * Unreadable headers contribute nothing (matching how a listing skips invalid
+ * files), and headers whose cwd does not belong to `cwd` are excluded exactly
+ * like `filterSessionsForCwd` would exclude them from a listing.
+ */
+export async function listParentSessionPathsInDir(sessionDir: string, cwd: string, readHeader: SessionHeaderReader): Promise<string[]> {
+  const sessionFiles = await listSessionFiles(sessionDir);
+  const headers = await Promise.all(sessionFiles.map((sessionFile) => readHeader(sessionFile)));
+  const parentSessionPaths: string[] = [];
+  for (const header of headers) {
+    // A header without a cwd (very old session files) would also be dropped by
+    // filterSessionsForCwd, so it contributes no parent here either.
+    if (header?.parentSession === undefined || header.cwd === undefined || !cwdPathsEqual(header.cwd, cwd)) continue;
+    parentSessionPaths.push(header.parentSession);
+  }
+  return parentSessionPaths;
+}
+
+/**
+ * Locate a session file by id without parsing transcripts.
+ *
+ * Session filenames embed the session id (`<timestamp>_<sessionId>.jsonl`), so
+ * exact and prefix matches are normally found from the directory names alone
+ * and confirmed by one header read. When no filename matches (renamed or
+ * hand-named files), every header in the directory is checked instead, keeping
+ * the outcome identical to picking the session out of a full listing. Headers
+ * decide: a file whose header id or cwd does not match is not the session.
+ *
+ * The header's cwd is returned canonicalized, matching what `list` reports.
+ */
+export async function resolveSessionFileInDir(
+  sessionDir: string,
+  cwd: string,
+  sessionId: string,
+  readHeader: SessionHeaderReader,
+): Promise<ResolvedSessionFile | undefined> {
+  const sessionFiles = await listSessionFiles(sessionDir);
+  const filenameMatches = sessionFiles.filter((sessionFile) => fileNameMatchesSessionId(basename(sessionFile), sessionId));
+  // Deterministic among multiple prefix matches: newest-embedded timestamp first.
+  const candidates = (filenameMatches.length > 0 ? filenameMatches : sessionFiles).slice().sort((a, b) => b.localeCompare(a));
+  for (const sessionFile of candidates) {
+    const header = await readHeader(sessionFile);
+    if (header?.cwd === undefined) continue;
+    if (header.id !== sessionId && !header.id.startsWith(sessionId)) continue;
+    if (!cwdPathsEqual(header.cwd, cwd)) continue;
+    return { id: header.id, cwd: canonicalizeStoredCwd(header.cwd), path: sessionFile };
+  }
+  return undefined;
+}
+
+/** Whether a `.jsonl` file name embeds `sessionId` (exactly or as a prefix). */
+function fileNameMatchesSessionId(fileName: string, sessionId: string): boolean {
+  const embeddedId = embeddedFileNameSessionId(fileName);
+  return embeddedId !== undefined && (embeddedId === sessionId || embeddedId.startsWith(sessionId));
+}
+
+/**
+ * The session id embedded in a SDK-style session file name
+ * (`<timestamp>_<sessionId>.jsonl`). The timestamp never contains `_`, so the
+ * id is everything after the first separator; files without one fall back to
+ * the whole stem, and header verification discards false guesses.
+ */
+function embeddedFileNameSessionId(fileName: string): string | undefined {
+  const stem = fileName.slice(0, -".jsonl".length);
+  const separatorIndex = stem.indexOf("_");
+  const candidate = separatorIndex === -1 ? stem : stem.slice(separatorIndex + 1);
+  return candidate === "" ? undefined : candidate;
+}
+
+async function listSessionFiles(sessionDir: string): Promise<string[]> {
+  try {
+    const names = await readdir(sessionDir);
+    return names.filter((name) => name.endsWith(".jsonl")).map((name) => join(sessionDir, name));
+  } catch {
+    // Matches the SDK listing behavior: an unreadable directory lists nothing.
+    return [];
+  }
 }
 
 function uniqueSessionsByPath(sessions: readonly PiSessionListEntry[]): PiSessionListEntry[] {

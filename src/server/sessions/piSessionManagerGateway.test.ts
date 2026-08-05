@@ -6,6 +6,7 @@ import { agentSessionDirEnvKeys } from "../../config.js";
 import { createPiSessionManagerGateway, defaultPiSessionDir, defaultPiSessionsRoot, filterSessionsForCwd, SessionDirResolver } from "./piSessionManagerGateway.js";
 import type { PiSessionListEntry } from "./piSessionService.js";
 import type { PiSessionManager } from "./piSessionService.js";
+import { readSessionHeaderSummary } from "./sessionFileHeader.js";
 import { sep } from "node:path";
 
 let tempDir: string;
@@ -142,6 +143,108 @@ describe("Pi session manager gateway", () => {
   });
 });
 
+describe("gateway header-only parent paths", () => {
+  it("collects parent paths only from sessions belonging to the requested cwd", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    const otherCwd = join(tempDir, "other-workspace");
+    await writeNamedSessionFile(sharedSessionDir, "child-a.jsonl", { id: "child-a", cwd, parentSession: "/parents/main.jsonl" });
+    await writeNamedSessionFile(sharedSessionDir, "child-b.jsonl", { id: "child-b", cwd: otherCwd, parentSession: "/parents/other.jsonl" });
+    await writeNamedSessionFile(sharedSessionDir, "no-parent.jsonl", { id: "no-parent", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.listParentSessionPaths(cwd, readSessionHeaderSummary)).resolves.toEqual(["/parents/main.jsonl"]);
+  });
+
+  it("skips unreadable headers instead of failing the scan", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    await mkdir(sharedSessionDir, { recursive: true });
+    await writeNamedSessionFile(sharedSessionDir, "child.jsonl", { id: "child", cwd, parentSession: "/parents/child.jsonl" });
+    await writeFile(join(sharedSessionDir, "broken.jsonl"), "not a session header\n", "utf8");
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.listParentSessionPaths(cwd, readSessionHeaderSummary)).resolves.toEqual(["/parents/child.jsonl"]);
+  });
+
+  it("lists nothing when the session directory does not exist", async () => {
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: join(tempDir, "missing-sessions") }));
+
+    await expect(gateway.listParentSessionPaths(cwd, readSessionHeaderSummary)).resolves.toEqual([]);
+  });
+});
+
+describe("gateway session-file resolution by id", () => {
+  it("resolves a session from the id embedded in its file name without scanning other headers", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    const targetPath = await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_target-id.jsonl", { id: "target-id", cwd });
+    await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-01-000Z_other-id.jsonl", { id: "other-id", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+    const readPaths: string[] = [];
+    const readHeader = async (sessionFile: string) => {
+      readPaths.push(sessionFile);
+      return readSessionHeaderSummary(sessionFile);
+    };
+
+    await expect(gateway.resolveSessionFile(cwd, "target-id", readHeader)).resolves.toEqual({ id: "target-id", cwd, path: targetPath });
+    expect(readPaths).toEqual([targetPath]);
+  });
+
+  it("resolves an id prefix the same way a listing match would", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    const targetPath = await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_0199f3a2-prefix-session.jsonl", { id: "0199f3a2-prefix-session", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "0199f3a2", readSessionHeaderSummary)).resolves.toEqual({ id: "0199f3a2-prefix-session", cwd, path: targetPath });
+  });
+
+  it("falls back to header reads when the file name does not embed the id", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    const renamedPath = await writeNamedSessionFile(sharedSessionDir, "hand-renamed.jsonl", { id: "renamed-session", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "renamed-session", readSessionHeaderSummary)).resolves.toEqual({ id: "renamed-session", cwd, path: renamedPath });
+  });
+
+  it("trusts the header over a file name that embeds a different session id", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    const copiedPath = await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_original-id.jsonl", { id: "copied-id", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "original-id", readSessionHeaderSummary)).resolves.toBeUndefined();
+    await expect(gateway.resolveSessionFile(cwd, "copied-id", readSessionHeaderSummary)).resolves.toEqual({ id: "copied-id", cwd, path: copiedPath });
+  });
+
+  it("does not resolve sessions that belong to another cwd", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    const otherCwd = join(tempDir, "other-workspace");
+    await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_elsewhere.jsonl", { id: "elsewhere", cwd: otherCwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "elsewhere", readSessionHeaderSummary)).resolves.toBeUndefined();
+  });
+
+  it("ignores sessions whose header has no cwd, like a listing would", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_legacy.jsonl", { id: "legacy" });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "legacy", readSessionHeaderSummary)).resolves.toBeUndefined();
+  });
+
+  it("canonicalizes the header cwd it reports", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_messy.jsonl", { id: "messy", cwd: `${cwd}${sep}.${sep}` });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "messy", readSessionHeaderSummary)).resolves.toMatchObject({ id: "messy", cwd });
+  });
+
+  it("resolves nothing when the session directory does not exist", async () => {
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: join(tempDir, "missing-sessions") }));
+
+    await expect(gateway.resolveSessionFile(cwd, "any-session", readSessionHeaderSummary)).resolves.toBeUndefined();
+  });
+});
+
 describe("filterSessionsForCwd", () => {
   it("matches cwds that differ only by trailing separator or redundant segments", () => {
     const sessions = [sessionEntry("a", cwd)];
@@ -185,4 +288,12 @@ function sessionEntry(id: string, sessionCwd: string): PiSessionListEntry {
 async function writeSessionFile(dir: string, id: string, sessionCwd: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${id}.jsonl`), `${JSON.stringify({ type: "session", version: 3, id, timestamp: "2026-01-01T00:00:00.000Z", cwd: sessionCwd })}\n`, "utf8");
+}
+
+async function writeNamedSessionFile(dir: string, fileName: string, header: { id: string; cwd?: string; parentSession?: string }): Promise<string> {
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, fileName);
+  const line = { type: "session", version: 3, timestamp: "2026-01-01T00:00:00.000Z", ...header };
+  await writeFile(path, `${JSON.stringify(line)}\n`, "utf8");
+  return path;
 }

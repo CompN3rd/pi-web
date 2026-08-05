@@ -283,6 +283,13 @@ export interface PiSessionListEntry {
   parentSessionPath?: string;
 }
 
+/** A session file located by id without parsing its transcript. */
+export interface ResolvedSessionFile {
+  id: string;
+  cwd: string;
+  path: string;
+}
+
 interface WorkspaceArchiveCandidate extends SessionArchiveTreeCandidate {
   cwd: string;
   listEntry?: PiSessionListEntry;
@@ -317,6 +324,19 @@ export interface PiSessionManager {
 
 export interface PiSessionManagerGateway {
   list(cwd: string): Promise<PiSessionListEntry[]>;
+  /**
+   * The `parentSessionPath` values recorded in the session files of `cwd`'s
+   * session directory, read from each file's header line only — no transcript
+   * parsing. `readHeader` is injected so the caller's per-path header cache is
+   * reused.
+   */
+  listParentSessionPaths(cwd: string, readHeader: SessionHeaderReader): Promise<string[]>;
+  /**
+   * Locate a session file by id (exact match or id prefix, the same semantics
+   * as finding it in `list`) without parsing transcripts. `readHeader` is
+   * injected so the caller's per-path header cache is reused.
+   */
+  resolveSessionFile(cwd: string, sessionId: string, readHeader: SessionHeaderReader): Promise<ResolvedSessionFile | undefined>;
   create(cwd: string, options?: { parentSession?: string }): PiSessionManager;
   /**
    * Cross-project listing of Pi's session stores (the default store plus any
@@ -1122,18 +1142,17 @@ export class PiSessionService implements SessionRouteService {
    *
    * Only sibling workspaces are scanned: agents may only spawn into workspaces
    * of the spawning session's own project, so that bounds where a child can be.
-   * Listing is skipped entirely when no project-workspace locator is configured
-   * or the cwd belongs to no registered project.
+   * Each sibling scan reads only the header line of every session file (the
+   * only place `parentSessionPath` is recorded), never the transcripts. Listing
+   * is skipped entirely when no project-workspace locator is configured or the
+   * cwd belongs to no registered project.
    */
   private async countChildrenInSiblingWorkspaces(sessions: readonly ClientSession[], cwd: string): Promise<Map<string, number>> {
     if (this.projectWorkspaces === undefined || sessions.length === 0) return new Map();
     try {
       const siblingCwds = await siblingWorkspaceCwds(this.projectWorkspaces, cwd);
       if (siblingCwds.length === 0) return new Map();
-      const listings = await Promise.all(siblingCwds.map(async (siblingCwd): Promise<string[]> => {
-        const entries = await this.sessionManager.list(siblingCwd);
-        return entries.flatMap((entry) => entry.parentSessionPath === undefined ? [] : [entry.parentSessionPath]);
-      }));
+      const listings = await Promise.all(siblingCwds.map((siblingCwd) => this.sessionManager.listParentSessionPaths(siblingCwd, this.readCachedSessionHeader)));
       return countOutOfListingChildren(sessions, listings.flat());
     } catch (error: unknown) {
       this.logger.info(
@@ -2410,6 +2429,10 @@ export class PiSessionService implements SessionRouteService {
     const sessionFile = session.sessionFile;
     if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
     await clearParentSession(sessionFile);
+    // The header cache memoizes the first successful read, and detach is the
+    // only flow that rewrites a header; drop the stale entry so sibling child
+    // counts and parent locations observe the cleared parent immediately.
+    this.sessionHeaderCache.delete(sessionFile);
     clearParentSessionHeader(session.sessionManager);
     this.unregisterSubsession(session.sessionId);
     await this.forgetUnreadSessions([{ sessionId: session.sessionId, cwd: session.sessionManager.getCwd() }]);
@@ -2676,7 +2699,9 @@ export class PiSessionService implements SessionRouteService {
       );
     }
 
-    const match = (await this.sessionManager.list(ref.cwd)).find((s) => s.id === ref.id || s.id.startsWith(ref.id));
+    // Resolve the session file directly by id: opening one inactive session
+    // must not pay for a full transcript listing of its whole workspace.
+    const match = await this.sessionManager.resolveSessionFile(ref.cwd, ref.id, this.readCachedSessionHeader);
     if (!match) throw new Error("Session not found");
     return this.openExistingSession(match.id, match.cwd, () => this.sessionManager.open(match.path), options);
   }

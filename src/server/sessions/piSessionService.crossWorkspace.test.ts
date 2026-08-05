@@ -1,9 +1,10 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PiSessionService, type PiSessionListEntry } from "./piSessionService.js";
-import { CapturingSessionEventHub, emptyArchiveStore, fakeSessionManager, sessionRecord, testModelRuntime, type SessionGateway } from "./piSessionService.testSupport.js";
+import { listParentSessionPathsInDir } from "./piSessionManagerGateway.js";
+import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionRecord, sessionRef, testModelRuntime, type SessionGateway } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 const CHILD_CWD = "/srv/dev/pi-web";
@@ -125,10 +126,10 @@ describe("PiSessionService.list children in sibling workspaces", () => {
     expect(listed).not.toHaveProperty("childSessionsElsewhere");
   });
 
-  it("still lists sessions when a sibling workspace cannot be listed", async () => {
+  it("still lists sessions when a sibling workspace cannot be scanned", async () => {
     const parent = sessionRecord("parent", CHILD_CWD);
     const service = serviceListing({ [CHILD_CWD]: [parent] }, [CHILD_CWD, PARENT_CWD], {
-      listCwd: (cwd) => {
+      scanCwd: (cwd) => {
         if (cwd === PARENT_CWD) throw new Error("sibling workspace is gone");
         return undefined;
       },
@@ -138,6 +139,65 @@ describe("PiSessionService.list children in sibling workspaces", () => {
 
     expect(listed).toMatchObject({ id: "parent" });
     expect(listed).not.toHaveProperty("childSessionsElsewhere");
+  });
+
+  it("counts sibling children from header parent paths even when sibling listings fail", async () => {
+    const parent = sessionRecord("parent", CHILD_CWD);
+    const service = serviceListing({
+      [CHILD_CWD]: [parent],
+      [PARENT_CWD]: [{ ...sessionRecord("child", PARENT_CWD), parentSessionPath: parent.path }],
+    }, [CHILD_CWD, PARENT_CWD], {
+      // A throwing sibling listing must not matter: the scan reads headers only.
+      listCwd: (cwd) => {
+        if (cwd === PARENT_CWD) throw new Error("sibling listing is unavailable");
+        return undefined;
+      },
+    });
+
+    const [listed] = await service.list(CHILD_CWD);
+
+    expect(listed).toMatchObject({ id: "parent", childSessionsElsewhere: 1 });
+  });
+
+  it("stops counting a sibling child as soon as its parent link is detached", async () => {
+    // The sibling scan reuses the service's memoized header reads, so detach —
+    // the only flow that rewrites a header — must drop the cached entry.
+    const parent = sessionRecord("parent", CHILD_CWD);
+    const siblingDir = join(tempDir, "sibling-sessions");
+    await mkdir(siblingDir, { recursive: true });
+    const childFile = join(siblingDir, "child.jsonl");
+    await writeFile(childFile, `${JSON.stringify({ type: "session", version: 3, id: "child", timestamp: "2026-01-01T00:00:00.000Z", cwd: PARENT_CWD, parentSession: parent.path })}\n`, "utf8");
+    const child = fakeRuntime("child", { sessionFile: childFile });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(child.runtime),
+      archiveStore: emptyArchiveStore(),
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: (cwd: string) => Promise.resolve(cwd === CHILD_CWD ? [parent] : []),
+        listAll: () => Promise.resolve([]),
+        listParentSessionPaths: (siblingCwd: string, readHeader) => siblingCwd === PARENT_CWD
+          ? listParentSessionPathsInDir(siblingDir, siblingCwd, readHeader)
+          : Promise.resolve([]),
+        resolveSessionFile: (refCwd: string, sessionId: string) => Promise.resolve(
+          sessionId === "child" && refCwd === PARENT_CWD ? { id: "child", cwd: PARENT_CWD, path: childFile } : undefined,
+        ),
+        open: () => fakeSessionManager(PARENT_CWD, { getSessionId: () => "child" }),
+      },
+      heartbeatIntervalMs: 60_000,
+      projectWorkspaces: { forCwd: () => Promise.resolve([CHILD_CWD, PARENT_CWD]) },
+    });
+
+    const [before] = await service.list(CHILD_CWD);
+    expect(before).toMatchObject({ id: "parent", childSessionsElsewhere: 1 });
+
+    await service.detachParent(sessionRef("child", PARENT_CWD));
+
+    const [after] = await service.list(CHILD_CWD);
+    expect(after).toMatchObject({ id: "parent" });
+    expect(after).not.toHaveProperty("childSessionsElsewhere");
+    await service.dispose();
   });
 
   it("reports both an out-of-workspace parent and children elsewhere on one listing", async () => {
@@ -177,7 +237,7 @@ type SessionRecord = PiSessionListEntry;
 function serviceListing(
   recordsByCwd: SessionRecord[] | Record<string, SessionRecord[]>,
   projectCwds?: string[],
-  options: { listCwd?: (cwd: string) => void } = {},
+  options: { listCwd?: (cwd: string) => void; scanCwd?: (cwd: string) => void } = {},
 ): PiSessionService {
   const listings = Array.isArray(recordsByCwd) ? { [CHILD_CWD]: recordsByCwd } : recordsByCwd;
   const gateway: SessionGateway = {
@@ -187,6 +247,14 @@ function serviceListing(
       return Promise.resolve(listings[cwd] ?? []);
     },
     listAll: () => Promise.resolve(Object.values(listings).flat()),
+    listParentSessionPaths: (cwd: string) => {
+      options.scanCwd?.(cwd);
+      return Promise.resolve((listings[cwd] ?? []).flatMap((entry) => entry.parentSessionPath === undefined ? [] : [entry.parentSessionPath]));
+    },
+    resolveSessionFile: (cwd: string, sessionId: string) => {
+      const match = Object.values(listings).flat().find((record) => record.id === sessionId || record.id.startsWith(sessionId));
+      return Promise.resolve(match === undefined ? undefined : { id: match.id, cwd: match.cwd, path: match.path });
+    },
     open: () => fakeSessionManager(),
   };
   return new PiSessionService(new CapturingSessionEventHub(), {
