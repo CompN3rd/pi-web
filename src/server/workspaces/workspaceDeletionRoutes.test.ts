@@ -1,11 +1,12 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TerminalCommandRun } from "../../shared/apiTypes.js";
 import { ProjectService } from "../projects/projectService.js";
 import type { SessionProxyDaemon } from "../sessiond/sessionProxyRoutes.js";
 import { ProjectStore } from "../storage/projectStore.js";
 import type { Project, WorkspaceListing } from "../types.js";
-import { registerWorkspaceDeletionRoutes, type WorktreePreRemoveHookProbe } from "./workspaceDeletionRoutes.js";
+import { registerWorkspaceDeletionRoutes, WORKTREE_PRE_REMOVE_HOOK_RELATIVE_PATH, type WorktreePreRemoveHookProbe } from "./workspaceDeletionRoutes.js";
 import { WorkspaceService } from "./workspaceService.js";
 
 let app: FastifyInstance;
@@ -73,6 +74,10 @@ const specialTargetWorkspace: WorkspaceListing = {
   isGitWorktree: true,
 };
 
+// Probe paths are built with the same join() as the route, so expectations match on every platform.
+const mainHookPath = join(mainWorkspace.path, WORKTREE_PRE_REMOVE_HOOK_RELATIVE_PATH);
+const specialHookPath = join(specialMainWorkspace.path, WORKTREE_PRE_REMOVE_HOOK_RELATIVE_PATH);
+
 interface AppOptions {
   project?: Project;
   workspaces?: WorkspaceListing[];
@@ -97,7 +102,7 @@ describe("workspace deletion routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json<TerminalCommandRun>()).toMatchObject({ id: "run1", workspaceId: "main", terminalId: "terminal1", status: "running" });
-    expect(hookProbePaths).toEqual(["/repo/.pi-web/hooks/worktree-pre-remove"]);
+    expect(hookProbePaths).toEqual([mainHookPath]);
     expect(daemonRequests).toEqual([
       { method: "DELETE", path: `/terminals?cwd=${encodeURIComponent(targetWorkspace.path)}` },
       {
@@ -126,7 +131,7 @@ describe("workspace deletion routes", () => {
     const response = await app.inject({ method: "DELETE", url: "/api/projects/p1/workspaces/feature" });
 
     expect(response.statusCode).toBe(200);
-    expect(hookProbePaths).toEqual(["/repo/.pi-web/hooks/worktree-pre-remove"]);
+    expect(hookProbePaths).toEqual([mainHookPath]);
     expect(daemonRequests).toEqual([
       { method: "DELETE", path: `/terminals?cwd=${encodeURIComponent(targetWorkspace.path)}` },
       {
@@ -138,7 +143,7 @@ describe("workspace deletion routes", () => {
           workspaceId: "main",
           cwd: "/repo",
           title: "Delete workspace: feature/branch",
-          command: "'/repo/.pi-web/hooks/worktree-pre-remove' '/repo/feature path' && git worktree remove '/repo/feature path'",
+          command: `'${mainHookPath}' '/repo/feature path' && git worktree remove '/repo/feature path'`,
           metadata: {
             "pi.operation": "workspace.delete",
             "target.workspaceId": "feature",
@@ -156,7 +161,7 @@ describe("workspace deletion routes", () => {
     const response = await app.inject({ method: "DELETE", url: "/api/projects/p2/workspaces/special-feature" });
 
     expect(response.statusCode).toBe(200);
-    expect(hookProbePaths).toEqual(["/my repo/.pi-web/hooks/worktree-pre-remove"]);
+    expect(hookProbePaths).toEqual([specialHookPath]);
     expect(daemonRequests).toEqual([
       { method: "DELETE", path: `/terminals?cwd=${encodeURIComponent(specialTargetWorkspace.path)}` },
       {
@@ -168,7 +173,7 @@ describe("workspace deletion routes", () => {
           workspaceId: "special-main",
           cwd: "/my repo",
           title: "Delete workspace: feature/special",
-          command: "'/my repo/.pi-web/hooks/worktree-pre-remove' '/my repo/wt '\\''x'\\''' && git worktree remove '/my repo/wt '\\''x'\\'''",
+          command: `'${specialHookPath}' '/my repo/wt '\\''x'\\''' && git worktree remove '/my repo/wt '\\''x'\\'''`,
           metadata: {
             "pi.operation": "workspace.delete",
             "target.workspaceId": "special-feature",
@@ -196,7 +201,7 @@ describe("workspace deletion routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "probe I/O error" });
-    expect(hookProbePaths).toEqual(["/repo/.pi-web/hooks/worktree-pre-remove"]);
+    expect(hookProbePaths).toEqual([mainHookPath]);
     expect(daemonRequests).toEqual([]);
   });
 
