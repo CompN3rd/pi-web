@@ -1405,6 +1405,11 @@ export class PiWebApp extends LitElement {
     return result;
   }
 
+  private async forkSessionTree(entryId: string): Promise<void> {
+    // The controller selects the forked session and closes the dialog on success.
+    await this.sessions.forkFromTree(entryId);
+  }
+
   private closeSessionTreeNavigator(): void {
     this.sessions.closeTreeDialog();
     void this.focusChatComposer();
@@ -1415,6 +1420,7 @@ export class PiWebApp extends LitElement {
       <session-tree-navigator
         .tree=${state.treeDialog}
         .onNavigate=${(targetId: string, summaryChoice: SessionTreeSummaryChoice) => this.navigateSessionTree(targetId, summaryChoice)}
+        .onFork=${(entryId: string) => this.forkSessionTree(entryId)}
         .onAbort=${() => this.sessions.abortTreeNavigation()}
         .onCancel=${() => { this.closeSessionTreeNavigator(); }}
       ></session-tree-navigator>

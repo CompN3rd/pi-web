@@ -1,5 +1,6 @@
+// @vitest-environment happy-dom
 import type { TemplateResult } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionTreeNavigateResult, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
 // Genuine Lit callback extraction is limited to pointer row/confirmation wiring;
 // keyboard state and hierarchy are covered through the pure sessionTreeModel.
@@ -160,6 +161,108 @@ describe("session-tree-navigator interactions", () => {
   });
 });
 
+describe("session-tree-navigator fork step", () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  it("offers continue-from-here and fork-into-new-session for every selectable entry", async () => {
+    const navigator = await mountNavigator();
+
+    const continueButton = footerButton(navigator, "Continue from here");
+    const forkButton = footerButton(navigator, "Fork into new session…");
+
+    expect(continueButton.classList.contains("primary")).toBe(true);
+    expect(continueButton.disabled).toBe(false);
+    expect(forkButton.disabled).toBe(false);
+  });
+
+  it("disables both actions when nothing is selectable", async () => {
+    const navigator = await mountNavigator({ nodes: [], activeLeafId: null, activePathIds: [] });
+
+    expect(footerButton(navigator, "Continue from here").disabled).toBe(true);
+    expect(footerButton(navigator, "Fork into new session…").disabled).toBe(true);
+  });
+
+  it("forks the selected entry after an explicit confirmation and disables everything while busy", async () => {
+    let resolveFork: () => void = () => undefined;
+    const onFork = vi.fn(() => new Promise<void>((resolve) => { resolveFork = resolve; }));
+    const navigator = await mountNavigator();
+    navigator.onFork = onFork;
+    await settle(navigator);
+
+    footerButton(navigator, "Fork into new session…").click();
+    await settle(navigator);
+
+    const bodyText = shadowText(navigator);
+    expect(bodyText).toContain("Active answer");
+    expect(bodyText).toContain("Creates a new session file up to this entry and switches to it. The original session is unchanged.");
+
+    footerButton(navigator, "Fork into new session").click();
+    await settle(navigator);
+
+    expect(onFork).toHaveBeenCalledWith("active");
+    expect(footerButton(navigator, "Forking…").disabled).toBe(true);
+    expect(footerButton(navigator, "Back").disabled).toBe(true);
+
+    resolveFork();
+    await settle(navigator);
+    expect(footerButton(navigator, "Fork into new session").disabled).toBe(false);
+  });
+
+  it("keeps the fork step open and actionable when the fork fails", async () => {
+    const navigator = await mountNavigator();
+    navigator.onFork = () => Promise.reject(new Error("Fork from the session tree is unavailable. Restart the session daemon to enable it."));
+    await settle(navigator);
+
+    footerButton(navigator, "Fork into new session…").click();
+    await settle(navigator);
+    footerButton(navigator, "Fork into new session").click();
+    await settle(navigator);
+
+    const alert = navigator.renderRoot.querySelector(".dialog-error[role='alert']");
+    expect(alert?.textContent).toContain("Fork from the session tree is unavailable. Restart the session daemon to enable it.");
+    expect(navigator.renderRoot.querySelector("h2")?.textContent).toBe("Fork into new session");
+    expect(footerButton(navigator, "Fork into new session").disabled).toBe(false);
+  });
+
+  it("returns to the tree step with Back or Escape", async () => {
+    const onFork = vi.fn(() => Promise.resolve());
+    const navigator = await mountNavigator();
+    navigator.onFork = onFork;
+    await settle(navigator);
+
+    footerButton(navigator, "Fork into new session…").click();
+    await settle(navigator);
+    footerButton(navigator, "Back").click();
+    await settle(navigator);
+    expect(navigator.renderRoot.querySelector("[role='tree']")).toBeTruthy();
+
+    footerButton(navigator, "Fork into new session…").click();
+    await settle(navigator);
+    dialogElement(navigator).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settle(navigator);
+    expect(navigator.renderRoot.querySelector("[role='tree']")).toBeTruthy();
+    expect(onFork).not.toHaveBeenCalled();
+  });
+
+  it("opens the fork step with the f shortcut on the tree step", async () => {
+    const navigator = await mountNavigator();
+    navigator.onFork = vi.fn(() => Promise.resolve());
+    await settle(navigator);
+
+    dialogElement(navigator).dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true }));
+    await settle(navigator);
+
+    expect(shadowText(navigator)).toContain("Creates a new session file up to this entry and switches to it.");
+  });
+});
+
 function initializedNavigator(): SessionTreeNavigator {
   const navigator = new SessionTreeNavigator();
   navigator.tree = tree();
@@ -184,7 +287,7 @@ function renderNavigator(navigator: SessionTreeNavigator): TemplateResult {
 }
 
 function clickTreeNavigate(navigator: SessionTreeNavigator): void {
-  templateEventHandlerNearMarker(renderNavigator(navigator), ">Navigate</button>")(new Event("click"));
+  templateEventHandlerNearMarker(renderNavigator(navigator), ">Continue from here</button>")(new Event("click"));
 }
 
 function componentProperty(navigator: SessionTreeNavigator, property: string): unknown {
@@ -233,4 +336,38 @@ function deferred<T>() {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+async function mountNavigator(snapshot: SessionTreeSnapshot = tree()): Promise<SessionTreeNavigator> {
+  const element = document.createElement("session-tree-navigator");
+  if (!(element instanceof SessionTreeNavigator)) throw new Error("session-tree-navigator element was not upgraded");
+  element.tree = snapshot;
+  document.body.append(element);
+  await settle(element);
+  return element;
+}
+
+async function settle(navigator: SessionTreeNavigator): Promise<void> {
+  await Promise.resolve();
+  await navigator.updateComplete;
+  await navigator.updateComplete;
+}
+
+function dialogElement(navigator: SessionTreeNavigator): HTMLElement {
+  const dialog = navigator.renderRoot.querySelector("section[role='dialog']");
+  if (!(dialog instanceof HTMLElement)) throw new Error("Session tree dialog was unavailable");
+  return dialog;
+}
+
+function footerButton(navigator: SessionTreeNavigator, label: string): HTMLButtonElement {
+  for (const button of navigator.renderRoot.querySelectorAll("footer button")) {
+    if (button.textContent.trim() !== label) continue;
+    if (!(button instanceof HTMLButtonElement)) throw new Error(`Footer button "${label}" is not a button element`);
+    return button;
+  }
+  throw new Error(`Footer button "${label}" was unavailable`);
+}
+
+function shadowText(navigator: SessionTreeNavigator): string {
+  return navigator.renderRoot.textContent;
 }

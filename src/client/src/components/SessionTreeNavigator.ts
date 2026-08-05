@@ -6,13 +6,14 @@ import { buildSessionTreeModel, initialSessionTreeSelection, toggleSessionTreeFo
 
 const EMPTY_TREE: SessionTreeSnapshot = { nodes: [], activeLeafId: null, activePathIds: [] };
 const MAX_SESSION_TREE_VISUAL_DEPTH = 8;
-type NavigatorStep = "tree" | "confirm";
-type PendingFocus = "tree" | "summary" | "custom";
+type NavigatorStep = "tree" | "confirm" | "fork";
+type PendingFocus = "tree" | "summary" | "custom" | "fork";
 
 @customElement("session-tree-navigator")
 export class SessionTreeNavigator extends LitElement {
   @property({ attribute: false }) tree: SessionTreeSnapshot = EMPTY_TREE;
   @property({ attribute: false }) onNavigate?: (targetId: string, summaryChoice: SessionTreeSummaryChoice) => Promise<SessionTreeNavigateResult>;
+  @property({ attribute: false }) onFork?: (entryId: string) => Promise<void>;
   @property({ attribute: false }) onAbort?: () => Promise<void>;
   @property({ attribute: false }) onCancel?: () => void;
 
@@ -40,6 +41,7 @@ export class SessionTreeNavigator extends LitElement {
     this.pendingFocus = undefined;
     if (pendingFocus === "tree") this.focusSelectedTreeItem();
     else if (pendingFocus === "custom") this.renderRoot.querySelector<HTMLTextAreaElement>("#session-tree-custom-focus")?.focus();
+    else if (pendingFocus === "fork") this.renderRoot.querySelector<HTMLButtonElement>("#session-tree-fork-focus")?.focus();
     else this.renderRoot.querySelector<HTMLInputElement>("input[name='session-tree-summary']:checked")?.focus();
   }
 
@@ -62,7 +64,7 @@ export class SessionTreeNavigator extends LitElement {
             </div>
             <button class="close-button" ?disabled=${this.busy} title="Close session tree" aria-label="Close session tree" @click=${() => { this.onCancel?.(); }}>×</button>
           </header>
-          ${this.step === "tree" ? this.renderTreeStep() : this.renderConfirmationStep()}
+          ${this.step === "tree" ? this.renderTreeStep() : this.step === "confirm" ? this.renderConfirmationStep() : this.renderForkStep()}
           ${this.renderFooter()}
         </section>
       </div>
@@ -74,7 +76,7 @@ export class SessionTreeNavigator extends LitElement {
     return html`
       <div class="body tree-step">
         <div class="tree-intro">
-          <p>Select where conversation context should continue. All retained branches stay in this session file.</p>
+          <p>Select where the conversation should continue. “Continue from here” branches inside this session file, while “Fork into new session” copies history up to the selected entry into a new session file.</p>
           <div class="legend" aria-label="Session tree markers">
             <span><span class="marker active-path-marker" aria-hidden="true"></span>Active path</span>
             <span><span class="marker active-leaf-marker" aria-hidden="true"></span>Active leaf</span>
@@ -189,6 +191,29 @@ export class SessionTreeNavigator extends LitElement {
     `;
   }
 
+  private renderForkStep(): TemplateResult {
+    const selectedNode = this.selectedId === undefined ? undefined : this.model.nodesById.get(this.selectedId);
+    return html`
+      <div class="body confirmation-step">
+        <div class="confirmation-card">
+          <div>
+            <span class="eyebrow">Selected entry</span>
+            <h2>Fork into new session</h2>
+          </div>
+          ${selectedNode === undefined ? html`<div class="empty">The selected history entry is no longer available.</div>` : html`
+            <div class="selected-entry">
+              <span class="kind">${sessionTreeKindLabel(selectedNode.kind)}</span>
+              <strong dir="auto">${selectedNode.summary}</strong>
+              <p>Creates a new session file up to this entry and switches to it. The original session is unchanged.</p>
+            </div>
+          `}
+          ${this.statusMessage === "" ? null : html`<div class="dialog-status" role="status">${this.statusMessage}</div>`}
+          ${this.error === "" ? null : html`<div class="dialog-error" role="alert">${this.error}</div>`}
+        </div>
+      </div>
+    `;
+  }
+
   private renderSummaryOption(mode: SessionTreeSummaryChoice["mode"], label: string, description: string): TemplateResult {
     return html`
       <label class=${`summary-option${this.summaryMode === mode ? " selected" : ""}`}>
@@ -209,7 +234,21 @@ export class SessionTreeNavigator extends LitElement {
       return html`
         <footer>
           <button @click=${() => { this.onCancel?.(); }}>Cancel</button>
-          <button class="primary" ?disabled=${this.selectedId === undefined} @click=${() => { this.continueToConfirmation(); }}>Navigate</button>
+          <span class="footer-spacer"></span>
+          <button ?disabled=${this.selectedId === undefined} @click=${() => { this.continueToFork(); }}>Fork into new session…</button>
+          <button class="primary" ?disabled=${this.selectedId === undefined} @click=${() => { this.continueToConfirmation(); }}>Continue from here</button>
+        </footer>
+      `;
+    }
+
+    if (this.step === "fork") {
+      return html`
+        <footer>
+          <button ?disabled=${this.busy} @click=${() => { this.returnToTree(); }}>Back</button>
+          <span class="footer-spacer"></span>
+          <button id="session-tree-fork-focus" class="primary" ?disabled=${this.busy || this.selectedId === undefined} @click=${() => { void this.submitFork(); }}>
+            ${this.busy ? "Forking…" : "Fork into new session"}
+          </button>
         </footer>
       `;
     }
@@ -293,6 +332,14 @@ export class SessionTreeNavigator extends LitElement {
     this.pendingFocus = "summary";
   }
 
+  private continueToFork(): void {
+    if (this.busy || this.selectedId === undefined || !this.model.nodesById.has(this.selectedId)) return;
+    this.step = "fork";
+    this.error = "";
+    this.statusMessage = "";
+    this.pendingFocus = "fork";
+  }
+
   private returnToTree(): void {
     if (this.busy) return;
     this.step = "tree";
@@ -358,6 +405,32 @@ export class SessionTreeNavigator extends LitElement {
     }
   }
 
+  private async submitFork(): Promise<void> {
+    if (this.busy || this.selectedId === undefined) return;
+    const fork = this.onFork;
+    if (fork === undefined) {
+      this.error = "Fork from the session tree is unavailable. Close and reopen /tree, then try again.";
+      return;
+    }
+
+    const entryId = this.selectedId;
+    const generation = ++this.operationGeneration;
+    this.busy = true;
+    this.error = "";
+    this.statusMessage = "";
+    try {
+      await fork(entryId);
+      if (generation !== this.operationGeneration) return;
+      // On success the app closes this dialog; clear busy in case it lingers.
+      this.busy = false;
+    } catch (error: unknown) {
+      if (generation !== this.operationGeneration) return;
+      this.busy = false;
+      this.statusMessage = "";
+      this.error = errorMessage(error);
+    }
+  }
+
   private async abortNavigation(): Promise<void> {
     if (!this.busy || this.summaryMode === "none" || this.aborting) return;
     const abort = this.onAbort;
@@ -388,14 +461,20 @@ export class SessionTreeNavigator extends LitElement {
       this.trapTabFocus(event);
       return;
     }
+    if (this.step === "tree" && !event.ctrlKey && !event.metaKey && !event.altKey && (event.key === "f" || event.key === "F")) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.continueToFork();
+      return;
+    }
     if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
     if (this.busy) {
-      if (this.summaryMode !== "none") void this.abortNavigation();
+      if (this.step !== "fork" && this.summaryMode !== "none") void this.abortNavigation();
       return;
     }
-    if (this.step === "confirm") this.returnToTree();
+    if (this.step === "confirm" || this.step === "fork") this.returnToTree();
     else this.onCancel?.();
   }
 
