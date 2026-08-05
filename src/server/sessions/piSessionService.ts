@@ -20,7 +20,7 @@ import {
   type ModelRuntime,
   type ResourceDiagnostic,
 } from "@earendil-works/pi-coding-agent";
-import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionStatus, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionUiEvent } from "../types.js";
+import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
@@ -2133,6 +2133,62 @@ export class PiSessionService implements SessionRouteService {
         this.deferredGeneratedSessionNames.delete(session);
         this.deferredSubsessionNotifications.delete(session);
       }
+    }
+  }
+
+  /**
+   * Fork the session from one entry of its tree into a new session file,
+   * leaving the original session untouched. The forked runtime replaces the
+   * current one, so the outcome is reported for the session the client is
+   * about to join rather than the forked-from record.
+   */
+  async forkFromTree(ref: PiSessionRef, request: ClientSessionTreeForkRequest): Promise<ClientSessionTreeForkResult> {
+    if (request.entryId.trim() === "") throw new Error("Session tree entry is required");
+    if (this.isTreeExclusiveSessionIdentityActive(ref.id)) {
+      throw new Error("Stop current session activity before forking the session tree");
+    }
+    await this.assertWritable(ref);
+    const session = await this.getOrOpen(ref);
+    if (this.hasActiveWork(session)) throw new Error("Stop current session activity before forking the session tree");
+    if (session.sessionManager.getLeafId() !== request.expectedLeafId) {
+      throw new Error("The session changed since /tree was opened. Reopen /tree and try again.");
+    }
+
+    this.publishActivity(session, "forking session from entry", "active");
+    this.publishStatus(session);
+    try {
+      const result = await this.commandService.forkEntry(session.sessionId, request.entryId);
+      if (result.type === "unsupported") throw new Error(result.message);
+      if (result.type !== "done") throw new Error("Session fork is unavailable");
+      if (result.session === undefined) {
+        if (this.isCurrentActiveSession(session)) {
+          this.publishActivity(session, "fork cancelled", "idle");
+          this.publishStatus(session);
+        }
+        return { cancelled: true };
+      }
+
+      const forkedSession = this.active.get(result.session.id)?.runtime.session;
+      if (forkedSession !== undefined && this.isCurrentActiveSession(forkedSession)) {
+        this.publishActivity(forkedSession, "session forked", "idle");
+        this.publishStatus(forkedSession);
+      }
+      // A successful fork rebinds the runtime under the forked session id; the
+      // forked-from activity record would otherwise strand an "active" phase.
+      if (result.session.id !== session.sessionId) this.activities.delete(session.sessionId);
+      return {
+        cancelled: false,
+        session: result.session,
+        ...(result.promptDraft === undefined ? {} : { promptDraft: result.promptDraft }),
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.isCurrentActiveSession(session)) {
+        this.publishActivity(session, "fork failed", "error", message);
+        this.events.publish(session.sessionId, { type: "session.error", message });
+        this.publishStatus(session);
+      }
+      throw error;
     }
   }
 

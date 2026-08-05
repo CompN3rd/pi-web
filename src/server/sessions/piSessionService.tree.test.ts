@@ -393,3 +393,137 @@ describe("PiSessionService session-tree behavior", () => {
     await service.dispose();
   });
 });
+
+describe("PiSessionService session-tree fork-from-entry", () => {
+  function forkRequest(entryId = "entry-1", expectedLeafId: string | null = "leaf-1") {
+    return { entryId, expectedLeafId };
+  }
+
+  it("forks user entries from before and maps the forked session with its prompt draft", async () => {
+    const fork = vi.fn(() => Promise.resolve({ cancelled: false, selectedText: "draft text" }));
+    const { service, fake, hub } = treeHarness({}, {
+      getUserMessagesForForking: () => [{ entryId: "entry-1", text: "draft text" }],
+    });
+    fake.runtime.fork = fork;
+
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest())).resolves.toMatchObject({
+      cancelled: false,
+      session: { id: SESSION_ID, cwd: "/workspace" },
+      promptDraft: "draft text",
+    });
+    expect(fork).toHaveBeenCalledWith("entry-1", { position: "before" });
+    expect(hub.sessionEvents.some(({ sessionId, event }) => sessionId === SESSION_ID
+      && event.type === "activity.update"
+      && event.activity.label === "forking session from entry"
+      && event.activity.phase === "active")).toBe(true);
+    expect(hub.sessionEvents.some(({ sessionId, event }) => sessionId === SESSION_ID
+      && event.type === "activity.update"
+      && event.activity.label === "session forked"
+      && event.activity.phase === "idle")).toBe(true);
+
+    await service.dispose();
+  });
+
+  it("forks non-user entries at the entry and omits the prompt draft", async () => {
+    const fork = vi.fn(() => Promise.resolve({ cancelled: false }));
+    const { service, fake } = treeHarness({}, {
+      getUserMessagesForForking: () => [{ entryId: "entry-1", text: "draft text" }],
+    });
+    fake.runtime.fork = fork;
+
+    const result = await service.forkFromTree(sessionRef(SESSION_ID), forkRequest("entry-9"));
+    expect(result).toMatchObject({ cancelled: false, session: { id: SESSION_ID } });
+    expect(result).not.toHaveProperty("promptDraft");
+    expect(fork).toHaveBeenCalledWith("entry-9", { position: "at" });
+
+    await service.dispose();
+  });
+
+  it("reports cancellation without forked session metadata", async () => {
+    const fork = vi.fn(() => Promise.resolve({ cancelled: true }));
+    const { service, fake, hub } = treeHarness();
+    fake.runtime.fork = fork;
+
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest())).resolves.toEqual({ cancelled: true });
+    expect(hub.sessionEvents.some(({ sessionId, event }) => sessionId === SESSION_ID
+      && event.type === "activity.update"
+      && event.activity.label === "fork cancelled"
+      && event.activity.phase === "idle")).toBe(true);
+
+    await service.dispose();
+  });
+
+  it("rejects blank entries, stale leaves, active work, and archived sessions before forking", async () => {
+    const fork = vi.fn(() => Promise.resolve({ cancelled: false }));
+    const { service, fake } = treeHarness({ getLeafId: () => "new-leaf" });
+    fake.runtime.fork = fork;
+
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest("   ", "new-leaf"))).rejects.toThrow(
+      "Session tree entry is required",
+    );
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest("entry-1", "old-leaf"))).rejects.toThrow(
+      "The session changed since /tree was opened. Reopen /tree and try again.",
+    );
+
+    fake.session.isStreaming = true;
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest("entry-1", "new-leaf"))).rejects.toThrow(
+      "Stop current session activity before forking the session tree",
+    );
+    fake.session.isStreaming = false;
+
+    expect(fork).not.toHaveBeenCalled();
+    await service.dispose();
+
+    const archived = treeHarness({}, {}, {
+      archiveStore: {
+        ...emptyArchiveStore(),
+        get: () => Promise.resolve({ sessionId: SESSION_ID, cwd: "/workspace", archivedAt: "2026-01-01T00:00:00.000Z", archivePath: `/archive/${SESSION_ID}.jsonl` }),
+      },
+    });
+    await expect(archived.service.forkFromTree(sessionRef(SESSION_ID), forkRequest())).rejects.toThrow(
+      "Archived sessions are read-only. Restore the session to continue.",
+    );
+    await archived.service.dispose();
+  });
+
+  it("rejects fork-from-tree while a clone replacement owns the session identity", async () => {
+    const replacement = deferred<{ cancelled: boolean; selectedText?: string }>();
+    const { service, fake } = treeHarness();
+    const fork = vi.fn(() => replacement.promise);
+    fake.runtime.fork = fork;
+
+    const cloning = service.runCommand(sessionRef(SESSION_ID), "/clone");
+    await vi.waitFor(() => { expect(fork).toHaveBeenCalledOnce(); });
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest())).rejects.toThrow(
+      "Stop current session activity before forking the session tree",
+    );
+
+    replacement.resolve({ cancelled: false });
+    await expect(cloning).resolves.toMatchObject({ type: "done", message: "Session cloned" });
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest())).resolves.toMatchObject({ cancelled: false });
+    expect(fork).toHaveBeenCalledTimes(2);
+
+    await service.dispose();
+  });
+
+  it("publishes session.error after a fork failure and allows the fork to be retried", async () => {
+    const fork = vi.fn<() => Promise<{ cancelled: boolean; selectedText?: string }>>();
+    fork.mockRejectedValueOnce(new Error("fork provider failed")).mockResolvedValueOnce({ cancelled: false });
+    const { service, fake, hub } = treeHarness();
+    fake.runtime.fork = fork;
+
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest())).rejects.toThrow("fork provider failed");
+    expect(hub.sessionEvents.some(({ sessionId, event }) => sessionId === SESSION_ID
+      && event.type === "session.error"
+      && event.message === "fork provider failed")).toBe(true);
+    expect(hub.sessionEvents.some(({ sessionId, event }) => sessionId === SESSION_ID
+      && event.type === "activity.update"
+      && event.activity.label === "fork failed"
+      && event.activity.phase === "error")).toBe(true);
+
+    await expect(service.forkFromTree(sessionRef(SESSION_ID), forkRequest())).resolves.toMatchObject({ cancelled: false });
+    expect(fork).toHaveBeenCalledTimes(2);
+
+    await service.dispose();
+  });
+});
