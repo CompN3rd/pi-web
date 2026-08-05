@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -63,17 +63,32 @@ describe("PiSessionService.list parent locations", () => {
     expect(child).not.toHaveProperty("parentSessionId");
   });
 
-  it("reads each parent header only once across repeated listings", async () => {
+  it("re-reads a cached parent header when the file at that path is replaced", async () => {
+    // The header cache is keyed by path but verified against the file's
+    // identity: a replacement landed at a cached path must be served, not the
+    // header of the file that used to live there.
     const parentFile = await parentSessionFile({ id: "parent-id", cwd: PARENT_CWD });
     const service = serviceListing([childRecord(parentFile)]);
     await service.list(CHILD_CWD);
 
-    // A cached header keeps the annotation after the file is removed, proving no
-    // second read happened for the same path.
+    const replacementFile = join(tempDir, "replacement-parent.jsonl");
+    await writeFile(replacementFile, `${JSON.stringify({ type: "session", version: 3, id: "replacement-id", cwd: PARENT_CWD })}\n`, "utf8");
+    await rename(replacementFile, parentFile);
+    const [child] = await service.list(CHILD_CWD);
+
+    expect(child).toMatchObject({ parentSessionCwd: PARENT_CWD, parentSessionId: "replacement-id" });
+  });
+
+  it("drops a cached parent annotation when the parent file is deleted", async () => {
+    const parentFile = await parentSessionFile({ id: "parent-id", cwd: PARENT_CWD });
+    const service = serviceListing([childRecord(parentFile)]);
+    await service.list(CHILD_CWD);
+
     await rm(parentFile);
     const [child] = await service.list(CHILD_CWD);
 
-    expect(child).toMatchObject({ parentSessionCwd: PARENT_CWD, parentSessionId: "parent-id" });
+    expect(child).not.toHaveProperty("parentSessionCwd");
+    expect(child).not.toHaveProperty("parentSessionId");
   });
 
   it("releases cached headers on dispose so the cache cannot outlive the service", async () => {
@@ -212,6 +227,77 @@ describe("PiSessionService.list children in sibling workspaces", () => {
     const [listed] = await service.list(CHILD_CWD);
 
     expect(listed).toMatchObject({ id: "middle", parentSessionCwd: PARENT_CWD, parentSessionId: "grandparent-id", childSessionsElsewhere: 1 });
+  });
+});
+
+describe("PiSessionService header cache on replaced session files", () => {
+  it("lists and opens the session that replaced a cached path instead of serving the stale header", async () => {
+    // The header cache memoizes reads per path while the summary scanner
+    // notices identity replacements. If the cached reader kept serving the
+    // old header for a replaced path, the replacement would appear in the
+    // listing but stay permanently unopenable ("Session not found").
+    const sessionDir = join(tempDir, "replace-sessions");
+    await mkdir(sessionDir, { recursive: true });
+    const message = (id: string, role: string, text: string) =>
+      JSON.stringify({ type: "message", id, parentId: "root", timestamp: "2026-01-01T00:01:00.000Z", message: { role, content: [{ type: "text", text }] } });
+    const header = (id: string, sessionCwd: string, parentSession?: string) =>
+      JSON.stringify({ type: "session", version: 3, id, timestamp: "2026-01-01T00:00:00.000Z", cwd: sessionCwd, ...(parentSession === undefined ? {} : { parentSession }) });
+    const originalPath = join(sessionDir, "2026-01-01T00-00-00-000Z_original-id.jsonl");
+    await writeFile(originalPath, `${header("original-id", CHILD_CWD)}\n${message("m1", "user", "original transcript")}\n`, "utf8");
+    // A child living in the sibling worktree records the original file as its
+    // parent, so the sibling scan reports it — proof that the scan really
+    // read (and cached) the headers.
+    await writeFile(join(sessionDir, "2026-01-01T00-00-01-000Z_child-id.jsonl"), `${header("child-id", PARENT_CWD, originalPath)}\n`, "utf8");
+
+    const realGateway = createPiSessionManagerGateway({
+      agentDir: TEST_AGENT_DIR,
+      env: { PI_CODING_AGENT_SESSION_DIR: sessionDir },
+      sessionDirEnvKeys: ["PI_CODING_AGENT_SESSION_DIR"],
+    });
+    const replacementRuntime = fakeRuntime("replacement-id", {
+      sessionManager: fakeSessionManager(CHILD_CWD, {
+        getSessionId: () => "replacement-id",
+        getBranch: () => [{ type: "message", id: "r1", parentId: null, timestamp: "2026-01-02T00:00:00.000Z", message: { role: "user", content: "replacement transcript" } }],
+      }),
+    });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(replacementRuntime.runtime),
+      archiveStore: emptyArchiveStore(),
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: (refCwd: string) => realGateway.list(refCwd),
+        listAll: () => realGateway.listAll(),
+        listParentSessionPaths: (refCwd: string, readHeader) => realGateway.listParentSessionPaths(refCwd, readHeader),
+        resolveSessionFile: (refCwd: string, sessionId: string, readHeader) => realGateway.resolveSessionFile(refCwd, sessionId, readHeader),
+        invalidateSessionFile: (sessionFile: string) => {
+          realGateway.invalidateSessionFile(sessionFile);
+        },
+        open: () => fakeSessionManager(CHILD_CWD, { getSessionId: () => "replacement-id" }),
+      },
+      heartbeatIntervalMs: 60_000,
+      projectWorkspaces: { forCwd: () => Promise.resolve([CHILD_CWD, PARENT_CWD]) },
+    });
+
+    // Cold listing: the sibling scan reads (and caches) every header in the dir.
+    const cold = await service.list(CHILD_CWD);
+    expect(cold.find((session) => session.id === "original-id")).toMatchObject({ childSessionsElsewhere: 1 });
+
+    // Atomic replacement: a new file is renamed over the cached path.
+    const replacementFile = join(sessionDir, "2026-01-02T00-00-00-000Z_replacement-id.jsonl");
+    await writeFile(replacementFile, `${header("replacement-id", CHILD_CWD)}\n${message("r1", "user", "replacement transcript")}\n`, "utf8");
+    await rename(replacementFile, originalPath);
+
+    const warm = await service.list(CHILD_CWD);
+    expect(warm.map((session) => session.id)).toEqual(["replacement-id"]);
+
+    // The open path must agree with the listing...
+    const page = await service.messages(sessionRef("replacement-id", CHILD_CWD));
+    expect(page.messages).toEqual([{ role: "user", content: "replacement transcript" }]);
+    // ...and the replaced session is really gone.
+    await expect(service.messages(sessionRef("original-id", CHILD_CWD))).rejects.toThrow("Session not found");
+    await service.dispose();
   });
 });
 

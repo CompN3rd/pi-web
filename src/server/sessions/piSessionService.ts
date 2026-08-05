@@ -1,6 +1,6 @@
-import { statSync } from "node:fs";
+import { statSync, type Stats } from "node:fs";
 import { join } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
@@ -818,6 +818,13 @@ export interface PiSessionServiceDependencies {
   catalogRefreshStatus?: CatalogRefreshStatus;
 }
 
+/** A cached session header plus the identity of the file it was read from. */
+interface CachedSessionHeader {
+  header: SessionHeaderSummary;
+  dev: number;
+  ino: number;
+}
+
 export class PiSessionService implements SessionRouteService {
   private readonly active = new Map<string, ActiveSession<PiSessionRuntime>>();
   private readonly pendingSessionOpens = new Map<string, PendingSessionOpen>();
@@ -852,8 +859,11 @@ export class PiSessionService implements SessionRouteService {
   private readonly subsessionLinks = new Map<string, TrackedSubsessionLink>();
   /** Parent id/file identities whose persisted links have already been loaded. */
   private readonly subsessionHydratedParents = new Set<string>();
-  /** Session file path -> its parsed header. Headers are written once, so successful reads are cached. */
-  private readonly sessionHeaderCache = new Map<string, SessionHeaderSummary>();
+  /**
+   * Session file path -> its parsed header and the file identity at read
+   * time. Headers are written once, so identity-verified reads are cached.
+   */
+  private readonly sessionHeaderCache = new Map<string, CachedSessionHeader>();
   /**
    * Tracked subsession id -> whether a completion notification is armed.
    * Armed when the child starts working; firing on completion disarms it so a
@@ -1178,15 +1188,33 @@ export class PiSessionService implements SessionRouteService {
   }
 
   /**
-   * Read a session file header, memoized per path. Pi writes the header once at
-   * session creation, so a successful read stays valid for the process lifetime;
-   * failures are not cached so a session file that appears later is picked up.
+   * Read a session file header, memoized per path. Pi writes the header once
+   * at session creation, so a successful read stays valid as long as the path
+   * still holds the same file: every hit re-checks the file's identity
+   * (dev/ino), and a replacement landed at a cached path is re-read instead
+   * of serving the previous file's header — the summary scanner detects such
+   * replacements, so the listing and the header reads must agree. The one
+   * thing identity cannot detect is an in-place rewrite that keeps the inode;
+   * detach, the only such writer, deletes the entry itself. Failures are not
+   * cached so a session file that appears later is picked up.
    */
   private readonly readCachedSessionHeader: SessionHeaderReader = async (sessionFile) => {
+    let stats: Stats;
+    try {
+      stats = await stat(sessionFile);
+    } catch {
+      // Gone or unreadable: report no header and forget any cached entry.
+      this.sessionHeaderCache.delete(sessionFile);
+      return undefined;
+    }
     const cached = this.sessionHeaderCache.get(sessionFile);
-    if (cached !== undefined) return cached;
+    if (cached?.dev === stats.dev && cached.ino === stats.ino) return cached.header;
     const header = await readSessionHeaderSummary(sessionFile);
-    if (header !== undefined) this.sessionHeaderCache.set(sessionFile, header);
+    if (header === undefined) {
+      this.sessionHeaderCache.delete(sessionFile);
+      return undefined;
+    }
+    this.sessionHeaderCache.set(sessionFile, { header, dev: stats.dev, ino: stats.ino });
     return header;
   };
 
