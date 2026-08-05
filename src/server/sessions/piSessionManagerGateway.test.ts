@@ -272,6 +272,54 @@ describe("gateway session-file resolution by id", () => {
     await expect(gateway.resolveSessionFile(cwd, "copied-id", readSessionHeaderSummary)).resolves.toEqual({ id: "copied-id", cwd, path: copiedPath });
   });
 
+  it("does not let a failing filename candidate shadow a renamed file that really holds the session", async () => {
+    // A copy whose name embeds the requested id but whose header holds another
+    // session must not end the search: the remaining files are checked too.
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_target-session.jsonl", { id: "unrelated-session", cwd });
+    const renamedPath = await writeNamedSessionFile(sharedSessionDir, "hand-renamed.jsonl", { id: "target-session", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "target-session", readSessionHeaderSummary)).resolves.toEqual({ id: "target-session", cwd, path: renamedPath });
+  });
+
+  it("prefers an exact header id over a newer prefix match", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    await writeNamedSessionFile(sharedSessionDir, "2026-01-02T00-00-00-000Z_abc123-extended.jsonl", { id: "abc123-extended", cwd });
+    const exactPath = await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_abc123.jsonl", { id: "abc123", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "abc123", readSessionHeaderSummary)).resolves.toEqual({ id: "abc123", cwd, path: exactPath });
+  });
+
+  it("prefers an exact header id in a renamed file over a prefix-matching filename candidate", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_target-session.jsonl", { id: "target-session-extended", cwd });
+    const renamedPath = await writeNamedSessionFile(sharedSessionDir, "archived.jsonl", { id: "target-session", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "target-session", readSessionHeaderSummary)).resolves.toEqual({ id: "target-session", cwd, path: renamedPath });
+  });
+
+  it("resolves ambiguous prefixes deterministically by newest embedded timestamp, then plain name order", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    // Written newest-last on purpose: readdir order must not influence the outcome.
+    const newestPath = await writeNamedSessionFile(sharedSessionDir, "2026-01-02T00-00-00-000Z_abc-two.jsonl", { id: "abc-two", cwd });
+    await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_abc-one.jsonl", { id: "abc-one", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    await expect(gateway.resolveSessionFile(cwd, "abc", readSessionHeaderSummary)).resolves.toEqual({ id: "abc-two", cwd, path: newestPath });
+
+    // Same embedded timestamp: plain (non-locale) code-unit order decides, so
+    // the lowercase id sorts after the uppercase one and wins.
+    const tiedDir = join(tempDir, "tied-sessions");
+    await writeNamedSessionFile(tiedDir, "2026-01-03T00-00-00-000Z_abc-AAA.jsonl", { id: "abc-AAA", cwd });
+    const tiedWinnerPath = await writeNamedSessionFile(tiedDir, "2026-01-03T00-00-00-000Z_abc-aaa.jsonl", { id: "abc-aaa", cwd });
+    const tiedGateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: tiedDir }));
+
+    await expect(tiedGateway.resolveSessionFile(cwd, "abc", readSessionHeaderSummary)).resolves.toEqual({ id: "abc-aaa", cwd, path: tiedWinnerPath });
+  });
+
   it("does not resolve sessions that belong to another cwd", async () => {
     const sharedSessionDir = join(tempDir, "shared-sessions");
     const otherCwd = join(tempDir, "other-workspace");

@@ -184,10 +184,16 @@ export async function listParentSessionPathsInDir(sessionDir: string, cwd: strin
  *
  * Session filenames embed the session id (`<timestamp>_<sessionId>.jsonl`), so
  * exact and prefix matches are normally found from the directory names alone
- * and confirmed by one header read. When no filename matches (renamed or
- * hand-named files), every header in the directory is checked instead, keeping
- * the outcome identical to picking the session out of a full listing. Headers
- * decide: a file whose header id or cwd does not match is not the session.
+ * and confirmed by one header read. Filename candidates that fail header
+ * verification (a copy whose header holds a different session) do not end the
+ * search: the remaining files are checked too, so sessions in renamed or
+ * hand-named files still resolve, keeping the outcome identical to picking the
+ * session out of a full listing. Headers decide: a file whose header id or cwd
+ * does not match is not the session.
+ *
+ * Among matches, an exact header id wins over a prefix match wherever it
+ * appears; ambiguous prefix matches resolve deterministically by creation-time
+ * order (see `byNewestEmbeddedTimestamp`).
  *
  * The header's cwd is returned canonicalized, matching what `list` reports.
  */
@@ -198,17 +204,57 @@ export async function resolveSessionFileInDir(
   readHeader: SessionHeaderReader,
 ): Promise<ResolvedSessionFile | undefined> {
   const sessionFiles = await listSessionFiles(sessionDir);
-  const filenameMatches = sessionFiles.filter((sessionFile) => fileNameMatchesSessionId(basename(sessionFile), sessionId));
-  // Deterministic among multiple prefix matches: newest-embedded timestamp first.
-  const candidates = (filenameMatches.length > 0 ? filenameMatches : sessionFiles).slice().sort((a, b) => b.localeCompare(a));
-  for (const sessionFile of candidates) {
+  const fileNameMatches: string[] = [];
+  const remainingFiles: string[] = [];
+  for (const sessionFile of sessionFiles) {
+    (fileNameMatchesSessionId(basename(sessionFile), sessionId) ? fileNameMatches : remainingFiles).push(sessionFile);
+  }
+  fileNameMatches.sort(byNewestEmbeddedTimestamp);
+  remainingFiles.sort(byNewestEmbeddedTimestamp);
+
+  // A prefix match is only provisional: an exact header id wins over it
+  // wherever it appears, so the search continues after one is found.
+  let prefixMatch: ResolvedSessionFile | undefined;
+  // Filename matches first; the remaining files follow so a renamed file still
+  // resolves when every filename candidate fails header verification.
+  for (const sessionFile of [...fileNameMatches, ...remainingFiles]) {
     const header = await readHeader(sessionFile);
     if (header?.cwd === undefined) continue;
-    if (header.id !== sessionId && !header.id.startsWith(sessionId)) continue;
     if (!cwdPathsEqual(header.cwd, cwd)) continue;
-    return { id: header.id, cwd: canonicalizeStoredCwd(header.cwd), path: sessionFile };
+    if (header.id === sessionId) {
+      return { id: header.id, cwd: canonicalizeStoredCwd(header.cwd), path: sessionFile };
+    }
+    if (prefixMatch === undefined && header.id.startsWith(sessionId)) {
+      prefixMatch = { id: header.id, cwd: canonicalizeStoredCwd(header.cwd), path: sessionFile };
+    }
   }
-  return undefined;
+  return prefixMatch;
+}
+
+/**
+ * Order session files newest-first by the timestamp embedded in SDK-style names
+ * (`<timestamp>_<sessionId>.jsonl`; the SDK stamps the session's creation time
+ * into the name, so this is creation-time order). Files sharing a timestamp,
+ * or without one, fall back to a plain code-unit path comparison — never
+ * `localeCompare`, whose result varies by locale — so the order is
+ * deterministic everywhere.
+ *
+ * This deliberately drifts from the listing, which orders by modified time:
+ * the resolver verifies headers only and never stats files, so ambiguous
+ * prefix matches resolve by creation-time order instead.
+ */
+function byNewestEmbeddedTimestamp(a: string, b: string): number {
+  const timestampA = embeddedFileNameTimestamp(basename(a));
+  const timestampB = embeddedFileNameTimestamp(basename(b));
+  if (timestampA !== timestampB) return timestampA < timestampB ? 1 : -1;
+  return a < b ? 1 : a > b ? -1 : 0;
+}
+
+/** The creation timestamp embedded in an SDK-style session file name ("" when absent). */
+function embeddedFileNameTimestamp(fileName: string): string {
+  const stem = fileName.slice(0, -".jsonl".length);
+  const separatorIndex = stem.indexOf("_");
+  return separatorIndex === -1 ? "" : stem.slice(0, separatorIndex);
 }
 
 /** Whether a `.jsonl` file name embeds `sessionId` (exactly or as a prefix). */
@@ -218,7 +264,7 @@ function fileNameMatchesSessionId(fileName: string, sessionId: string): boolean 
 }
 
 /**
- * The session id embedded in a SDK-style session file name
+ * The session id embedded in an SDK-style session file name
  * (`<timestamp>_<sessionId>.jsonl`). The timestamp never contains `_`, so the
  * id is everything after the first separator; files without one fall back to
  * the whole stem, and header verification discards false guesses.
