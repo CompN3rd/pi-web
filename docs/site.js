@@ -1,3 +1,17 @@
+const animatedHomePage = document.querySelector(".home-page");
+
+if (animatedHomePage !== null) {
+  const skipIntroAnimation = () => {
+    animatedHomePage.classList.add("intro-skipped");
+  };
+
+  if (window.scrollY !== 0) {
+    skipIntroAnimation();
+  } else {
+    window.addEventListener("scroll", skipIntroAnimation, { passive: true, once: true });
+  }
+}
+
 const themeButtons = document.querySelectorAll("[data-theme-toggle]");
 const themeStorageKey = "pi-web-theme";
 const systemPrefersLight = window.matchMedia("(prefers-color-scheme: light)");

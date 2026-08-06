@@ -100,6 +100,26 @@ body::after {
   --intro-color: var(--brand-3);
 }
 
+.home-page.intro-skipped .site-header,
+.home-page.intro-skipped .site-footer,
+.home-page.intro-skipped .title-context,
+.home-page.intro-skipped .hero .eyebrow,
+.home-page.intro-skipped .hero-lede,
+.home-page.intro-skipped .hero-manifesto,
+.home-page.intro-skipped .hero-actions,
+.home-page.intro-skipped .hero-stats,
+.home-page.intro-skipped .terminal,
+.home-page.intro-skipped main > section:not(.hero) {
+  opacity: 1;
+  animation: none;
+}
+
+.home-page.intro-skipped .intro-word {
+  opacity: 1;
+  transform: none;
+  animation: none;
+}
+
 @keyframes word-drop {
   0% {
     opacity: 0;
