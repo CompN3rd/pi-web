@@ -68,6 +68,15 @@ export class ModalSurface extends LitElement {
   }
 
   protected override firstUpdated(): void {
+    this.focusDialog();
+  }
+
+  /**
+   * Moves focus into the dialog: the `initialFocus` target when one matches,
+   * otherwise the dialog section. Hosts call this after swapping content that
+   * held focus (for example a step change) so keys keep reaching the dialog.
+   */
+  focusDialog(): void {
     (this.initialFocusTarget() ?? this.section)?.focus();
   }
 

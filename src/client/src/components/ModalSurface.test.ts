@@ -76,6 +76,32 @@ describe("modal-surface initial focus", () => {
   });
 });
 
+describe("modal-surface refocus on request", () => {
+  it("moves focus back to the dialog section when asked", async () => {
+    const surface = await mountSurface({ content: `<button>Inside</button>` });
+    const outside = appendFocusTarget("Outside");
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    surface.focusDialog();
+
+    expect(surface.shadowRoot?.activeElement).toBe(dialogSection(surface));
+  });
+
+  it("moves focus to the designated initial target when one is set", async () => {
+    const surface = await mountSurface({
+      content: `<input aria-label="Query">`,
+      configure: (element) => { element.initialFocus = "input"; },
+    });
+    const outside = appendFocusTarget("Outside");
+    outside.focus();
+
+    surface.focusDialog();
+
+    expect(document.activeElement).toBe(surface.querySelector("input"));
+  });
+});
+
 describe("modal-surface close contract", () => {
   it("routes Escape to the close callback without leaking the key", async () => {
     const onClose = vi.fn<() => void>();
