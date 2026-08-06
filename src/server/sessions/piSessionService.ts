@@ -332,13 +332,6 @@ export interface PiSessionManager {
 export interface PiSessionManagerGateway {
   list(cwd: string): Promise<PiSessionListEntry[]>;
   /**
-   * The `parentSessionPath` values recorded in the session files of `cwd`'s
-   * session directory, read from each file's header line only — no transcript
-   * parsing. `readHeader` is injected so the caller's per-path header cache is
-   * reused.
-   */
-  listParentSessionPaths(cwd: string, readHeader: SessionHeaderReader): Promise<string[]>;
-  /**
    * Locate a session file by id (exact match or id prefix, the same semantics
    * as finding it in `list`) without parsing transcripts. `readHeader` is
    * injected so the caller's per-path header cache is reused.
@@ -1169,17 +1162,18 @@ export class PiSessionService implements SessionRouteService {
    *
    * Only sibling workspaces are scanned: agents may only spawn into workspaces
    * of the spawning session's own project, so that bounds where a child can be.
-   * Each sibling scan reads only the header line of every session file (the
-   * only place `parentSessionPath` is recorded), never the transcripts. Listing
-   * is skipped entirely when no project-workspace locator is configured or the
-   * cwd belongs to no registered project.
+   * Listing is skipped entirely when no project-workspace locator is configured
+   * or the cwd belongs to no registered project.
    */
   private async countChildrenInSiblingWorkspaces(sessions: readonly ClientSession[], cwd: string): Promise<Map<string, number>> {
     if (this.projectWorkspaces === undefined || sessions.length === 0) return new Map();
     try {
       const siblingCwds = await siblingWorkspaceCwds(this.projectWorkspaces, cwd);
       if (siblingCwds.length === 0) return new Map();
-      const listings = await Promise.all(siblingCwds.map((siblingCwd) => this.sessionManager.listParentSessionPaths(siblingCwd, this.readCachedSessionHeader)));
+      const listings = await Promise.all(siblingCwds.map(async (siblingCwd): Promise<string[]> => {
+        const entries = await this.sessionManager.list(siblingCwd);
+        return entries.flatMap((entry) => entry.parentSessionPath === undefined ? [] : [entry.parentSessionPath]);
+      }));
       return countOutOfListingChildren(sessions, listings.flat());
     } catch (error: unknown) {
       this.logger.info(

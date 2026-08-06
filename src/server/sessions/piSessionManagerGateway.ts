@@ -4,7 +4,6 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
-import type { SessionHeaderSummary } from "./sessionFileHeader.js";
 import type { SessionHeaderReader } from "./parentSessionLocator.js";
 import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
 import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
@@ -63,14 +62,6 @@ export class SessionDirResolver {
 
 export type PiSessionManagerGatewayOptions = SessionDirResolverOptions;
 
-/**
- * Same bound as the summary scanner's: concurrent header opens are capped so
- * a directory with many sessions cannot exhaust file descriptors. Exhaustion
- * (EMFILE) would surface as "unreadable" headers and silently drop children
- * from the sibling counts.
- */
-const MAX_CONCURRENT_HEADER_READS = 10;
-
 export function createPiSessionManagerGateway(options: PiSessionManagerGatewayOptions): PiSessionManagerGateway {
   return new SettingsAwarePiSessionManagerGateway(new SessionDirResolver(options));
 }
@@ -98,11 +89,6 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
       cwd: canonicalizeStoredCwd(session.cwd),
     }));
     return filterSessionsForCwd(sessions, cwd);
-  }
-
-  async listParentSessionPaths(cwd: string, readHeader: SessionHeaderReader): Promise<string[]> {
-    const resolution = this.resolver.resolve(cwd);
-    return listParentSessionPathsInDir(resolution.sessionDir, cwd, readHeader);
   }
 
   async resolveSessionFile(cwd: string, sessionId: string, readHeader: SessionHeaderReader): Promise<ResolvedSessionFile | undefined> {
@@ -163,52 +149,6 @@ export function filterSessionsForCwd(sessions: readonly PiSessionListEntry[], cw
   // Sessions with an empty cwd (old session files) are excluded: resolve("") would
   // resolve to this process's cwd and produce false matches.
   return sessions.filter((session) => session.cwd !== "" && cwdPathsEqual(session.cwd, cwd));
-}
-
-/**
- * Collect the `parentSessionPath` values recorded in a session directory's
- * files, reading only each file's single-line JSON header — never the
- * transcripts. The header is the only place a child records its parent, so
- * this yields exactly what a full listing would report for the relationship.
- *
- * Unreadable headers contribute nothing (matching how a listing skips invalid
- * files), and headers whose cwd does not belong to `cwd` are excluded exactly
- * like `filterSessionsForCwd` would exclude them from a listing.
- */
-export async function listParentSessionPathsInDir(sessionDir: string, cwd: string, readHeader: SessionHeaderReader): Promise<string[]> {
-  const sessionFiles = await listSessionFiles(sessionDir);
-  const headers = await readSessionHeadersWithBoundedConcurrency(sessionFiles, readHeader);
-  const parentSessionPaths: string[] = [];
-  for (const header of headers) {
-    // A header without a cwd (very old session files) would also be dropped by
-    // filterSessionsForCwd, so it contributes no parent here either.
-    if (header?.parentSession === undefined || header.cwd === undefined || !cwdPathsEqual(header.cwd, cwd)) continue;
-    parentSessionPaths.push(header.parentSession);
-  }
-  return parentSessionPaths;
-}
-
-/**
- * Read every header with bounded concurrency (see MAX_CONCURRENT_HEADER_READS),
- * preserving input order. Every file is read even when earlier reads fail.
- */
-async function readSessionHeadersWithBoundedConcurrency(
-  sessionFiles: readonly string[],
-  readHeader: SessionHeaderReader,
-): Promise<(SessionHeaderSummary | undefined)[]> {
-  const headers: (SessionHeaderSummary | undefined)[] = Array.from({ length: sessionFiles.length }, () => undefined);
-  let nextIndex = 0;
-  const workerCount = Math.min(MAX_CONCURRENT_HEADER_READS, sessionFiles.length);
-  const workers = Array.from({ length: workerCount }, async () => {
-    for (;;) {
-      const index = nextIndex++;
-      const sessionFile = sessionFiles[index];
-      if (sessionFile === undefined) return;
-      headers[index] = await readHeader(sessionFile);
-    }
-  });
-  await Promise.all(workers);
-  return headers;
 }
 
 /**
