@@ -290,13 +290,6 @@ export interface PiSessionListEntry {
   parentSessionPath?: string;
 }
 
-/** A session file located by id without parsing its transcript. */
-export interface ResolvedSessionFile {
-  id: string;
-  cwd: string;
-  path: string;
-}
-
 interface WorkspaceArchiveCandidate extends SessionArchiveTreeCandidate {
   cwd: string;
   listEntry?: PiSessionListEntry;
@@ -331,12 +324,6 @@ export interface PiSessionManager {
 
 export interface PiSessionManagerGateway {
   list(cwd: string): Promise<PiSessionListEntry[]>;
-  /**
-   * Locate a session file by id (exact match or id prefix, the same semantics
-   * as finding it in `list`) without parsing transcripts. `readHeader` is
-   * injected so the caller's per-path header cache is reused.
-   */
-  resolveSessionFile(cwd: string, sessionId: string, readHeader: SessionHeaderReader): Promise<ResolvedSessionFile | undefined>;
   /**
    * Drop any cached listing summary for a session file that was rewritten in
    * place (detach clears the header while keeping the inode): file identity
@@ -2754,9 +2741,7 @@ export class PiSessionService implements SessionRouteService {
       );
     }
 
-    // Resolve the session file directly by id: opening one inactive session
-    // must not pay for a full transcript listing of its whole workspace.
-    const match = await this.sessionManager.resolveSessionFile(ref.cwd, ref.id, this.readCachedSessionHeader);
+    const match = (await this.sessionManager.list(ref.cwd)).find((s) => s.id === ref.id || s.id.startsWith(ref.id));
     if (!match) throw new Error("Session not found");
     return this.openExistingSession(match.id, match.cwd, () => this.sessionManager.open(match.path), options);
   }

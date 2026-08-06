@@ -1144,10 +1144,6 @@ class RejectingSessionManager implements PiSessionManagerGateway {
     return Promise.resolve([]);
   }
 
-  resolveSessionFile() {
-    return Promise.resolve(undefined);
-  }
-
   invalidateSessionFile() {
     /* no memo to drop in this fake */
   }

@@ -183,9 +183,6 @@ describe("PiSessionService.list children in sibling workspaces", () => {
         invalidateSessionFile: (sessionFile: string) => {
           realGateway.invalidateSessionFile(sessionFile);
         },
-        resolveSessionFile: (refCwd: string, sessionId: string) => Promise.resolve(
-          sessionId === "child" && refCwd === PARENT_CWD ? { id: "child", cwd: PARENT_CWD, path: childFile } : undefined,
-        ),
         open: () => fakeSessionManager(PARENT_CWD, { getSessionId: () => "child" }),
       },
       heartbeatIntervalMs: 60_000,
@@ -255,7 +252,6 @@ describe("PiSessionService header cache on replaced session files", () => {
         create: () => fakeSessionManager(),
         list: (refCwd: string) => realGateway.list(refCwd),
         listAll: () => realGateway.listAll(),
-        resolveSessionFile: (refCwd: string, sessionId: string, readHeader) => realGateway.resolveSessionFile(refCwd, sessionId, readHeader),
         invalidateSessionFile: (sessionFile: string) => {
           realGateway.invalidateSessionFile(sessionFile);
         },
@@ -322,7 +318,6 @@ describe("PiSessionService.detachParent summary memo", () => {
         create: () => fakeSessionManager(),
         list: (refCwd: string) => realGateway.list(refCwd),
         listAll: () => realGateway.listAll(),
-        resolveSessionFile: (refCwd: string, sessionId: string, readHeader) => realGateway.resolveSessionFile(refCwd, sessionId, readHeader),
         invalidateSessionFile: (sessionFile: string) => {
           realGateway.invalidateSessionFile(sessionFile);
         },
@@ -382,10 +377,6 @@ function serviceListing(
     },
     listAll: () => Promise.resolve(Object.values(listings).flat()),
     invalidateSessionFile: () => undefined,
-    resolveSessionFile: (cwd: string, sessionId: string) => {
-      const match = Object.values(listings).flat().find((record) => record.id === sessionId || record.id.startsWith(sessionId));
-      return Promise.resolve(match === undefined ? undefined : { id: match.id, cwd: match.cwd, path: match.path });
-    },
     open: () => fakeSessionManager(),
   };
   return new PiSessionService(new CapturingSessionEventHub(), {
