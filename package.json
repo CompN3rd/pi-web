@@ -116,9 +116,9 @@
   "homepage": "https://pi-web.dev/",
   "packageManager": "npm@11.11.0",
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": ">=0.83.0 <0.84",
-    "@earendil-works/pi-ai": ">=0.83.0 <0.84",
-    "@earendil-works/pi-coding-agent": ">=0.83.0 <0.84"
+    "@earendil-works/pi-agent-core": ">=0.83.0",
+    "@earendil-works/pi-ai": ">=0.83.0",
+    "@earendil-works/pi-coding-agent": ">=0.83.0"
   },
   "keywords": [
     "pi-package",
