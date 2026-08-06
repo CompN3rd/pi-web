@@ -15,7 +15,9 @@ Respect the project's existing conventions and the framework/library idioms alre
 
 ### Proportionate
 
-Prefer boring, local changes that solve the problem without surprising future maintainers. Implement the described behavior well without trying to anticipate and defend against every hypothetical edge case. Cover an edge case when it surfaces during implementation, review, or verification, or when leaving it unhandled would violate the error-handling, state-integrity, or security expectations below.
+Start with the simplest design that meets the behavioral contract and finish line. Prefer boring, local changes that solve the problem without surprising future maintainers.
+
+When an edge case or race is identified, assess its plausible frequency and consequence before adding special handling. Address it now when the contract requires it, it is reasonably likely in normal use, or its impact justifies the added complexity. Otherwise defer special handling, rely on ordinary observable failure or recovery behavior, and revisit if real usage shows that the case matters. Do not defer cases with a credible risk of corrupting durable state, weakening a security or authorization boundary, or failing silently without a practical recovery path.
 
 Avoid unrelated refactoring, opportunistic cleanup, and broad rewrites unless the task requires them. Avoid new abstractions that add ceremony without clarifying ownership, reducing duplication, isolating volatility, or improving testability.
 
@@ -90,7 +92,7 @@ During implementation:
 
 When reviewing or finishing code, check:
 
-- Is the change proportionate, or did it introduce avoidable architecture ceremony?
+- Is this the simplest design that meets the behavioral contract and finish line, with any edge-case or race handling justified by likelihood or impact?
 - Can this behavior be reused or combined without copying internals?
 - Are side effects visible, bounded, and cleaned up when needed?
 - Is mutable state ownership clear?
