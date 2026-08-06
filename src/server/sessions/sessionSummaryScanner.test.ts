@@ -1,10 +1,12 @@
 import * as fsPromises from "node:fs/promises";
 import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { scanSessionFileSummary, scanSessionSummariesInDir, SessionSummaryScanner } from "./sessionSummaryScanner.js";
+import type { PiSessionListEntry } from "./piSessionService.js";
+import { isRecord } from "./sessionFileFormat.js";
+import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
 
 // Route node:fs/promises through a plain copy of the real module: Node's
 // builtin namespaces are frozen, so vi.spyOn cannot redefine their exports
@@ -50,7 +52,7 @@ describe("session summary scanner parity with the SDK listing", () => {
       sessionInfoLine("Kept name"),
     ]);
 
-    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), coldListing(sessionDir)]);
 
     expect(scannedSessions.map((session) => session.path).sort()).toEqual([richPath, namedPath]);
     for (const scanned of scannedSessions) {
@@ -82,7 +84,7 @@ describe("session summary scanner parity with the SDK listing", () => {
     const pinned = new Date("2026-02-03T04:05:06.000Z");
     await utimes(path, pinned, pinned);
 
-    const summary = await scanSessionFileSummary(path);
+    const summary = await scanFileSummary(path);
 
     expect(summary?.modified.getTime()).toBe(pinned.getTime());
     expect(summary?.modified.getTime()).toBe((await stat(path)).mtime.getTime());
@@ -97,7 +99,7 @@ describe("session summary scanner parity with the SDK listing", () => {
     await utimes(join(sessionDir, "2026-01-01T00-00-00-000Z_newest.jsonl"), new Date("2026-01-03T00:00:00Z"), new Date("2026-01-03T00:00:00Z"));
     await utimes(join(sessionDir, "2026-01-01T00-00-00-000Z_middle.jsonl"), new Date("2026-01-02T00:00:00Z"), new Date("2026-01-02T00:00:00Z"));
 
-    const sessions = await scanSessionSummariesInDir(sessionDir);
+    const sessions = await coldListing(sessionDir);
 
     expect(sessions.map((session) => session.id)).toEqual(["newest", "middle", "oldest"]);
   });
@@ -111,7 +113,7 @@ describe("session summary scanner name handling", () => {
       sessionInfoLine("Second"),
     ]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ name: "Second" });
+    expect(await scanFileSummary(path)).toMatchObject({ name: "Second" });
   });
 
   it("treats empty, whitespace-only, and missing names as clears", async () => {
@@ -122,14 +124,14 @@ describe("session summary scanner name handling", () => {
         sessionInfoLine("Visible"),
         sessionInfoLine(clear),
       ]);
-      expect((await scanSessionFileSummary(path))?.name, `name ${JSON.stringify(clear)} clears`).toBeUndefined();
+      expect((await scanFileSummary(path))?.name, `name ${JSON.stringify(clear)} clears`).toBeUndefined();
     }
   });
 
   it("trims surrounding whitespace from kept names", async () => {
     const path = await writeSession("trimmed.jsonl", [headerLine({ id: "trimmed", cwd: WORKSPACE }), sessionInfoLine("  Padded name  ")]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ name: "Padded name" });
+    expect(await scanFileSummary(path)).toMatchObject({ name: "Padded name" });
   });
 });
 
@@ -142,7 +144,7 @@ describe("session summary scanner first message extraction", () => {
       messageLine({ role: "user", content: textContent("later") }),
     ]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ firstMessage: "the real first message", messageCount: 3 });
+    expect(await scanFileSummary(path)).toMatchObject({ firstMessage: "the real first message", messageCount: 3 });
   });
 
   it("skips user messages without text content when finding the first message", async () => {
@@ -153,7 +155,7 @@ describe("session summary scanner first message extraction", () => {
       messageLine({ role: "user", content: textContent("typed later") }),
     ]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ firstMessage: "typed later", messageCount: 3 });
+    expect(await scanFileSummary(path)).toMatchObject({ firstMessage: "typed later", messageCount: 3 });
   });
 
   it("joins multiple text blocks with a space like the SDK", async () => {
@@ -162,7 +164,7 @@ describe("session summary scanner first message extraction", () => {
       messageLine({ role: "user", content: [{ type: "text", text: "part one" }, { type: "image", url: "x" }, { type: "text", text: "part two" }] }),
     ]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ firstMessage: "part one part two" });
+    expect(await scanFileSummary(path)).toMatchObject({ firstMessage: "part one part two" });
   });
 
   it("falls back to the SDK's placeholder when no user message has text", async () => {
@@ -171,7 +173,7 @@ describe("session summary scanner first message extraction", () => {
       messageLine({ role: "assistant", content: textContent("only assistant") }),
     ]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ firstMessage: "(no messages)", messageCount: 1 });
+    expect(await scanFileSummary(path)).toMatchObject({ firstMessage: "(no messages)", messageCount: 1 });
   });
 });
 
@@ -179,8 +181,8 @@ describe("session summary scanner edge cases", () => {
   it("skips empty files", async () => {
     const path = await writeSession("empty.jsonl", []);
 
-    expect(await scanSessionFileSummary(path)).toBeUndefined();
-    expect(await scanSessionSummariesInDir(sessionDir)).toEqual([]);
+    expect(await scanFileSummary(path)).toBeUndefined();
+    expect(await coldListing(sessionDir)).toEqual([]);
   });
 
   it("skips files whose first parseable entry is not a session header", async () => {
@@ -189,33 +191,33 @@ describe("session summary scanner edge cases", () => {
       headerLine({ id: "late-header", cwd: WORKSPACE }),
     ]);
 
-    expect(await scanSessionFileSummary(path)).toBeUndefined();
+    expect(await scanFileSummary(path)).toBeUndefined();
   });
 
   it("skips unparseable files but still finds a header after blank or garbage lines", async () => {
     await writeSession("garbage.jsonl", ["not json at all"]);
     const latePath = await writeSession("late-header.jsonl", ["", "also not json", headerLine({ id: "late", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("hi") })]);
 
-    expect(await scanSessionFileSummary(join(sessionDir, "garbage.jsonl"))).toBeUndefined();
-    expect(await scanSessionFileSummary(latePath)).toMatchObject({ id: "late", messageCount: 1, firstMessage: "hi" });
+    expect(await scanFileSummary(join(sessionDir, "garbage.jsonl"))).toBeUndefined();
+    expect(await scanFileSummary(latePath)).toMatchObject({ id: "late", messageCount: 1, firstMessage: "hi" });
   });
 
   it("skips headers without a usable string id instead of listing broken sessions", async () => {
     const path = await writeSession("no-id.jsonl", [JSON.stringify({ type: "session", version: 3, timestamp: "2026-01-01T00:00:00.000Z", cwd: WORKSPACE })]);
 
-    expect(await scanSessionFileSummary(path)).toBeUndefined();
+    expect(await scanFileSummary(path)).toBeUndefined();
   });
 
   it("lists headers without a cwd with an empty cwd for the gateway filter to drop", async () => {
     const path = await writeSession("legacy.jsonl", [headerLine({ id: "legacy" })]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ id: "legacy", cwd: "" });
+    expect(await scanFileSummary(path)).toMatchObject({ id: "legacy", cwd: "" });
   });
 
   it("does not count a message line truncated mid-write", async () => {
     const path = await writeSession("truncated.jsonl", [headerLine({ id: "truncated", cwd: WORKSPACE }), '{"type":"message","id":"half-written"']);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ id: "truncated", messageCount: 0, firstMessage: "(no messages)" });
+    expect(await scanFileSummary(path)).toMatchObject({ id: "truncated", messageCount: 0, firstMessage: "(no messages)" });
   });
 
   it("counts a torn final write that happens to end in an inner brace", async () => {
@@ -229,7 +231,7 @@ describe("session summary scanner edge cases", () => {
       '{"type":"message","id":"torn-1","message":{"role":"assistant","content":[{"type":"text","text":"streaming"}]}',
     ]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ id: "torn", messageCount: 2, firstMessage: "start" });
+    expect(await scanFileSummary(path)).toMatchObject({ id: "torn", messageCount: 2, firstMessage: "start" });
   });
 
   it("never classifies high-bit garbage bytes as a known entry type", async () => {
@@ -250,7 +252,7 @@ describe("session summary scanner edge cases", () => {
       ]),
     );
 
-    const summary = await scanSessionFileSummary(path);
+    const summary = await scanFileSummary(path);
     expect(summary).toMatchObject({ id: "garbage-types", messageCount: 1, firstMessage: "real" });
     expect(summary?.name).toBeUndefined();
   });
@@ -264,7 +266,7 @@ describe("session summary scanner edge cases", () => {
       `${messageLine({ role: "assistant", content: textContent("crlf") })}\r`,
     ]);
 
-    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), coldListing(sessionDir)]);
 
     expect(sdkSessions).toMatchObject([{ id: "padded", messageCount: 2 }]);
     expect(scannedSessions).toMatchObject([{ id: "padded", messageCount: 2, firstMessage: "padded" }]);
@@ -277,7 +279,7 @@ describe("session summary scanner edge cases", () => {
       JSON.stringify({ name: "Late name", type: "session_info", timestamp: "2026-01-01T00:02:00.000Z" }),
     ]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ messageCount: 1, firstMessage: "reordered first", name: "Late name" });
+    expect(await scanFileSummary(path)).toMatchObject({ messageCount: 1, firstMessage: "reordered first", name: "Late name" });
   });
 
   it("keeps huge tool-result lines from leaking into the summary without parsing them", async () => {
@@ -291,7 +293,7 @@ describe("session summary scanner edge cases", () => {
       messageLine({ role: "user", content: textContent("later") }),
     ]);
 
-    const summary = await scanSessionFileSummary(path);
+    const summary = await scanFileSummary(path);
 
     expect(summary).toMatchObject({ id: "huge", messageCount: 3, firstMessage: "start" });
     expect(summary?.name).toBeUndefined();
@@ -310,11 +312,11 @@ describe("session summary scanner edge cases", () => {
       invalidBody,
     ]);
 
-    expect(await scanSessionFileSummary(path)).toMatchObject({ id: "unvalidated", messageCount: 2, firstMessage: "start" });
+    expect(await scanFileSummary(path)).toMatchObject({ id: "unvalidated", messageCount: 2, firstMessage: "start" });
   });
 
   it("lists nothing when the session directory does not exist", async () => {
-    expect(await scanSessionSummariesInDir(join(tempDir, "missing"))).toEqual([]);
+    expect(await coldListing(join(tempDir, "missing"))).toEqual([]);
   });
 });
 
@@ -343,7 +345,7 @@ describe("session summary scanner memo", () => {
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(cold);
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(cold);
     // A warm memoized listing is field-for-field identical to a fresh scan.
-    expect(await scanSessionSummariesInDir(sessionDir)).toEqual(cold);
+    expect(await coldListing(sessionDir)).toEqual(cold);
   });
 
   it("re-scans a grown file whole", async () => {
@@ -363,7 +365,7 @@ describe("session summary scanner memo", () => {
 
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "grown", messageCount: 4, firstMessage: "first question", name: "Renamed later" }]);
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(warm).toEqual(await coldListing(sessionDir));
   });
 
   it("re-scans a file whose unterminated trailing line was completed by an append", async () => {
@@ -381,7 +383,7 @@ describe("session summary scanner memo", () => {
 
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "inflight", messageCount: 3, firstMessage: "start" }]);
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(warm).toEqual(await coldListing(sessionDir));
   });
 
   it("fully re-parses a file that shrunk", async () => {
@@ -399,7 +401,7 @@ describe("session summary scanner memo", () => {
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "shrunk", messageCount: 1, firstMessage: "new first" }]);
     expect(warm[0]?.name).toBeUndefined();
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(warm).toEqual(await coldListing(sessionDir));
   });
 
   it("fully re-parses a replacement file at the same path even when it is larger", async () => {
@@ -420,7 +422,7 @@ describe("session summary scanner memo", () => {
 
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "replacement", messageCount: 3, firstMessage: "bigger first" }]);
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(warm).toEqual(await coldListing(sessionDir));
   });
 
   it("drops deleted sessions and does not resurrect stale entries at the same path", async () => {
@@ -495,7 +497,7 @@ describe("session summary scanner memo", () => {
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "detached", messageCount: 2 }]);
     expect(warm[0]).not.toHaveProperty("parentSessionPath");
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(warm).toEqual(await coldListing(sessionDir));
   });
 
   it("reads identity and metadata from the opened file, not a stale pathname stat", async () => {
@@ -536,7 +538,7 @@ describe("session summary scanner memo", () => {
     // The memo now describes the replacement: later listings stay consistent.
     const settled = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(settled).toMatchObject([{ id: "replacement", messageCount: 3 }]);
-    expect(settled).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(settled).toEqual(await coldListing(sessionDir));
   });
 
 });
@@ -567,7 +569,7 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
 
     const cold = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(cold).toMatchObject([{ id: "spanning", messageCount: 3, firstMessage: "first", name: "Renamed across chunks" }]);
-    expect(cold).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(cold).toEqual(await coldListing(sessionDir));
   });
 
   it("counts a line longer than several chunks exactly once without scanning its body", async () => {
@@ -588,7 +590,7 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
     const summary = (await scanner.scanSessionSummariesInDir(sessionDir))[0];
     expect(summary).toMatchObject({ id: "long-line", messageCount: 3, firstMessage: "start" });
     expect(summary?.name).toBeUndefined();
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await coldListing(sessionDir));
   });
 
   it("folds an unterminated multi-chunk tail whole once the file grows", async () => {
@@ -611,7 +613,7 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
 
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "unterminated-span", messageCount: 3, firstMessage: "start" }]);
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(warm).toEqual(await coldListing(sessionDir));
   });
 
   it("memoizes a rejected file at its observed end-of-file so warm listings do not re-read it", async () => {
@@ -646,7 +648,7 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
     } finally {
       openSpy.mockRestore();
     }
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await scanSessionSummariesInDir(sessionDir));
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await coldListing(sessionDir));
   });
 
   it("allocates no read buffers for a fully warm listing", async () => {
@@ -694,7 +696,7 @@ describe("session summary scanner deliberate SDK divergences", () => {
       messageLine({ role: "user", content: textContent("hi") }),
     ]);
 
-    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), coldListing(sessionDir)]);
 
     // Divergence, locked in: the SDK lists all three broken headers.
     expect(sdkSessions).toHaveLength(3);
@@ -715,7 +717,7 @@ describe("session summary scanner deliberate SDK divergences", () => {
       messageLine({ role: "user", content: textContent("hi") }),
     ]);
 
-    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), coldListing(sessionDir)]);
 
     expect(sdkSessions).toEqual([]);
     expect(scannedSessions).toMatchObject([{ id: "after-scalars", messageCount: 1, firstMessage: "hi" }]);
@@ -732,7 +734,7 @@ describe("session summary scanner deliberate SDK divergences", () => {
       messageLine({ role: "user", content: textContent("after null") }),
     ]);
 
-    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), coldListing(sessionDir)]);
 
     expect(sdkSessions).toEqual([]);
     expect(scannedSessions).toMatchObject([{ id: "null-message", messageCount: 3, firstMessage: "real first" }]);
@@ -745,7 +747,7 @@ describe("session summary scanner deliberate SDK divergences", () => {
     ]);
     await writeSession("header-only.jsonl", [headerLine({ id: "header-only", cwd: WORKSPACE })]);
 
-    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), scanSessionSummariesInDir(sessionDir)]);
+    const [sdkSessions, scannedSessions] = await Promise.all([SessionManager.listAll(sessionDir), coldListing(sessionDir)]);
 
     const idAndFirstMessage = (sessions: { id: string; firstMessage: string }[]) => sessions.map((session) => [session.id, session.firstMessage]).sort();
     expect(idAndFirstMessage(sdkSessions)).toEqual([
@@ -758,6 +760,16 @@ describe("session summary scanner deliberate SDK divergences", () => {
     ]);
   });
 });
+
+/** A listing from a scanner with an empty memo: every file is read from disk. */
+async function coldListing(dir: string): Promise<PiSessionListEntry[]> {
+  return new SessionSummaryScanner().scanSessionSummariesInDir(dir);
+}
+
+/** The cold summary of one session file, or undefined when it is not listable. */
+async function scanFileSummary(path: string): Promise<PiSessionListEntry | undefined> {
+  return (await coldListing(dirname(path))).find((session) => session.path === path);
+}
 
 function nextEntryId(): string {
   entryCounter += 1;
@@ -820,8 +832,4 @@ async function rewriteHeaderWithoutParentSession(path: string): Promise<void> {
  */
 function statWithSize(stats: Awaited<ReturnType<typeof stat>>, size: number): Awaited<ReturnType<typeof stat>> {
   return Object.assign({}, stats, { size });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

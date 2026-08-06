@@ -2,7 +2,40 @@ import { open, readdir, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { join, sep } from "node:path";
+import { isRecord, tryParseEntry } from "./sessionFileFormat.js";
 import type { PiSessionListEntry } from "./piSessionService.js";
+
+/*
+ * LISTING CONTRACT
+ *
+ * The summary fields mirror the SDK listing (`SessionManager.listAll`):
+ * `messageCount` counts every `message` entry, `firstMessage` is the first
+ * user message with non-empty text content, `name` is the latest `session_info`
+ * name (an empty or missing name clears it), and `created`/`id`/`cwd`/
+ * `parentSessionPath` come from the header line. Three deliberate differences:
+ *
+ * - `modified` is the file mtime rather than the last message timestamp.
+ *   Session files are append-only, so the mtime is a faithful "last activity"
+ *   for listing order, the only thing `modified` is used for.
+ * - `allMessagesText` is always empty. Building it required parsing every
+ *   message body — the cost this scanner exists to remove — and PI WEB never
+ *   consumes it.
+ * - `messageCount` can transiently include a final write read mid-flight: a
+ *   message-shaped line that ends with `}` counts even though its JSON is
+ *   never validated, where the SDK fails to parse such a torn line. The count
+ *   self-heals on the next listing once the line completes (the file is
+ *   re-scanned whole as soon as its size changes).
+ *
+ * Files whose header is missing, unreadable, or not a session header are
+ * skipped, like the SDK does. Results are sorted by `modified` descending.
+ *
+ * Per-line work is minimal: lines are classified from their leading
+ * `{"type":"..."` bytes without ever decoding them, and lines are only turned
+ * into strings and JSON-parsed when they matter — the header, `session_info`
+ * lines (rare, one per rename), and message lines until the first user text
+ * message has been found. Message bodies after that point (which hold the huge
+ * tool results and assistant replies) are neither decoded nor parsed.
+ */
 
 /**
  * Fast-path classification prefix of a session file line, as raw bytes.
@@ -34,64 +67,6 @@ const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
 /** Types longer than this fall back to a full parse instead of byte classification. */
 const MAX_CLASSIFIED_TYPE_LENGTH = 64;
 
-/**
- * List the sessions in one session directory with one lightweight streaming
- * pass per file, instead of the SDK's full-transcript listing.
- *
- * Stateless: every call re-reads every file. Daemon listings should use
- * {@link SessionSummaryScanner}, which memoizes these summaries across calls.
- *
- * The summary fields mirror the SDK listing (`SessionManager.listAll`):
- * `messageCount` counts every `message` entry, `firstMessage` is the first
- * user message with non-empty text content, `name` is the latest `session_info`
- * name (an empty or missing name clears it), and `created`/`id`/`cwd`/
- * `parentSessionPath` come from the header line. Three deliberate differences:
- *
- * - `modified` is the file mtime rather than the last message timestamp.
- *   Session files are append-only, so the mtime is a faithful "last activity"
- *   for listing order, the only thing `modified` is used for.
- * - `allMessagesText` is always empty. Building it required parsing every
- *   message body — the cost this scanner exists to remove — and PI WEB never
- *   consumes it.
- * - `messageCount` can transiently include a final write read mid-flight: a
- *   message-shaped line that ends with `}` counts even though its JSON is
- *   never validated, where the SDK fails to parse such a torn line. The count
- *   self-heals on the next listing once the line completes (the file is
- *   re-scanned whole as soon as its size changes).
- *
- * Files whose header is missing, unreadable, or not a session header are
- * skipped, like the SDK does. Results are sorted by `modified` descending.
- */
-export async function scanSessionSummariesInDir(sessionDir: string): Promise<PiSessionListEntry[]> {
-  const files = await listSessionFilesInDir(sessionDir);
-  const summaries = await scanSessionFilesWithBoundedConcurrency(files, SCAN_CHUNK_BYTES, summarizeWholeFile);
-  return sortedSessionSummaries(summaries);
-}
-
-/**
- * Summarize one session file in a single streaming pass.
- *
- * Per-line work is minimal: lines are classified from their leading
- * `{"type":"..."` bytes without ever decoding them, and lines are only turned
- * into strings and JSON-parsed when they matter — the header, `session_info`
- * lines (rare, one per rename), and message lines until the first user text
- * message has been found. Message bodies after that point (which hold the huge
- * tool results and assistant replies) are neither decoded nor parsed.
- *
- * Returns undefined when the file is not a usable session (unreadable, empty,
- * or first parseable entry is not a session header), matching the SDK.
- */
-export async function scanSessionFileSummary(filePath: string, chunkBuffer?: Buffer): Promise<PiSessionListEntry | undefined> {
-  return summarizeWholeFile(filePath, () => chunkBuffer ?? Buffer.allocUnsafe(SCAN_CHUNK_BYTES));
-}
-
-/** The streaming single-pass summary; `chunkBuffer` supplies the read buffer lazily. */
-async function summarizeWholeFile(filePath: string, chunkBuffer: () => Buffer): Promise<PiSessionListEntry | undefined> {
-  const scanned = await scanWholeSessionFile(filePath, chunkBuffer);
-  if (scanned === undefined) return undefined;
-  return buildSummaryFromFold(scanned.fold, filePath, scanned.mtime);
-}
-
 /** Construction options for {@link SessionSummaryScanner}. */
 export interface SessionSummaryScannerOptions {
   /**
@@ -104,7 +79,8 @@ export interface SessionSummaryScannerOptions {
 
 /**
  * Session summary scanner with a per-file memo, so repeated listings of the
- * same session directory do not re-read transcripts that did not change.
+ * same session directory do not re-read transcripts that did not change. See
+ * the listing contract above for the fields it produces.
  *
  * The memo is a last resort on top of the lightweight streaming scan and is
  * deliberately trivial to invalidate — it never holds anything the file
@@ -158,10 +134,10 @@ export class SessionSummaryScanner {
   }
 
   /**
-   * The memoized equivalent of {@link scanSessionSummariesInDir}: same fields,
-   * same order, same skip rules, but files whose identity and size have not
-   * changed since the previous scan of their directory are answered from the
-   * memo (one stat each) instead of being read.
+   * List the sessions in one session directory with one lightweight streaming
+   * pass per changed file, instead of the SDK's full-transcript listing. Files
+   * whose identity and size have not changed since the previous scan of their
+   * directory are answered from the memo (one stat each) instead of being read.
    */
   async scanSessionSummariesInDir(sessionDir: string): Promise<PiSessionListEntry[]> {
     const files = await listSessionFilesInDir(sessionDir);
@@ -358,7 +334,7 @@ function buildSummaryFromFold(fold: SummaryFoldState, filePath: string, mtime: D
     modified: mtime,
     messageCount: fold.messageCount,
     firstMessage: fold.firstMessageText ?? "(no messages)",
-    // Never built: see the directory-level doc comment. Kept because SDK-built
+    // Never built: see the listing contract above. Kept because SDK-built
     // entries (cleanup listing) still carry the field.
     allMessagesText: "",
     ...(fold.name === undefined ? {} : { name: fold.name }),
@@ -511,20 +487,6 @@ function extractTextContent(content: unknown): string {
     if (typeof text === "string") texts.push(text);
   }
   return texts.join(" ");
-}
-
-function tryParseEntry(line: string): Record<string, unknown> | undefined {
-  if (line.trim() === "") return undefined;
-  try {
-    const parsed: unknown = JSON.parse(line);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 async function listSessionFilesInDir(sessionDir: string): Promise<string[]> {
