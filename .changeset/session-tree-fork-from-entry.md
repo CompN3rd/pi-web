@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Add fork-from-entry and an explicit continue-from-here action to the session tree navigator. "Continue from here" branches the conversation in the same session file, while "Fork into new session…" creates a new session file up to the selected entry and switches to it, leaving the original session unchanged.
+Add a two-step session tree flow that first selects a history entry, then either continues from it in the same session or forks it into a separate session while leaving the original unchanged. Forking from a user message restores that message as the new session draft.
