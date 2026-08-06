@@ -35,9 +35,7 @@ export function agentProfileActivationState(
 export function agentDirFieldOverridden(envOverrides: PiWebConfigEnvOverrides | undefined, draftCommand: string): boolean {
   if (envOverrides?.agentDirSource === "pi-web") return true;
   if (envOverrides?.agentDirSource === "pi-compatibility") return usesPiCodingAgentStateCompatibility(draftCommand.trim() || "pi");
-  // Older remote responses do not identify the source. Keep their override
-  // read-only rather than incorrectly treating a PI_WEB_AGENT_DIR as conditional.
-  return envOverrides?.agentDir === true;
+  return false;
 }
 
 export function mergeSelectedMachineSessiondConfig(base: PiWebConfigResponse, selectedMachine: PiWebConfigResponse): PiWebConfigResponse {

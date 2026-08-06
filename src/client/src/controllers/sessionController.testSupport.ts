@@ -95,6 +95,7 @@ export const workspace: Workspace = {
   isMain: true,
   isGitRepo: true,
   isGitWorktree: false,
+  effectiveConfig: {},
 };
 
 export const oldSession: SessionInfo = {

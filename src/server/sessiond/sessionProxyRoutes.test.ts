@@ -78,11 +78,11 @@ describe("machine-scoped session proxy routes", () => {
   });
 
   it("strips the machine prefix before forwarding auth requests", async () => {
-    const response = await app.inject({ method: "POST", url: "/api/machines/local/auth/api-key", payload: { providerId: "p", key: "k" } });
+    const response = await app.inject({ method: "POST", url: "/api/machines/local/auth/api-key/interactive", payload: { providerId: "p" } });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true });
-    expect(daemon.requests).toEqual([{ method: "POST", path: "/auth/api-key", body: { providerId: "p", key: "k" } }]);
+    expect(daemon.requests).toEqual([{ method: "POST", path: "/auth/api-key/interactive", body: { providerId: "p" } }]);
   });
 
   it("forwards automation updates and cancellation to the session daemon", async () => {

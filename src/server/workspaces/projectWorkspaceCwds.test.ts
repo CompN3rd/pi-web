@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Project, Workspace } from "../types.js";
+import type { Project, WorkspaceListing } from "../types.js";
 import { RegisteredProjectWorkspaceCwds, siblingWorkspaceCwds } from "./projectWorkspaceCwds.js";
 
 describe("RegisteredProjectWorkspaceCwds", () => {
@@ -69,7 +69,7 @@ function project(id: string): Project {
   return { id, name: id, path: `/srv/dev/${id}`, createdAt: "2026-07-28T00:00:00.000Z" };
 }
 
-function workspacesFor(owner: Project, paths: string[]): Workspace[] {
+function workspacesFor(owner: Project, paths: string[]): WorkspaceListing[] {
   return paths.map((path, index) => ({
     id: `${owner.id}-workspace-${String(index)}`,
     projectId: owner.id,

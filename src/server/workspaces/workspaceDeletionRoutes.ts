@@ -1,22 +1,46 @@
+import { access, constants } from "node:fs/promises";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import type { TerminalCommandRun, Workspace } from "../../shared/apiTypes.js";
+import type { TerminalCommandRun } from "../../shared/apiTypes.js";
+import type { WorkspaceListing } from "../types.js";
 import { workspaceDeletionMetadata } from "../../shared/workspaceDeletion.js";
 import { SessionDaemonClient } from "../../sessiond/sessionDaemonClient.js";
 import type { ProjectService } from "../projects/projectService.js";
 import type { SessionProxyDaemon } from "../sessiond/sessionProxyRoutes.js";
+import { isNodeErrorWithCode } from "./pathSafety.js";
 import type { WorkspaceService } from "./workspaceService.js";
 
-export function registerWorkspaceDeletionRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceService, daemon: SessionProxyDaemon = new SessionDaemonClient(), prefix = "/api"): void {
+/** Relative path, from a workspace root, of the optional repo-provided hook that runs before `git worktree remove`. */
+export const WORKTREE_PRE_REMOVE_HOOK_RELATIVE_PATH = ".pi-web/hooks/worktree-pre-remove";
+
+/** Executability probe for the pre-remove hook; injectable so deletion stays testable without a real filesystem. */
+export interface WorktreePreRemoveHookProbe {
+  isExecutable(path: string): Promise<boolean>;
+}
+
+const realWorktreePreRemoveHookProbe: WorktreePreRemoveHookProbe = {
+  async isExecutable(path) {
+    try {
+      await access(path, constants.X_OK);
+      return true;
+    } catch (error) {
+      if (isNodeErrorWithCode(error, "ENOENT") || isNodeErrorWithCode(error, "ENOTDIR") || isNodeErrorWithCode(error, "EACCES") || isNodeErrorWithCode(error, "EPERM")) return false;
+      throw error;
+    }
+  },
+};
+
+export function registerWorkspaceDeletionRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceService, daemon: SessionProxyDaemon = new SessionDaemonClient(), prefix = "/api", preRemoveHook: WorktreePreRemoveHookProbe = realWorktreePreRemoveHookProbe): void {
   app.delete<{ Params: { projectId: string; workspaceId: string } }>(`${prefix}/projects/:projectId/workspaces/:workspaceId`, async (request, reply) => {
     try {
-      return await deleteWorkspace(projects, workspaces, daemon, request.params.projectId, request.params.workspaceId);
+      return await deleteWorkspace(projects, workspaces, daemon, preRemoveHook, request.params.projectId, request.params.workspaceId);
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 }
 
-async function deleteWorkspace(projects: ProjectService, workspaces: WorkspaceService, daemon: SessionProxyDaemon, projectId: string, workspaceId: string): Promise<TerminalCommandRun> {
+async function deleteWorkspace(projects: ProjectService, workspaces: WorkspaceService, daemon: SessionProxyDaemon, preRemoveHook: WorktreePreRemoveHookProbe, projectId: string, workspaceId: string): Promise<TerminalCommandRun> {
   const project = await projects.requireProject(projectId);
   const projectWorkspaces = await workspaces.list(project);
   const targetWorkspace = projectWorkspaces.find((workspace) => workspace.id === workspaceId);
@@ -26,8 +50,18 @@ async function deleteWorkspace(projects: ProjectService, workspaces: WorkspaceSe
   const commandWorkspace = projectWorkspaces.find((workspace) => workspace.isMain) ?? projectWorkspaces.find((workspace) => workspace.id !== targetWorkspace.id);
   if (commandWorkspace === undefined) throw new Error("Project main workspace not found");
 
+  // Probe before any side effect so an unexpected filesystem failure aborts before terminals are closed.
+  const hookPath = join(commandWorkspace.path, WORKTREE_PRE_REMOVE_HOOK_RELATIVE_PATH);
+  const hookExecutable = await preRemoveHook.isExecutable(hookPath);
+
   const closeResponse = await requestJson(daemon, "DELETE", `/terminals?cwd=${encodeURIComponent(targetWorkspace.path)}`);
   if (closeResponse.statusCode < 200 || closeResponse.statusCode >= 300) throw new Error(`Failed to close workspace terminals: ${responseError(closeResponse.body, closeResponse.statusCode)}`);
+
+  // Single composed command: `&&` is the fail-closed guarantee — a non-zero hook exit prevents the removal.
+  const quotedTargetPath = shellQuote(targetWorkspace.path);
+  const command = hookExecutable
+    ? `${shellQuote(hookPath)} ${quotedTargetPath} && git worktree remove ${quotedTargetPath}`
+    : `git worktree remove ${quotedTargetPath}`;
 
   const deleteResponse = await requestJson(daemon, "POST", "/terminal-command-runs", {
     origin: "core",
@@ -35,18 +69,18 @@ async function deleteWorkspace(projects: ProjectService, workspaces: WorkspaceSe
     workspaceId: commandWorkspace.id,
     cwd: commandWorkspace.path,
     title: `Delete workspace: ${workspaceLabel(targetWorkspace)}`,
-    command: `git worktree remove ${shellQuote(targetWorkspace.path)}`,
+    command,
     metadata: workspaceDeletionMetadata(targetWorkspace),
   });
   if (deleteResponse.statusCode < 200 || deleteResponse.statusCode >= 300) throw new Error(`Failed to start workspace deletion: ${responseError(deleteResponse.body, deleteResponse.statusCode)}`);
   return parseTerminalCommandRun(deleteResponse.body);
 }
 
-function canDeleteWorkspace(workspace: Workspace): boolean {
+function canDeleteWorkspace(workspace: WorkspaceListing): boolean {
   return workspace.isGitWorktree && !workspace.isMain;
 }
 
-function workspaceLabel(workspace: Workspace): string {
+function workspaceLabel(workspace: WorkspaceListing): string {
   return workspace.branch ?? workspace.label;
 }
 

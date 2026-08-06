@@ -2,7 +2,7 @@ import { ModelRuntime, type ExtensionUIContext } from "@earendil-works/pi-coding
 import { InMemoryCredentialStore, type Credential, type CredentialStore } from "@earendil-works/pi-ai";
 import type { GlobalSessionEvent, SessionNotificationSummaryEvent, SessionUiEvent } from "../../shared/apiTypes.js";
 import { SessionEventHub } from "../realtime/sessionEventHub.js";
-import type { PiAgentSession, PiSessionManager, PiSessionRuntime, PiSessionServiceDependencies } from "./piSessionService.js";
+import type { PiAgentSession, PiSessionListEntry, PiSessionManager, PiSessionRuntime, PiSessionServiceDependencies, ResolvedSessionFile } from "./piSessionService.js";
 
 export class CapturingSessionEventHub extends SessionEventHub {
   readonly sessionEvents: { sessionId: string; event: SessionUiEvent }[] = [];
@@ -233,9 +233,28 @@ export function runtimeCreator(runtime: PiSessionRuntime): RuntimeCreator {
 
 export function sessionGateway(records: ReturnType<typeof sessionRecord>[]): SessionGateway {
   return {
-    create: () => fakeSessionManager(),
+    create: (cwd) => fakeSessionManager(cwd),
     list: () => Promise.resolve(records),
+    listAll: () => Promise.resolve(records),
+    listParentSessionPaths: () => Promise.resolve([]),
+    invalidateSessionFile: () => undefined,
+    resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve(records)),
     open: () => fakeSessionManager(),
+  };
+}
+
+/**
+ * Build a gateway `resolveSessionFile` on top of a `list` implementation,
+ * picking the session exactly the way a full listing would (exact id or id
+ * prefix). For test gateways whose `list` fake is the source of truth, this
+ * keeps id resolution consistent with what the fake lists.
+ */
+export function resolveSessionFileFromList(
+  list: (cwd: string) => Promise<PiSessionListEntry[]>,
+): (cwd: string, sessionId: string) => Promise<ResolvedSessionFile | undefined> {
+  return async (cwd, sessionId) => {
+    const match = (await list(cwd)).find((record) => record.id === sessionId || record.id.startsWith(sessionId));
+    return match === undefined ? undefined : { id: match.id, cwd: match.cwd, path: match.path };
   };
 }
 

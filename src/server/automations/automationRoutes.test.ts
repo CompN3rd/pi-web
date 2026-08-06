@@ -1,12 +1,13 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AutomationUsageSnapshot, Workspace } from "../../shared/apiTypes.js";
+import type { AutomationUsageSnapshot } from "../../shared/apiTypes.js";
+import type { WorkspaceListing } from "../types.js";
 import { registerAutomationRoutes } from "./automationRoutes.js";
 import { AutomationService } from "./automationService.js";
 import { AutomationStore } from "./automationStore.js";
 
 const scope = { projectId: "project-1", workspaceId: "workspace-1" };
-const workspace: Workspace = { id: scope.workspaceId, projectId: scope.projectId, path: "/repo", label: "repo", isMain: true, isGitRepo: true, isGitWorktree: false };
+const workspace: WorkspaceListing = { id: scope.workspaceId, projectId: scope.projectId, path: "/repo", label: "repo", isMain: true, isGitRepo: true, isGitWorktree: false };
 const stores: AutomationStore[] = [];
 
 async function fixture() {

@@ -10,12 +10,12 @@ const askUserOutcome: AskUserOutcome = {
   closedAt: "2026-07-20T10:05:00.000Z",
   questions: [
     {
-      question: { id: "db", question: "Which database?", options: [{ value: "pg", label: "Postgres" }], allowOther: true },
+      question: { id: "db", question: "Which database?", options: [{ value: "pg", label: "Postgres" }] },
       answered: true,
       values: ["pg"],
     },
     {
-      question: { id: "cache", question: "Which cache?", options: [{ value: "redis", label: "Redis" }], allowOther: true },
+      question: { id: "cache", question: "Which cache?", options: [{ value: "redis", label: "Redis" }] },
       answered: false,
       values: [],
     },
@@ -110,6 +110,12 @@ describe("chat message normalization", () => {
   it("falls back to a placeholder for image content without data", () => {
     expect(normalizeMessage({ role: "user", content: [{ type: "image", mimeType: "image/png" }] })).toEqual([
       { role: "user", parts: [{ type: "text", text: "[image]" }] },
+    ]);
+  });
+
+  it("carries the thinking level into assistant message metadata", () => {
+    expect(normalizeMessage({ role: "assistant", content: [{ type: "text", text: "hi" }], provider: "openai", model: "gpt-4.1", timestamp: "2026-05-09T12:00:00.000Z", thinkingLevel: "max" })).toEqual([
+      { role: "assistant", parts: [{ type: "text", text: "hi" }], meta: { timestamp: "2026-05-09T12:00:00.000Z", model: { provider: "openai", id: "gpt-4.1" }, thinkingLevel: "max" } },
     ]);
   });
 

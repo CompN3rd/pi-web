@@ -2,13 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AutomationDraft, AutomationUsageSnapshot, SessionModel, Workspace } from "../../shared/apiTypes.js";
+import type { AutomationDraft, AutomationUsageSnapshot, SessionModel } from "../../shared/apiTypes.js";
+import type { WorkspaceListing } from "../types.js";
 import { AutomationService } from "./automationService.js";
 import type { CreatedAutomationSession } from "./automationSessionRunner.js";
 import { AutomationStore } from "./automationStore.js";
 
 const scope = { projectId: "project-1", workspaceId: "workspace-1" };
-const workspace: Workspace = { id: scope.workspaceId, projectId: scope.projectId, path: "/repo", label: "repo", isMain: true, isGitRepo: true, isGitWorktree: false };
+const workspace: WorkspaceListing = { id: scope.workspaceId, projectId: scope.projectId, path: "/repo", label: "repo", isMain: true, isGitRepo: true, isGitWorktree: false };
 const model: SessionModel = { provider: "test", id: "model", name: "Test Model", reasoning: true };
 const usage: AutomationUsageSnapshot = {
   scope: "root_session",

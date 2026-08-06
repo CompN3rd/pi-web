@@ -200,7 +200,7 @@ describe("workspace-git-panel context reset", () => {
 
     const switched = workspacePanelContext({
       gitStatus: treeStatus(),
-      workspace: { id: "workspace-2", projectId: "project-1", path: "/tmp/project-2", label: "other", isMain: false, isGitRepo: true, isGitWorktree: false },
+      workspace: { id: "workspace-2", projectId: "project-1", path: "/tmp/project-2", label: "other", isMain: false, isGitRepo: true, isGitWorktree: false, effectiveConfig: {} },
     });
     panel.context = switched;
     callPanelWillUpdate(panel, context);
@@ -351,7 +351,7 @@ class FakeStorage {
 }
 
 function workspacePanelContext(patch: Partial<WorkspacePanelContext> = {}): WorkspacePanelContext {
-  const workspace = patch.workspace ?? { id: "workspace-1", projectId: "project-1", path: "/tmp/project", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false };
+  const workspace = patch.workspace ?? { id: "workspace-1", projectId: "project-1", path: "/tmp/project", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false, effectiveConfig: {} };
   return {
     machine: patch.machine ?? { id: "local", name: "Local", kind: "local" },
     workspace,

@@ -90,11 +90,11 @@ describe("Docker command assets", () => {
     expect(runtimeCompose).toContain("PI_WEB_DOCKER_MODE: runtime");
     expect(runtimeCompose).toContain("PI_WEB_DOCKER_INSTALL_DIR: ${PI_WEB_DOCKER_INSTALL_DIR:?set by docker/install.sh}");
     expect(runtimeCompose).toContain("PI_WEB_DOCKER_HELPER_IMAGE: ${PI_WEB_IMAGE:-pi-web:local}");
-    expect(runtimeCompose).toContain("COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-pi-web}");
+    expect(runtimeCompose).not.toContain("COMPOSE_PROJECT_NAME:");
     expect(devCompose).toContain("PI_WEB_DOCKER_MODE: dev");
     expect(devCompose).toContain("PI_WEB_DOCKER_DEV_REPO_ROOT: ${PI_WEB_DOCKER_DEV_REPO_ROOT:?set by docker/pi-web-docker --dev}");
     expect(devCompose).toContain("PI_WEB_DOCKER_HELPER_IMAGE: ${PI_WEB_DEV_IMAGE:-pi-web:dev}");
-    expect(devCompose).toContain("COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-pi-web-dev}");
+    expect(devCompose).not.toContain("COMPOSE_PROJECT_NAME:");
     expect(devCompose).toContain("/usr/local/sbin/pi-web-dev-sync-node-modules");
     expect(devCompose.match(/volumes: \*pi-web-dev-volumes/g)).toHaveLength(3);
   });
@@ -318,6 +318,21 @@ describe("Docker command assets", () => {
     expect(result.stderr).toContain("while a Git merge is in progress");
     expect(result.stderr).toContain("resolve or abort the Git merge");
     await expect(readFile(helperLog, "utf8")).rejects.toThrow();
+  });
+
+  dockerCommandIt("allows development updates with a stale REBASE_HEAD from a completed rebase", async () => {
+    const helperLog = join(tempDir, "dev-helper.log");
+    const devRoot = await createCleanDevGitRepoWithFakeHelper(helperLog);
+    const fakeDocker = await installFakeDocker();
+    await installFakeId(fakeDocker.binDir, 1234, 2345);
+    // Git leaves REBASE_HEAD behind after a rebase completes; only the
+    // rebase-merge/rebase-apply state directories mean one is in progress.
+    const head = (await execUtf8("git", ["-C", devRoot, "rev-parse", "HEAD"], cleanProcessEnv())).stdout.trim();
+    await writeFile(join(devRoot, ".git", "REBASE_HEAD"), `${head}\n`, "utf8");
+
+    await runDockerCommand(["--dev", "update"], devHostEnv(fakeDocker, devRoot, join(tempDir, "home")));
+
+    expect(await readFile(helperLog, "utf8")).toContain("args=build --pull");
   });
 
   dockerCommandIt("allows clean development updates and dirty development starts", async () => {

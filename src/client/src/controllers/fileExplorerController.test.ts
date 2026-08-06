@@ -50,6 +50,7 @@ const workspace: Workspace = {
   isMain: true,
   isGitRepo: true,
   isGitWorktree: false,
+  effectiveConfig: {},
 };
 
 describe("FileExplorerController file tree workflows", () => {

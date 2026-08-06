@@ -45,12 +45,6 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Boolean }) sessionsCollapsed = false;
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
-  @property({ type: Boolean }) canDeleteArchivedSessions = false;
-  @property({ type: Boolean }) canReloadSessions = false;
-  @property({ type: Boolean }) canCleanupSessions = false;
-  @property({ type: Boolean }) authoritativeSessionPersistence = false;
-  @property({ type: String }) archivedDeleteUnavailableMessage = "Update and restart Pi-Web on this machine to delete archived sessions.";
-  @property({ type: String }) cleanupUnavailableMessage = "Update and restart Pi-Web on this machine to clean up sessions.";
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
   @property({ attribute: false }) onToggleProjects?: () => void;
@@ -176,12 +170,6 @@ export class AppNavigationPanel extends LitElement {
         .selected=${this.selectedSession}
         .startingCount=${this.startingSessionCount}
         .canStart=${this.canStartSession}
-        .canDeleteArchived=${this.canDeleteArchivedSessions}
-        .canReload=${this.canReloadSessions}
-        .canCleanup=${this.canCleanupSessions}
-        .authoritativeSessionPersistence=${this.authoritativeSessionPersistence}
-        .archivedDeleteUnavailableMessage=${this.archivedDeleteUnavailableMessage}
-        .cleanupUnavailableMessage=${this.cleanupUnavailableMessage}
         .collapsible=${this.collapsible}
         .collapsed=${this.sessionsCollapsed}
         .onToggleCollapsed=${() => { this.onToggleSessions?.(); }}
@@ -235,20 +223,14 @@ export class AppNavigationPanel extends LitElement {
     machine-switcher { flex: 1 1 auto; min-width: 0; }
     :host([compact]) header { display: none; }
     .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
-    machine-list, project-list, workspace-list { flex: 0 0 auto; max-height: 26%; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
-    session-list { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+    /* Expanded sections share the panel height equally, so collapsing one
+       section distributes its space to every remaining section, not just the
+       session list. Collapsed sections keep only their heading height. */
+    machine-list, project-list, workspace-list, session-list { flex: 1 1 0px; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
     machine-list[collapsed],
     project-list[collapsed],
     workspace-list[collapsed],
     session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
-    :host([compact]) machine-list,
-    :host([compact]) project-list,
-    :host([compact]) workspace-list,
-    :host([compact]) session-list { flex: 1 1 auto; max-height: none; min-height: 0; overflow: hidden; }
-    :host([compact]) machine-list[collapsed],
-    :host([compact]) project-list[collapsed],
-    :host([compact]) workspace-list[collapsed],
-    :host([compact]) session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
   `;
 }

@@ -44,7 +44,7 @@ describe("MachineController", () => {
 
   it("selects a newly added machine and clears stale workspace state", async () => {
     const project = { id: "p1", name: "Project", path: "/repo", createdAt: "now" };
-    const workspace = { id: "w1", projectId: project.id, path: "/repo", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false };
+    const workspace = { id: "w1", projectId: project.id, path: "/repo", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false, effectiveConfig: {} };
     const session = { id: "s1", cwd: "/repo", path: "/repo/.pi/sessions/s1.json", created: "now", modified: "now", messageCount: 1, firstMessage: "hello" };
     let state: AppState = {
       ...initialAppState(),
@@ -210,7 +210,7 @@ describe("MachineController", () => {
     const first = controller.refreshMachineRuntime("local");
     const second = controller.refreshMachineRuntime("local");
     await second;
-    resolveOlder?.({ machineId: "local", ok: true, checkedAt: "old", capabilities: ["sessions.unread"] });
+    resolveOlder?.({ machineId: "local", ok: true, checkedAt: "old", capabilities: [] });
     await first;
 
     expect(state.machineRuntimes["local"]).toMatchObject({ checkedAt: "new", capabilities: [] });

@@ -51,20 +51,16 @@ describe("chatQueuedSectionShowsClearAction", () => {
   const serverSection = requireSection(chatQueuedMessageSections([], [{ kind: "steer", text: "server queued" }])[0]);
   const clientSection = requireSection(chatQueuedMessageSections([{ kind: "followUp", text: "waiting" }], [])[0]);
 
-  it("shows the action for the server queue when clearing is supported and wired", () => {
-    expect(chatQueuedSectionShowsClearAction(serverSection, true, true)).toBe(true);
-  });
-
-  it("hides the action when the runtime does not support clearing", () => {
-    expect(chatQueuedSectionShowsClearAction(serverSection, false, true)).toBe(false);
+  it("shows the action for the server queue when a clear handler is wired", () => {
+    expect(chatQueuedSectionShowsClearAction(serverSection, true)).toBe(true);
   });
 
   it("hides the action when no clear handler is wired", () => {
-    expect(chatQueuedSectionShowsClearAction(serverSection, true, false)).toBe(false);
+    expect(chatQueuedSectionShowsClearAction(serverSection, false)).toBe(false);
   });
 
   it("never shows the server action for the separate client pending-start queue", () => {
-    expect(chatQueuedSectionShowsClearAction(clientSection, true, true)).toBe(false);
+    expect(chatQueuedSectionShowsClearAction(clientSection, true)).toBe(false);
   });
 });
 
@@ -78,7 +74,6 @@ describe("ChatView queued-message clear wiring", () => {
     const view = new ChatView();
     const onClearServerQueue = vi.fn();
     view.status = queuedStatus([{ kind: "steer", text: "server queued" }]);
-    view.canClearServerQueue = true;
     view.onClearServerQueue = onClearServerQueue;
 
     templateEventHandlerNearMarker(renderQueuedMessages(view), "Clear queue")(new Event("click"));
@@ -258,6 +253,17 @@ describe("chatMessageMetadataLabel", () => {
       parts: [],
       meta: { timestamp, model: { provider: "provider", id: "model" } },
     })).toBe(`${formattedTimestamp} · provider/model`);
+  });
+
+  it("appends the thinking level after the model when present", () => {
+    const timestamp = "2026-07-10T19:15:30.000Z";
+    const formattedTimestamp = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" }).format(new Date(timestamp));
+
+    expect(chatMessageMetadataLabel({
+      role: "assistant",
+      parts: [],
+      meta: { timestamp, model: { provider: "provider", id: "model" }, thinkingLevel: "high" },
+    })).toBe(`${formattedTimestamp} · provider/model · high`);
   });
 });
 

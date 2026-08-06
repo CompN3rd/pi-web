@@ -3,21 +3,21 @@ import { PI_WEB_CAPABILITIES } from "./capabilities";
 import { parsePiWebComponentStatus, parsePiWebInstallationInfo, parsePiWebRuntimeResponse, parsePiWebVersionResponse } from "./piWebStatusParsing";
 
 describe("PI WEB status parsing", () => {
-  it("parses known top-level and component capabilities while ignoring unknown strings", () => {
+  it("keeps known capabilities while dropping retired and unknown strings", () => {
     expect(parsePiWebRuntimeResponse({
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",
       components: {
-        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.selectedMachineSettings, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"] },
-        sessiond: { component: "sessiond", label: "Session daemon", runtimeVersion: "1.0.0", available: true, capabilities: ["future.sessiondCapability"] },
+        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.automations, "piPackages.manage", "future.capability"] },
+        sessiond: { component: "sessiond", label: "Session daemon", runtimeVersion: "1.0.0", available: true, capabilities: [PI_WEB_CAPABILITIES.automations, "future.sessiondCapability"] },
       },
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.selectedMachineSettings, PI_WEB_CAPABILITIES.agentProfileConfig, "future.capability"],
+      capabilities: [PI_WEB_CAPABILITIES.automations, "piPackages.manage", "future.capability"],
     })).toMatchObject({
       components: {
-        web: { capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.selectedMachineSettings, PI_WEB_CAPABILITIES.agentProfileConfig] },
-        sessiond: { capabilities: [] },
+        web: { capabilities: [PI_WEB_CAPABILITIES.automations] },
+        sessiond: { capabilities: [PI_WEB_CAPABILITIES.automations] },
       },
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, PI_WEB_CAPABILITIES.selectedMachineSettings, PI_WEB_CAPABILITIES.agentProfileConfig],
+      capabilities: [PI_WEB_CAPABILITIES.automations],
     });
   });
 
@@ -26,10 +26,10 @@ describe("PI WEB status parsing", () => {
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",
       components: {
-        web: { component: "web", label: "Web/UI", available: true, capabilities: [PI_WEB_CAPABILITIES.piPackagesManage, 1] },
+        web: { component: "web", label: "Web/UI", available: true, capabilities: ["piPackages.manage", 1] },
         sessiond: { component: "sessiond", label: "Session daemon", available: true, capabilities: [] },
       },
-      capabilities: [PI_WEB_CAPABILITIES.piPackagesManage],
+      capabilities: ["piPackages.manage"],
     })).toBeUndefined();
   });
 

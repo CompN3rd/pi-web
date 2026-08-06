@@ -9,7 +9,7 @@ import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-codin
 import type { ActiveAgentProfileDescriptor, PiWebCapability, PiWebComponentStatus, PiWebInstallationInfo, PiWebReleaseStatus, PiWebRuntimeComponent, PiWebRuntimeResponse, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebVersionResponse } from "../shared/apiTypes.js";
 import { effectivePiWebCapabilities, WEB_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
 import { piWebDockerCommand } from "../docker/piWebDockerCommandPlan.js";
-import { parsePiWebComponentStatus, parsePiWebRuntimeComponent } from "../shared/piWebStatusParsing.js";
+import { parsePiWebRuntimeComponent } from "../shared/piWebStatusParsing.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import { isHostAbsoluteAgentDir, isPiCompanionCommand, isSafeAgentCommandForHost, PI_CODING_AGENT_DIR_ENV } from "../config.js";
 import { createPiWebReleaseLookupCache, type PiWebReleaseLookup } from "./piWebReleaseLookupCache.js";
@@ -307,14 +307,12 @@ async function getSessiondRuntimeComponent(daemon: PiWebStatusDaemon): Promise<P
   try {
     const upstream = await daemon.request("GET", "/runtime");
     if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
-      return await legacySessiondRuntimeComponent(daemon) ?? unavailableSessiondRuntime(`runtime check returned HTTP ${String(upstream.statusCode)}`);
+      return unavailableSessiondRuntime(`runtime check returned HTTP ${String(upstream.statusCode)}`);
     }
     const parsed: unknown = upstream.body === "" ? undefined : JSON.parse(upstream.body);
     const runtime = parsePiWebRuntimeComponent(parsed);
     if (runtime !== undefined) return runtime;
-    const legacyVersion = isRecord(parsed) ? parsePiWebComponentStatus(parsed["version"]) : undefined;
-    if (legacyVersion !== undefined) return runtimeComponentFromStatus(legacyVersion);
-    return await legacySessiondRuntimeComponent(daemon) ?? unavailableSessiondRuntime("runtime response did not include valid runtime information");
+    return unavailableSessiondRuntime("runtime response did not include valid runtime information");
   } catch (error) {
     return unavailableSessiondRuntime(error instanceof Error ? error.message : String(error));
   }
@@ -324,45 +322,22 @@ async function getSessiondComponentStatus(daemon: PiWebStatusDaemon, options: Pi
   try {
     const upstream = await daemon.request("GET", "/runtime");
     if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
-      return await legacySessiondComponentStatus(daemon) ?? unavailableSessiond(`runtime check returned HTTP ${String(upstream.statusCode)}`);
+      return unavailableSessiond(`runtime check returned HTTP ${String(upstream.statusCode)}`);
     }
     const parsed: unknown = upstream.body === "" ? undefined : JSON.parse(upstream.body);
-    const legacyVersion = isRecord(parsed) ? parsePiWebComponentStatus(parsed["version"]) : undefined;
-    if (legacyVersion !== undefined) return legacyVersion;
     const runtime = parsePiWebRuntimeComponent(parsed);
-    if (runtime?.available !== true) return await legacySessiondComponentStatus(daemon) ?? unavailableSessiond(runtime?.error ?? "runtime response did not include valid runtime information");
+    if (runtime?.available !== true) return unavailableSessiond(runtime?.error ?? "runtime response did not include valid runtime information");
     const status = await getPiWebComponentStatus("sessiond", options);
-    return { ...status, ...(runtime.runtimeVersion === undefined ? {} : { runtimeVersion: runtime.runtimeVersion }), available: true };
+    const runtimeVersion = runtime.runtimeVersion ?? status.runtimeVersion;
+    return {
+      ...status,
+      ...(runtimeVersion === undefined ? {} : { runtimeVersion }),
+      stale: isInstalledVersionNewer(status.installedVersion, runtimeVersion),
+      available: true,
+    };
   } catch (error) {
     return unavailableSessiond(error instanceof Error ? error.message : String(error));
   }
-}
-
-async function legacySessiondRuntimeComponent(daemon: PiWebStatusDaemon): Promise<PiWebRuntimeComponent | undefined> {
-  const status = await legacySessiondComponentStatus(daemon);
-  return status === undefined ? undefined : runtimeComponentFromStatus(status);
-}
-
-async function legacySessiondComponentStatus(daemon: PiWebStatusDaemon): Promise<PiWebComponentStatus | undefined> {
-  try {
-    const upstream = await daemon.request("GET", "/health");
-    if (upstream.statusCode < 200 || upstream.statusCode >= 300) return undefined;
-    const parsed: unknown = upstream.body === "" ? undefined : JSON.parse(upstream.body);
-    return isRecord(parsed) ? parsePiWebComponentStatus(parsed["version"]) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function runtimeComponentFromStatus(status: PiWebComponentStatus): PiWebRuntimeComponent {
-  return {
-    component: status.component,
-    label: status.label,
-    ...(status.runtimeVersion === undefined ? {} : { runtimeVersion: status.runtimeVersion }),
-    available: status.available,
-    capabilities: [],
-    ...(status.error === undefined ? {} : { error: status.error }),
-  };
 }
 
 function unavailableSessiondRuntime(error: string): PiWebRuntimeComponent {

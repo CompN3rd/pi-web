@@ -62,35 +62,6 @@ export class AuthController {
     const provider = dialog.providers.find((candidate) => candidate.id === providerId && (authType === undefined || candidate.authType === authType));
     if (provider === undefined) return;
     if (provider.authType === "oauth" || provider.loginFlow === "interactive") await this.startLoginFlow(provider);
-    else this.setState({ authDialog: { step: "apiKey", provider, value: "" } });
-  }
-
-  updateApiKey(value: string): void {
-    const dialog = this.getState().authDialog;
-    if (dialog?.step !== "apiKey") return;
-    const clean = { ...dialog };
-    delete clean.error;
-    this.setState({ authDialog: { ...clean, value } });
-  }
-
-  async saveApiKey(): Promise<void> {
-    const dialog = this.getState().authDialog;
-    if (dialog?.step !== "apiKey") return;
-    const key = dialog.value.trim();
-    if (key === "") {
-      this.setState({ authDialog: { ...dialog, error: "API key is required" } });
-      return;
-    }
-    const clean = { ...dialog };
-    delete clean.error;
-    this.setState({ authDialog: { ...clean, saving: true } });
-    try {
-      await this.api.saveApiKey(dialog.provider.id, key, selectedMachineId(this.getState()));
-      this.closeDialog();
-      void this.refreshStatus();
-    } catch (error) {
-      this.setState({ authDialog: { ...dialog, saving: false, error: String(error) } });
-    }
   }
 
   async openLogout(providerId?: string): Promise<void> {
@@ -190,7 +161,6 @@ export class AuthController {
       const provider = exact[0];
       if (provider === undefined) return;
       if (provider.authType === "oauth" || provider.loginFlow === "interactive") await this.startLoginFlow(provider);
-      else this.setState({ authDialog: { step: "apiKey", provider, value: "" } });
     } catch (error) {
       this.setState({ error: String(error) });
     }

@@ -1,5 +1,29 @@
 # @jmfederico/pi-web
 
+## 1.202608.0
+
+> [!WARNING]
+> **Breaking change:** Compatibility with older PI WEB runtimes has been removed. Upgrade every remote machine first, then the gateway, so every machine and the gateway run `1.202608.0` together. This release also requires Pi Coding Agent 0.83.0 or newer.
+
+### Patch Changes
+
+- f716f65: Keep the session daemon's own runtime environment out of agent processes: agent shells, terminals, and spawned sessions no longer inherit keys such as `NODE_ENV=production` or `PI_WEB_DATA_DIR`, so commands like `npm install` behave normally inside sessions and a second PI WEB instance started from a session no longer picks up the live daemon's data directory or socket.
+- c09b67d: Show the thinking level in assistant chat bubble metadata next to the model and timestamp, for both history and live messages. Bubbles from turns with thinking off stay unchanged.
+- 8163d08: Drop all backwards-compatibility gates for older PI WEB runtimes. This release is incompatible with older components: upgrade every remote machine first, then the gateway, so all machines and the gateway run the new version together.
+
+  Also fixes the session daemon staleness check: a session daemon running an older version than the installed package is now correctly reported as stale, so the restart reminder fires as intended.
+
+- b9d3634: Speed up session listings and opening persisted sessions in projects with large session histories. The session daemon no longer parses every session transcript on each request: listings use a lightweight summary scan with an incremental cache that only re-reads newly appended transcript data, and opening a session no longer triggers redundant full-workspace scans.
+- 233fd90: Navigation panel sections now share the panel height equally: collapsing a section (such as Projects) distributes its space to all remaining expanded sections instead of only the session list growing.
+- ff7a06e: Show nested relay documents in the Relays workspace panel. Folders in a relay packet now appear as chips in the document strip and expand inline (expanding one collapses its siblings); collapsing the folder that holds the open document keeps the selection and highlights the folder. Very deep or large relay trees are listed partially, with a notice.
+- Update HTTP server dependencies to patched releases that prevent static-route authorization and path-traversal guard bypasses, request-validation host confusion, and denial-of-service vectors.
+- 4bf2be9: Respect the Pi agent profile's `httpIdleTimeoutMs` in the session daemon so long model responses (e.g. slow local vLLM backends) no longer fail with "Model response failed: terminated" at the built-in 5-minute HTTP idle timeout; `0` disables the timeout. Restart pi-web-sessiond after changing the setting.
+- c2b7cce: Sessions started via `spawn_session` and `spawn_subsession` now inherit the spawning session's thinking level instead of falling back to the pi default, clamped to the child model's capabilities.
+- 5f4d813: Let agents pick a model when delegating work: `spawn_session` and `spawn_subsession` accept an optional `model` parameter as an exact `provider/model-id` (an unknown value is rejected; omitting it keeps the inherited model). In the chat composer, typing `#` opens a model completion menu that inserts a `#provider/model-id` reference into the draft, which agents forward as that parameter.
+- 7103bfc: Streamline the session list bulk-selection toolbar: the Select visible / Clear visible / Clear buttons are now a single toggle that offers "Select visible" when nothing is selected and "Clear selected" otherwise, and the redundant Done button is gone — selection mode closes from the same ☑ heading button that opened it. "Archive selected" and "Delete selected" are shortened to "Archive" and "Delete". The slimmer toolbar no longer wraps to two lines on narrow sidebars.
+- 9ef2649: Upgrade the bundled Pi coding agent to 0.83.0, bringing credential export commands, headless OpenRouter sign-in, Claude Opus 5 on GitHub Copilot, and upstream session and provider fixes. The supported Pi version range is now open-ended (`>=0.83.0`, no upper bound), so you can run newer Pi releases as they come out without waiting for a PI WEB update.
+- f927f5d: Run a repo-provided `.pi-web/hooks/worktree-pre-remove` hook before deleting a workspace worktree. When the hook exists and is executable, it runs with the target worktree path before `git worktree remove`; a non-zero exit blocks the removal. See the config reference for the hook contract.
+
 ## 1.202607.3
 
 ### Patch Changes

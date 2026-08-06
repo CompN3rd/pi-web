@@ -154,16 +154,12 @@
               <p>
                 When machine federation is enabled, <strong>Settings → Pi packages</strong> targets the currently selected
                 machine. The panel labels whether changes will run on the local/gateway machine or on a selected remote
-                PI WEB machine. If an older or unavailable remote PI WEB server does not expose package-management routes,
-                PI WEB reports the package management operation as unsupported or unavailable instead of silently falling
-                back to the gateway.
+                PI WEB machine.
               </p>
               <p>
                 Use <strong>Settings → PI WEB plugins</strong> to enable or disable discovered PI WEB browser plugins
                 before the browser imports them. In a federated setup, this plugin enablement surface targets the
-                currently selected machine and labels where changes are saved. If an older or unavailable remote PI WEB
-                server does not advertise selected-machine settings support, PI WEB reports the plugin settings as
-                unsupported or unavailable instead of silently falling back to the gateway.
+                currently selected machine and labels where changes are saved.
               </p>
               <p>
                 After installing, removing, or updating a Pi package, type <code>/reload</code> in each idle PI WEB
@@ -428,8 +424,8 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
               </ul>
               <p>
                 Remote plugin enablement is controlled by the remote machine's PI WEB plugin config. To edit or disable
-                one, select that machine and use <strong>Settings → PI WEB plugins</strong> when the remote server exposes
-                selected-machine settings, or open that machine directly/update its config file.
+                one, select that machine and use <strong>Settings → PI WEB plugins</strong>, or open that machine
+                directly/update its config file.
               </p>
               <p>
                 Plugin package metadata can set <code>machineSpecific: true</code>. Use it for plugins like Updates whose
@@ -535,6 +531,10 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
           <a href="config">Config</a>
           <a href="faq">FAQ</a>
           <a href="https://github.com/jmfederico/pi-web">GitHub</a>
+          <span class="version-switcher" role="group" aria-label="Documentation version">
+            <a class="version-switcher-option" data-version-option="stable" href="https://pi-web.dev/plugins" aria-current="true">Stable</a>
+            <a class="version-switcher-option" data-version-option="dev" href="https://pi-web.dev/dev/plugins">Dev</a>
+          </span>
         </div>
       </div>
     </footer>

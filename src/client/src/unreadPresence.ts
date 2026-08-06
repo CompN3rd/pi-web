@@ -12,9 +12,9 @@ import type { SessionUnreadProjectionView } from "./sessionUnread";
  * - A project has presence only when one of its known workspaces has presence;
  *   a cwd matching no known workspace lights the machine dot only, never a
  *   project or workspace row (even when it sits under the project path).
- * - An undefined projection (unsupported/unknown capability or not yet
- *   loaded) yields no presence. Stale-but-present data still counts, the same
- *   tolerance `SessionUnreadController.unreadSessionIds` applies.
+ * - An undefined projection (machine removed or not yet loaded) yields no
+ *   presence. Stale-but-present data still counts, the same tolerance
+ *   `SessionUnreadController.unreadSessionIds` applies.
  *
  * Workspace/project presence can only be derived for the machine whose
  * projects and workspaces are loaded — the selected one.

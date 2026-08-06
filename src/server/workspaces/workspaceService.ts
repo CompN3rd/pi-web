@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Project } from "../types.js";
-import type { Workspace } from "../types.js";
+import type { Project, WorkspaceListing } from "../types.js";
 import { discoverGitWorktrees, isGitRepository, type GitWorktreeInfo } from "./gitWorktreeDiscovery.js";
 
 const idFor = (value: string) => createHash("sha1").update(value).digest("hex").slice(0, 12);
@@ -16,7 +15,7 @@ const realGit: WorkspaceGitPort = { isGitRepository, discoverGitWorktrees };
 export class WorkspaceService {
   constructor(private readonly git: WorkspaceGitPort = realGit) {}
 
-  async list(project: Project): Promise<Workspace[]> {
+  async list(project: Project): Promise<WorkspaceListing[]> {
     const isGitRepo = await this.git.isGitRepository(project.path);
     if (!isGitRepo) {
       return [this.single(project, false)];
@@ -50,7 +49,7 @@ export class WorkspaceService {
     return worktrees.filter((worktree) => worktree.prunable !== true || worktree.path === project.path);
   }
 
-  private single(project: Project, isGitRepo: boolean): Workspace {
+  private single(project: Project, isGitRepo: boolean): WorkspaceListing {
     return {
       id: idFor(`${project.id}:${project.path}`),
       projectId: project.id,
