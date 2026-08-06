@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Fix session lookup so an id that exactly matches a session always opens that session. Previously a shortened session reference could open a different, more recently used session whose id started with the same characters.
+Resolve a shortened session reference the same way everywhere: an id that exactly matches a session always opens that session, and an ambiguous prefix now picks the same session the session list shows for it. Previously opening a session ranked ambiguous prefix matches by creation time while the list ranked them by last-modified time, so the two could disagree.

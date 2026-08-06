@@ -849,10 +849,10 @@ worktree_path="$1"
               </p>
               <p>
                 A tracked subsession always runs in the spawning session's working directory, so it stays in that
-                workspace's session tree next to its parent. <code>spawn_subsession</code> takes no <code>cwd</code>, and
-                a request to start a tracked child in another workspace is refused with an error. To get work done
-                elsewhere, instruct the child to work there from this workspace, or use <code>spawn_session</code>, which
-                still targets any workspace of the project, for an independent session there.
+                workspace's session tree next to its parent. <code>spawn_subsession</code> takes no <code>cwd</code>. To
+                get work done elsewhere, instruct the child to work there from this workspace, or use
+                <code>spawn_session</code>, which still targets any workspace of the project, for an independent session
+                there.
               </p>
               <p>
                 At a join point, after finishing its independent work, the parent calls

@@ -68,10 +68,10 @@ export function createPiSessionManagerGateway(options: PiSessionManagerGatewayOp
 class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
   /**
    * One memoized scanner per gateway: its per-file summary memo lives as long
-   * as the daemon, so repeated listings only stat unchanged files and parse
-   * the appended tails of grown ones. Invalidation is automatic (file
-   * identity + size; see SessionSummaryScanner), with `invalidateSessionFile`
-   * for in-place rewrites and a `clear()` escape hatch.
+   * as the daemon, so repeated listings answer unchanged files from one stat
+   * and re-scan changed ones whole. Invalidation is automatic (file identity +
+   * size; see SessionSummaryScanner), with `invalidateSessionFile` for the
+   * in-place rewrites those checks cannot see.
    */
   private readonly summaryScanner = new SessionSummaryScanner();
 
