@@ -4,7 +4,7 @@ import { join, resolve, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PiSessionService, type PiAgentSession, type PiSessionRuntime } from "./piSessionService.js";
 import { SessionNotificationStore } from "./sessionNotificationStore.js";
-import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
+import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModelRuntime, type RuntimeCreator, type SessionGateway } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 
@@ -180,6 +180,64 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     expect(loserSubscribe).not.toHaveBeenCalled();
     expect(loserUnsubscribe).not.toHaveBeenCalled();
     expect(loser.calls.dispose).toBe(0);
+  });
+
+  it("opens an inactive session by direct id resolution without listing its workspace", async () => {
+    const sessionId = "direct-resolve-session";
+    const fake = fakeRuntime(sessionId, {
+      sessionManager: fakeSessionManager("/workspace", {
+        getSessionId: () => sessionId,
+        getBranch: () => [{ type: "message", message: { role: "user", content: "resolved directly" } }],
+      }),
+    });
+    const list = vi.fn(() => Promise.reject(new Error("opening one session must not list its workspace")));
+    const gateway: SessionGateway = {
+      create: () => fakeSessionManager(),
+      list,
+      listAll: () => Promise.resolve([]),
+      listParentSessionPaths: () => Promise.resolve([]),
+      invalidateSessionFile: () => undefined,
+      resolveSessionFile: (refCwd, refId) => Promise.resolve(
+        refId === sessionId ? { id: sessionId, cwd: refCwd, path: `/sessions/${sessionId}.jsonl` } : undefined,
+      ),
+      open: () => fakeSessionManager(),
+    };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      archiveStore: emptyArchiveStore(),
+      sessionManager: gateway,
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const page = await service.messages(sessionRef(sessionId));
+
+    expect(page.messages).toEqual([{ role: "user", content: "resolved directly" }]);
+    expect(list).not.toHaveBeenCalled();
+    await service.dispose();
+  });
+
+  it("still reports a missing session when direct resolution finds nothing", async () => {
+    const gateway: SessionGateway = {
+      create: () => fakeSessionManager(),
+      list: () => Promise.resolve([]),
+      listAll: () => Promise.resolve([]),
+      listParentSessionPaths: () => Promise.resolve([]),
+      invalidateSessionFile: () => undefined,
+      resolveSessionFile: () => Promise.resolve(undefined),
+      open: () => fakeSessionManager(),
+    };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      archiveStore: emptyArchiveStore(),
+      sessionManager: gateway,
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await expect(service.messages(sessionRef("missing-session"))).rejects.toThrow("Session not found");
+    await service.dispose();
   });
 
   it("clears a failed pending open so the session can be retried", async () => {
@@ -693,6 +751,9 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
           { ...sessionRecord("archived"), messageCount: 2, firstMessage: "bye", allMessagesText: "bye" },
         ]),
         listAll: () => Promise.resolve([]),
+        listParentSessionPaths: () => Promise.resolve([]),
+        invalidateSessionFile: () => undefined,
+        resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -722,6 +783,9 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([{ ...sessionRecord("active"), messageCount: 1, firstMessage: "hello", allMessagesText: "hello" }]),
         listAll: () => Promise.resolve([]),
+        listParentSessionPaths: () => Promise.resolve([]),
+        invalidateSessionFile: () => undefined,
+        resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -998,6 +1062,9 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([]),
         listAll: () => Promise.resolve([]),
+        listParentSessionPaths: () => Promise.resolve([]),
+        invalidateSessionFile: () => undefined,
+        resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
       },
       workspaceActivity: {
