@@ -14,7 +14,7 @@ describe("PiSessionService", () => {
       const parent = fakeRuntime("parent-1", { sessionFile: "/tmp/parent-1.jsonl" });
       const children = childIds.map((childId) => fakeRuntime(childId, {
         sessionFile: `/tmp/${childId}.jsonl`,
-        sessionManager: fakeSessionManager("/workspace-feature"),
+        sessionManager: fakeSessionManager("/workspace"),
       }));
       const child = children[0];
       if (child === undefined) throw new Error("At least one child fixture is required");
@@ -51,22 +51,84 @@ describe("PiSessionService", () => {
     }
 
     it("records the parent, delivers the prompt, and lists the tracked child", async () => {
-      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
+      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace"); // bring the parent online so it can be notified
 
-      const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace-feature" });
+      const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice" });
 
-      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace-feature" });
+      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace" });
       expect(child.calls.prompt).toEqual([{ text: "do the slice", options: undefined }]);
       await expect(service.listSubsessions("parent-1")).resolves.toEqual([
-        { sessionId: "child-1", cwd: "/workspace-feature", status: "idle" },
+        { sessionId: "child-1", cwd: "/workspace", status: "idle" },
       ]);
+      await service.dispose();
+    });
+
+    it("resolves the tracked child against the parent's own cwd, ignoring any requested target", async () => {
+      const requestedTargets: (string | undefined)[] = [];
+      const parent = fakeRuntime("parent-1", { sessionFile: "/tmp/parent-1.jsonl" });
+      const child = fakeRuntime("child-1", { sessionFile: "/tmp/child-1.jsonl", sessionManager: fakeSessionManager("/workspace") });
+      const runtimes = [parent.runtime, child.runtime];
+      let index = 0;
+      const service = new PiSessionService(new CapturingSessionEventHub(), {
+        agentDir: TEST_AGENT_DIR,
+        modelRuntime: testModelRuntime,
+        createAgentRuntime: () => {
+          const runtime = runtimes[index] ?? child.runtime;
+          index += 1;
+          return Promise.resolve(runtime);
+        },
+        sessionManager: sessionGateway([]),
+        archiveStore: emptyArchiveStore(),
+        spawnTargets: {
+          resolveSpawnTarget: (_spawningCwd, requestedCwd) => {
+            requestedTargets.push(requestedCwd);
+            return Promise.resolve({ allowed: true, cwd: "/workspace" });
+          },
+        },
+        heartbeatIntervalMs: 60_000,
+      });
+
+      await service.start("/workspace");
+      const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice" });
+
+      expect(requestedTargets).toEqual([undefined]);
+      expect(result.cwd).toBe("/workspace");
+      await service.dispose();
+    });
+
+    it("refuses a target workspace other than the parent's own and names both alternatives", async () => {
+      const { service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+
+      await expect(service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace-feature" }))
+        .rejects.toThrow("A tracked subsession runs in this session's working directory (/workspace); /workspace-feature was requested. Instruct the child to work elsewhere from this workspace, or use spawn_session for an independent session in another workspace.");
+      await expect(service.listSubsessions("parent-1")).resolves.toEqual([]);
+      await service.dispose();
+    });
+
+    it("accepts a target that names the parent's own cwd in a non-canonical form", async () => {
+      const { service } = subsessionService({ allowed: true, cwd: "/workspace" });
+      await service.start("/workspace");
+
+      const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace/" });
+
+      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace" });
+      await service.dispose();
+    });
+
+    it("refuses to spawn a tracked child from an unregistered workspace", async () => {
+      const { service } = subsessionService({ allowed: false, reason: "not-registered" });
+      await service.start("/workspace");
+
+      await expect(service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice" }))
+        .rejects.toThrow("Spawning session is not in a registered project");
       await service.dispose();
     });
 
     it("uses the parent model and thinking level and disables delegation before creating the tracked child runtime", async () => {
       const parent = fakeRuntime("parent-1", { sessionFile: "/tmp/parent-1.jsonl" });
-      const child = fakeRuntime("child-1", { sessionFile: "/tmp/child-1.jsonl", sessionManager: fakeSessionManager("/workspace-feature") });
+      const child = fakeRuntime("child-1", { sessionFile: "/tmp/child-1.jsonl", sessionManager: fakeSessionManager("/workspace") });
       const model = testModel();
       const initialModels: PiAgentSession["model"][] = [];
       const initialThinkingLevels: unknown[] = [];
@@ -88,12 +150,12 @@ describe("PiSessionService", () => {
         createAgentRuntime,
         sessionManager: sessionGateway([]),
         archiveStore: emptyArchiveStore(),
-        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace-feature" }) },
+        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace" }) },
         heartbeatIntervalMs: 60_000,
       });
 
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace-feature", model, thinkingLevel: "max" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", model, thinkingLevel: "max" });
 
       expect(initialModels).toEqual([undefined, model]);
       expect(initialThinkingLevels).toEqual([undefined, "max"]);
@@ -104,7 +166,7 @@ describe("PiSessionService", () => {
     it("resolves a model spec against the parent's models and names it in the result", async () => {
       const scoped = testModel();
       const parent = fakeRuntime("parent-1", { sessionFile: "/tmp/parent-1.jsonl", scopedModels: [{ model: scoped }] });
-      const child = fakeRuntime("child-1", { sessionFile: "/tmp/child-1.jsonl", sessionManager: fakeSessionManager("/workspace-feature"), model: scoped });
+      const child = fakeRuntime("child-1", { sessionFile: "/tmp/child-1.jsonl", sessionManager: fakeSessionManager("/workspace"), model: scoped });
       const initialModels: PiAgentSession["model"][] = [];
       const runtimes = [parent.runtime, child.runtime];
       let index = 0;
@@ -121,15 +183,15 @@ describe("PiSessionService", () => {
         createAgentRuntime,
         sessionManager: sessionGateway([]),
         archiveStore: emptyArchiveStore(),
-        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace-feature" }) },
+        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace" }) },
         heartbeatIntervalMs: 60_000,
       });
 
       await service.start("/workspace");
-      const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace-feature", modelSpec: "anthropic/claude-sonnet-4-5-20250929" });
+      const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", modelSpec: "anthropic/claude-sonnet-4-5-20250929" });
 
       expect(initialModels[1]).toBe(scoped);
-      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace-feature", model: "anthropic/claude-sonnet-4-5-20250929" });
+      expect(result).toEqual({ sessionId: "child-1", cwd: "/workspace", model: "anthropic/claude-sonnet-4-5-20250929" });
       await service.dispose();
     });
 
@@ -147,7 +209,7 @@ describe("PiSessionService", () => {
       });
       const child = fakeRuntime("child-1", {
         sessionFile: "/tmp/child-1.jsonl",
-        sessionManager: fakeSessionManager("/workspace-feature", {
+        sessionManager: fakeSessionManager("/workspace", {
           appendCustomEntry: (customType, data) => {
             childPersisted.push({ customType, data });
             return "child-entry-1";
@@ -166,17 +228,17 @@ describe("PiSessionService", () => {
         },
         sessionManager: sessionGateway([]),
         archiveStore: emptyArchiveStore(),
-        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace-feature" }) },
+        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace" }) },
         heartbeatIntervalMs: 60_000,
       });
 
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace-feature" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice" });
 
       expect(parentPersisted).toEqual([
         {
           customType: "pi-web.subsession.link",
-          data: { version: 1, spawnedBySessionId: "parent-1", spawnedSessionId: "child-1", spawnedSessionFile: "/tmp/child-1.jsonl", cwd: "/workspace-feature" },
+          data: { version: 1, spawnedBySessionId: "parent-1", spawnedSessionId: "child-1", spawnedSessionFile: "/tmp/child-1.jsonl", cwd: "/workspace" },
         },
       ]);
       expect(childPersisted).toEqual([
@@ -855,12 +917,12 @@ describe("PiSessionService", () => {
     });
 
     it("notifies the parent once when the tracked child stops working", async () => {
-      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       child.session.sessionManager.getBranch = () => [
         { type: "message", message: { role: "assistant", content: "all done" } },
       ];
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", cwd: "/workspace-feature" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
       parent.calls.prompt.length = 0; // ignore the spawn prompt to the child; focus on the parent notification
 
       child.session.isStreaming = true;
@@ -882,13 +944,13 @@ describe("PiSessionService", () => {
     });
 
     it("omits oversized output from the completion notice while keeping it available for inspection", async () => {
-      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       const longOutput = `BEGIN_LONG_OUTPUT\n${"x".repeat(2100)}\nEND_LONG_OUTPUT`;
       child.session.sessionManager.getBranch = () => [
         { type: "message", message: { role: "assistant", content: longOutput } },
       ];
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", cwd: "/workspace-feature" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
 
       child.session.isStreaming = true;
       child.emit({ type: "agent_start" });
@@ -909,15 +971,15 @@ describe("PiSessionService", () => {
 
     it("reports other working children in each completion notice", async () => {
       const { parent, children, service } = subsessionService(
-        { allowed: true, cwd: "/workspace-feature" },
+        { allowed: true, cwd: "/workspace" },
         60_000,
         ["child-1", "child-2"],
       );
       const [first, second] = children;
       if (first === undefined || second === undefined) throw new Error("Expected two child fixtures");
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "first", cwd: "/workspace-feature" });
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "second", cwd: "/workspace-feature" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "first" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "second" });
 
       first.session.isStreaming = true;
       first.emit({ type: "agent_start" });
@@ -949,9 +1011,9 @@ describe("PiSessionService", () => {
     });
 
     it("notifies via the heartbeat when the child settles without a further event", async () => {
-      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace-feature" }, 10);
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" }, 10);
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", cwd: "/workspace-feature" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
       parent.calls.prompt.length = 0;
 
       // The child works, then settles silently: agent_end arrives while it still
@@ -974,16 +1036,16 @@ describe("PiSessionService", () => {
     });
 
     it("does not notify the parent when a tracked child is archived", async () => {
-      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", cwd: "/workspace-feature" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
       // Arm the notification, as a real working child would.
       child.session.isStreaming = true;
       child.emit({ type: "agent_start" });
       child.session.isStreaming = false;
       parent.calls.sendCustomMessage.length = 0;
 
-      await service.archive(sessionRef("child-1", "/workspace-feature"));
+      await service.archive(sessionRef("child-1", "/workspace"));
       // Let any pending notification settle, then confirm the archived child
       // never notified the parent.
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -993,22 +1055,22 @@ describe("PiSessionService", () => {
     });
 
     it("reports a missing tracked child file as unknown in the subsession list", async () => {
-      const { service } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
+      const { service } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", cwd: "/workspace-feature" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
 
-      await service.archive(sessionRef("child-1", "/workspace-feature"));
+      await service.archive(sessionRef("child-1", "/workspace"));
 
       await expect(service.listSubsessions("parent-1")).resolves.toEqual([
-        { sessionId: "child-1", cwd: "/workspace-feature", status: "unknown" },
+        { sessionId: "child-1", cwd: "/workspace", status: "unknown" },
       ]);
       await service.dispose();
     });
 
     it("check_subsession and read_subsession refuse sessions that are not the caller's children", async () => {
-      const { service } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
+      const { service } = subsessionService({ allowed: true, cwd: "/workspace" });
       await service.start("/workspace");
-      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go", cwd: "/workspace-feature" });
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
 
       await expect(service.checkSubsession("someone-else", "child-1")).rejects.toThrow("not one of your subsessions");
       await expect(service.readSubsession("someone-else", "child-1", {})).rejects.toThrow("not one of your subsessions");
@@ -1024,7 +1086,7 @@ describe("PiSessionService", () => {
         sessionManager: sessionGateway([]),
         heartbeatIntervalMs: 60_000,
       });
-      await expect(service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "p", parentSessionFile: undefined, prompt: "go", cwd: undefined }))
+      await expect(service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "p", parentSessionFile: undefined, prompt: "go" }))
         .rejects.toThrow("Spawning sessions is disabled");
       await service.dispose();
     });

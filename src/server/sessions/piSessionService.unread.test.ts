@@ -396,7 +396,6 @@ describe("PiSessionService daemon-owned unread state", () => {
         parentSessionId: "parent-1",
         parentSessionFile: parentFile,
         prompt: "do the slice",
-        cwd: "/workspace-feature",
       });
       completeRuntimeWork(child);
 

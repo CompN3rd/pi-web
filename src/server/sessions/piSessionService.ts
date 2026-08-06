@@ -120,6 +120,15 @@ function spawnTargetError(decision: Extract<SpawnTargetDecision, { allowed: fals
   return new Error(`cwd must be a workspace of this project. Allowed: ${decision.allowedCwds.join(", ")}`);
 }
 
+/**
+ * Tracked subsessions are worktree-scoped, so a requested target other than the
+ * parent's own cwd fails closed instead of being silently retargeted. The
+ * message names the rule and both supported ways to get work done elsewhere.
+ */
+function subsessionCwdError(spawningCwd: string, requestedCwd: string): Error {
+  return new Error(`A tracked subsession runs in this session's working directory (${spawningCwd}); ${requestedCwd} was requested. Instruct the child to work elsewhere from this workspace, or use spawn_session for an independent session in another workspace.`);
+}
+
 function modelSpecOf(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
 }
@@ -1223,14 +1232,21 @@ export class PiSessionService implements SessionRouteService {
   }
 
   /**
-   * Start a *tracked* child session on behalf of a LLM. Identical to
-   * {@link spawnSession} in how the target cwd is resolved, but the child
-   * records its parent (so it shows in the session tree) and is registered so
-   * the parent is notified when it stops working and can inspect it later.
+   * Start a *tracked* child session on behalf of a LLM. Unlike
+   * {@link spawnSession}, a tracked child always runs in the parent's own
+   * workspace: parent/child trees are worktree-scoped, so a child elsewhere
+   * would be invisible to the parent's listing. The child records its parent
+   * (so it shows in the session tree) and is registered so the parent is
+   * notified when it stops working and can inspect it later.
    */
   async spawnSubsession(input: SpawnSubsessionInvocation): Promise<SpawnSubsessionResult> {
     if (this.spawnTargets === undefined) throw new Error("Spawning sessions is disabled");
-    const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, input.cwd);
+    if (input.cwd !== undefined && input.cwd !== "" && !cwdPathsEqual(input.cwd, input.spawningCwd)) {
+      throw subsessionCwdError(input.spawningCwd, input.cwd);
+    }
+    // Resolved against the parent's own cwd only: this still refuses spawning
+    // from an unregistered directory, which keeps the child visible in the UI.
+    const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, undefined);
     if (!decision.allowed) throw spawnTargetError(decision);
     // A model spec overrides the inherited model and is resolved against the
     // parent's model runtime; only a spec resolves against the parent.
