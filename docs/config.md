@@ -101,6 +101,47 @@ Project-local `uploads.defaultFolder` overrides the global upload destination fo
 
 Plugins may own separate project files, such as `.pi-web/tasks.json` for the built-in Workspace Tasks plugin.
 
+PI WEB also honors one optional project hook; see [Worktree pre-remove hook](#worktree-pre-remove-hook).
+
+## Worktree pre-remove hook
+
+Before PI WEB deletes a workspace (a secondary Git worktree), it gives the repository one chance to tear down project-owned infrastructure tied to that worktree. To use the hook, provide an executable script at:
+
+```text
+.pi-web/hooks/worktree-pre-remove
+```
+
+relative to the workspace where the deletion command runs. PI WEB runs the deletion command from the project's main workspace when it exists, so commit the hook there and it follows the repository.
+
+When the hook is present and executable, PI WEB dispatches the hook and the removal as one composed terminal command:
+
+```sh
+'<hook path>' '<worktree path>' && git worktree remove '<worktree path>'
+```
+
+Contract:
+
+- **Arguments:** exactly one — the absolute path of the worktree being deleted.
+- **Working directory:** the workspace the deletion command runs in, not the worktree being deleted.
+- **Exit codes:** `0` lets the removal proceed; any non-zero exit blocks it. The `&&` chain is the fail-closed guarantee — a failing hook keeps the worktree on disk.
+- **Absent hook:** a missing file, or a file without the executable bit (for example after a checkout that lost it), is treated as no hook; PI WEB then runs a plain `git worktree remove`.
+
+The composed command is dispatched like any other workspace deletion — same `Delete workspace: <branch>` terminal title — so hook output and failures are visible in the terminal run. If PI WEB cannot probe the hook path because of an unexpected filesystem error, the deletion request fails before any workspace terminals are closed.
+
+Example: a hook that stops and removes local dev containers that bind-mount the worktree, so deletion does not leave stale containers behind. The hook is an opaque extension point — the contract does not assume any specific tooling, so use whatever the repository standardizes on:
+
+```sh
+#!/bin/sh
+# .pi-web/hooks/worktree-pre-remove
+set -eu
+
+worktree_path="$1"
+
+# Stop/remove local dev containers bind-mounting "$worktree_path",
+# release other per-worktree resources, etc.
+# Exit non-zero to block the worktree removal.
+```
+
 ## Configuration matrix
 
 Rows with JSON key `—` are runtime-only environment variables, not config-file keys. `Global` means machine-global. In Settings, selected-machine-safe global keys (`pathAccess`, `uploads`, `maxUploadBytes`, `agent`, `spawnSessions`, `subsessions`, `askUser`, and `plugins`) are edited for the selected machine; gateway host/port/allowed-hosts, keyboard shortcuts, and machine registry/tokens stay local.
@@ -146,6 +187,10 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 Each data directory is independent: after pointing PI WEB at a new root, it starts there with empty registries and no session archives. To carry session archives over, stop PI WEB, then copy `archived-sessions.json` and the `archived-sessions/` directory from the old data directory into the new one before starting it again.
 
 This setting does not change the PI WEB config file selected by `PI_WEB_CONFIG` or Pi-owned state such as the active session files selected by `PI_CODING_AGENT_SESSION_DIR`.
+
+### Agent process environment
+
+Agent shells, terminals, and spawned sessions do not inherit the session daemon's own configuration. When the daemon starts, it removes its `PI_WEB_*` configuration keys, `NODE_ENV`, `PORT`, and `PI_CODING_AGENT_SESSION_DIR` from the environment agent processes see, so development commands behave normally inside sessions — for example, `npm install` is not affected by a production `NODE_ENV` meant for the daemon, and a second PI WEB instance started from a session does not pick up the live daemon's data directory or socket. `PI_CODING_AGENT_DIR` and ordinary variables (`PATH`, `HOME`, proxy settings, and the like) remain visible. The daemon itself keeps using the values it captured at startup.
 
 ### External path access
 
