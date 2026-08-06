@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionTreeNavigateResult, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
+import type { SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
 import { SessionTreeNavigator, sessionTreeEntryReturnsToEditor, sessionTreeVisualDepth } from "./SessionTreeNavigator";
 
 type NavigateCallback = (targetId: string, summaryChoice: SessionTreeSummaryChoice) => Promise<SessionTreeNavigateResult>;
+type ForkCallback = (entryId: string) => Promise<SessionTreeForkResult>;
 
 describe("session-tree-navigator location step", () => {
   beforeEach(() => {
@@ -151,7 +152,7 @@ describe("session-tree-navigator action step", () => {
 
   it("dispatches the final action to the selected callback and retains location after cancellation", async () => {
     const onNavigate = vi.fn<NavigateCallback>().mockResolvedValue({ cancelled: true });
-    const onFork = vi.fn(() => Promise.resolve());
+    const onFork = vi.fn<ForkCallback>().mockResolvedValue({ cancelled: true });
     const navigator = await mountNavigator();
     navigator.onNavigate = onNavigate;
     navigator.onFork = onFork;
@@ -175,6 +176,10 @@ describe("session-tree-navigator action step", () => {
 
     expect(onFork).toHaveBeenCalledWith("side");
     expect(onNavigate).toHaveBeenCalledOnce();
+    expect(navigator.renderRoot.querySelector("h2")?.textContent).toBe("Choose how to continue");
+    expect(operationRadio(navigator, "fork").checked).toBe(true);
+    expect(selectedEntryText(navigator)).toContain("Side branch");
+    expect(navigator.renderRoot.querySelector(".dialog-status[role='status']")?.textContent).toContain("Fork cancelled. No new session was created");
   });
 
   it("validates custom summary focus without submitting", async () => {
@@ -260,10 +265,9 @@ describe("session-tree-navigator action step", () => {
   });
 
   it("disables the unified step while a fork is in flight", async () => {
-    let resolveFork: () => void = () => undefined;
-    const forkPromise = new Promise<void>((resolve) => { resolveFork = resolve; });
+    const forkResult = deferred<SessionTreeForkResult>();
     const navigator = await mountNavigator();
-    navigator.onFork = () => forkPromise;
+    navigator.onFork = () => forkResult.promise;
     await advanceToAction(navigator);
     operationRadio(navigator, "fork").click();
     await settle(navigator);
@@ -278,9 +282,10 @@ describe("session-tree-navigator action step", () => {
     expect(footerButton(navigator, "Forking…").disabled).toBe(true);
     expect(footerLabels(navigator)).not.toContain("Cancel summarization");
 
-    resolveFork();
+    forkResult.resolve({ cancelled: true });
     await settle(navigator);
     expect(footerButton(navigator, "Fork into new session").disabled).toBe(false);
+    expect(shadowText(navigator)).toContain("Fork cancelled. No new session was created");
   });
 });
 

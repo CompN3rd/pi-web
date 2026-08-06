@@ -61,6 +61,11 @@ export interface SessionCommandNaming {
   listSessionNames?: (cwd: string) => Promise<readonly string[]>;
 }
 
+export interface ForkEntryOptions {
+  /** Rechecked inside the serialized replacement boundary when supplied by /tree. */
+  expectedLeafId: string | null;
+}
+
 type RelatedSessionKind = "fork" | "copy";
 
 interface PendingCommandSelect {
@@ -124,17 +129,21 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
    * text returns as a prompt draft; every other entry forks "at" so the forked
    * file includes it.
    */
-  async forkEntry(sessionId: string, entryId: string): Promise<ClientCommandResult> {
+  async forkEntry(sessionId: string, entryId: string, options?: ForkEntryOptions): Promise<ClientCommandResult> {
     const active = await this.getActive(sessionId);
     if (this.lifecycle.isTreeNavigationActive?.(active.runtime.session) === true) return treeNavigationActiveUnsupported();
     if (this.hasActiveWork(active.runtime.session)) return forkActiveUnsupported("fork");
     const relatedName = await this.nextRelatedSessionName(active, "fork");
     if (this.lifecycle.isTreeNavigationActive?.(active.runtime.session) === true) return treeNavigationActiveUnsupported();
     if (this.hasActiveWork(active.runtime.session)) return forkActiveUnsupported("fork");
-    // The entry set may differ from what callers saw, so resolve the fork
-    // position from the session state that is current when the replacement begins.
-    const position = this.forkPosition(active.runtime.session, entryId);
     const result = await this.runSessionReplacement(active.runtime, async () => {
+      const session = active.runtime.session;
+      if (options !== undefined && session.sessionManager.getLeafId() !== options.expectedLeafId) {
+        throw new Error("The session changed since /tree was opened. Reopen /tree and try again.");
+      }
+      // Resolve the entry kind from the session state protected by the same
+      // replacement boundary as the fork, not Pi's text-only /fork selector.
+      const position = this.forkPosition(session, entryId);
       const forkResult = await active.runtime.fork(entryId, { position });
       if (!forkResult.cancelled) this.tryNameRelatedSession(active.runtime.session, relatedName);
       return forkResult;
@@ -239,6 +248,8 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
   }
 
   private forkPosition(session: TSession, entryId: string): "before" | "at" {
+    const treeNode = this.lifecycle.getSessionTree?.(session)?.nodes.find((node) => node.id === entryId);
+    if (treeNode !== undefined) return treeNode.kind === "user" ? "before" : "at";
     return session.getUserMessagesForForking().some((message) => message.entryId === entryId) ? "before" : "at";
   }
 

@@ -1,6 +1,6 @@
 import { LitElement, html } from "lit";
 import { customElement, query, state } from "lit/decorators.js";
-import { configApi, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveUploadFolder, type AskUserSubmission, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
+import { configApi, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveUploadFolder, type AskUserSubmission, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState } from "../appState";
 import { isSessionActive } from "../../../shared/activity";
@@ -1405,9 +1405,9 @@ export class PiWebApp extends LitElement {
     return result;
   }
 
-  private async forkSessionTree(entryId: string): Promise<void> {
+  private async forkSessionTree(entryId: string): Promise<SessionTreeForkResult> {
     // The controller selects the forked session and closes the dialog on success.
-    await this.sessions.forkFromTree(entryId);
+    return this.sessions.forkFromTree(entryId);
   }
 
   private closeSessionTreeNavigator(): void {

@@ -1,6 +1,6 @@
 import type { TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionTreeNavigateResult, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
+import type { SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { SessionController } from "../controllers/sessionController";
 // This node-environment test uses the shared, type-guarded template inspection
@@ -9,7 +9,7 @@ import { templateValueAfterMarker } from "../templateInspection.testSupport";
 import { PiWebApp } from "./PiWebApp";
 
 type NavigateHandler = (targetId: string, summaryChoice: SessionTreeSummaryChoice) => Promise<SessionTreeNavigateResult>;
-type ForkHandler = (entryId: string) => Promise<void>;
+type ForkHandler = (entryId: string) => Promise<SessionTreeForkResult>;
 type AbortHandler = () => Promise<void>;
 type CancelHandler = () => void;
 type RenderSessionTreeNavigator = (this: PiWebApp, state: AppState) => TemplateResult | null;
@@ -52,20 +52,24 @@ describe("PiWebApp session tree wiring", () => {
     expect(focusChatComposer).toHaveBeenCalledTimes(2);
   });
 
-  it("routes fork requests through SessionController and lets failures reach the navigator", async () => {
+  it("routes fork requests through SessionController and propagates results and failures", async () => {
     const app = createApp();
     const state = setAppTree(app, tree());
     const controller = appSessionController(app);
     const forkFromTree = vi.spyOn(controller, "forkFromTree")
+      .mockResolvedValueOnce({ cancelled: true })
       .mockResolvedValueOnce({ cancelled: false, session: { ...session(), id: "session-fork" } })
       .mockRejectedValueOnce(new Error("Stop current activity before forking."));
     const onFork = navigatorForkHandler(renderSessionTreeNavigator(app, state));
 
-    await onFork("side");
-    expect(forkFromTree).toHaveBeenCalledWith("side");
+    await expect(onFork("side")).resolves.toEqual({ cancelled: true });
+    expect(forkFromTree).toHaveBeenNthCalledWith(1, "side");
 
-    await expect(onFork("root")).rejects.toThrow("Stop current activity before forking.");
+    await expect(onFork("root")).resolves.toMatchObject({ cancelled: false, session: { id: "session-fork" } });
     expect(forkFromTree).toHaveBeenNthCalledWith(2, "root");
+
+    await expect(onFork("failure")).rejects.toThrow("Stop current activity before forking.");
+    expect(forkFromTree).toHaveBeenNthCalledWith(3, "failure");
   });
 
   it("does not steal focus after the user selects another session during navigation", async () => {

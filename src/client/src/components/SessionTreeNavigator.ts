@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { SessionTreeNavigateResult, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
+import type { SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
 import { SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH } from "../../../shared/apiTypes";
 import { buildSessionTreeModel, initialSessionTreeSelection, toggleSessionTreeFold, transitionSessionTreeKey, validateSessionTreeSummaryChoice, visibleSessionTreeRows, type SessionTreeModel, type SessionTreeRow } from "../sessionTreeModel";
 
@@ -14,7 +14,7 @@ type PendingFocus = "tree" | "operation" | "summary" | "custom";
 export class SessionTreeNavigator extends LitElement {
   @property({ attribute: false }) tree: SessionTreeSnapshot = EMPTY_TREE;
   @property({ attribute: false }) onNavigate?: (targetId: string, summaryChoice: SessionTreeSummaryChoice) => Promise<SessionTreeNavigateResult>;
-  @property({ attribute: false }) onFork?: (entryId: string) => Promise<void>;
+  @property({ attribute: false }) onFork?: (entryId: string) => Promise<SessionTreeForkResult>;
   @property({ attribute: false }) onAbort?: () => Promise<void>;
   @property({ attribute: false }) onCancel?: () => void;
 
@@ -428,10 +428,13 @@ export class SessionTreeNavigator extends LitElement {
     this.error = "";
     this.statusMessage = "";
     try {
-      await fork(entryId);
+      const result = await fork(entryId);
       if (generation !== this.operationGeneration) return;
       // On success the app closes this dialog; clear busy in case it lingers.
       this.busy = false;
+      if (result.cancelled) {
+        this.statusMessage = "Fork cancelled. No new session was created; your selected history entry is unchanged.";
+      }
     } catch (error: unknown) {
       if (generation !== this.operationGeneration) return;
       this.busy = false;

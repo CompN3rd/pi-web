@@ -2233,7 +2233,9 @@ export class PiSessionService implements SessionRouteService {
     this.publishActivity(session, "forking session from entry", "active");
     this.publishStatus(session);
     try {
-      const result = await this.commandService.forkEntry(session.sessionId, request.entryId);
+      const result = await this.commandService.forkEntry(session.sessionId, request.entryId, {
+        expectedLeafId: request.expectedLeafId,
+      });
       if (result.type === "unsupported") throw new Error(result.message);
       if (result.type !== "done") throw new Error("Session fork is unavailable");
       if (result.session === undefined) {

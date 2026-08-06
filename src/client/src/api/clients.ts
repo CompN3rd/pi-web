@@ -264,9 +264,8 @@ export const terminalsApi = {
 };
 
 /**
- * Raised when the session daemon cannot serve `tree/fork`: an older daemon
- * without the route answers 404, and a severed proxy answers 502. The message
- * is user-facing and explains how to enable the operation.
+ * Raised when an older session daemon cannot serve the specific `tree/fork`
+ * route. The message is user-facing and explains how to enable the operation.
  */
 export class SessionTreeForkUnavailableError extends Error {
   constructor() {
@@ -281,12 +280,19 @@ async function requestSessionTreeFork(session: SessionRef, fork: SessionTreeFork
     headers: { "content-type": "application/json" },
     body: sessionBody(session, { entryId: fork.entryId, expectedLeafId: fork.expectedLeafId }),
   });
-  if (response.status === 404 || response.status === 502) throw new SessionTreeForkUnavailableError();
   if (!response.ok) {
     const body: unknown = await response.json().catch((): unknown => ({}));
+    if (isMissingSessionTreeForkRoute(response.status, body)) throw new SessionTreeForkUnavailableError();
     throw new Error(apiErrorMessage(body) ?? response.statusText);
   }
   return parseSessionTreeForkResult(await response.json());
+}
+
+function isMissingSessionTreeForkRoute(status: number, value: unknown): boolean {
+  if (status !== 404 || !isRecord(value)) return false;
+  if (value["statusCode"] !== 404 || value["error"] !== "Not Found") return false;
+  const message = value["message"];
+  return typeof message === "string" && /^Route POST:.*\/tree\/fork not found$/i.test(message);
 }
 
 async function getOptionalTerminalCommandRun(runId: string, machineId: string): Promise<TerminalCommandRun | undefined> {
