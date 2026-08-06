@@ -57,4 +57,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          # Keep in sync with docs-dev.yml so both sites deploy with the same wrangler.
+          wranglerVersion: "4.119.0"
           command: deploy --config docs/wrangler.jsonc
