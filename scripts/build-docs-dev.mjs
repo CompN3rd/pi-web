@@ -63,6 +63,18 @@ function bannerHtml(sha, stableUrl) {
   );
 }
 
+// Dev copies flip the footer version switcher: source pages default to Stable active,
+// the dev variant marks Dev active instead. Both patterns must match exactly once so
+// source markup drift fails the deploy instead of silently shipping a wrong switcher.
+function activateDevVersion(html) {
+  const stableOption = /(<a\b[^>]*data-version-option="stable"[^>]*?) aria-current="true"/;
+  const devOption = /(<a\b[^>]*data-version-option="dev"[^>]*?)>/;
+  if (!stableOption.test(html) || !devOption.test(html)) {
+    throw new Error("Expected footer version switcher options to flip the active version.");
+  }
+  return html.replace(stableOption, "$1").replace(devOption, '$1 aria-current="true">');
+}
+
 function injectDevMarkers(html, banner) {
   if (!html.includes("<head>")) {
     throw new Error("Expected a <head> tag to inject the noindex meta tag.");
@@ -91,7 +103,7 @@ const htmlPages = readdirSync(pagesDir).filter((name) => name.endsWith(".html"))
 for (const page of htmlPages) {
   const pagePath = path.join(pagesDir, page);
   const html = readFileSync(pagePath, "utf8");
-  writeFileSync(pagePath, injectDevMarkers(html, bannerHtml(sha, stableUrlFor(page))));
+  writeFileSync(pagePath, activateDevVersion(injectDevMarkers(html, bannerHtml(sha, stableUrlFor(page)))));
 }
 
 writeFileSync(outDir + "/_redirects", "/dev/index.html /dev/ 301\n");
