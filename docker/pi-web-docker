@@ -234,7 +234,10 @@ dev_git_operation() {
   git_dir=$1
   if [ -f "$git_dir/MERGE_HEAD" ]; then
     printf '%s\n' merge
-  elif [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ] || [ -f "$git_dir/REBASE_HEAD" ]; then
+  elif [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ]; then
+    # REBASE_HEAD is not a valid marker: Git leaves it behind after a rebase
+    # completes. Only the rebase-merge/rebase-apply state directories mean
+    # a rebase is actually in progress.
     printf '%s\n' rebase
   elif [ -f "$git_dir/CHERRY_PICK_HEAD" ]; then
     printf '%s\n' cherry-pick
