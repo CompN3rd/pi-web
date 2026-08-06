@@ -218,6 +218,20 @@ describe("session summary scanner edge cases", () => {
     expect(await scanSessionFileSummary(path)).toMatchObject({ id: "truncated", messageCount: 0, firstMessage: "(no messages)" });
   });
 
+  it("counts a torn final write that happens to end in an inner brace", async () => {
+    // Performance contract: the fast path does not validate JSON, so a final
+    // write caught mid-flight counts as soon as it ends with `}` — a transient
+    // +1 that self-heals on the next listing, because a file whose size
+    // changed is always scanned whole again.
+    const path = await writeSession("torn.jsonl", [
+      headerLine({ id: "torn", cwd: WORKSPACE }),
+      messageLine({ role: "user", content: textContent("start") }),
+      '{"type":"message","id":"torn-1","message":{"role":"assistant","content":[{"type":"text","text":"streaming"}]}',
+    ]);
+
+    expect(await scanSessionFileSummary(path)).toMatchObject({ id: "torn", messageCount: 2, firstMessage: "start" });
+  });
+
   it("never classifies high-bit garbage bytes as a known entry type", async () => {
     // Buffer.toString("ascii") masks each byte's high bit, so these byte
     // sequences decode to "message" and "session_info": classification must
@@ -332,7 +346,7 @@ describe("session summary scanner memo", () => {
     expect(await scanSessionSummariesInDir(sessionDir)).toEqual(cold);
   });
 
-  it("folds appended tails without re-deriving cached fields", async () => {
+  it("re-scans a grown file whole", async () => {
     const path = await writeSession("grown.jsonl", [
       headerLine({ id: "grown", cwd: WORKSPACE }),
       messageLine({ role: "user", content: textContent("first question") }),
@@ -352,7 +366,10 @@ describe("session summary scanner memo", () => {
     expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
 
-  it("re-folds a complete trailing line that was still missing its newline when cached", async () => {
+  it("re-scans a file whose unterminated trailing line was completed by an append", async () => {
+    // A line still being written is folded into the listing it was read for,
+    // then folded again as part of the whole file once the writer finishes
+    // it: the size changed, so no line is counted twice.
     const inFlight = messageLine({ role: "assistant", content: textContent("streaming") });
     const path = await writeSession("inflight.jsonl", [headerLine({ id: "inflight", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("start") })]);
     await appendFile(path, inFlight, "utf8");
@@ -364,47 +381,6 @@ describe("session summary scanner memo", () => {
 
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "inflight", messageCount: 3, firstMessage: "start" }]);
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
-  });
-
-  it("does not double-count a partial trailing line completed by an append", async () => {
-    const path = await writeSession("partial.jsonl", [headerLine({ id: "partial", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("start") })]);
-    await appendFile(path, '{"type":"message","id":"half', "utf8");
-    const scanner = new SessionSummaryScanner();
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "partial", messageCount: 1 }]);
-
-    await appendFile(
-      path,
-      '-written","parentId":"root","timestamp":"2026-01-01T00:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n',
-      "utf8",
-    );
-
-    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
-    expect(warm).toMatchObject([{ id: "partial", messageCount: 2, firstMessage: "start" }]);
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
-  });
-
-  it("counts a torn final write ending in an inner brace and self-heals when it completes", async () => {
-    // Performance contract: the fast path does not validate JSON, so a final
-    // write caught mid-flight counts as soon as it ends with `}` — a
-    // transient +1 that self-heals when the line completes, because the memo
-    // re-folds the unterminated final line from its start.
-    const path = await writeSession("torn.jsonl", [headerLine({ id: "torn", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("start") })]);
-    await appendFile(
-      path,
-      '{"type":"message","id":"torn-1","parentId":"root","timestamp":"2026-01-01T00:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"streaming"}]}',
-      "utf8",
-    );
-    const scanner = new SessionSummaryScanner();
-
-    // Ends in an inner `}` while the JSON is still incomplete: counted.
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "torn", messageCount: 2 }]);
-
-    // The writer completes the line: the transient count must not double.
-    await appendFile(path, "}\n", "utf8");
-
-    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
-    expect(warm).toMatchObject([{ id: "torn", messageCount: 2, firstMessage: "start" }]);
     expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
 
@@ -492,13 +468,12 @@ describe("session summary scanner memo", () => {
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "afters", firstMessage: "new text" }]);
   });
 
-  it("invalidate() drops one memo entry so an in-place header rewrite is re-read", async () => {
+  it("invalidate() drops one memo entry so a same-size in-place rewrite is re-read", async () => {
     // Detach clears the parent link by rewriting the header in place (same
-    // inode) while appended entries can still grow the file — the one rewrite
-    // the identity+size memo key cannot detect. invalidate() is the targeted
-    // escape hatch; without it the warm scan stays stale: the growth path
-    // resumes at an offset that is now mid-file, never re-reads the header,
-    // and never counts the line that offset landed inside.
+    // inode) — the rewrite the identity+size key cannot detect whenever the
+    // file's size happens to be unchanged. invalidate() is the targeted
+    // escape hatch; without it the stat-only fast path serves the pre-detach
+    // summary forever.
     const parentPath = join(tempDir, "parents", "parent.jsonl");
     const path = await writeSession("detached.jsonl", [
       headerLine({ id: "detached", cwd: WORKSPACE, parentSession: parentPath }),
@@ -508,24 +483,22 @@ describe("session summary scanner memo", () => {
     const scanner = new SessionSummaryScanner();
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "detached", messageCount: 2, parentSessionPath: parentPath }]);
 
-    // Grow the file, then rewrite the header without the parent link the way
-    // clearParentSession does (truncate + write, same inode).
-    await appendFile(path, `${messageLine({ role: "user", content: textContent("padding so the rewrite still grows the file") })}\n`, "utf8");
+    // Rewrite the header without the parent link the way clearParentSession
+    // does (truncate + write, same inode), padding the file back to its
+    // original size so identity and size both look unchanged.
     await rewriteHeaderWithoutParentSession(path);
 
-    // No invalidation yet: the memo serves the stale summary — the old parent
-    // link, and a message count frozen at the memoized value even though the
-    // file now holds one more message.
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "detached", messageCount: 2, parentSessionPath: parentPath }]);
+    // No invalidation yet: the memo still serves the old parent link.
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "detached", parentSessionPath: parentPath }]);
 
     scanner.invalidate(path);
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
-    expect(warm).toMatchObject([{ id: "detached", messageCount: 3 }]);
+    expect(warm).toMatchObject([{ id: "detached", messageCount: 2 }]);
     expect(warm[0]).not.toHaveProperty("parentSessionPath");
     expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
 
-  it("re-parses from the start when the file is replaced between the memo and the growth scan", async () => {
+  it("reads identity and metadata from the opened file, not a stale pathname stat", async () => {
     const path = await writeSession("raced.jsonl", [
       headerLine({ id: "original", cwd: WORKSPACE }),
       messageLine({ role: "user", content: textContent("old first") }),
@@ -547,10 +520,9 @@ describe("session summary scanner memo", () => {
     await rename(replacementPath, path);
 
     // Replay the stat/open race: the pathname stat still reports the
-    // memoized identity at a grown size, as it did before the replacement
-    // landed. The growth path must then notice the new dev/ino on the
-    // opened handle and re-parse from the start — folding the replacement's
-    // tail into the old summary would keep the original id.
+    // memoized identity at a different size, as it did before the
+    // replacement landed. The rescan opens the path and describes whatever
+    // file it got, so the summary and its mtime come from the replacement.
     const statSpy = vi.spyOn(fsPromises, "stat").mockResolvedValue(statWithSize(memoizedStats, memoizedStats.size + 1));
     try {
       const warm = await scanner.scanSessionSummariesInDir(sessionDir);
@@ -567,42 +539,12 @@ describe("session summary scanner memo", () => {
     expect(settled).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
 
-  it("re-parses from the start when the file shrunk between the memo and the growth scan", async () => {
-    // Same inode, smaller file: the truncate + rewrite lands after the
-    // pathname stat reported growth, so only the handle's fstat can catch it.
-    const path = await writeSession("raced-shrink.jsonl", [
-      headerLine({ id: "raced-shrink", cwd: WORKSPACE }),
-      messageLine({ role: "user", content: textContent("old first") }),
-      messageLine({ role: "assistant", content: textContent("old second") }),
-      sessionInfoLine("Old name"),
-    ]);
-    const scanner = new SessionSummaryScanner();
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "raced-shrink", messageCount: 2, name: "Old name" }]);
-    const memoizedStats = await stat(path);
-
-    await writeFile(path, `${[headerLine({ id: "rewritten", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("new first") })].join("\n")}\n`, "utf8");
-
-    const statSpy = vi.spyOn(fsPromises, "stat").mockResolvedValue(statWithSize(memoizedStats, memoizedStats.size + 1));
-    try {
-      const warm = await scanner.scanSessionSummariesInDir(sessionDir);
-      // Folding from the cached offset would read past the new end of file
-      // and keep the old summary; the handle check forces a full re-parse.
-      expect(warm).toMatchObject([{ id: "rewritten", messageCount: 1, firstMessage: "new first" }]);
-      expect(warm[0]?.name).toBeUndefined();
-    } finally {
-      statSpy.mockRestore();
-    }
-
-    const settled = await scanner.scanSessionSummariesInDir(sessionDir);
-    expect(settled).toMatchObject([{ id: "rewritten", messageCount: 1 }]);
-    expect(settled).toEqual(await scanSessionSummariesInDir(sessionDir));
-  });
 });
 
 describe("session summary scanner multi-chunk folding with a small chunk seam", () => {
   // The 4 MiB production chunk size would need gigabyte fixtures to span;
-  // the constructor seam shrinks it so lines spanning chunks, unterminated
-  // tails, and the memo's resumeOffset interplay are testable at byte scale.
+  // the constructor seam shrinks it so lines spanning chunks and unterminated
+  // tails are testable at byte scale.
   const SMALL_CHUNK_BYTES = 64;
 
   it("rejects chunk sizes that cannot drive a streaming read", () => {
@@ -649,15 +591,14 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
 
-  it("re-folds an unterminated multi-chunk tail from its start when the file grows", async () => {
+  it("folds an unterminated multi-chunk tail whole once the file grows", async () => {
     const path = await writeSession("unterminated-span.jsonl", [
       headerLine({ id: "unterminated-span", cwd: WORKSPACE }),
       messageLine({ role: "user", content: textContent("start") }),
     ]);
     const longLine = messageLine({ role: "assistant", content: [{ type: "text", text: "s".repeat(300) }] });
     // Land the long line in two writes, cut inside its body: the first scan
-    // sees a tail that both spans chunks and has no trailing newline, so the
-    // memo must resume at the line's start, not at a chunk boundary.
+    // sees a tail that both spans chunks and has no trailing newline.
     const cutAt = 200;
     await appendFile(path, longLine.slice(0, cutAt), "utf8");
     const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
@@ -673,64 +614,11 @@ describe("session summary scanner multi-chunk folding with a small chunk seam", 
     expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
   });
 
-  it("does not double-count a chunk-spanning final line written without its newline", async () => {
-    const path = await writeSession("no-newline-span.jsonl", [
-      headerLine({ id: "no-newline-span", cwd: WORKSPACE }),
-      messageLine({ role: "user", content: textContent("start") }),
-    ]);
-    // Complete JSON, no trailing newline, longer than one chunk: counted for
-    // this listing, but the memo must re-fold it whole once bytes follow.
-    const completeLine = messageLine({ role: "assistant", content: [{ type: "text", text: "y".repeat(300) }] });
-    await appendFile(path, completeLine, "utf8");
-    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "no-newline-span", messageCount: 2 }]);
-
-    await appendFile(path, `\n${messageLine({ role: "user", content: textContent("after") })}\n`, "utf8");
-
-    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
-    expect(warm).toMatchObject([{ id: "no-newline-span", messageCount: 3, firstMessage: "start" }]);
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
-  });
-
-  it("resumes grown files at the memoized line boundary across chunks", async () => {
-    // Clean termination: the memo resumes exactly at end-of-file and folds
-    // the appended multi-chunk tail into the cached state, then resumes again
-    // from the boundary its own fold memoized.
-    const path = await writeSession("resume.jsonl", [
-      headerLine({ id: "resume", cwd: WORKSPACE }),
-      messageLine({ role: "user", content: textContent("first question") }),
-      messageLine({ role: "assistant", content: textContent("first answer") }),
-    ]);
-    const scanner = new SessionSummaryScanner({ chunkBytes: SMALL_CHUNK_BYTES });
-    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "resume", messageCount: 2, firstMessage: "first question" }]);
-
-    await appendFile(
-      path,
-      `${[
-        messageLine({ role: "user", content: [{ type: "toolResult", toolCallId: "call-1", content: "z".repeat(300) }] }),
-        sessionInfoLine("Renamed later"),
-        messageLine({ role: "user", content: textContent("second question") }),
-      ].join("\n")}\n`,
-      "utf8",
-    );
-
-    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
-    expect(warm).toMatchObject([{ id: "resume", messageCount: 4, firstMessage: "first question", name: "Renamed later" }]);
-    expect(warm).toEqual(await scanSessionSummariesInDir(sessionDir));
-
-    // A second growth fold resumes from the boundary memoized by the first.
-    await appendFile(path, `${messageLine({ role: "assistant", content: textContent("second answer") })}\n`, "utf8");
-
-    const warmer = await scanner.scanSessionSummariesInDir(sessionDir);
-    expect(warmer).toMatchObject([{ id: "resume", messageCount: 5, firstMessage: "first question", name: "Renamed later" }]);
-    expect(warmer).toEqual(await scanSessionSummariesInDir(sessionDir));
-  });
-
-  it("memoizes a rejected file at end-of-file instead of resuming it chunk by chunk", async () => {
+  it("memoizes a rejected file at its observed end-of-file so warm listings do not re-read it", async () => {
     // The first parseable line is not a session header, so the file is
-    // rejected. Rejection is final, so the memo must hold the observed
-    // end-of-file: resuming from a mid-file offset instead would re-read the
-    // rejected bytes one chunk per warm listing.
+    // rejected and the fold stops at that line. Rejection is final, so the
+    // memo must still record the observed end-of-file, or every warm listing
+    // would see a size mismatch and re-read the rejected bytes.
     const filler = messageLine({ role: "assistant", content: textContent("filler") });
     const lines = [messageLine({ role: "user", content: textContent("orphan first line") })];
     for (let index = 0; index < 40; index += 1) lines.push(filler);
@@ -906,16 +794,24 @@ async function writeSession(fileName: string, lines: readonly string[]): Promise
 }
 
 /**
- * Mimics piSessionService's clearParentSession: rewrite the header in place
- * (truncate + write keeps the inode) with the parent link removed.
+ * Mimics piSessionService's clearParentSession — rewrite the header in place
+ * (truncate + write keeps the inode) with the parent link removed — and pads
+ * the header back to its original byte length, so the rewrite is the one the
+ * memo's identity + size key cannot see at all.
  */
 async function rewriteHeaderWithoutParentSession(path: string): Promise<void> {
   const content = await readFile(path, "utf8");
   const newlineIndex = content.indexOf("\n");
-  const parsed: unknown = JSON.parse(content.slice(0, newlineIndex));
+  const original = content.slice(0, newlineIndex);
+  const parsed: unknown = JSON.parse(original);
   if (!isRecord(parsed)) throw new Error("Invalid session file header");
   delete parsed["parentSession"];
-  await writeFile(path, `${JSON.stringify(parsed)}${content.slice(newlineIndex)}`, "utf8");
+  const padKeyOverhead = JSON.stringify({ ...parsed, pad: "" }).length - JSON.stringify(parsed).length;
+  const padLength = original.length - JSON.stringify(parsed).length - padKeyOverhead;
+  if (padLength < 0) throw new Error("Header cannot be padded back to its original length");
+  const rewritten = JSON.stringify({ ...parsed, pad: "x".repeat(padLength) });
+  if (rewritten.length !== original.length) throw new Error("Padded header length does not match the original");
+  await writeFile(path, `${rewritten}${content.slice(newlineIndex)}`, "utf8");
 }
 
 /**

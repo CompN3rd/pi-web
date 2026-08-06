@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -273,11 +273,13 @@ describe("PiSessionService listing of replaced session files", () => {
 describe("PiSessionService.detachParent summary memo", () => {
   it("invalidates the gateway summary memo so warm listings re-read the rewritten header", async () => {
     // The gateway keeps one memoized scanner for its lifetime. Detach rewrites
-    // the header in place (same inode), which the memo's identity+size key
-    // cannot detect, so detach must invalidate the entry or the warm listing
-    // serves the pre-detach parent link and message count forever. This test
-    // lists through the real gateway/scanner path on purpose: fakes cannot see
-    // the memo.
+    // the header in place, keeping the inode, so the memo's identity + size
+    // key cannot see the change whenever the rewritten file happens to be the
+    // size the memo recorded (a concurrent append can make the shrunk header
+    // net out). Detach must therefore invalidate the entry explicitly, and
+    // the warm listing must show the cleared parent. This test lists through
+    // the real gateway/scanner path on purpose: fakes cannot see the memo.
+    const invalidated: string[] = [];
     const sessionDir = join(tempDir, "detach-sessions");
     await mkdir(sessionDir, { recursive: true });
     const parentPath = join(sessionDir, "parent.jsonl");
@@ -307,6 +309,7 @@ describe("PiSessionService.detachParent summary memo", () => {
         list: (refCwd: string) => realGateway.list(refCwd),
         listAll: () => realGateway.listAll(),
         invalidateSessionFile: (sessionFile: string) => {
+          invalidated.push(sessionFile);
           realGateway.invalidateSessionFile(sessionFile);
         },
         open: () => fakeSessionManager(CHILD_CWD, { getSessionId: () => "child" }),
@@ -317,15 +320,15 @@ describe("PiSessionService.detachParent summary memo", () => {
     const before = await service.list(CHILD_CWD);
     expect(before.find((session) => session.id === "child")).toMatchObject({ id: "child", messageCount: 2, parentSessionPath: parentPath });
 
-    // Grow the file after the cold listing so the memo takes its append-growth
-    // path — the shape in which the in-place rewrite went unnoticed.
-    await appendFile(childPath, `${message("m3", "user", "padding so the rewrite still grows the file")}\n`, "utf8");
-
     await service.detachParent(sessionRef("child", CHILD_CWD));
+
+    // The rewritten file's own path is dropped from the memo — the only
+    // signal an identity + size key cannot derive for itself.
+    expect(invalidated).toContain(childPath);
 
     const after = await service.list(CHILD_CWD);
     const detached = after.find((session) => session.id === "child");
-    expect(detached).toMatchObject({ id: "child", messageCount: 3 });
+    expect(detached).toMatchObject({ id: "child", messageCount: 2 });
     expect(detached).not.toHaveProperty("parentSessionPath");
     await service.dispose();
   });
