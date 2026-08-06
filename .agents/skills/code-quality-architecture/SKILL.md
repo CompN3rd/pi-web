@@ -15,7 +15,9 @@ Respect the project's existing conventions and the framework/library idioms alre
 
 ### Proportionate
 
-Prefer boring, local changes that solve the problem without surprising future maintainers. Avoid broad rewrites unless the task requires them, and avoid new abstractions that add ceremony without clarifying ownership, reducing duplication, isolating volatility, or improving testability.
+Prefer boring, local changes that solve the problem without surprising future maintainers. Implement the described behavior well without trying to anticipate and defend against every hypothetical edge case. Cover an edge case when it surfaces during implementation, review, or verification, or when leaving it unhandled would violate the error-handling, state-integrity, or security expectations below.
+
+Avoid unrelated refactoring, opportunistic cleanup, and broad rewrites unless the task requires them. Avoid new abstractions that add ceremony without clarifying ownership, reducing duplication, isolating volatility, or improving testability.
 
 ### Composable
 
@@ -45,7 +47,11 @@ Framework-facing code should usually be thin: gather inputs, call the core logic
 
 ### Deliberate error handling
 
-Handle errors at meaningful boundaries. Do not swallow errors silently, scatter defensive `try`/`catch` blocks everywhere, or turn every failure into vague fallback behavior. Let core logic communicate failures clearly, and translate them into logs, UI messages, HTTP responses, retries, or cleanup at the edge that has the right context.
+Failures must be observable and traceable to their cause. Handle them at meaningful boundaries through an explicit return or throw, contextual logging, a user-visible error, or another signal appropriate to that boundary. Do not silently rescue failures, swallow errors, or turn them into vague fallback or success behavior. Avoid scattering defensive `try`/`catch` blocks everywhere; let core logic communicate failures clearly, then translate them at the edge that has the right context.
+
+When changing PI WEB-managed durable state, structure operations so failure does not silently leave partial writes, ambiguous overwrites, or broken invariants. Apply this where an actual persistence or lifecycle boundary warrants it; do not add transactional machinery to ephemeral or reconstructible state without a concrete need.
+
+Security and authorization boundaries fail closed. Never convert a validation, authentication, authorization, or policy failure into permissive behavior merely to keep an operation running.
 
 ### Dependencies injected
 
@@ -89,7 +95,7 @@ When reviewing or finishing code, check:
 - Are side effects visible, bounded, and cleaned up when needed?
 - Is mutable state ownership clear?
 - Do names, types, and file boundaries communicate intent?
-- Are errors handled at the right boundary with enough context?
+- Are failures observable and traceable at the right boundary, without leaving durable state ambiguous or weakening a security or authorization boundary?
 - Are domain logic and framework glue separated enough for the size of the change?
 - Are important dependencies explicit and replaceable in tests?
 - Can the meaningful behavior be tested without booting unnecessary infrastructure?
