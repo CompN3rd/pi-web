@@ -431,14 +431,16 @@ describe("session summary scanner memo", () => {
     const scanner = new SessionSummaryScanner();
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "original", messageCount: 1 }]);
 
-    // Unlink + recreate changes the inode, so growth must not be read as an append.
-    await rm(path);
-    await writeSession("replaced.jsonl", [
+    // Rename-over swaps in a different inode, so growth must not be read as
+    // an append. (Unlink + recreate is not a portable replacement: some
+    // filesystems hand the freed inode right back to the recreated file.)
+    const replacementPath = await writeSession("replaced-successor.jsonl", [
       headerLine({ id: "replacement", cwd: WORKSPACE }),
       messageLine({ role: "user", content: textContent("bigger first") }),
       messageLine({ role: "assistant", content: textContent("padding to outgrow the original file") }),
       messageLine({ role: "user", content: textContent("more") }),
     ]);
+    await rename(replacementPath, path);
 
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "replacement", messageCount: 3, firstMessage: "bigger first" }]);
@@ -465,8 +467,10 @@ describe("session summary scanner memo", () => {
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual([]);
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual([]);
 
-    await rm(path);
-    await writeSession("not-a-session.jsonl", [headerLine({ id: "fixed", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("valid now") })]);
+    // Rename-over swaps in a different inode (unlink + recreate can reuse the
+    // freed inode, which the memo would read as growth of the rejected fold).
+    const fixedPath = await writeSession("not-a-session-fixed.jsonl", [headerLine({ id: "fixed", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("valid now") })]);
+    await rename(fixedPath, path);
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "fixed" }]);
   });
 

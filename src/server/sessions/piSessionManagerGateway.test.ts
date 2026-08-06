@@ -346,9 +346,13 @@ describe("gateway session-file resolution by id", () => {
     await expect(gateway.resolveSessionFile(cwd, "abc", readSessionHeaderSummary)).resolves.toEqual({ id: "abc-two", cwd, path: newestPath });
 
     // Same embedded timestamp: plain (non-locale) code-unit order decides, so
-    // the lowercase id sorts after the uppercase one and wins.
+    // the id starting with a lowercase letter sorts after the uppercase one
+    // and wins. The names must differ by more than case: case-insensitive
+    // filesystems (Windows CI) collapse case-only variants into one file. A
+    // locale-aware comparison would rank Z after a and flip the winner, so
+    // this still catches a drift away from code-unit order.
     const tiedDir = join(tempDir, "tied-sessions");
-    await writeNamedSessionFile(tiedDir, "2026-01-03T00-00-00-000Z_abc-AAA.jsonl", { id: "abc-AAA", cwd });
+    await writeNamedSessionFile(tiedDir, "2026-01-03T00-00-00-000Z_abc-ZZZ.jsonl", { id: "abc-ZZZ", cwd });
     const tiedWinnerPath = await writeNamedSessionFile(tiedDir, "2026-01-03T00-00-00-000Z_abc-aaa.jsonl", { id: "abc-aaa", cwd });
     const tiedGateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: tiedDir }));
 
