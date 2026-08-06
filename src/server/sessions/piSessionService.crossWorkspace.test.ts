@@ -63,10 +63,10 @@ describe("PiSessionService.list parent locations", () => {
     expect(child).not.toHaveProperty("parentSessionId");
   });
 
-  it("re-reads a cached parent header when the file at that path is replaced", async () => {
-    // The header cache is keyed by path but verified against the file's
-    // identity: a replacement landed at a cached path must be served, not the
-    // header of the file that used to live there.
+  it("reports the replacement when the parent file at a listed path is replaced", async () => {
+    // Parent headers are read per listing, so a replacement landed at a
+    // previously listed path must be reported, not the file that used to live
+    // there.
     const parentFile = await parentSessionFile({ id: "parent-id", cwd: PARENT_CWD });
     const service = serviceListing([childRecord(parentFile)]);
     await service.list(CHILD_CWD);
@@ -79,7 +79,7 @@ describe("PiSessionService.list parent locations", () => {
     expect(child).toMatchObject({ parentSessionCwd: PARENT_CWD, parentSessionId: "replacement-id" });
   });
 
-  it("drops a cached parent annotation when the parent file is deleted", async () => {
+  it("drops the parent annotation once the parent file is deleted", async () => {
     const parentFile = await parentSessionFile({ id: "parent-id", cwd: PARENT_CWD });
     const service = serviceListing([childRecord(parentFile)]);
     await service.list(CHILD_CWD);
@@ -89,18 +89,6 @@ describe("PiSessionService.list parent locations", () => {
 
     expect(child).not.toHaveProperty("parentSessionCwd");
     expect(child).not.toHaveProperty("parentSessionId");
-  });
-
-  it("releases cached headers on dispose so the cache cannot outlive the service", async () => {
-    const parentFile = await parentSessionFile({ id: "parent-id", cwd: PARENT_CWD });
-    const service = serviceListing([childRecord(parentFile)]);
-    await service.list(CHILD_CWD);
-
-    await service.dispose();
-    await rm(parentFile);
-    const [child] = await service.list(CHILD_CWD);
-
-    expect(child).not.toHaveProperty("parentSessionCwd");
   });
 });
 
@@ -214,12 +202,12 @@ describe("PiSessionService.list children in sibling workspaces", () => {
   });
 });
 
-describe("PiSessionService header cache on replaced session files", () => {
-  it("lists and opens the session that replaced a cached path instead of serving the stale header", async () => {
-    // The header cache memoizes reads per path while the summary scanner
-    // notices identity replacements. If the cached reader kept serving the
-    // old header for a replaced path, the replacement would appear in the
-    // listing but stay permanently unopenable ("Session not found").
+describe("PiSessionService listing of replaced session files", () => {
+  it("lists and opens the session that replaced a listed path instead of serving the stale one", async () => {
+    // The summary scanner memoizes listings per path but notices identity
+    // replacements. If a warm listing kept serving the old entry for a
+    // replaced path, the replacement would appear in the listing but stay
+    // permanently unopenable ("Session not found").
     const sessionDir = join(tempDir, "replace-sessions");
     await mkdir(sessionDir, { recursive: true });
     const message = (id: string, role: string, text: string) =>
@@ -261,7 +249,7 @@ describe("PiSessionService header cache on replaced session files", () => {
       projectWorkspaces: { forCwd: () => Promise.resolve([CHILD_CWD, PARENT_CWD]) },
     });
 
-    // Cold listing: the sibling scan reads (and caches) every header in the dir.
+    // Cold listing: the sibling scan reads every header in the dir.
     const cold = await service.list(CHILD_CWD);
     expect(cold.find((session) => session.id === "original-id")).toMatchObject({ childSessionsElsewhere: 1 });
 

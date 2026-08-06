@@ -1,6 +1,6 @@
-import { statSync, type Stats } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
@@ -61,8 +61,8 @@ import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
 
 import { type AuthChange } from "./authService.js";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
-import { readSessionHeaderSummary, type SessionHeaderSummary } from "./sessionFileHeader.js";
-import { countOutOfListingChildren, locateOutOfListingParents, type SessionHeaderReader } from "./parentSessionLocator.js";
+import { readSessionHeaderSummary } from "./sessionFileHeader.js";
+import { countOutOfListingChildren, locateOutOfListingParents } from "./parentSessionLocator.js";
 import { siblingWorkspaceCwds, type ProjectWorkspaceCwds } from "../workspaces/projectWorkspaceCwds.js";
 import type { WorkspaceActivityService } from "../activity/workspaceActivityService.js";
 import { createAskUserToolDefinition, type AskUserInvocation, type AskUserToolDeps } from "./askUserTool.js";
@@ -798,13 +798,6 @@ export interface PiSessionServiceDependencies {
   catalogRefreshStatus?: CatalogRefreshStatus;
 }
 
-/** A cached session header plus the identity of the file it was read from. */
-interface CachedSessionHeader {
-  header: SessionHeaderSummary;
-  dev: number;
-  ino: number;
-}
-
 export class PiSessionService implements SessionRouteService {
   private readonly active = new Map<string, ActiveSession<PiSessionRuntime>>();
   private readonly pendingSessionOpens = new Map<string, PendingSessionOpen>();
@@ -839,13 +832,6 @@ export class PiSessionService implements SessionRouteService {
   private readonly subsessionLinks = new Map<string, TrackedSubsessionLink>();
   /** Parent id/file identities whose persisted links have already been loaded. */
   private readonly subsessionHydratedParents = new Set<string>();
-  /**
-   * Session file path -> its parsed header and the file identity at read
-   * time. Headers are written once, so identity-verified reads are cached.
-   */
-  private readonly sessionHeaderCache = new Map<string, CachedSessionHeader>();
-  /** Session file path -> its in-flight header read, so concurrent scans share one read per file. */
-  private readonly pendingSessionHeaderReads = new Map<string, Promise<SessionHeaderSummary | undefined>>();
   /**
    * Tracked subsession id -> whether a completion notification is armed.
    * Armed when the child starts working; firing on completion disarms it so a
@@ -1080,8 +1066,6 @@ export class PiSessionService implements SessionRouteService {
     this.subsessionLinks.clear();
     this.subsessionHydratedParents.clear();
     this.subsessionNotifyArmed.clear();
-    this.sessionHeaderCache.clear();
-    this.pendingSessionHeaderReads.clear();
     this.notificationStore.clearAll("service-dispose");
     await Promise.all(activeSessions.map(async (active) => {
       active.unsubscribe();
@@ -1126,7 +1110,7 @@ export class PiSessionService implements SessionRouteService {
    */
   private async withRelatedSessionsElsewhere(sessions: readonly ClientSession[], cwd: string): Promise<ClientSession[]> {
     const [parentLocations, childCounts] = await Promise.all([
-      locateOutOfListingParents(sessions, cwd, this.readCachedSessionHeader),
+      locateOutOfListingParents(sessions, cwd, readSessionHeaderSummary),
       this.countChildrenInSiblingWorkspaces(sessions, cwd),
     ]);
     return sessions.map((session) => {
@@ -1169,49 +1153,6 @@ export class PiSessionService implements SessionRouteService {
       );
       return new Map();
     }
-  }
-
-  /**
-   * Read a session file header, memoized per path, with one in-flight read
-   * per path: concurrent scans of a shared session directory share the read
-   * instead of each opening the file. Pi writes the header once at session
-   * creation, so a successful read stays valid as long as the path still
-   * holds the same file: every hit re-checks the file's identity (dev/ino),
-   * and a replacement landed at a cached path is re-read instead of serving
-   * the previous file's header — the summary scanner detects such
-   * replacements, so the listing and the header reads must agree. The one
-   * thing identity cannot detect is an in-place rewrite that keeps the
-   * inode; detach, the only such writer, deletes the entry itself. Failures
-   * are not cached so a session file that appears later is picked up.
-   */
-  private readonly readCachedSessionHeader: SessionHeaderReader = (sessionFile) => {
-    const pending = this.pendingSessionHeaderReads.get(sessionFile);
-    if (pending !== undefined) return pending;
-    const read = this.loadSessionHeader(sessionFile).finally(() => {
-      this.pendingSessionHeaderReads.delete(sessionFile);
-    });
-    this.pendingSessionHeaderReads.set(sessionFile, read);
-    return read;
-  };
-
-  private async loadSessionHeader(sessionFile: string): Promise<SessionHeaderSummary | undefined> {
-    let stats: Stats;
-    try {
-      stats = await stat(sessionFile);
-    } catch {
-      // Gone or unreadable: report no header and forget any cached entry.
-      this.sessionHeaderCache.delete(sessionFile);
-      return undefined;
-    }
-    const cached = this.sessionHeaderCache.get(sessionFile);
-    if (cached?.dev === stats.dev && cached.ino === stats.ino) return cached.header;
-    const header = await readSessionHeaderSummary(sessionFile);
-    if (header === undefined) {
-      this.sessionHeaderCache.delete(sessionFile);
-      return undefined;
-    }
-    this.sessionHeaderCache.set(sessionFile, { header, dev: stats.dev, ino: stats.ino });
-    return header;
   }
 
   async start(cwd: string, options: StartSessionOptions = {}): Promise<ClientSession> {
@@ -2467,13 +2408,9 @@ export class PiSessionService implements SessionRouteService {
     const sessionFile = session.sessionFile;
     if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
     await clearParentSession(sessionFile);
-    // The header cache memoizes the first successful read, and detach is the
-    // only flow that rewrites a header; drop the stale entry so sibling child
-    // counts and parent locations observe the cleared parent immediately.
-    this.sessionHeaderCache.delete(sessionFile);
-    // The same in-place rewrite is invisible to the gateway's summary memo
-    // (same inode, possibly grown file), which would otherwise keep listing
-    // the old parent link and a stale message count until restart.
+    // This in-place rewrite is invisible to the gateway's summary memo (same
+    // inode, possibly grown file), which would otherwise keep listing the old
+    // parent link and a stale message count until restart.
     this.sessionManager.invalidateSessionFile(sessionFile);
     clearParentSessionHeader(session.sessionManager);
     this.unregisterSubsession(session.sessionId);
