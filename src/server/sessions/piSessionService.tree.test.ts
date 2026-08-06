@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionTreeNavigateRequest, SessionTreeSummaryChoice } from "../../shared/apiTypes.js";
+import { WorkspaceActivityService } from "../activity/workspaceActivityService.js";
 import { PiSessionService, type PiAgentSession, type PiSessionManager, type PiSessionServiceDependencies } from "./piSessionService.js";
 import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModel, testModelRuntime, type TestSession } from "./piSessionService.testSupport.js";
 import type { ProjectableSessionTreeNode } from "./sessionTreeProjection.js";
@@ -422,6 +423,73 @@ describe("PiSessionService session-tree fork-from-entry", () => {
       && event.activity.phase === "idle")).toBe(true);
 
     await service.dispose();
+  });
+
+  it("clears superseded session and workspace activity when a changed-id fork spans a heartbeat", async () => {
+    vi.useFakeTimers();
+    const completeFork = deferred<undefined>();
+    let service: PiSessionService | undefined;
+    let forkOperation: ReturnType<PiSessionService["forkFromTree"]> | undefined;
+    try {
+      const workspaceActivity = new WorkspaceActivityService();
+      const harness = treeHarness({}, {}, { heartbeatIntervalMs: 1_000, workspaceActivity });
+      service = harness.service;
+      const replacementSessionId = "tree-session-fork";
+      const replacement = fakeRuntime(replacementSessionId, {
+        sessionManager: fakeSessionManager("/workspace", {
+          getSessionId: () => replacementSessionId,
+          getLeafId: () => "fork-leaf",
+        }),
+      });
+      const forkStarted = deferred<undefined>();
+      let rebindSession: ((session: PiAgentSession) => Promise<void>) | undefined;
+      harness.fake.runtime.setRebindSession = (callback) => { rebindSession = callback; };
+      harness.fake.runtime.fork = vi.fn(async () => {
+        forkStarted.resolve(undefined);
+        await completeFork.promise;
+        if (!Reflect.set(harness.fake.runtime, "session", replacement.session)) {
+          throw new Error("Could not replace fake runtime session");
+        }
+        if (rebindSession === undefined) throw new Error("Expected runtime rebind callback");
+        await rebindSession(replacement.session);
+        return { cancelled: false };
+      });
+
+      forkOperation = service.forkFromTree(sessionRef(SESSION_ID), forkRequest());
+      await forkStarted.promise;
+      expect(workspaceActivity.snapshot().workspaces).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const originalGlobalActivities = () => harness.hub.globalEvents.filter((event) => event.type === "activity.update"
+        && event.activity.sessionId === SESSION_ID);
+      expect(originalGlobalActivities().at(-1)).toMatchObject({
+        activity: { sessionId: SESSION_ID, phase: "active" },
+      });
+      expect(workspaceActivity.snapshot().workspaces).toMatchObject([
+        { cwd: "/workspace", hasSessionActivity: true },
+      ]);
+
+      completeFork.resolve(undefined);
+      await expect(forkOperation).resolves.toMatchObject({
+        cancelled: false,
+        session: { id: replacementSessionId },
+      });
+
+      expect(originalGlobalActivities().at(-1)).toMatchObject({
+        activity: { sessionId: SESSION_ID, phase: "idle", label: "idle" },
+      });
+      expect(harness.hub.sessionEvents.filter(({ sessionId, event }) => sessionId === SESSION_ID
+        && event.type === "activity.update").at(-1)).toMatchObject({
+        event: { activity: { sessionId: SESSION_ID, phase: "idle", label: "idle" } },
+      });
+      expect(workspaceActivity.snapshot().workspaces).toEqual([]);
+    } finally {
+      completeFork.resolve(undefined);
+      await forkOperation?.catch(() => undefined);
+      await service?.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("forks attachment-only user entries from before using the projected tree kind", async () => {

@@ -2251,9 +2251,7 @@ export class PiSessionService implements SessionRouteService {
         this.publishActivity(forkedSession, "session forked", "idle");
         this.publishStatus(forkedSession);
       }
-      // A successful fork rebinds the runtime under the forked session id; the
-      // forked-from activity record would otherwise strand an "active" phase.
-      if (result.session.id !== session.sessionId) this.activities.delete(session.sessionId);
+      if (result.session.id !== session.sessionId) this.clearSupersededSessionActivity(session);
       return {
         cancelled: false,
         session: result.session,
@@ -2268,6 +2266,25 @@ export class PiSessionService implements SessionRouteService {
       }
       throw error;
     }
+  }
+
+  /**
+   * A changed-id fork can rebind its runtime after a heartbeat published the
+   * prior identity as active. Clear every observable owner before forgetting
+   * that identity's local activity record.
+   */
+  private clearSupersededSessionActivity(session: PiAgentSession): void {
+    const sessionId = session.sessionId;
+    if (this.activities.get(sessionId)?.phase === "active") {
+      const at = new Date().toISOString();
+      const stored = { phase: "idle" as const, label: "idle", at };
+      this.activities.set(sessionId, stored);
+      const activity = { sessionId, ...stored };
+      this.events.publish(sessionId, { type: "activity.update", activity });
+      this.events.publishGlobal({ type: "activity.update", activity });
+    }
+    this.workspaceActivity?.removeSession(sessionId, session.sessionManager.getCwd());
+    this.activities.delete(sessionId);
   }
 
   private async reloadSessionRuntime(session: PiAgentSession): Promise<void> {
