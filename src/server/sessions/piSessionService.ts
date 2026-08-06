@@ -2678,7 +2678,7 @@ export class PiSessionService implements SessionRouteService {
       );
     }
 
-    const match = (await this.sessionManager.list(ref.cwd)).find((s) => s.id === ref.id || s.id.startsWith(ref.id));
+    const match = findSessionByIdOrPrefix(await this.sessionManager.list(ref.cwd), ref.id);
     if (!match) throw new Error("Session not found");
     return this.openExistingSession(match.id, match.cwd, () => this.sessionManager.open(match.path), options);
   }

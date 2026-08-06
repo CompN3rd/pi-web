@@ -214,6 +214,40 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await service.dispose();
   });
 
+  it("prefers an exact listing id over a newer prefix-extended one", async () => {
+    const sessionId = "exact-match-session";
+    const extendedId = `${sessionId}-extended`;
+    const fake = fakeRuntime(sessionId, {
+      sessionManager: fakeSessionManager("/workspace", {
+        getSessionId: () => sessionId,
+        getBranch: () => [{ type: "message", message: { role: "user", content: "exact session" } }],
+      }),
+    });
+    const open = vi.fn(() => fakeSessionManager());
+    const gateway: SessionGateway = {
+      create: () => fakeSessionManager(),
+      // The listing is sorted modified-desc, so the prefix-extended id comes first.
+      list: () => Promise.resolve([sessionRecord(extendedId), sessionRecord(sessionId)]),
+      listAll: () => Promise.resolve([]),
+      invalidateSessionFile: () => undefined,
+      open,
+    };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      archiveStore: emptyArchiveStore(),
+      sessionManager: gateway,
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const page = await service.messages(sessionRef(sessionId));
+
+    expect(page.messages).toEqual([{ role: "user", content: "exact session" }]);
+    expect(open).toHaveBeenCalledWith(`/sessions/${sessionId}.jsonl`);
+    await service.dispose();
+  });
+
   it("still reports a missing session when the listing has no match", async () => {
     const gateway: SessionGateway = {
       create: () => fakeSessionManager(),
