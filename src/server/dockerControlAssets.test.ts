@@ -320,6 +320,21 @@ describe("Docker command assets", () => {
     await expect(readFile(helperLog, "utf8")).rejects.toThrow();
   });
 
+  dockerCommandIt("allows development updates with a stale REBASE_HEAD from a completed rebase", async () => {
+    const helperLog = join(tempDir, "dev-helper.log");
+    const devRoot = await createCleanDevGitRepoWithFakeHelper(helperLog);
+    const fakeDocker = await installFakeDocker();
+    await installFakeId(fakeDocker.binDir, 1234, 2345);
+    // Git leaves REBASE_HEAD behind after a rebase completes; only the
+    // rebase-merge/rebase-apply state directories mean one is in progress.
+    const head = (await execUtf8("git", ["-C", devRoot, "rev-parse", "HEAD"], cleanProcessEnv())).stdout.trim();
+    await writeFile(join(devRoot, ".git", "REBASE_HEAD"), `${head}\n`, "utf8");
+
+    await runDockerCommand(["--dev", "update"], devHostEnv(fakeDocker, devRoot, join(tempDir, "home")));
+
+    expect(await readFile(helperLog, "utf8")).toContain("args=build --pull");
+  });
+
   dockerCommandIt("allows clean development updates and dirty development starts", async () => {
     const helperLog = join(tempDir, "dev-helper.log");
     const devRoot = await createCleanDevGitRepoWithFakeHelper(helperLog);

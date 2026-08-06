@@ -1270,6 +1270,18 @@ class RejectingSessionManager implements PiSessionManagerGateway {
     return Promise.resolve([]);
   }
 
+  listParentSessionPaths() {
+    return Promise.resolve([]);
+  }
+
+  resolveSessionFile() {
+    return Promise.resolve(undefined);
+  }
+
+  invalidateSessionFile() {
+    /* no memo to drop in this fake */
+  }
+
   open(): never {
     this.calls.open += 1;
     throw new Error("Session manager should not open sessions for invalid prompt payloads");
