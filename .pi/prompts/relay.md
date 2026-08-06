@@ -17,7 +17,7 @@ Use `.agents/skills/code-quality-architecture/SKILL.md` as the implementation an
 
 ## Mode
 
-Default to **in-place mode**, using the current checkout and branch. Use **worktree mode** when the task requests it or this prompt was invoked through `/relay-worktree`.
+Use **in-place mode** — the current checkout and branch — unless this prompt was invoked through `/relay-worktree` or the task explicitly asks for a worktree. If the intended mode is ambiguous, prefer asking the user over guessing.
 
 Use the packet location defined by the `relay` skill. In worktree mode, create the packet inside the new worktree, not the dispatching checkout.
 
@@ -46,7 +46,7 @@ The final leg creates or updates the pull request:
 
 ## Worktree mode
 
-1. Load `git-worktree-location` and create a new branch and worktree from the recorded base unless the task specifies otherwise. Record the worktree path and branch alongside the base information in `charter.md`.
+1. Create a new branch and worktree from the recorded base unless the task specifies otherwise. Place it consistently with the repository's existing worktrees (inspect with `git worktree list`; the convention is a sibling `pi-web-worktrees/<name>` directory on a `feat/<name>` branch). Record the worktree path and branch alongside the base information in `charter.md`.
 2. Set `cwd` to that worktree for every handoff.
 3. Leg 1 is setup only: from the worktree run `npm ci`, confirm setup succeeded and the working tree is clean apart from the ignored Relay packet, then hand off. Do not inspect, plan, or implement the task in the setup leg.
 
@@ -61,7 +61,7 @@ In addition to the charter required by the `relay` skill, require that:
 
 ## Before dispatching
 
-Infer the finish line, leg sizing, task-selection policy, and initial sequence when the task provides enough information. Use `ask_user` only when an answer materially changes the goal, target, destructive-data choice, or non-obvious base. Ask at most three questions in one call and include confirmation before dispatch when questions are necessary. Otherwise, write the packet and dispatch leg 1 with one `spawn_session`.
+Infer the finish line, leg sizing, task-selection policy, and initial sequence when the task provides enough information. Use `ask_user` only when an answer materially changes the goal, target, mode (in-place vs worktree), destructive-data choice, or non-obvious base. Ask at most three questions in one call and include confirmation before dispatch when questions are necessary. Otherwise, write the packet and dispatch leg 1 with one `spawn_session`.
 
 ## Report back
 
