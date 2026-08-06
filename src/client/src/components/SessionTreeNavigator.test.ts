@@ -1,16 +1,119 @@
+// @vitest-environment happy-dom
+
 import type { TemplateResult } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionTreeNavigateResult, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
-// Genuine Lit callback extraction is limited to pointer row/confirmation wiring;
-// keyboard state and hierarchy are covered through the pure sessionTreeModel.
-// A DOM harness would otherwise add a new test environment only for two clicks.
+// The modal-surface shell (focus on open, Escape/backdrop routing) is exercised
+// through real DOM interaction; keyboard state and hierarchy stay covered through
+// the pure sessionTreeModel, and TemplateResult extraction is limited to pointer
+// row/confirmation wiring.
 import { templateClickHandlerForText, templateEventHandlerNearMarker } from "../templateInspection.testSupport";
+import { deepActiveElement, dialogSurface, pressKey, requiredElement, settleRenderedDialog, surfaceBackdrop } from "./modalSurfaceTestSupport";
 import { SessionTreeNavigator, sessionTreeEntryReturnsToEditor, sessionTreeVisualDepth } from "./SessionTreeNavigator";
 
 type NavigateCallback = (targetId: string, summaryChoice: SessionTreeSummaryChoice) => Promise<SessionTreeNavigateResult>;
 type VoidMethod = (this: SessionTreeNavigator) => void;
 type PromiseMethod = (this: SessionTreeNavigator) => Promise<void>;
 type SummaryModeMethod = (this: SessionTreeNavigator, mode: SessionTreeSummaryChoice["mode"]) => void;
+
+afterEach(() => {
+  document.body.replaceChildren();
+  localStorage.clear();
+});
+
+describe("session-tree-navigator modal surface", () => {
+  it("focuses the selected history row when opened", async () => {
+    const navigator = await mountNavigator();
+
+    expect(deepActiveElement()).toBe(treeRow(navigator, "active"));
+  });
+
+  it("focuses the close button when opened with an empty tree", async () => {
+    const navigator = await mountNavigator({ tree: { nodes: [], activeLeafId: null, activePathIds: [] } });
+
+    expect(deepActiveElement()).toBe(closeButton(navigator));
+  });
+
+  it("cancels from the tree step on Escape", async () => {
+    const onCancel = vi.fn<() => void>();
+    const navigator = await mountNavigator({ onCancel });
+
+    pressKey(dialogSurface(navigator), "Escape");
+
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("returns to the tree step from confirmation on Escape instead of cancelling", async () => {
+    const onCancel = vi.fn<() => void>();
+    const navigator = await mountNavigator({ onCancel });
+    await continueToConfirmation(navigator);
+
+    pressKey(dialogSurface(navigator), "Escape");
+    await settleRenderedDialog(navigator);
+
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(renderedTree(navigator)).not.toBeNull();
+  });
+
+  // The surface owns one dismissal route, so a backdrop press steps back from
+  // confirmation exactly like Escape instead of closing outright.
+  it("steps back from confirmation on a backdrop press and cancels from the tree step", async () => {
+    const onCancel = vi.fn<() => void>();
+    const navigator = await mountNavigator({ onCancel });
+    await continueToConfirmation(navigator);
+
+    backdropPress(navigator);
+    await settleRenderedDialog(navigator);
+
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(renderedTree(navigator)).not.toBeNull();
+
+    backdropPress(navigator);
+
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("aborts an in-flight summarization on Escape and swallows backdrop presses while busy", async () => {
+    const navigation = deferred<SessionTreeNavigateResult>();
+    const onNavigate = vi.fn<NavigateCallback>(() => navigation.promise);
+    const onAbort = vi.fn(() => Promise.resolve());
+    const onCancel = vi.fn<() => void>();
+    const navigator = await mountNavigator({ onNavigate, onAbort, onCancel });
+    await continueToConfirmation(navigator);
+    summaryRadio(navigator, "default").click();
+    await settleRenderedDialog(navigator);
+    primaryFooterButton(navigator).click();
+    await settleRenderedDialog(navigator);
+
+    backdropPress(navigator);
+    pressKey(dialogSurface(navigator), "Escape");
+
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onAbort).toHaveBeenCalledOnce();
+
+    navigation.resolve({ cancelled: true, aborted: true });
+    await settleRenderedDialog(navigator);
+  });
+
+  it("swallows Escape while a plain navigation is in flight", async () => {
+    const navigation = deferred<SessionTreeNavigateResult>();
+    const onNavigate = vi.fn<NavigateCallback>(() => navigation.promise);
+    const onAbort = vi.fn(() => Promise.resolve());
+    const onCancel = vi.fn<() => void>();
+    const navigator = await mountNavigator({ onNavigate, onAbort, onCancel });
+    await continueToConfirmation(navigator);
+    primaryFooterButton(navigator).click();
+    await settleRenderedDialog(navigator);
+
+    pressKey(dialogSurface(navigator), "Escape");
+
+    expect(onAbort).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+
+    navigation.resolve({ cancelled: false });
+    await settleRenderedDialog(navigator);
+  });
+});
 
 describe("session-tree-navigator interactions", () => {
   it("uses pointer selection for explicit navigation and retains it after cancellation", async () => {
@@ -159,6 +262,53 @@ describe("session-tree-navigator interactions", () => {
     expect(sessionTreeVisualDepth(20_000)).toBe(8);
   });
 });
+
+interface MountedNavigatorProps {
+  tree?: SessionTreeSnapshot;
+  onNavigate?: NavigateCallback;
+  onAbort?: () => Promise<void>;
+  onCancel?: () => void;
+}
+
+async function mountNavigator(props: MountedNavigatorProps = {}): Promise<SessionTreeNavigator> {
+  const navigator = new SessionTreeNavigator();
+  navigator.tree = props.tree ?? tree();
+  navigator.onNavigate = props.onNavigate ?? (() => Promise.resolve({ cancelled: false }));
+  if (props.onAbort !== undefined) navigator.onAbort = props.onAbort;
+  if (props.onCancel !== undefined) navigator.onCancel = props.onCancel;
+  document.body.append(navigator);
+  await settleRenderedDialog(navigator);
+  return navigator;
+}
+
+async function continueToConfirmation(navigator: SessionTreeNavigator): Promise<void> {
+  primaryFooterButton(navigator).click();
+  await settleRenderedDialog(navigator);
+}
+
+function treeRow(navigator: SessionTreeNavigator, nodeId: string): HTMLElement {
+  return requiredElement(navigator.shadowRoot?.querySelector<HTMLElement>(`[data-tree-node-id='${nodeId}']`), `navigator tree row ${nodeId}`);
+}
+
+function renderedTree(navigator: SessionTreeNavigator): Element | null {
+  return navigator.shadowRoot?.querySelector("[role='tree']") ?? null;
+}
+
+function closeButton(navigator: SessionTreeNavigator): HTMLElement {
+  return requiredElement(navigator.shadowRoot?.querySelector<HTMLElement>(".close-button"), "navigator close button");
+}
+
+function primaryFooterButton(navigator: SessionTreeNavigator): HTMLButtonElement {
+  return requiredElement(navigator.shadowRoot?.querySelector<HTMLButtonElement>("footer button.primary"), "navigator primary footer button");
+}
+
+function summaryRadio(navigator: SessionTreeNavigator, mode: SessionTreeSummaryChoice["mode"]): HTMLInputElement {
+  return requiredElement(navigator.shadowRoot?.querySelector<HTMLInputElement>(`input[name='session-tree-summary'][value='${mode}']`), `navigator ${mode} summary radio`);
+}
+
+function backdropPress(navigator: SessionTreeNavigator): void {
+  surfaceBackdrop(navigator).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
+}
 
 function initializedNavigator(): SessionTreeNavigator {
   const navigator = new SessionTreeNavigator();
