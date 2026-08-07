@@ -30,7 +30,7 @@ export interface SessionHeaderSummary {
   parentSession?: string;
 }
 
-/** Reads a session file header; injected so header-driven lookups are testable without a filesystem. */
+/** Reads a session file header; injected so lookups can replace or observe their header reads. */
 export type SessionHeaderReader = (sessionFile: string) => Promise<SessionHeaderSummary | undefined>;
 
 /**

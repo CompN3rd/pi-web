@@ -1,7 +1,7 @@
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentSessionDirEnvKeys } from "../../config.js";
 import { createPiSessionManagerGateway, defaultPiSessionDir, defaultPiSessionsRoot, filterSessionsForCwd, resolveSessionFileInDir, SessionDirResolver } from "./piSessionManagerGateway.js";
 import type { PiSessionListEntry } from "./piSessionService.js";
@@ -205,8 +205,8 @@ describe("Pi session manager gateway", () => {
 
 describe("gateway session-file resolution by id", () => {
   it("resolves a session from the id embedded in its file name without scanning other headers", async () => {
-    // Header reads are the resolver's only IO, so the injected reader is the
-    // seam that proves opening one session does not read the whole directory.
+    // Directory enumeration chooses candidates; the injected reader proves an
+    // exact filename match does not read unrelated session headers.
     const sharedSessionDir = join(tempDir, "shared-sessions");
     const targetPath = await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_target-id.jsonl", { id: "target-id", cwd });
     await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-01-000Z_other-id.jsonl", { id: "other-id", cwd });
@@ -228,6 +228,42 @@ describe("gateway session-file resolution by id", () => {
 
     await expect(gateway.resolveSessionFile(cwd, "configured-id")).resolves.toEqual({ id: "configured-id", cwd, path: targetPath });
     await expect(gateway.resolveSessionFile(cwd, "elsewhere-id")).resolves.toBeUndefined();
+  });
+
+  it("resolveSessionFile neither calls nor waits on an in-flight list", async () => {
+    const sharedSessionDir = join(tempDir, "shared-sessions");
+    const targetPath = await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_direct-id.jsonl", { id: "direct-id", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+    let releaseList!: (sessions: PiSessionListEntry[]) => void;
+    const pendingList = new Promise<PiSessionListEntry[]>((resolve) => {
+      releaseList = resolve;
+    });
+    let reportUnexpectedListCall!: () => void;
+    const unexpectedListCall = new Promise<void>((resolve) => {
+      reportUnexpectedListCall = () => {
+        resolve();
+      };
+    });
+    let listCallCount = 0;
+    const list = vi.spyOn(gateway, "list").mockImplementation(() => {
+      listCallCount += 1;
+      if (listCallCount > 1) reportUnexpectedListCall();
+      return pendingList;
+    });
+
+    // Hold one public listing open. A resolver coupled through `this.list`
+    // makes a second call and loses this race while both calls remain pending.
+    const inFlightList = gateway.list(cwd);
+    const resolution = gateway.resolveSessionFile(cwd, "direct-id");
+    const firstOutcome = await Promise.race([
+      resolution.then((match) => ({ kind: "resolved" as const, match })),
+      unexpectedListCall.then(() => ({ kind: "list-called" as const })),
+    ]);
+    releaseList([]);
+    await Promise.allSettled([inFlightList, resolution]);
+
+    expect(firstOutcome).toEqual({ kind: "resolved", match: { id: "direct-id", cwd, path: targetPath } });
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it("resolves an id prefix the same way a listing match would", async () => {
@@ -378,4 +414,3 @@ async function writeNamedSessionFile(dir: string, fileName: string, header: { id
   await writeFile(path, `${JSON.stringify(line)}\n`, "utf8");
   return path;
 }
-

@@ -339,9 +339,9 @@ export interface PiSessionManager {
 export interface PiSessionManagerGateway {
   list(cwd: string): Promise<PiSessionListEntry[]>;
   /**
-   * Locate a session file by id (exact match, then id prefix — the same
-   * precedence as finding it in `list`) without parsing transcripts or
-   * listing the workspace.
+   * Locate a session file by id, with an exact header id taking priority over
+   * a prefix, without parsing message bodies or building a full workspace
+   * transcript listing.
    */
   resolveSessionFile(cwd: string, sessionId: string): Promise<ResolvedSessionFile | undefined>;
   /**
@@ -355,7 +355,8 @@ export interface PiSessionManagerGateway {
   /**
    * Cross-project listing of Pi's session stores (the default store plus any
    * env-configured session dir). Session cleanup scans every project at once;
-   * per-session lookups use the cwd-scoped `list` instead.
+   * cwd-scoped UI listings use `list`, while direct named lookups use
+   * `resolveSessionFile`.
    */
   listAll(): Promise<PiSessionListEntry[]>;
   open(path: string): PiSessionManager;

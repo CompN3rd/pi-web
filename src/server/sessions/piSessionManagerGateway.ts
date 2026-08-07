@@ -159,13 +159,13 @@ export function filterSessionsForCwd(sessions: readonly PiSessionListEntry[], cw
  * and confirmed by one header read. Filename candidates that fail header
  * verification (a copy whose header holds a different session) do not end the
  * search: the remaining files are checked too, so sessions in renamed or
- * hand-named files still resolve, keeping the outcome identical to picking the
- * session out of a full listing. Headers decide: a file whose header id or cwd
+ * hand-named files still resolve. Headers decide: a file whose header id or cwd
  * does not match is not the session.
  *
  * Among matches, an exact header id wins over a prefix match wherever it
- * appears; ambiguous prefix matches resolve deterministically by creation-time
- * order (see `byNewestEmbeddedTimestamp`).
+ * appears. Ambiguous prefix candidates are considered in two buckets: filename
+ * matches before remaining files, with each bucket sorted by the creation time
+ * embedded in SDK-style names (see `byNewestEmbeddedTimestamp`).
  *
  * The header's cwd is returned canonicalized, matching what `list` reports.
  */
@@ -212,8 +212,8 @@ export async function resolveSessionFileInDir(
  * deterministic everywhere.
  *
  * This deliberately drifts from the listing, which orders by modified time:
- * the resolver verifies headers only and never stats files, so ambiguous
- * prefix matches resolve by creation-time order instead.
+ * the resolver never stats transcript files, so ambiguous prefix candidates
+ * within each bucket are considered in this creation-time order instead.
  */
 function byNewestEmbeddedTimestamp(a: string, b: string): number {
   const timestampA = embeddedFileNameTimestamp(basename(a));

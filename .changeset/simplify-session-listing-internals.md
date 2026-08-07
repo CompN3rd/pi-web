@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Speed up session listing and make its cached rows more reliable. Listing reads only as much of each session file as a row needs, and its cache re-reads a changed session file whole rather than tracking partial parse state, which removes a class of stale-row bugs after a session file is rewritten in place. Opening, prompting, or running a command in a session you name directly stays independent of listing, so a large or busy session directory does not slow those down or make them wait behind a listing already in progress.
+Speed up session listing and keep its cached rows reliable. The scanner reads each changed valid session file through the end, while avoiding decoding or parsing message bodies that no longer affect its row, and rebuilds the row from that complete pass instead of carrying partial parse state forward. Opening, prompting, or running a command in a directly named session does not build a full transcript listing or wait behind a listing promise already in progress.
