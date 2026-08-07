@@ -64,6 +64,7 @@ import "./AuthDialog";
 import "./ProjectDialog";
 import "./MachineDialog";
 import type { MachineDialogSubmit } from "./MachineDialog";
+import { hasRenderedModal } from "./modalLayerRegistry";
 import "./SettingsDialog";
 import "./WorkspacePanel";
 import type { WorkspacePanelEmptyState } from "./WorkspacePanel";
@@ -266,7 +267,7 @@ export class PiWebApp extends LitElement {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (this.isModalOverlayOpen()) return;
+    if (this.isRenderedModalOpen()) return;
     if (this.keyboard.handle(event, this.getDefaultActions(), { shortcuts: this.shortcutConfig })) {
       event.preventDefault();
       event.stopPropagation();
@@ -343,26 +344,14 @@ export class PiWebApp extends LitElement {
       if (document.visibilityState !== "visible") return false;
       if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     }
-    if (this.isModalOverlayOpen()) return false;
+    if (this.isRenderedModalOpen()) return false;
     if (this.state.mainView === "chat") return true;
     if (this.state.mainView === "navigation") return !this.appShell.isMobileNavigationLayout;
     return this.isDesktopSideBySideLayout();
   }
 
-  private isModalOverlayOpen(): boolean {
-    return this.settingsSection !== undefined
-      || this.sessionCleanupDialog !== undefined
-      || this.state.actionPaletteOpen
-      || this.state.projectDialogOpen
-      || this.state.machineDialogOpen
-      || this.state.treeDialog !== undefined
-      || this.state.themeDialog !== undefined
-      || this.state.authDialog !== undefined
-      || (this.state.selectedSession !== undefined && (
-        this.state.commandDialog !== undefined
-        || this.state.modelDialog !== undefined
-        || this.state.thinkingDialog !== undefined
-      ));
+  private isRenderedModalOpen(): boolean {
+    return hasRenderedModal(this.ownerDocument);
   }
 
   override connectedCallback(): void {
@@ -762,7 +751,7 @@ export class PiWebApp extends LitElement {
   }
 
   private shouldAutoFocusPrompt(): boolean {
-    return !this.isModalOverlayOpen() && this.appShell.shouldAutoFocusPrompt();
+    return !this.isRenderedModalOpen() && this.appShell.shouldAutoFocusPrompt();
   }
 
   private async withChatPrependTransition(action: () => Promise<void>) {
@@ -1391,6 +1380,10 @@ export class PiWebApp extends LitElement {
     if (this.state.mainView !== "chat") this.selectMainView("chat");
     await this.updateComplete;
     await nextFrame();
+    // The focus request may outlive the dialog transition that scheduled it.
+    // Recheck the rendered boundary at the final side-effect point so a newer
+    // or surviving modal keeps visual and keyboard focus ownership.
+    if (this.isRenderedModalOpen()) return;
     this.promptEditor?.focusInput();
   }
 

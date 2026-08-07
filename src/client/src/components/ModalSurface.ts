@@ -1,10 +1,8 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
+import { deepActiveElement, focusElement, isHiddenOrInertInComposedTree, registerRenderedModal, type RenderedModalRegistration } from "./modalLayerRegistry";
 
 const FOCUSABLE_SELECTOR = "button, input, select, textarea, a[href], [tabindex]";
-const connectedModalSurfaces = new Set<ModalSurface>();
-const modalSurfaceConnectionOrders = new WeakMap<ModalSurface, number>();
-let modalSurfaceConnectionOrder = 0;
 
 /**
  * Shared modal surface for the client's custom overlay dialogs. It owns the
@@ -42,22 +40,16 @@ export class ModalSurface extends LitElement {
 
   @query("section") private section?: HTMLElement;
 
-  private focusRestorationPath: HTMLElement[] = [];
+  private modalRegistration: RenderedModalRegistration | undefined;
 
   override connectedCallback(): void {
     super.connectedCallback();
-    const previous = deepActiveElement();
-    if (previous instanceof HTMLElement) {
-      const lowerSurface = containingModalSurface(previous);
-      // Copy a lower dialog's path so its opener remains available even if the
-      // lower surface disconnects while this newer dialog still owns focus.
-      this.focusRestorationPath = [previous, ...(lowerSurface?.focusRestorationPath ?? [])];
-    } else {
-      this.focusRestorationPath = [];
-    }
-    modalSurfaceConnectionOrders.set(this, ++modalSurfaceConnectionOrder);
-    connectedModalSurfaces.add(this);
-    requestModalSurfaceUpdates(this.ownerDocument);
+    this.modalRegistration = registerRenderedModal({
+      element: this,
+      paintElement: modalLayerHost(this),
+      focus: () => { this.focusDialogContent(); },
+      onTopChange: () => { this.requestUpdate(); },
+    });
     // Key handling lives on the host, not the shadow section: slotted dialog
     // content bubbles key events up its light-DOM tree to this element, and
     // key presses inside the surface's own shadow section reach it as composed
@@ -67,28 +59,10 @@ export class ModalSurface extends LitElement {
 
   override disconnectedCallback(): void {
     this.removeEventListener("keydown", this.handleKeyDown);
-    connectedModalSurfaces.delete(this);
-    requestModalSurfaceUpdates(this.ownerDocument);
+    const registration = this.modalRegistration;
+    this.modalRegistration = undefined;
     super.disconnectedCallback();
-    const restorationPath = this.focusRestorationPath;
-    this.focusRestorationPath = [];
-    // Restore only when focus still belongs to this dialog: either it sits
-    // inside the subtree being removed, or the removal already reset it to the
-    // page. When a newer dialog owns focus, leave it alone.
-    const active = deepActiveElement();
-    const focusWasReset = active === null || active === document.body || active === document.documentElement;
-    if (!focusWasReset && !composedContains(this, active)) return;
-
-    // A lower visible modal takes precedence over an opener behind it. Prefer
-    // the exact remembered control when it still belongs to that modal, then
-    // fall back to the lower modal's own initial-focus contract.
-    const lowerSurface = topModalSurface(this.ownerDocument);
-    if (lowerSurface !== undefined) {
-      if (restoreFocus(restorationPath.filter((target) => composedContains(lowerSurface, target)))) return;
-      lowerSurface.focusDialog();
-      return;
-    }
-    restoreFocus(restorationPath);
+    registration?.unregister();
   }
 
   protected override firstUpdated(): void {
@@ -102,16 +76,19 @@ export class ModalSurface extends LitElement {
    */
   focusDialog(): void {
     // Async dialog data can resolve after a visually higher modal has opened.
-    // Only the actual top layer may claim focus; when that layer closes,
-    // disconnectedCallback asks the next surface to apply this contract.
-    if (!isTopModalSurface(this)) return;
+    // Only the actual top layer may claim focus; when that layer closes, the
+    // rendered-modal registry reapplies the surviving layer's focus contract.
+    this.modalRegistration?.focus();
+  }
+
+  private focusDialogContent(): void {
     const initialTarget = this.initialFocusTarget();
     if (initialTarget !== null && focusElement(initialTarget)) return;
     if (this.section !== undefined) focusElement(this.section);
   }
 
   override render(): TemplateResult {
-    const isTop = isTopModalSurface(this);
+    const isTop = this.modalRegistration?.isTop === true;
     return html`
       <div class="backdrop" @mousedown=${(event: MouseEvent) => { this.handleBackdropMouseDown(event); }}>
         <section
@@ -160,7 +137,7 @@ export class ModalSurface extends LitElement {
       this.section?.focus();
       return;
     }
-    const active = deepActiveElement();
+    const active = deepActiveElement(this.ownerDocument);
     const activeIndex = focusable.findIndex((element) => element === active);
     if (activeIndex === -1) {
       // Focus rests on the dialog section itself (or an untracked element):
@@ -197,19 +174,6 @@ export class ModalSurface extends LitElement {
   `;
 }
 
-/** Deepest element holding focus, resolving through nested shadow roots. */
-function deepActiveElement(): Element | null {
-  let active: Element | null = document.activeElement;
-  while (active instanceof HTMLElement) {
-    const deeper: Element | null = active.shadowRoot?.activeElement ?? null;
-    if (deeper === null) return active;
-    active = deeper;
-  }
-  // happy-dom reports activeElement as undefined when nothing is focused;
-  // the runtime value is normalized even though the type says Element | null.
-  return active ?? null;
-}
-
 /**
  * Focusable elements inside the surface's dialog content in flattened Tab-cycle
  * order. Open shadow roots replace a host's light children, and slots insert
@@ -233,31 +197,6 @@ function isSequentiallyFocusable(element: HTMLElement): boolean {
   return element.matches(FOCUSABLE_SELECTOR) && element.tabIndex >= 0;
 }
 
-/** Hidden/inert content is absent from the browser's sequential focus order. */
-function isHiddenOrInertInComposedTree(element: HTMLElement): boolean {
-  const view = element.ownerDocument.defaultView;
-  const elementStyle = view?.getComputedStyle(element);
-  if (elementStyle?.visibility === "hidden" || elementStyle?.visibility === "collapse") return true;
-
-  let current: Element | null = element;
-  while (current !== null) {
-    if (current.hasAttribute("hidden") || current.hasAttribute("inert")) return true;
-    const style = view?.getComputedStyle(current);
-    if (style?.display === "none" || style?.getPropertyValue("content-visibility") === "hidden") return true;
-    current = composedParentElement(current);
-  }
-  return false;
-}
-
-function composedParentElement(element: Element): Element | null {
-  const assignedSlot = element.assignedSlot;
-  if (assignedSlot instanceof HTMLSlotElement) return assignedSlot;
-  const parent = element.parentElement;
-  if (parent instanceof Element) return parent;
-  const root = element.getRootNode();
-  return root instanceof ShadowRoot && root.host instanceof Element ? root.host : null;
-}
-
 function flattenedChildElements(parent: Element | ShadowRoot): Element[] {
   if (parent instanceof HTMLSlotElement) {
     const assigned = parent.assignedNodes({ flatten: true });
@@ -270,97 +209,7 @@ function flattenedChildElements(parent: Element | ShadowRoot): Element[] {
   return Array.from(renderedRoot.children);
 }
 
-function requestModalSurfaceUpdates(ownerDocument: Document): void {
-  for (const surface of connectedModalSurfaces) {
-    if (surface.ownerDocument === ownerDocument) surface.requestUpdate();
-  }
-}
-
-function topModalSurface(ownerDocument: Document): ModalSurface | undefined {
-  let top: ModalSurface | undefined;
-  for (const surface of connectedModalSurfaces) {
-    if (!surface.isConnected || surface.ownerDocument !== ownerDocument) continue;
-    if (top === undefined || compareModalPaintOrder(surface, top) > 0) top = surface;
-  }
-  return top;
-}
-
-function isTopModalSurface(surface: ModalSurface): boolean {
-  return topModalSurface(surface.ownerDocument) === surface;
-}
-
-/** Compare the app's fixed modal hosts by z-index, then DOM paint order. */
-function compareModalPaintOrder(left: ModalSurface, right: ModalSurface): number {
-  const leftHost = modalLayerHost(left);
-  const rightHost = modalLayerHost(right);
-  const layerDifference = modalLayerZIndex(leftHost) - modalLayerZIndex(rightHost);
-  if (layerDifference !== 0) return layerDifference;
-  if (leftHost !== rightHost) {
-    const position = leftHost.compareDocumentPosition(rightHost);
-    if ((position & Node.DOCUMENT_POSITION_DISCONNECTED) === 0) {
-      if ((position & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return -1;
-      if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return 1;
-    }
-  }
-  return (modalSurfaceConnectionOrders.get(left) ?? 0) - (modalSurfaceConnectionOrders.get(right) ?? 0);
-}
-
 function modalLayerHost(surface: ModalSurface): HTMLElement {
   const root = surface.getRootNode();
   return root instanceof ShadowRoot && root.host instanceof HTMLElement ? root.host : surface;
-}
-
-function modalLayerZIndex(host: HTMLElement): number {
-  const value = host.ownerDocument.defaultView?.getComputedStyle(host).zIndex ?? "";
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function restoreFocus(path: readonly HTMLElement[]): boolean {
-  for (const target of path) {
-    if (focusElement(target)) return true;
-  }
-  return false;
-}
-
-function focusElement(target: HTMLElement): boolean {
-  if (!target.isConnected || target.matches(":disabled") || isHiddenOrInertInComposedTree(target)) return false;
-  target.focus();
-  const active = deepActiveElement();
-  return active === target || (active !== null && composedContains(target, active));
-}
-
-/** Nearest modal surface containing `node`, crossing open shadow boundaries. */
-function containingModalSurface(node: Element): ModalSurface | undefined {
-  let current: Node = node;
-  for (;;) {
-    if (current instanceof ModalSurface) return current;
-    const parent: Node | null = current.parentNode;
-    if (parent != null && parent !== current) {
-      current = parent;
-      continue;
-    }
-    const root = current instanceof ShadowRoot ? current : current.getRootNode();
-    if (!(root instanceof ShadowRoot)) return undefined;
-    current = root.host;
-  }
-}
-
-/** Whether `node` is contained in `host` across shadow boundaries. */
-function composedContains(host: Element, node: Element): boolean {
-  let current: Node = node;
-  for (;;) {
-    if (current === host) return true;
-    // happy-dom reports missing or bogus parents (undefined, or even the node
-    // itself) at shadow boundaries, so guard the plain DOM climb carefully.
-    const parent: Node | null = current.parentNode;
-    if (parent != null && parent !== current) {
-      current = parent;
-      continue;
-    }
-    // A shadow tree's top node reports no usable parent; hop to the shadow host.
-    const root = current instanceof ShadowRoot ? current : current.getRootNode();
-    if (!(root instanceof ShadowRoot)) return false;
-    current = root.host;
-  }
 }
