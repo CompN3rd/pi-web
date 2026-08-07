@@ -13,7 +13,8 @@ const FOCUSABLE_SELECTOR = "button, input, select, textarea, a[href], [tabindex]
  * - routes Escape and backdrop presses to `onClose`, unless the host sets the
  *   `busy` opt-out (Escape is then routed to the optional `onBusyEscape`),
  * - traps Tab/Shift+Tab within the dialog's focusable elements, including
- *   controls inside nested shadow roots,
+ *   controls inside nested shadow roots, and counts a named radio group as the
+ *   one sequential stop the platform gives it,
  * - keeps focus and modal accessibility ownership on the visually top surface,
  * - restores focus to the previous control or surviving lower dialog on disconnect.
  *
@@ -186,7 +187,38 @@ function modalSurfaceFocusableElements(surface: ModalSurface): HTMLElement[] {
     for (const child of flattenedChildElements(element)) collect(child);
   };
   for (const child of flattenedChildElements(surface)) collect(child);
-  return focusable;
+  return withOneStopPerRadioGroup(focusable);
+}
+
+/**
+ * Collapses every named radio group to the single Tab stop the platform gives
+ * it: the checked member, or the group's first focusable member when none is
+ * checked. Counting each radio separately would put the trap's last stop
+ * before the group's real end, so Tab from the checked radio of a trailing
+ * group would be treated as mid-cycle and walk focus out of the dialog.
+ *
+ * Groups are keyed by form owner and name, matching how HTML scopes a radio
+ * group; radios with no name are independent stops and keep their own.
+ */
+function withOneStopPerRadioGroup(focusable: readonly HTMLElement[]): HTMLElement[] {
+  const stopsByOwner = new Map<HTMLFormElement | null, Map<string, HTMLInputElement>>();
+  for (const element of focusable) {
+    const radio = namedRadio(element);
+    if (radio === null) continue;
+    const stopsByName = stopsByOwner.get(radio.form) ?? new Map<string, HTMLInputElement>();
+    stopsByOwner.set(radio.form, stopsByName);
+    const stop = stopsByName.get(radio.name);
+    // First member wins until a checked member appears; a group has at most one
+    // checked radio, so the checked member then keeps the stop for good.
+    if (stop === undefined || (radio.checked && !stop.checked)) stopsByName.set(radio.name, radio);
+  }
+  const stops = new Set<HTMLElement>(Array.from(stopsByOwner.values()).flatMap((stopsByName) => Array.from(stopsByName.values())));
+  return focusable.filter((element) => namedRadio(element) === null || stops.has(element));
+}
+
+function namedRadio(element: HTMLElement): HTMLInputElement | null {
+  if (!(element instanceof HTMLInputElement) || element.type !== "radio" || element.name === "") return null;
+  return element;
 }
 
 function isSequentiallyFocusable(element: HTMLElement): boolean {

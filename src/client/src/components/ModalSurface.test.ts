@@ -248,6 +248,105 @@ describe("modal-surface Tab trap", () => {
   });
 });
 
+describe("modal-surface radio group Tab stops", () => {
+  it("wraps Tab from a trailing checked radio group instead of leaking out of the dialog", async () => {
+    // The reported path: the Keyboard settings panel while loading, where the
+    // panel action is disabled and the Enter-key preference group is the
+    // dialog's last Tab stop.
+    const surface = await mountRadioGroupSurface({ checkedOption: "send" });
+    const send = radioOption(surface, "send");
+    const stay = requiredElement(surface.querySelector<HTMLButtonElement>("#stay"), "enabled control");
+
+    send.focus();
+    const forward = pressKey(send, "Tab");
+
+    expect(forward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(stay);
+  });
+
+  it("keeps the checked member's own position as the group's stop", async () => {
+    const surface = await mountRadioGroupSurface({ checkedOption: "newline" });
+    const newline = radioOption(surface, "newline");
+    const stay = requiredElement(surface.querySelector<HTMLButtonElement>("#stay"), "enabled control");
+
+    newline.focus();
+    const forward = pressKey(newline, "Tab");
+    expect(forward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(stay);
+
+    stay.focus();
+    const backward = pressKey(stay, "Tab", { shift: true });
+    expect(backward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(newline);
+
+    // The unchecked member is not a stop, so a Tab press from it re-enters the
+    // cycle at its leading edge instead of counting as mid-cycle.
+    const send = radioOption(surface, "send");
+    send.focus();
+    const fromUnchecked = pressKey(send, "Tab");
+    expect(fromUnchecked.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(stay);
+  });
+
+  it("uses the first member as the group's stop when nothing is checked", async () => {
+    const surface = await mountRadioGroupSurface({ checkedOption: "none" });
+    const send = radioOption(surface, "send");
+    const stay = requiredElement(surface.querySelector<HTMLButtonElement>("#stay"), "enabled control");
+
+    send.focus();
+    const forward = pressKey(send, "Tab");
+    expect(forward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(stay);
+
+    stay.focus();
+    const backward = pressKey(stay, "Tab", { shift: true });
+    expect(backward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(send);
+  });
+
+  it("collapses each named group separately, so the last group ends the cycle", async () => {
+    const surface = await mountSurface({
+      content: `
+        <input id="first-group" type="radio" name="operation" checked>
+        <input type="radio" name="operation">
+        <input id="second-group" type="radio" name="summary" checked>
+        <input type="radio" name="summary">
+      `,
+    });
+    const firstGroup = requiredElement(surface.querySelector<HTMLInputElement>("#first-group"), "first group stop");
+    const secondGroup = requiredElement(surface.querySelector<HTMLInputElement>("#second-group"), "second group stop");
+
+    // The second group follows the first mid-cycle rather than the first
+    // group's unchecked sibling.
+    firstGroup.focus();
+    const acrossGroups = pressKey(firstGroup, "Tab");
+    expect(acrossGroups.defaultPrevented).toBe(false);
+
+    // And the last group's checked member ends the cycle: its trailing
+    // unchecked sibling is not a stop of its own.
+    secondGroup.focus();
+    const wrap = pressKey(secondGroup, "Tab");
+    expect(wrap.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(firstGroup);
+  });
+
+  it("keeps unnamed radios as independent Tab stops", async () => {
+    const surface = await mountSurface({
+      content: `<input id="unnamed-one" type="radio"><input id="unnamed-two" type="radio">`,
+    });
+    const one = requiredElement(surface.querySelector<HTMLInputElement>("#unnamed-one"), "first unnamed radio");
+    const two = requiredElement(surface.querySelector<HTMLInputElement>("#unnamed-two"), "second unnamed radio");
+
+    one.focus();
+    expect(pressKey(one, "Tab").defaultPrevented).toBe(false);
+
+    two.focus();
+    const wrap = pressKey(two, "Tab");
+    expect(wrap.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(one);
+  });
+});
+
 describe("modal-surface nested shadow content", () => {
   it("includes controls inside nested shadow roots in the Tab cycle", async () => {
     const surface = await mountSurface({
@@ -414,6 +513,29 @@ async function mountSurface(options: MountSurfaceOptions): Promise<ModalSurface>
   document.body.append(surface);
   await surface.updateComplete;
   return surface;
+}
+
+/**
+ * Mirrors the reported Keyboard settings shape: a disabled panel action, one
+ * enabled control, then a trailing named radio group rendered inside labels.
+ */
+async function mountRadioGroupSurface(options: { checkedOption: "send" | "newline" | "none" }): Promise<ModalSurface> {
+  const surface = await mountSurface({
+    content: `
+      <button id="reload" disabled>Reload</button>
+      <button id="stay">Stay</button>
+      <div role="radiogroup" aria-label="Enter key behavior">
+        <label><input id="option-send" type="radio" name="prompt-enter-preference"><span>Send</span></label>
+        <label><input id="option-newline" type="radio" name="prompt-enter-preference"><span>Newline</span></label>
+      </div>
+    `,
+  });
+  if (options.checkedOption !== "none") radioOption(surface, options.checkedOption).checked = true;
+  return surface;
+}
+
+function radioOption(surface: ModalSurface, option: "send" | "newline"): HTMLInputElement {
+  return requiredElement(surface.querySelector<HTMLInputElement>(`#option-${option}`), `${option} radio option`);
 }
 
 async function mountTrapSurface(): Promise<ModalSurface> {
