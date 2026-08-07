@@ -6,6 +6,7 @@ import { workspaceUploadPath } from "../api/workspaceUploads";
 import type { WorkspaceUploadBatchState, WorkspaceUploadFileState } from "../workspaceUploadState";
 import { MAX_IMAGE_PREVIEW_BYTES, MAX_IMAGE_PREVIEW_LABEL } from "../../../shared/workspaceFiles";
 import type { WorkspacePanelContext } from "../plugins/types";
+import { registerRenderedModal, type RenderedModalRegistration } from "./modalLayerRegistry";
 import { workspacePanelStyles } from "./shared";
 
 interface PendingWorkspaceUploadReview {
@@ -22,6 +23,8 @@ export interface WorkspaceUploadScope {
 export class WorkspaceFilesPanel extends LitElement {
   @property({ attribute: false }) context: WorkspacePanelContext | undefined;
   @query("#workspace-upload-input") private uploadInput?: HTMLInputElement;
+  @query(".dialog-backdrop") private uploadDialogBackdrop?: HTMLElement | null;
+  @query(".upload-dialog") private uploadDialog?: HTMLElement | null;
   @state() private pendingUpload: PendingWorkspaceUploadReview | undefined;
   @state() private destinationFolder = "";
   @state() private overwrite = false;
@@ -29,11 +32,21 @@ export class WorkspaceFilesPanel extends LitElement {
   @state() private formError = "";
   @state() private dragActive = false;
   private dragDepth = 0;
+  private uploadModalRegistration: RenderedModalRegistration | undefined;
 
   protected override willUpdate(changedProperties: PropertyValues<this>): void {
     if (!changedProperties.has("context")) return;
     const previous = changedProperties.get("context");
     if (previous !== undefined && this.context !== undefined && workspaceContextKey(previous) !== workspaceContextKey(this.context)) this.resetPendingUpload();
+  }
+
+  protected override updated(): void {
+    this.syncUploadModal();
+  }
+
+  override disconnectedCallback(): void {
+    this.releaseUploadModal();
+    super.disconnectedCallback();
   }
 
   override render(): TemplateResult {
@@ -182,7 +195,7 @@ export class WorkspaceFilesPanel extends LitElement {
     const fileCount = review.files.length;
     return html`
       <div class="dialog-backdrop" @mousedown=${() => { this.closeUploadDialog(); }}>
-        <section class="upload-dialog" role="dialog" aria-modal="true" aria-label="Review file upload" @mousedown=${(event: MouseEvent) => { event.stopPropagation(); }} @keydown=${this.handleDialogKeyDown}>
+        <section class="upload-dialog" role="dialog" aria-modal="true" aria-label="Review file upload" tabindex="-1" @mousedown=${(event: MouseEvent) => { event.stopPropagation(); }} @keydown=${this.handleDialogKeyDown}>
           <header>
             <div>
               <span class="eyebrow">Upload</span>
@@ -193,7 +206,7 @@ export class WorkspaceFilesPanel extends LitElement {
           <form @submit=${(event: SubmitEvent) => { this.submitUploadReview(event, context, review); }}>
             <label>
               <span>Destination folder</span>
-              <input .value=${this.destinationFolder} placeholder=${context.workspaceUploadDefaultFolder} @input=${this.handleDestinationInput} />
+              <input id="workspace-upload-destination" .value=${this.destinationFolder} placeholder=${context.workspaceUploadDefaultFolder} @input=${this.handleDestinationInput} />
               <small>Workspace-relative. Leave empty to upload at the workspace root.</small>
             </label>
             <div class="dialog-options">
@@ -321,6 +334,45 @@ export class WorkspaceFilesPanel extends LitElement {
     this.formError = "";
   }
 
+  private syncUploadModal(): void {
+    const backdrop = this.uploadDialogBackdrop;
+    const dialog = this.uploadDialog;
+    if (!(backdrop instanceof HTMLElement) || !(dialog instanceof HTMLElement)) {
+      this.releaseUploadModal();
+      return;
+    }
+    if (this.uploadModalRegistration !== undefined) {
+      this.applyUploadModalAccessibility(dialog, this.uploadModalRegistration.isTop);
+      return;
+    }
+
+    const registration = registerRenderedModal({
+      element: backdrop,
+      // The workspace panel establishes the outer stacking context. Its
+      // internal z-index cannot outrank a fixed application dialog outside it.
+      paintElement: workspaceModalLayerHost(this),
+      focus: () => {
+        const destination = this.renderRoot.querySelector<HTMLElement>("#workspace-upload-destination");
+        (destination ?? dialog).focus();
+      },
+      onTopChange: (isTop) => { this.applyUploadModalAccessibility(dialog, isTop); },
+    });
+    this.uploadModalRegistration = registration;
+    registration.focus();
+  }
+
+  private applyUploadModalAccessibility(dialog: HTMLElement, isTop: boolean): void {
+    dialog.setAttribute("aria-modal", isTop ? "true" : "false");
+    if (isTop) dialog.removeAttribute("aria-hidden");
+    else dialog.setAttribute("aria-hidden", "true");
+  }
+
+  private releaseUploadModal(): void {
+    const registration = this.uploadModalRegistration;
+    this.uploadModalRegistration = undefined;
+    registration?.unregister();
+  }
+
   private resetPendingUpload(): void {
     this.closeUploadDialog();
     this.dragDepth = 0;
@@ -440,6 +492,11 @@ function fileListToArray(files: FileList | null | undefined): File[] {
 
 function isFileDrag(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+
+function workspaceModalLayerHost(panel: WorkspaceFilesPanel): HTMLElement {
+  const root = panel.getRootNode();
+  return root instanceof ShadowRoot && root.host instanceof HTMLElement ? root.host : panel;
 }
 
 function uploadSummaryLabel(batches: readonly WorkspaceUploadBatchState[]): string {
