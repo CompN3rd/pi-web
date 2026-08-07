@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
-import { SessionTreeNavigator, sessionTreeEntryReturnsToEditor, sessionTreeVisualDepth } from "./SessionTreeNavigator";
+import type { SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
+import { SessionTreeNavigator, sessionTreeEntryReturnsToEditor, sessionTreeKindPresentation, sessionTreeVisualDepth } from "./SessionTreeNavigator";
 
 type NavigateCallback = (targetId: string, summaryChoice: SessionTreeSummaryChoice) => Promise<SessionTreeNavigateResult>;
 type ForkCallback = (entryId: string) => Promise<SessionTreeForkResult>;
@@ -33,6 +33,26 @@ describe("session-tree-navigator location step", () => {
     expect(shadowText(navigator)).toContain("does not contain any selectable history entries");
     expect(footerLabels(navigator)).toEqual(["Cancel", "Next"]);
     expect(footerButton(navigator, "Next").disabled).toBe(true);
+  });
+
+  it("uses the same semantic kind badge treatment in the tree and selected-entry steps", async () => {
+    const navigator = await mountNavigator();
+    const root = treeItem(navigator, "root");
+    root.click();
+    await settle(navigator);
+
+    const treeBadge = kindBadge(root);
+    expect(treeBadge.textContent).toBe("User");
+    expect(treeBadge.classList.contains("kind-tone-user")).toBe(true);
+    expect(root.classList.contains("kind-tone-user")).toBe(false);
+
+    await advanceToAction(navigator);
+    const selectedEntry = navigator.renderRoot.querySelector(".selected-entry");
+    if (!(selectedEntry instanceof HTMLElement)) throw new Error("Selected entry was unavailable");
+    const actionBadge = kindBadge(selectedEntry);
+    expect(actionBadge.textContent).toBe("User");
+    expect(actionBadge.classList.contains("kind-tone-user")).toBe(true);
+    expect(selectedEntry.classList.contains("kind-tone-user")).toBe(false);
   });
 
   it("ignores f and F but advances with Enter", async () => {
@@ -290,6 +310,40 @@ describe("session-tree-navigator action step", () => {
 });
 
 describe("session-tree-navigator display helpers", () => {
+  it("maps every node kind to its semantic badge treatment and readable label", () => {
+    const actual: Record<SessionTreeNodeKind, ReturnType<typeof sessionTreeKindPresentation>> = {
+      user: sessionTreeKindPresentation("user"),
+      assistant: sessionTreeKindPresentation("assistant"),
+      "tool-result": sessionTreeKindPresentation("tool-result"),
+      bash: sessionTreeKindPresentation("bash"),
+      "custom-message": sessionTreeKindPresentation("custom-message"),
+      compaction: sessionTreeKindPresentation("compaction"),
+      "branch-summary": sessionTreeKindPresentation("branch-summary"),
+      "model-change": sessionTreeKindPresentation("model-change"),
+      "thinking-level-change": sessionTreeKindPresentation("thinking-level-change"),
+      "session-info": sessionTreeKindPresentation("session-info"),
+      label: sessionTreeKindPresentation("label"),
+      custom: sessionTreeKindPresentation("custom"),
+      other: sessionTreeKindPresentation("other"),
+    };
+
+    expect(actual).toEqual({
+      user: { label: "User", tone: "user", bookkeeping: false },
+      assistant: { label: "Assistant", tone: "assistant", bookkeeping: false },
+      "tool-result": { label: "Tool result", tone: "tool", bookkeeping: false },
+      bash: { label: "Shell", tone: "shell", bookkeeping: false },
+      "custom-message": { label: "Custom message", tone: "context", bookkeeping: false },
+      compaction: { label: "Compaction", tone: "context", bookkeeping: false },
+      "branch-summary": { label: "Branch summary", tone: "context", bookkeeping: false },
+      "model-change": { label: "Model", tone: "metadata", bookkeeping: true },
+      "thinking-level-change": { label: "Thinking", tone: "metadata", bookkeeping: true },
+      "session-info": { label: "Session info", tone: "metadata", bookkeeping: true },
+      label: { label: "Label", tone: "metadata", bookkeeping: true },
+      custom: { label: "Custom", tone: "metadata", bookkeeping: true },
+      other: { label: "Other", tone: "metadata", bookkeeping: true },
+    });
+  });
+
   it("describes Pi's editor-return semantics and bounds pathological visual indentation", () => {
     expect(sessionTreeEntryReturnsToEditor("user")).toBe(true);
     expect(sessionTreeEntryReturnsToEditor("custom-message")).toBe(true);
@@ -344,6 +398,12 @@ function treeItem(navigator: SessionTreeNavigator, id: string): HTMLElement {
   const item = navigator.renderRoot.querySelector(`[data-tree-node-id='${id}']`);
   if (!(item instanceof HTMLElement)) throw new Error(`Tree item "${id}" was unavailable`);
   return item;
+}
+
+function kindBadge(container: ParentNode): HTMLElement {
+  const badge = container.querySelector(".kind");
+  if (!(badge instanceof HTMLElement)) throw new Error("Kind badge was unavailable");
+  return badge;
 }
 
 function closeButton(navigator: SessionTreeNavigator): HTMLButtonElement {

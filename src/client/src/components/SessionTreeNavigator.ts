@@ -10,6 +10,30 @@ type NavigatorStep = "tree" | "action";
 type NavigatorOperation = "continue" | "fork";
 type PendingFocus = "tree" | "operation" | "summary" | "custom";
 
+export type SessionTreeKindTone = "user" | "assistant" | "tool" | "shell" | "context" | "metadata";
+
+export interface SessionTreeKindPresentation {
+  readonly label: string;
+  readonly tone: SessionTreeKindTone;
+  readonly bookkeeping: boolean;
+}
+
+const SESSION_TREE_KIND_PRESENTATION = {
+  user: { label: "User", tone: "user", bookkeeping: false },
+  assistant: { label: "Assistant", tone: "assistant", bookkeeping: false },
+  "tool-result": { label: "Tool result", tone: "tool", bookkeeping: false },
+  bash: { label: "Shell", tone: "shell", bookkeeping: false },
+  "custom-message": { label: "Custom message", tone: "context", bookkeeping: false },
+  compaction: { label: "Compaction", tone: "context", bookkeeping: false },
+  "branch-summary": { label: "Branch summary", tone: "context", bookkeeping: false },
+  "model-change": { label: "Model", tone: "metadata", bookkeeping: true },
+  "thinking-level-change": { label: "Thinking", tone: "metadata", bookkeeping: true },
+  "session-info": { label: "Session info", tone: "metadata", bookkeeping: true },
+  label: { label: "Label", tone: "metadata", bookkeeping: true },
+  custom: { label: "Custom", tone: "metadata", bookkeeping: true },
+  other: { label: "Other", tone: "metadata", bookkeeping: true },
+} as const satisfies Record<SessionTreeNodeKind, SessionTreeKindPresentation>;
+
 @customElement("session-tree-navigator")
 export class SessionTreeNavigator extends LitElement {
   @property({ attribute: false }) tree: SessionTreeSnapshot = EMPTY_TREE;
@@ -100,12 +124,13 @@ export class SessionTreeNavigator extends LitElement {
   private renderTreeRow(row: SessionTreeRow): TemplateResult {
     const selected = row.node.id === this.selectedId;
     const expanded = row.childIds.length > 0 && !this.foldedIds.has(row.node.id);
+    const kindPresentation = sessionTreeKindPresentation(row.node.kind);
     const classes = [
       "tree-row",
       selected ? "selected" : "",
       row.activePath ? "active-path" : "",
       row.activeLeaf ? "active-leaf" : "",
-      isBookkeepingKind(row.node.kind) ? "bookkeeping" : "",
+      kindPresentation.bookkeeping ? "bookkeeping" : "",
     ].filter((value) => value !== "").join(" ");
     const visualDepth = sessionTreeVisualDepth(row.branchDepth);
     return html`
@@ -129,7 +154,7 @@ export class SessionTreeNavigator extends LitElement {
           @click=${(event: MouseEvent) => { this.toggleNode(row.node.id, event); }}
         >${row.childIds.length === 0 ? "·" : expanded ? "▾" : "▸"}</span>
         <span class="metadata">
-          <span class="kind">${sessionTreeKindLabel(row.node.kind)}</span>
+          ${this.renderKindBadge(kindPresentation)}
           <span class="badges">
             ${row.activePath && !row.activeLeaf ? html`<span class="badge path">Active path</span>` : null}
             ${row.activeLeaf ? html`<span class="badge leaf">Active leaf</span>` : null}
@@ -144,6 +169,10 @@ export class SessionTreeNavigator extends LitElement {
     `;
   }
 
+  private renderKindBadge(presentation: SessionTreeKindPresentation): TemplateResult {
+    return html`<span class=${`kind kind-tone-${presentation.tone}`}>${presentation.label}</span>`;
+  }
+
   private renderActionStep(): TemplateResult {
     const selectedNode = this.selectedId === undefined ? undefined : this.model.nodesById.get(this.selectedId);
     const validation = validateSessionTreeSummaryChoice(this.summaryMode, this.customInstructions);
@@ -156,7 +185,7 @@ export class SessionTreeNavigator extends LitElement {
           </div>
           ${selectedNode === undefined ? html`<div class="empty">The selected history entry is no longer available.</div>` : html`
             <div class="selected-entry">
-              <span class="kind">${sessionTreeKindLabel(selectedNode.kind)}</span>
+              ${this.renderKindBadge(sessionTreeKindPresentation(selectedNode.kind))}
               <strong dir="auto">${selectedNode.summary}</strong>
               <p>${this.selectedEntryDescription(selectedNode.kind)}</p>
             </div>
@@ -554,7 +583,13 @@ export class SessionTreeNavigator extends LitElement {
     .tree-row > .metadata > .kind { grid-column: 2; grid-row: 1; }
     .tree-row > .entry { grid-column: 3; grid-row: 1; }
     .tree-row > .metadata > .badges { grid-column: 4; grid-row: 1; }
-    .kind { display: inline-flex; align-items: center; width: fit-content; border: 1px solid var(--pi-border); border-radius: 999px; padding: 2px 7px; color: var(--pi-muted); background: var(--pi-bg); font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .kind { --kind-border: var(--pi-border); --kind-background: var(--pi-surface); display: inline-flex; align-items: center; width: fit-content; border: 1px solid var(--kind-border); border-radius: 999px; padding: 2px 7px; color: var(--pi-text); background: var(--kind-background); font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .kind-tone-user { --kind-border: var(--pi-accent-border); --kind-background: var(--pi-selection-bg); }
+    .kind-tone-assistant { --kind-border: var(--pi-border); --kind-background: var(--pi-surface); }
+    .kind-tone-tool { --kind-border: var(--pi-warning-border); --kind-background: var(--pi-warning-surface); }
+    .kind-tone-shell { --kind-border: var(--pi-success); --kind-background: var(--pi-success-bg); }
+    .kind-tone-context { --kind-border: var(--pi-purple-border); --kind-background: var(--pi-purple-surface); }
+    .kind-tone-metadata { --kind-border: var(--pi-border-muted); --kind-background: var(--pi-bg-overlay); color: var(--pi-muted); }
     .entry { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
     .summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pi-text); }
     .bookkeeping .summary { color: var(--pi-muted); }
@@ -619,31 +654,8 @@ export function sessionTreeEntryReturnsToEditor(kind: SessionTreeNodeKind): bool
   return kind === "user" || kind === "custom-message";
 }
 
-export function sessionTreeKindLabel(kind: SessionTreeNodeKind): string {
-  switch (kind) {
-    case "user": return "User";
-    case "assistant": return "Assistant";
-    case "tool-result": return "Tool result";
-    case "bash": return "Shell";
-    case "custom-message": return "Custom message";
-    case "compaction": return "Compaction";
-    case "branch-summary": return "Branch summary";
-    case "model-change": return "Model";
-    case "thinking-level-change": return "Thinking";
-    case "session-info": return "Session info";
-    case "label": return "Label";
-    case "custom": return "Custom";
-    case "other": return "Other";
-  }
-}
-
-function isBookkeepingKind(kind: SessionTreeNodeKind): boolean {
-  return kind === "model-change"
-    || kind === "thinking-level-change"
-    || kind === "session-info"
-    || kind === "label"
-    || kind === "custom"
-    || kind === "other";
+export function sessionTreeKindPresentation(kind: SessionTreeNodeKind): SessionTreeKindPresentation {
+  return SESSION_TREE_KIND_PRESENTATION[kind];
 }
 
 function errorMessage(error: unknown): string {
