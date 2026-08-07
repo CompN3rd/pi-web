@@ -3,7 +3,10 @@ interface RenderedModalLayer {
   element: HTMLElement;
   /** Element that establishes this custom layer's z-index and paint order. */
   paintElement?: HTMLElement;
-  /** Native modal dialogs render in the browser's top layer above custom overlays. */
+  /**
+   * Native modal dialogs render in the browser's top layer above custom
+   * overlays and hold modality from `showModal()` until `close()`.
+   */
   nativeTopLayer?: boolean;
   /** Apply this layer's viable focus target when it becomes visually topmost. */
   focus: () => void;
@@ -62,7 +65,7 @@ export function registerRenderedModal(layer: RenderedModalLayer): RenderedModalR
   };
 }
 
-/** True only while a connected, rendered modal is registered in this document. */
+/** True only while a visibly rendered modal is registered in this document. */
 export function hasRenderedModal(ownerDocument: Document | undefined): boolean {
   return ownerDocument !== undefined && topModalLayer(ownerDocument) !== undefined;
 }
@@ -96,17 +99,35 @@ function notifyModalLayers(ownerDocument: Document): void {
 function topModalLayer(ownerDocument: Document): RegisteredModalLayer | undefined {
   let top: RegisteredModalLayer | undefined;
   for (const registered of registeredModalLayers) {
-    if (!registered.layer.element.isConnected || registered.layer.element.ownerDocument !== ownerDocument) continue;
+    if (!isRenderedModalLayer(ownerDocument, registered)) continue;
     if (top === undefined || compareModalPaintOrder(registered, top) > 0) top = registered;
   }
   return top;
 }
 
+/**
+ * A registered layer owns modality only while it is actually rendered. A view
+ * switch or responsive CSS can hide a still-connected custom layer - the
+ * workspace upload review disappears with its panel when the main view leaves
+ * the workspace - and a hidden layer that kept counting would suppress global
+ * shortcuts, prompt focus, and unread acknowledgement with nothing on screen to
+ * dismiss and no obvious recovery.
+ *
+ * Native top-layer dialogs are exempt: their modality belongs to the browser
+ * from `showModal()` until `close()`, and hosts must register before that call
+ * to capture the pre-modal focus target, while the dialog is still hidden as an
+ * unopened `dialog` element.
+ */
+function isRenderedModalLayer(ownerDocument: Document, registered: RegisteredModalLayer): boolean {
+  const { element, nativeTopLayer } = registered.layer;
+  if (!element.isConnected || element.ownerDocument !== ownerDocument) return false;
+  return nativeTopLayer === true || !isHiddenOrInertInComposedTree(element);
+}
+
 function containingModalLayer(ownerDocument: Document, node: Element): RegisteredModalLayer | undefined {
   let top: RegisteredModalLayer | undefined;
   for (const registered of registeredModalLayers) {
-    if (!registered.layer.element.isConnected
-      || registered.layer.element.ownerDocument !== ownerDocument
+    if (!isRenderedModalLayer(ownerDocument, registered)
       || !composedContains(registered.layer.element, node)) continue;
     if (top === undefined || compareModalPaintOrder(registered, top) > 0) top = registered;
   }
