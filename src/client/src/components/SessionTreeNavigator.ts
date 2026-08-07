@@ -1,24 +1,27 @@
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { SessionTreeNavigateResult, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
+import type { SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryChoice } from "../api";
 import { SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH } from "../../../shared/apiTypes";
 import { buildSessionTreeModel, initialSessionTreeSelection, toggleSessionTreeFold, transitionSessionTreeKey, validateSessionTreeSummaryChoice, visibleSessionTreeRows, type SessionTreeModel, type SessionTreeRow } from "../sessionTreeModel";
 
 const EMPTY_TREE: SessionTreeSnapshot = { nodes: [], activeLeafId: null, activePathIds: [] };
 const MAX_SESSION_TREE_VISUAL_DEPTH = 8;
-type NavigatorStep = "tree" | "confirm";
-type PendingFocus = "tree" | "summary" | "custom";
+type NavigatorStep = "tree" | "action";
+type NavigatorOperation = "continue" | "fork";
+type PendingFocus = "tree" | "operation" | "summary" | "custom";
 
 @customElement("session-tree-navigator")
 export class SessionTreeNavigator extends LitElement {
   @property({ attribute: false }) tree: SessionTreeSnapshot = EMPTY_TREE;
   @property({ attribute: false }) onNavigate?: (targetId: string, summaryChoice: SessionTreeSummaryChoice) => Promise<SessionTreeNavigateResult>;
+  @property({ attribute: false }) onFork?: (entryId: string) => Promise<SessionTreeForkResult>;
   @property({ attribute: false }) onAbort?: () => Promise<void>;
   @property({ attribute: false }) onCancel?: () => void;
 
   @state() private selectedId: string | undefined;
   @state() private foldedIds: ReadonlySet<string> = new Set();
   @state() private step: NavigatorStep = "tree";
+  @state() private operation: NavigatorOperation = "continue";
   @state() private summaryMode: SessionTreeSummaryChoice["mode"] = "none";
   @state() private customInstructions = "";
   @state() private busy = false;
@@ -40,6 +43,7 @@ export class SessionTreeNavigator extends LitElement {
     this.pendingFocus = undefined;
     if (pendingFocus === "tree") this.focusSelectedTreeItem();
     else if (pendingFocus === "custom") this.renderRoot.querySelector<HTMLTextAreaElement>("#session-tree-custom-focus")?.focus();
+    else if (pendingFocus === "operation") this.renderRoot.querySelector<HTMLInputElement>("input[name='session-tree-operation']:checked")?.focus();
     else this.renderRoot.querySelector<HTMLInputElement>("input[name='session-tree-summary']:checked")?.focus();
   }
 
@@ -62,7 +66,7 @@ export class SessionTreeNavigator extends LitElement {
             </div>
             <button class="close-button" ?disabled=${this.busy} title="Close session tree" aria-label="Close session tree" @click=${() => { this.onCancel?.(); }}>×</button>
           </header>
-          ${this.step === "tree" ? this.renderTreeStep() : this.renderConfirmationStep()}
+          ${this.step === "tree" ? this.renderTreeStep() : this.renderActionStep()}
           ${this.renderFooter()}
         </section>
       </div>
@@ -74,7 +78,7 @@ export class SessionTreeNavigator extends LitElement {
     return html`
       <div class="body tree-step">
         <div class="tree-intro">
-          <p>Select where conversation context should continue. All retained branches stay in this session file.</p>
+          <p>Select the history entry where you would like to continue.</p>
           <div class="legend" aria-label="Session tree markers">
             <span><span class="marker active-path-marker" aria-hidden="true"></span>Active path</span>
             <span><span class="marker active-leaf-marker" aria-hidden="true"></span>Active leaf</span>
@@ -140,7 +144,7 @@ export class SessionTreeNavigator extends LitElement {
     `;
   }
 
-  private renderConfirmationStep(): TemplateResult {
+  private renderActionStep(): TemplateResult {
     const selectedNode = this.selectedId === undefined ? undefined : this.model.nodesById.get(this.selectedId);
     const validation = validateSessionTreeSummaryChoice(this.summaryMode, this.customInstructions);
     return html`
@@ -148,39 +152,44 @@ export class SessionTreeNavigator extends LitElement {
         <div class="confirmation-card">
           <div>
             <span class="eyebrow">Selected entry</span>
-            <h2>Confirm navigation</h2>
+            <h2>Choose how to continue</h2>
           </div>
           ${selectedNode === undefined ? html`<div class="empty">The selected history entry is no longer available.</div>` : html`
             <div class="selected-entry">
               <span class="kind">${sessionTreeKindLabel(selectedNode.kind)}</span>
               <strong dir="auto">${selectedNode.summary}</strong>
-              ${sessionTreeEntryReturnsToEditor(selectedNode.kind)
-                ? html`<p>This message’s text will return to the prompt editor for optional editing and resubmission.</p>`
-                : html`<p>The prompt editor will be empty after navigating to this entry.</p>`}
+              <p>${this.selectedEntryDescription(selectedNode.kind)}</p>
             </div>
           `}
           <fieldset ?disabled=${this.busy}>
-            <legend>Abandoned branch summary</legend>
-            ${this.renderSummaryOption("none", "No summary", "Switch branches without adding a summary entry.")}
-            ${this.renderSummaryOption("default", "Summarize", "Ask Pi to summarize the context being left behind.")}
-            ${this.renderSummaryOption("custom", "Summarize with custom focus", "Guide Pi toward the details that matter for the new branch.")}
-            ${this.summaryMode === "custom" ? html`
-              <label class="custom-focus" for="session-tree-custom-focus">
-                <span>Custom summary focus</span>
-                <textarea
-                  id="session-tree-custom-focus"
-                  rows="5"
-                  maxlength=${String(SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH)}
-                  .value=${this.customInstructions}
-                  @input=${(event: InputEvent) => { this.handleCustomInstructionsInput(event); }}
-                ></textarea>
-                <span class="character-count">${this.customInstructions.length} / ${SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH}</span>
-              </label>
-              ${validation.ok ? null : html`<div class="validation-error" role="alert">${validation.error}</div>`}
-            ` : null}
+            <legend>How would you like to continue?</legend>
+            ${this.renderOperationOption("continue", "Continue in this session", "Branch from the selected entry in this session file and keep its other branches.")}
+            ${this.renderOperationOption("fork", "Fork into a new session", "Create and switch to a separate session file while leaving the original unchanged.")}
           </fieldset>
+          ${this.operation === "continue" ? html`
+            <fieldset ?disabled=${this.busy}>
+              <legend>Abandoned branch summary</legend>
+              ${this.renderSummaryOption("none", "No summary", "Switch branches without adding a summary entry.")}
+              ${this.renderSummaryOption("default", "Summarize", "Ask Pi to summarize the context being left behind.")}
+              ${this.renderSummaryOption("custom", "Summarize with custom focus", "Guide Pi toward the details that matter for the new branch.")}
+              ${this.summaryMode === "custom" ? html`
+                <label class="custom-focus" for="session-tree-custom-focus">
+                  <span>Custom summary focus</span>
+                  <textarea
+                    id="session-tree-custom-focus"
+                    rows="5"
+                    maxlength=${String(SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH)}
+                    .value=${this.customInstructions}
+                    @input=${(event: InputEvent) => { this.handleCustomInstructionsInput(event); }}
+                  ></textarea>
+                  <span class="character-count">${this.customInstructions.length} / ${SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH}</span>
+                </label>
+                ${validation.ok ? null : html`<div class="validation-error" role="alert">${validation.error}</div>`}
+              ` : null}
+            </fieldset>
+          ` : null}
           <div class="side-effects-note" role="note">
-            <strong>Conversation context only.</strong> Navigation changes the active conversation branch. It does not undo filesystem changes, shell commands, tool calls, or other side effects.
+            <strong>Conversation context only.</strong> Continuing or forking does not undo filesystem changes, shell commands, tool calls, or other side effects.
           </div>
           ${this.statusMessage === "" ? null : html`<div class="dialog-status" role="status">${this.statusMessage}</div>`}
           ${this.error === "" ? null : html`<div class="dialog-error" role="alert">${this.error}</div>`}
@@ -189,9 +198,35 @@ export class SessionTreeNavigator extends LitElement {
     `;
   }
 
+  private selectedEntryDescription(kind: SessionTreeNodeKind): string {
+    if (this.operation === "fork") {
+      return kind === "user"
+        ? "The new session will branch before this user message, and its text will return to the prompt editor as the new session draft."
+        : "The new session will include this entry and all history leading to it.";
+    }
+    return sessionTreeEntryReturnsToEditor(kind)
+      ? "This message’s text will return to the prompt editor for optional editing and resubmission in this session."
+      : "The prompt editor will be empty after continuing from this entry in this session.";
+  }
+
+  private renderOperationOption(operation: NavigatorOperation, label: string, description: string): TemplateResult {
+    return html`
+      <label class=${`choice-option${this.operation === operation ? " selected" : ""}`}>
+        <input
+          type="radio"
+          name="session-tree-operation"
+          value=${operation}
+          .checked=${this.operation === operation}
+          @change=${() => { this.selectOperation(operation); }}
+        >
+        <span><strong>${label}</strong><small>${description}</small></span>
+      </label>
+    `;
+  }
+
   private renderSummaryOption(mode: SessionTreeSummaryChoice["mode"], label: string, description: string): TemplateResult {
     return html`
-      <label class=${`summary-option${this.summaryMode === mode ? " selected" : ""}`}>
+      <label class=${`choice-option${this.summaryMode === mode ? " selected" : ""}`}>
         <input
           type="radio"
           name="session-tree-summary"
@@ -209,12 +244,14 @@ export class SessionTreeNavigator extends LitElement {
       return html`
         <footer>
           <button @click=${() => { this.onCancel?.(); }}>Cancel</button>
-          <button class="primary" ?disabled=${this.selectedId === undefined} @click=${() => { this.continueToConfirmation(); }}>Navigate</button>
+          <span class="footer-spacer"></span>
+          <button class="primary" ?disabled=${this.selectedId === undefined} @click=${() => { this.continueToAction(); }}>Next</button>
         </footer>
       `;
     }
 
-    const summarizing = this.summaryMode !== "none";
+    const continuing = this.operation === "continue";
+    const summarizing = continuing && this.summaryMode !== "none";
     return html`
       <footer>
         <button ?disabled=${this.busy} @click=${() => { this.returnToTree(); }}>Back</button>
@@ -222,8 +259,8 @@ export class SessionTreeNavigator extends LitElement {
         ${this.busy && summarizing ? html`
           <button class="danger" ?disabled=${this.aborting} @click=${() => { void this.abortNavigation(); }}>${this.aborting ? "Cancelling…" : "Cancel summarization"}</button>
         ` : null}
-        <button class="primary" ?disabled=${this.busy || this.selectedId === undefined} @click=${() => { void this.submitNavigation(); }}>
-          ${this.busy ? summarizing ? "Summarizing…" : "Navigating…" : summarizing ? "Summarize and navigate" : "Navigate"}
+        <button class="primary" ?disabled=${this.busy || this.selectedId === undefined} @click=${() => { void this.submitSelectedOperation(); }}>
+          ${this.primaryActionLabel()}
         </button>
       </footer>
     `;
@@ -235,6 +272,7 @@ export class SessionTreeNavigator extends LitElement {
     this.selectedId = initialSessionTreeSelection(this.model);
     this.foldedIds = new Set();
     this.step = "tree";
+    this.operation = "continue";
     this.summaryMode = "none";
     this.customInstructions = "";
     this.busy = false;
@@ -273,7 +311,7 @@ export class SessionTreeNavigator extends LitElement {
       return;
     }
     if (next.action === "confirm") {
-      this.continueToConfirmation();
+      this.continueToAction();
       return;
     }
     this.selectedId = next.selectedId;
@@ -281,16 +319,16 @@ export class SessionTreeNavigator extends LitElement {
     this.pendingFocus = "tree";
   }
 
-  private continueToConfirmation(): void {
-    if (this.selectedId === undefined || !this.model.nodesById.has(this.selectedId)) return;
+  private continueToAction(): void {
+    if (this.busy || this.selectedId === undefined || !this.model.nodesById.has(this.selectedId)) return;
     if (!validateSessionTreeSummaryChoice(this.summaryMode, this.customInstructions).ok) {
       this.summaryMode = "none";
       this.customInstructions = "";
     }
-    this.step = "confirm";
+    this.step = "action";
     this.error = "";
     this.statusMessage = "";
-    this.pendingFocus = "summary";
+    this.pendingFocus = "operation";
   }
 
   private returnToTree(): void {
@@ -299,6 +337,14 @@ export class SessionTreeNavigator extends LitElement {
     this.error = "";
     this.statusMessage = "";
     this.pendingFocus = "tree";
+  }
+
+  private selectOperation(operation: NavigatorOperation): void {
+    if (this.busy) return;
+    this.operation = operation;
+    this.error = "";
+    this.statusMessage = "";
+    this.pendingFocus = "operation";
   }
 
   private selectSummaryMode(mode: SessionTreeSummaryChoice["mode"]): void {
@@ -314,6 +360,16 @@ export class SessionTreeNavigator extends LitElement {
     this.customInstructions = event.currentTarget.value;
     this.error = "";
     this.statusMessage = "";
+  }
+
+  private primaryActionLabel(): string {
+    if (!this.busy) return this.operation === "continue" ? "Continue from here" : "Fork into new session";
+    if (this.operation === "fork") return "Forking…";
+    return this.summaryMode === "none" ? "Continuing…" : "Summarizing…";
+  }
+
+  private submitSelectedOperation(): Promise<void> {
+    return this.operation === "continue" ? this.submitNavigation() : this.submitFork();
   }
 
   private async submitNavigation(): Promise<void> {
@@ -358,6 +414,35 @@ export class SessionTreeNavigator extends LitElement {
     }
   }
 
+  private async submitFork(): Promise<void> {
+    if (this.busy || this.selectedId === undefined) return;
+    const fork = this.onFork;
+    if (fork === undefined) {
+      this.error = "Fork from the session tree is unavailable. Close and reopen /tree, then try again.";
+      return;
+    }
+
+    const entryId = this.selectedId;
+    const generation = ++this.operationGeneration;
+    this.busy = true;
+    this.error = "";
+    this.statusMessage = "";
+    try {
+      const result = await fork(entryId);
+      if (generation !== this.operationGeneration) return;
+      // On success the app closes this dialog; clear busy in case it lingers.
+      this.busy = false;
+      if (result.cancelled) {
+        this.statusMessage = "Fork cancelled. No new session was created; your selected history entry is unchanged.";
+      }
+    } catch (error: unknown) {
+      if (generation !== this.operationGeneration) return;
+      this.busy = false;
+      this.statusMessage = "";
+      this.error = errorMessage(error);
+    }
+  }
+
   private async abortNavigation(): Promise<void> {
     if (!this.busy || this.summaryMode === "none" || this.aborting) return;
     const abort = this.onAbort;
@@ -392,10 +477,10 @@ export class SessionTreeNavigator extends LitElement {
     event.preventDefault();
     event.stopPropagation();
     if (this.busy) {
-      if (this.summaryMode !== "none") void this.abortNavigation();
+      if (this.operation === "continue" && this.summaryMode !== "none") void this.abortNavigation();
       return;
     }
-    if (this.step === "confirm") this.returnToTree();
+    if (this.step === "action") this.returnToTree();
     else this.onCancel?.();
   }
 
@@ -486,11 +571,11 @@ export class SessionTreeNavigator extends LitElement {
     .selected-entry p { grid-column: 2; color: var(--pi-muted); font-size: 12px; }
     fieldset { min-width: 0; margin: 0; padding: 0; border: 0; display: grid; gap: 9px; }
     legend { margin-bottom: 8px; font-weight: 700; }
-    .summary-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; border: 1px solid var(--pi-border); border-radius: 10px; padding: 11px 12px; background: var(--pi-surface); cursor: pointer; }
-    .summary-option.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
-    .summary-option input { margin-top: 3px; accent-color: var(--pi-accent); }
-    .summary-option span { display: grid; gap: 3px; }
-    .summary-option small { color: var(--pi-muted); }
+    .choice-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; border: 1px solid var(--pi-border); border-radius: 10px; padding: 11px 12px; background: var(--pi-surface); cursor: pointer; }
+    .choice-option.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
+    .choice-option input { margin-top: 3px; accent-color: var(--pi-accent); }
+    .choice-option span { display: grid; gap: 3px; }
+    .choice-option small { color: var(--pi-muted); }
     .custom-focus { display: grid; gap: 6px; margin: 2px 0 0 30px; font-weight: 600; }
     textarea { width: 100%; resize: vertical; min-height: 94px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); padding: 9px 10px; font: var(--pi-control-font-size, 16px) var(--pi-control-font-family, system-ui, sans-serif); }
     textarea:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
