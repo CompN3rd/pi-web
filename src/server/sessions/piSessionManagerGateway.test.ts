@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import { agentSessionDirEnvKeys } from "../../config.js";
 import { createPiSessionManagerGateway, defaultPiSessionDir, defaultPiSessionsRoot, filterSessionsForCwd, SessionDirResolver } from "./piSessionManagerGateway.js";
 import type { PiSessionListEntry } from "./piSessionService.js";
 import type { PiSessionManager } from "./piSessionService.js";
+import { rewriteHeaderWithoutParentSession } from "./sessionFileRewrite.testSupport.js";
 import { sep } from "node:path";
 
 let tempDir: string;
@@ -176,8 +177,9 @@ describe("Pi session manager gateway", () => {
 
   it("invalidateSessionFile drops the memo for a header rewritten in place", async () => {
     // Detach rewrites the header with a truncate+write that keeps the inode
-    // (mirrored here), while appended entries keep the file growing — a
-    // rewrite invisible to the memo key without an explicit invalidation.
+    // (mirrored here, padded back to the memoized size) — the one rewrite the
+    // memo's identity + size key cannot see, so without an explicit
+    // invalidation the stat-only fast path keeps serving the old parent link.
     const sharedSessionDir = join(tempDir, "detach-sessions");
     const message = (id: string, role: string, text: string) =>
       JSON.stringify({ type: "message", id, parentId: "root", timestamp: "2026-01-01T00:01:00.000Z", message: { role, content: [{ type: "text", text }] } });
@@ -187,12 +189,11 @@ describe("Pi session manager gateway", () => {
 
     await expect(gateway.list(cwd)).resolves.toMatchObject([{ id: "detached-session", cwd, messageCount: 2, parentSessionPath: "/parents/detached.jsonl" }]);
 
-    await appendFile(path, `${message("m3", "user", "padding so the rewrite still grows the file")}\n`, "utf8");
     await rewriteHeaderWithoutParentSession(path);
     gateway.invalidateSessionFile(path);
 
     const [listed] = await gateway.list(cwd);
-    expect(listed).toMatchObject({ id: "detached-session", cwd, messageCount: 3 });
+    expect(listed).toMatchObject({ id: "detached-session", cwd, messageCount: 2 });
     expect(listed).not.toHaveProperty("parentSessionPath");
     // Invalidating a path that was never memoized is a no-op.
     expect(() => {
@@ -254,19 +255,3 @@ async function writeNamedSessionFile(dir: string, fileName: string, header: { id
   return path;
 }
 
-/**
- * Mimics piSessionService's clearParentSession: rewrite the header in place
- * (truncate + write keeps the inode) with the parent link removed.
- */
-async function rewriteHeaderWithoutParentSession(path: string): Promise<void> {
-  const content = await readFile(path, "utf8");
-  const newlineIndex = content.indexOf("\n");
-  const parsed: unknown = JSON.parse(content.slice(0, newlineIndex));
-  if (!isRecord(parsed)) throw new Error("Invalid session file header");
-  delete parsed["parentSession"];
-  await writeFile(path, `${JSON.stringify(parsed)}${content.slice(newlineIndex)}`, "utf8");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}

@@ -1,11 +1,11 @@
 import * as fsPromises from "node:fs/promises";
-import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PiSessionListEntry } from "./piSessionService.js";
-import { isRecord } from "./sessionFileFormat.js";
+import { rewriteHeaderWithoutParentSession } from "./sessionFileRewrite.testSupport.js";
 import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
 
 // Route node:fs/promises through a plain copy of the real module: Node's
@@ -803,27 +803,6 @@ async function writeSession(fileName: string, lines: readonly string[]): Promise
   const path = join(sessionDir, fileName);
   await writeFile(path, lines.length === 0 ? "" : `${lines.join("\n")}\n`, "utf8");
   return path;
-}
-
-/**
- * Mimics piSessionService's clearParentSession — rewrite the header in place
- * (truncate + write keeps the inode) with the parent link removed — and pads
- * the header back to its original byte length, so the rewrite is the one the
- * memo's identity + size key cannot see at all.
- */
-async function rewriteHeaderWithoutParentSession(path: string): Promise<void> {
-  const content = await readFile(path, "utf8");
-  const newlineIndex = content.indexOf("\n");
-  const original = content.slice(0, newlineIndex);
-  const parsed: unknown = JSON.parse(original);
-  if (!isRecord(parsed)) throw new Error("Invalid session file header");
-  delete parsed["parentSession"];
-  const padKeyOverhead = JSON.stringify({ ...parsed, pad: "" }).length - JSON.stringify(parsed).length;
-  const padLength = original.length - JSON.stringify(parsed).length - padKeyOverhead;
-  if (padLength < 0) throw new Error("Header cannot be padded back to its original length");
-  const rewritten = JSON.stringify({ ...parsed, pad: "x".repeat(padLength) });
-  if (rewritten.length !== original.length) throw new Error("Padded header length does not match the original");
-  await writeFile(path, `${rewritten}${content.slice(newlineIndex)}`, "utf8");
 }
 
 /**

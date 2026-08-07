@@ -2357,9 +2357,10 @@ export class PiSessionService implements SessionRouteService {
     const sessionFile = session.sessionFile;
     if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
     await clearParentSession(sessionFile);
-    // This in-place rewrite is invisible to the gateway's summary memo (same
-    // inode, possibly grown file), which would otherwise keep listing the old
-    // parent link and a stale message count until restart.
+    // The header rewrite keeps the inode, and whenever it leaves the file's
+    // size unchanged it is invisible to the gateway's summary memo, which
+    // cannot detect such rewrites from identity + size alone and would keep
+    // listing the old parent link until restart.
     this.sessionManager.invalidateSessionFile(sessionFile);
     clearParentSessionHeader(session.sessionManager);
     this.unregisterSubsession(session.sessionId);
