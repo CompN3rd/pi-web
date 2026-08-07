@@ -159,7 +159,7 @@ describe("Pi session manager gateway", () => {
     await expect(gateway.list(cwd)).resolves.toMatchObject([{ id: "session-rough", cwd, messageCount: 1, firstMessage: "hello" }]);
   });
 
-  it("keeps repeated listings fresh by folding appended transcript tails", async () => {
+  it("keeps repeated listings fresh when a transcript grows", async () => {
     // The gateway keeps one memoized scanner for its lifetime, so a second
     // listing of the same directory must reflect appends, not stale cache.
     const sharedSessionDir = join(tempDir, "memo-sessions");
@@ -230,7 +230,7 @@ describe("gateway session-file resolution by id", () => {
     await expect(gateway.resolveSessionFile(cwd, "elsewhere-id")).resolves.toBeUndefined();
   });
 
-  it("resolveSessionFile neither calls nor waits on an in-flight list", async () => {
+  it("resolveSessionFile does not call list while a listing is in flight", async () => {
     const sharedSessionDir = join(tempDir, "shared-sessions");
     const targetPath = await writeNamedSessionFile(sharedSessionDir, "2026-01-01T00-00-00-000Z_direct-id.jsonl", { id: "direct-id", cwd });
     const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
@@ -253,6 +253,9 @@ describe("gateway session-file resolution by id", () => {
 
     // Hold one public listing open. A resolver coupled through `this.list`
     // makes a second call and loses this race while both calls remain pending.
+    // This pins that coupling only: it does not detect a resolver that reaches
+    // past `list` into the scanner, or one that awaits a shared in-flight
+    // listing promise without calling `list` itself.
     const inFlightList = gateway.list(cwd);
     const resolution = gateway.resolveSessionFile(cwd, "direct-id");
     const firstOutcome = await Promise.race([
