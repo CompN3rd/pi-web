@@ -38,11 +38,19 @@ export class ModalSurface extends LitElement {
 
   @query("section") private section?: HTMLElement;
 
-  private previousFocus: Element | null = null;
+  private focusRestorationPath: HTMLElement[] = [];
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.previousFocus = deepActiveElement();
+    const previous = deepActiveElement();
+    if (previous instanceof HTMLElement) {
+      const lowerSurface = containingModalSurface(previous);
+      // Copy a lower dialog's path so its opener remains available even if the
+      // lower surface disconnects while this newer dialog still owns focus.
+      this.focusRestorationPath = [previous, ...(lowerSurface?.focusRestorationPath ?? [])];
+    } else {
+      this.focusRestorationPath = [];
+    }
     // Key handling lives on the host, not the shadow section: slotted dialog
     // content bubbles key events up its light-DOM tree to this element, and
     // key presses inside the surface's own shadow section reach it as composed
@@ -53,16 +61,15 @@ export class ModalSurface extends LitElement {
   override disconnectedCallback(): void {
     this.removeEventListener("keydown", this.handleKeyDown);
     super.disconnectedCallback();
-    const previous = this.previousFocus;
-    this.previousFocus = null;
-    if (!(previous instanceof HTMLElement) || !previous.isConnected) return;
+    const restorationPath = this.focusRestorationPath;
+    this.focusRestorationPath = [];
     // Restore only when focus still belongs to this dialog: either it sits
     // inside the subtree being removed, or the removal already reset it to the
     // page. When a newer dialog owns focus, leave it alone.
     const active = deepActiveElement();
     const focusWasReset = active === null || active === document.body || active === document.documentElement;
     if (!focusWasReset && !composedContains(this, active)) return;
-    previous.focus();
+    restorationPath.find((target) => target.isConnected)?.focus();
   }
 
   protected override firstUpdated(): void {
@@ -209,6 +216,22 @@ function flattenedChildElements(parent: Element | ShadowRoot): Element[] {
   }
   const renderedRoot = parent instanceof Element ? parent.shadowRoot ?? parent : parent;
   return Array.from(renderedRoot.children);
+}
+
+/** Nearest modal surface containing `node`, crossing open shadow boundaries. */
+function containingModalSurface(node: Element): ModalSurface | undefined {
+  let current: Node = node;
+  for (;;) {
+    if (current instanceof ModalSurface) return current;
+    const parent: Node | null = current.parentNode;
+    if (parent != null && parent !== current) {
+      current = parent;
+      continue;
+    }
+    const root = current instanceof ShadowRoot ? current : current.getRootNode();
+    if (!(root instanceof ShadowRoot)) return undefined;
+    current = root.host;
+  }
 }
 
 /** Whether `node` is contained in `host` across shadow boundaries. */

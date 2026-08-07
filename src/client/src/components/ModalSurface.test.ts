@@ -321,7 +321,7 @@ describe("modal-surface focus restoration", () => {
     expect(document.activeElement).not.toBe(trigger);
   });
 
-  it("does not pull focus back when a newer dialog already owns it", async () => {
+  it("restores through a lower dialog removed while a newer dialog owns focus", async () => {
     const trigger = appendFocusTarget("Opener");
     trigger.focus();
 
@@ -332,10 +332,8 @@ describe("modal-surface focus restoration", () => {
     first.remove();
     expect(document.activeElement).toBe(second);
 
-    // The second dialog's previously focused element lived inside the first
-    // one, so its removal leaves focus with the page instead of a dead element.
     second.remove();
-    expect(document.activeElement).toBe(document.body);
+    expect(document.activeElement).toBe(trigger);
   });
 });
 

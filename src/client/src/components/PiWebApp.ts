@@ -266,7 +266,7 @@ export class PiWebApp extends LitElement {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (this.settingsSection !== undefined || this.state.treeDialog !== undefined) return;
+    if (this.isModalOverlayOpen()) return;
     if (this.keyboard.handle(event, this.getDefaultActions(), { shortcuts: this.shortcutConfig })) {
       event.preventDefault();
       event.stopPropagation();
@@ -343,13 +343,13 @@ export class PiWebApp extends LitElement {
       if (document.visibilityState !== "visible") return false;
       if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     }
-    if (this.isChatObscured()) return false;
+    if (this.isModalOverlayOpen()) return false;
     if (this.state.mainView === "chat") return true;
     if (this.state.mainView === "navigation") return !this.appShell.isMobileNavigationLayout;
     return this.isDesktopSideBySideLayout();
   }
 
-  private isChatObscured(): boolean {
+  private isModalOverlayOpen(): boolean {
     return this.settingsSection !== undefined
       || this.sessionCleanupDialog !== undefined
       || this.state.actionPaletteOpen
