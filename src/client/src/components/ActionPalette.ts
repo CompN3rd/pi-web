@@ -1,7 +1,8 @@
-import { LitElement, css, html, type PropertyValues } from "lit";
+import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AppAction } from "../actions";
 import { formatShortcut } from "../keyboardShortcuts";
+import { keyboardEventOriginatesFromButton } from "./keyboardEventTarget";
 import "./ModalSurface";
 import { scrollWhenSelected } from "./scrollWhenSelected";
 
@@ -33,11 +34,19 @@ export class ActionPalette extends LitElement {
               }
             }}
           >
-          <button title="Close" @click=${() => this.onCancel?.()}>×</button>
+          <button title="Close" aria-label="Close" @click=${() => this.onCancel?.()}>×</button>
         </header>
         <div class="options">
           ${actions.length === 0 ? html`<div class="empty">No actions found.</div>` : actions.map((action, index) => html`
-            <button class=${`${index === this.selectedIndex ? "selected" : ""} ${action.enabled === false ? "disabled" : ""}`} ?disabled=${action.enabled === false} title=${action.disabledReason ?? action.title} ${scrollWhenSelected(index === this.selectedIndex, action.id)} @click=${() => { this.run(action); }}>
+            <button
+              class=${`${index === this.selectedIndex ? "selected" : ""} ${action.enabled === false ? "disabled" : ""}`}
+              ?disabled=${action.enabled === false}
+              title=${action.disabledReason ?? action.title}
+              aria-current=${index === this.selectedIndex ? "true" : nothing}
+              ${scrollWhenSelected(index === this.selectedIndex, action.id)}
+              @focus=${() => { this.selectedIndex = index; }}
+              @click=${() => { this.run(action); }}
+            >
               <span class="main">
                 <strong>${action.title}</strong>
                 ${action.description !== undefined && action.description !== "" ? html`<small>${action.description}</small>` : null}
@@ -63,8 +72,10 @@ export class ActionPalette extends LitElement {
   }
 
   // Escape and backdrop presses are owned by the modal surface (routed to
-  // `onCancel`); this handler keeps the action-list navigation idiom.
+  // `onCancel`). Search-input keys retain the action-list navigation idiom,
+  // while focused native buttons keep their own semantics.
   private handleKeyDown(event: KeyboardEvent) {
+    if (keyboardEventOriginatesFromButton(event)) return;
     const actions = this.filteredActions();
     if (event.key === "ArrowDown") {
       event.preventDefault();

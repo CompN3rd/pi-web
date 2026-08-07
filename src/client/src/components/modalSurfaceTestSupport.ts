@@ -48,6 +48,13 @@ export function pressKey(target: Element, key: string): KeyboardEvent {
   return event;
 }
 
+/** Models the browser's native button click default, which happy-dom omits. */
+export function pressNativeButtonEnter(button: HTMLButtonElement): KeyboardEvent {
+  const event = pressKey(button, "Enter");
+  if (!event.defaultPrevented) button.click();
+  return event;
+}
+
 /** Deepest element holding focus, resolving through nested shadow roots. */
 export function deepActiveElement(): Element | null {
   let active: Element | null = document.activeElement;

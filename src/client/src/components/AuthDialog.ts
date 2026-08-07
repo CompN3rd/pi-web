@@ -1,7 +1,8 @@
-import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
+import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { AuthDialogState } from "../appState";
 import type { AuthProviderOption, OAuthFlowState } from "../api";
+import { keyboardEventOriginatesFromButton } from "./keyboardEventTarget";
 import "./ModalSurface";
 import type { ModalSurface } from "./ModalSurface";
 import { scrollWhenSelected } from "./scrollWhenSelected";
@@ -25,10 +26,8 @@ export class AuthDialog extends LitElement {
   @property({ attribute: false }) onOAuthRespond?: (value?: string) => void;
   @property({ attribute: false }) onOAuthCancel?: () => void;
   @property({ attribute: false }) onCancel?: () => void;
-  @query("input") private input?: HTMLInputElement;
   @query("modal-surface") private surface?: ModalSurface;
   @state() private selectedIndex = 0;
-  private lastFocusedInputKey: string | undefined;
 
   override render() {
     const state = this.state;
@@ -42,7 +41,7 @@ export class AuthDialog extends LitElement {
       >
         <header>
           <strong>${this.dialogTitle(state)}</strong>
-          <button title="Close" @click=${() => { this.cancel(); }}>×</button>
+          <button title="Close" aria-label="Close" @click=${() => { this.cancel(); }}>×</button>
         </header>
         ${this.renderBody(state)}
       </modal-surface>
@@ -61,11 +60,18 @@ export class AuthDialog extends LitElement {
   }
 
   protected override updated(changed: PropertyValues): void {
-    this.focusInputIfNeeded();
-    // Step changes replace the dialog's controls; without an explicit refocus a
-    // removed button strands focus on <body> and the dialog stops receiving keys.
+    if (!changed.has("state")) return;
     const previousStep = authDialogStateStep(changed.get("state"));
-    if (previousStep !== undefined && previousStep !== this.state?.step) this.surface?.focusDialog();
+    if (previousStep === undefined) return;
+    const currentStep = this.state?.step;
+    const stepChanged = previousStep !== currentStep;
+    const oauthInteractionChanged = previousStep === "oauth"
+      && currentStep === "oauth"
+      && oauthInteractionKey(changed.get("state")) !== oauthInteractionKey(this.state);
+    // Step changes and same-step OAuth interaction changes can replace the
+    // focused control. Reapply the surface's input-or-dialog focus contract so
+    // keyboard events never become stranded on the page.
+    if (stepChanged || oauthInteractionChanged) this.surface?.focusDialog();
   }
 
   private dialogTitle(state: AuthDialogState): string {
@@ -83,7 +89,13 @@ export class AuthDialog extends LitElement {
     return html`
       <div class="options">
         ${options.length === 0 ? html`<div class="empty">${state.step === "logout" ? "No stored credentials. Environment variables and models.json settings are unchanged." : "No providers available."}</div>` : options.map((option, index) => html`
-          <button class=${index === this.selectedIndex ? "selected" : ""} ${scrollWhenSelected(index === this.selectedIndex, option.key)} @click=${() => { option.run(); }}>
+          <button
+            class=${index === this.selectedIndex ? "selected" : ""}
+            aria-current=${index === this.selectedIndex ? "true" : nothing}
+            ${scrollWhenSelected(index === this.selectedIndex, option.key)}
+            @focus=${() => { this.selectedIndex = index; }}
+            @click=${() => { option.run(); }}
+          >
             <span>${option.title}</span>
             <small>${option.detail}</small>
           </button>
@@ -160,22 +172,12 @@ export class AuthDialog extends LitElement {
     `;
   }
 
-  private focusInputIfNeeded(): void {
-    const key = focusKey(this.state);
-    if (key === undefined) {
-      this.lastFocusedInputKey = undefined;
-      return;
-    }
-    if (key === this.lastFocusedInputKey) return;
-    this.lastFocusedInputKey = key;
-    this.input?.focus();
-  }
-
-  // Escape is owned by the modal surface (routed to `cancel`); this handler
-  // covers option-list navigation and OAuth prompt submission.
+  // Escape is owned by the modal surface (routed to `cancel`). List-level
+  // navigation and prompt submission deliberately defer to native buttons so
+  // their focused Enter behavior remains authoritative.
   private handleKeyDown(event: KeyboardEvent): void {
     const state = this.state;
-    if (state === undefined) return;
+    if (state === undefined || keyboardEventOriginatesFromButton(event)) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       const options = this.optionsFor(state);
       if (options === undefined || options.length === 0) return;
@@ -245,9 +247,27 @@ function authTypeLabel(authType: "oauth" | "api_key"): string {
   return authType === "oauth" ? "subscription" : "credentials";
 }
 
-function focusKey(state: AuthDialogState | undefined): string | undefined {
-  if (state?.step === "oauth" && state.flow.prompt !== undefined) return `oauth:${state.flow.flowId}:${state.flow.prompt.requestId}`;
-  return undefined;
+/**
+ * Identity of the controls rendered for an OAuth interaction. Polling updates
+ * that preserve this key must not steal focus; changes indicate that the
+ * focused prompt/selection/action may have been replaced.
+ */
+function oauthInteractionKey(value: unknown): string | undefined {
+  if (authDialogStateStep(value) !== "oauth" || typeof value !== "object" || value === null || !("flow" in value)) return undefined;
+  const flow = value.flow;
+  if (typeof flow !== "object" || flow === null) return undefined;
+  const flowId = "flowId" in flow && typeof flow.flowId === "string" ? flow.flowId : "";
+  const promptRequestId = "prompt" in flow ? oauthInteractionRequestId(flow.prompt) : undefined;
+  if (promptRequestId !== undefined) return `${flowId}:prompt:${promptRequestId}`;
+  const selectRequestId = "select" in flow ? oauthInteractionRequestId(flow.select) : undefined;
+  if (selectRequestId !== undefined) return `${flowId}:select:${selectRequestId}`;
+  const status = "status" in flow && typeof flow.status === "string" ? flow.status : "unknown";
+  return `${flowId}:waiting:${status}`;
+}
+
+function oauthInteractionRequestId(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || !("requestId" in value)) return undefined;
+  return typeof value.requestId === "string" ? value.requestId : undefined;
 }
 
 /** Step of a previous `state` value read from a PropertyValues map, without type assertions. */

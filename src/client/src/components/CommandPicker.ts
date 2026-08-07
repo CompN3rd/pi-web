@@ -1,6 +1,7 @@
-import { LitElement, css, html } from "lit";
+import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { CommandOption } from "../api";
+import { keyboardEventOriginatesFromButton } from "./keyboardEventTarget";
 import "./ModalSurface";
 import { scrollWhenSelected } from "./scrollWhenSelected";
 
@@ -26,12 +27,18 @@ export class CommandPicker extends LitElement {
       >
         <header>
           <strong>${this.title}</strong>
-          <button @click=${() => this.onCancel?.()}>×</button>
+          <button aria-label="Close" @click=${() => this.onCancel?.()}>×</button>
         </header>
         ${this.searchable ? html`<input placeholder="Search" .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}>` : null}
         <div class="options" tabindex="0">
           ${options.map((option, index) => html`
-            <button class=${index === this.selectedIndex ? "selected" : ""} ${scrollWhenSelected(index === this.selectedIndex, option.value)} @click=${() => this.onPick?.(option.value)}>
+            <button
+              class=${index === this.selectedIndex ? "selected" : ""}
+              aria-current=${index === this.selectedIndex ? "true" : nothing}
+              ${scrollWhenSelected(index === this.selectedIndex, option.value)}
+              @focus=${() => { this.selectedIndex = index; }}
+              @click=${() => this.onPick?.(option.value)}
+            >
               <span>${option.label}</span>
               ${option.description !== undefined && option.description !== "" ? html`<small>${option.description}</small>` : null}
             </button>
@@ -66,8 +73,10 @@ export class CommandPicker extends LitElement {
   }
 
   // Escape and backdrop presses are owned by the modal surface (routed to
-  // `onCancel`); this handler keeps the option-list navigation idiom.
+  // `onCancel`). Search and list-container keys retain the broadened option
+  // navigation idiom, while focused native buttons keep their own semantics.
   private handleKeyDown(event: KeyboardEvent) {
+    if (keyboardEventOriginatesFromButton(event)) return;
     const options = this.filteredOptions();
     if (event.key === "ArrowDown") {
       event.preventDefault();

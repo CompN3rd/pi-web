@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthDialogState } from "../appState";
 import type { AuthProviderOption, OAuthFlowState } from "../api";
 import { AuthDialog, oauthPromptInputType } from "./AuthDialog";
+import { pressNativeButtonEnter } from "./modalSurfaceTestSupport";
 import type { ModalSurface } from "./ModalSurface";
 
 afterEach(() => {
@@ -60,7 +61,7 @@ describe("auth-dialog focus on open", () => {
     const dialog = await mountDialog({ step: "method" }, { onChooseMethod });
     const firstOption = requiredElement(optionButtons(dialog)[0], "first method option");
     firstOption.focus();
-    pressKey(firstOption, "Enter");
+    pressNativeButtonEnter(firstOption);
     expect(onChooseMethod).toHaveBeenCalledWith("oauth");
 
     // The host app answers the method choice by advancing the dialog to the
@@ -72,6 +73,44 @@ describe("auth-dialog focus on open", () => {
     pressKey(dialogSurface(dialog), "ArrowDown");
     await settleDialog(dialog);
     expect(selectedOptionIndex(dialog)).toBe(1);
+  });
+
+  it("returns focus to the dialog when an OAuth prompt disappears and keeps the next Tab inside", async () => {
+    const dialog = await mountDialog(oauthState({ prompt: { requestId: "req-1", message: "Enter the code", promptType: "text" } }));
+    expect(deepActiveElement()).toBe(promptInput(dialog));
+
+    dialog.state = oauthState();
+    await settleDialog(dialog);
+
+    expect(deepActiveElement()).toBe(dialogSection(dialog));
+    const tabEvent = pressKey(dialogSurface(dialog), "Tab");
+    expect(tabEvent.defaultPrevented).toBe(true);
+    expect(deepActiveElement()).toBe(closeButton(dialog));
+  });
+
+  it("refocuses when OAuth selection and waiting controls replace each other", async () => {
+    const onOAuthCancel = vi.fn<() => void>();
+    const dialog = await mountDialog(
+      oauthState({ prompt: { requestId: "req-1", message: "Enter the code", promptType: "text" } }),
+      { onOAuthCancel },
+    );
+
+    dialog.state = oauthState({ select: oauthSelect("select-1", "Account one") });
+    await settleDialog(dialog);
+    expect(deepActiveElement()).toBe(dialogSection(dialog));
+
+    requiredElement(oauthSelectButtons(dialog)[0], "first OAuth selection").focus();
+    dialog.state = oauthState();
+    await settleDialog(dialog);
+    expect(deepActiveElement()).toBe(dialogSection(dialog));
+
+    oauthActionButton(dialog, "Cancel").focus();
+    dialog.state = oauthState({ select: oauthSelect("select-2", "Account two") });
+    await settleDialog(dialog);
+    expect(deepActiveElement()).toBe(dialogSection(dialog));
+
+    pressKey(dialogSurface(dialog), "Escape");
+    expect(onOAuthCancel).toHaveBeenCalledOnce();
   });
 });
 
@@ -148,6 +187,27 @@ describe("auth-dialog option-list keyboard navigation", () => {
     expect(onSelectProvider).toHaveBeenCalledWith("p2", "oauth");
   });
 
+  it("lets a focused option own Enter and exposes that option as current", async () => {
+    const onSelectProvider = vi.fn<(providerId: string, authType: "oauth" | "api_key") => void>();
+    const dialog = await mountDialog(
+      { step: "providers", mode: "login", authType: "oauth", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] },
+      { onSelectProvider },
+    );
+    const secondOption = requiredElement(optionButtons(dialog)[1], "second provider option");
+
+    expect(selectedOptionIndex(dialog)).toBe(0);
+    secondOption.focus();
+    await settleDialog(dialog);
+
+    expect(selectedOptionIndex(dialog)).toBe(1);
+    expect(secondOption.getAttribute("aria-current")).toBe("true");
+    const event = pressNativeButtonEnter(secondOption);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onSelectProvider).toHaveBeenCalledOnce();
+    expect(onSelectProvider).toHaveBeenCalledWith("p2", "oauth");
+  });
+
   it("activates the selected stored credential with Enter on the logout step", async () => {
     const onLogoutProvider = vi.fn<(providerId: string) => void>();
     const dialog = await mountDialog({ step: "logout", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] }, { onLogoutProvider });
@@ -155,6 +215,28 @@ describe("auth-dialog option-list keyboard navigation", () => {
     pressKey(dialogSurface(dialog), "Enter");
 
     expect(onLogoutProvider).toHaveBeenCalledWith("p1");
+  });
+
+  it("does not log out the selected provider when Enter belongs to another focused button", async () => {
+    const onLogoutProvider = vi.fn<(providerId: string) => void>();
+    const onCancel = vi.fn<() => void>();
+    const dialog = await mountDialog(
+      { step: "logout", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] },
+      { onLogoutProvider, onCancel },
+    );
+    const secondProvider = requiredElement(optionButtons(dialog)[1], "second logout provider");
+
+    secondProvider.focus();
+    await settleDialog(dialog);
+    pressNativeButtonEnter(secondProvider);
+    expect(onLogoutProvider).toHaveBeenCalledWith("p2");
+
+    closeButton(dialog).focus();
+    const closeEvent = pressNativeButtonEnter(closeButton(dialog));
+
+    expect(closeEvent.defaultPrevented).toBe(false);
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onLogoutProvider).toHaveBeenCalledTimes(1);
   });
 
   it("restarts the selection at the first option when the step changes", async () => {
@@ -178,6 +260,23 @@ describe("auth-dialog OAuth prompt keys", () => {
     pressKey(promptInput(dialog), "Enter");
 
     expect(onOAuthRespond).toHaveBeenCalledOnce();
+  });
+
+  it("lets a focused OAuth Cancel button own Enter instead of submitting", async () => {
+    const onOAuthRespond = vi.fn<(value?: string) => void>();
+    const onOAuthCancel = vi.fn<() => void>();
+    const dialog = await mountDialog(
+      oauthState({ prompt: { requestId: "req-1", message: "Enter the code", promptType: "text" } }),
+      { onOAuthRespond, onOAuthCancel },
+    );
+    const cancel = oauthActionButton(dialog, "Cancel");
+    cancel.focus();
+
+    const event = pressNativeButtonEnter(cancel);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onOAuthCancel).toHaveBeenCalledOnce();
+    expect(onOAuthRespond).not.toHaveBeenCalled();
   });
 });
 
@@ -220,8 +319,22 @@ function promptInput(dialog: AuthDialog): HTMLInputElement {
   return requiredElement(dialog.shadowRoot?.querySelector("input"), "OAuth prompt input");
 }
 
+function closeButton(dialog: AuthDialog): HTMLButtonElement {
+  return requiredElement(dialog.shadowRoot?.querySelector<HTMLButtonElement>("header button[aria-label='Close']"), "auth-dialog Close button");
+}
+
 function optionButtons(dialog: AuthDialog): HTMLButtonElement[] {
   return [...(dialog.shadowRoot?.querySelectorAll<HTMLButtonElement>(".options button") ?? [])];
+}
+
+function oauthSelectButtons(dialog: AuthDialog): HTMLButtonElement[] {
+  return [...(dialog.shadowRoot?.querySelectorAll<HTMLButtonElement>(".inline-options button") ?? [])];
+}
+
+function oauthActionButton(dialog: AuthDialog, label: string): HTMLButtonElement {
+  const button = [...(dialog.shadowRoot?.querySelectorAll<HTMLButtonElement>(".actions button") ?? [])]
+    .find((candidate) => candidate.textContent.trim() === label);
+  return requiredElement(button, `OAuth ${label} button`);
 }
 
 function selectedOptionIndex(dialog: AuthDialog): number {
@@ -238,6 +351,10 @@ function oauthState(flow: Partial<OAuthFlowState> = {}): AuthDialogState {
     machineId: "machine-1",
     flow: { flowId: "flow-1", providerId: "anthropic", providerName: "Anthropic", status: "running", progress: [], ...flow },
   };
+}
+
+function oauthSelect(requestId: string, label: string): NonNullable<OAuthFlowState["select"]> {
+  return { requestId, message: "Choose an account", options: [{ value: requestId, label }] };
 }
 
 function pressKey(target: Element, key: string): KeyboardEvent {

@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppAction } from "../actions";
 import { ActionPalette, filterActionPaletteActions } from "./ActionPalette";
-import { deepActiveElement, dialogSection, dialogSurface, pressKey, requiredElement, settleRenderedDialog, surfaceBackdrop } from "./modalSurfaceTestSupport";
+import { deepActiveElement, dialogSection, dialogSurface, pressKey, pressNativeButtonEnter, requiredElement, settleRenderedDialog, surfaceBackdrop } from "./modalSurfaceTestSupport";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -82,6 +82,31 @@ describe("action-palette modal surface", () => {
 
     expect(onRun).toHaveBeenCalledWith(actions[2]);
   });
+
+  it("lets focused action and Close buttons keep their native Enter meanings", async () => {
+    const onRun = vi.fn<(action: AppAction) => void>();
+    const onCancel = vi.fn<() => void>();
+    const actions = [action("a", "Alpha"), action("b", "Beta")];
+    const palette = await mountPalette({ onRun, onCancel, actions });
+    const secondAction = requiredElement(actionButtons(palette)[1], "second palette action");
+
+    secondAction.focus();
+    await settleRenderedDialog(palette);
+    expect(selectedActionIndex(palette)).toBe(1);
+    expect(secondAction.getAttribute("aria-current")).toBe("true");
+    const actionEvent = pressNativeButtonEnter(secondAction);
+
+    expect(actionEvent.defaultPrevented).toBe(false);
+    expect(onRun).toHaveBeenCalledWith(actions[1]);
+
+    const close = closeButton(palette);
+    close.focus();
+    const closeEvent = pressNativeButtonEnter(close);
+
+    expect(closeEvent.defaultPrevented).toBe(false);
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onRun).toHaveBeenCalledTimes(1);
+  });
 });
 
 interface ActionPaletteProps {
@@ -104,9 +129,16 @@ function searchInput(palette: ActionPalette): HTMLInputElement {
   return requiredElement(palette.shadowRoot?.querySelector<HTMLInputElement>("input"), "action-palette search input");
 }
 
+function actionButtons(palette: ActionPalette): HTMLButtonElement[] {
+  return [...(palette.shadowRoot?.querySelectorAll<HTMLButtonElement>(".options button") ?? [])];
+}
+
+function closeButton(palette: ActionPalette): HTMLButtonElement {
+  return requiredElement(palette.shadowRoot?.querySelector<HTMLButtonElement>("header button[aria-label='Close']"), "action-palette Close button");
+}
+
 function selectedActionIndex(palette: ActionPalette): number {
-  const buttons = [...(palette.shadowRoot?.querySelectorAll<HTMLButtonElement>(".options button") ?? [])];
-  return buttons.findIndex((button) => button.classList.contains("selected"));
+  return actionButtons(palette).findIndex((button) => button.classList.contains("selected"));
 }
 
 function action(id: string, title: string, patch: Partial<AppAction> = {}): AppAction {
