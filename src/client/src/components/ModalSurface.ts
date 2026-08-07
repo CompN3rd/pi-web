@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 
-const FOCUSABLE_SELECTOR = "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex='-1'])";
+const FOCUSABLE_SELECTOR = "button, input, select, textarea, a[href], [tabindex]";
 
 /**
  * Shared modal surface for the client's custom overlay dialogs. It owns the
@@ -35,8 +35,6 @@ export class ModalSurface extends LitElement {
   @property({ attribute: false }) initialFocus?: string;
   /** Accessible name applied as `aria-label` on the dialog section. */
   @property({ attribute: false }) label?: string;
-  /** ID of the content element naming the dialog (`aria-labelledby`); takes precedence over `label`. */
-  @property({ attribute: false }) labelledBy?: string;
 
   @query("section") private section?: HTMLElement;
 
@@ -87,8 +85,7 @@ export class ModalSurface extends LitElement {
           role="dialog"
           aria-modal="true"
           aria-busy=${this.busy ? "true" : "false"}
-          aria-label=${this.labelledBy === undefined ? this.label ?? nothing : nothing}
-          aria-labelledby=${this.labelledBy ?? nothing}
+          aria-label=${this.label ?? nothing}
           tabindex="-1"
         ><slot></slot></section>
       </div>
@@ -180,22 +177,38 @@ function deepActiveElement(): Element | null {
 }
 
 /**
- * Focusable elements inside the surface's dialog content in Tab-cycle order,
- * descending into nested shadow roots (settings panels render their controls
- * inside their own shadow trees).
+ * Focusable elements inside the surface's dialog content in flattened Tab-cycle
+ * order. Open shadow roots replace a host's light children, and slots insert
+ * their assigned children where the slot is rendered.
  */
 function modalSurfaceFocusableElements(surface: ModalSurface): HTMLElement[] {
   const focusable: HTMLElement[] = [];
-  const collect = (root: Element | ShadowRoot): void => {
-    for (const child of root.children) {
-      if (!(child instanceof HTMLElement)) continue;
-      if (child.matches(FOCUSABLE_SELECTOR)) focusable.push(child);
-      collect(child);
-      if (child.shadowRoot !== null) collect(child.shadowRoot);
-    }
+  const collect = (element: Element): void => {
+    if (element instanceof HTMLElement && isSequentiallyFocusable(element)) focusable.push(element);
+    for (const child of flattenedChildElements(element)) collect(child);
   };
-  collect(surface);
+  for (const child of flattenedChildElements(surface)) collect(child);
   return focusable;
+}
+
+function isSequentiallyFocusable(element: HTMLElement): boolean {
+  if (element.matches(":disabled")) return false;
+  if (element instanceof HTMLInputElement && element.type === "hidden") return false;
+  // Native controls match by tag even when an explicit negative tabindex has
+  // removed them from sequential keyboard navigation.
+  return element.matches(FOCUSABLE_SELECTOR) && element.tabIndex >= 0;
+}
+
+function flattenedChildElements(parent: Element | ShadowRoot): Element[] {
+  if (parent instanceof HTMLSlotElement) {
+    const assigned = parent.assignedNodes({ flatten: true });
+    // Preserve fallback content when a DOM implementation reports an empty
+    // assigned list; assigned text keeps the list nonempty and suppresses it.
+    const rendered = assigned.length === 0 ? parent.childNodes : assigned;
+    return Array.from(rendered).filter((node): node is Element => node instanceof Element);
+  }
+  const renderedRoot = parent instanceof Element ? parent.shadowRoot ?? parent : parent;
+  return Array.from(renderedRoot.children);
 }
 
 /** Whether `node` is contained in `host` across shadow boundaries. */

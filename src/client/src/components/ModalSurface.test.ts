@@ -9,9 +9,9 @@ afterEach(() => {
 });
 
 describe("modal-surface rendering", () => {
-  it("renders an accessible dialog section around the provided content", async () => {
+  it("renders a self-contained accessible name around slotted content", async () => {
     const surface = await mountSurface({
-      content: `<p id="greeting">Hello</p>`,
+      content: `<h1 id="greeting">Hello</h1>`,
       configure: (element) => { element.label = "Greeting dialog"; },
     });
     const section = dialogSection(surface);
@@ -24,20 +24,6 @@ describe("modal-surface rendering", () => {
     const slot = section.querySelector("slot");
     if (!(slot instanceof HTMLSlotElement)) throw new Error("modal-surface did not render its content slot");
     expect(slot.assignedElements().map((element) => element.id)).toEqual(["greeting"]);
-  });
-
-  it("prefers an explicit labelled-by reference over a plain label", async () => {
-    const surface = await mountSurface({
-      content: `<h1 id="dialog-title">Title</h1>`,
-      configure: (element) => {
-        element.label = "Ignored label";
-        element.labelledBy = "dialog-title";
-      },
-    });
-    const section = dialogSection(surface);
-
-    expect(section.getAttribute("aria-labelledby")).toBe("dialog-title");
-    expect(section.getAttribute("aria-label")).toBeNull();
   });
 });
 
@@ -265,6 +251,31 @@ describe("modal-surface nested shadow content", () => {
     expect(document.activeElement).toBe(after);
   });
 
+  it("follows flattened slot order at both edges and skips negative-tabindex controls", async () => {
+    const surface = await mountSurface({
+      content: `
+        <modal-surface-test-slotted>
+          <button id="slotted-first">Slotted first</button>
+          <button id="slotted-last">Slotted last</button>
+          <button id="removed-from-tab-order" tabindex="-1">Programmatic only</button>
+          <button tabindex="0" disabled>Disabled</button>
+        </modal-surface-test-slotted>
+      `,
+    });
+    const internalAction = nestedInternalAction(surface);
+    const slottedLast = requiredElement(surface.querySelector<HTMLButtonElement>("#slotted-last"), "last slotted button");
+
+    slottedLast.focus();
+    const forward = pressKey(slottedLast, "Tab");
+    expect(forward.defaultPrevented).toBe(true);
+    expect(deepActiveElement()).toBe(internalAction);
+
+    internalAction.focus();
+    const backward = pressKey(surface, "Tab", { shift: true });
+    expect(backward.defaultPrevented).toBe(true);
+    expect(deepActiveElement()).toBe(slottedLast);
+  });
+
   it("enters the Tab cycle directly into a nested shadow control", async () => {
     const surface = await mountSurface({ content: `<modal-surface-test-nested></modal-surface-test-nested>` });
 
@@ -363,6 +374,11 @@ function nestedFocusButton(surface: ModalSurface): HTMLButtonElement {
   return requiredElement(host.shadowRoot?.querySelector("button"), "nested shadow button");
 }
 
+function nestedInternalAction(surface: ModalSurface): HTMLButtonElement {
+  const host = requiredElement(surface.querySelector("modal-surface-test-slotted"), "nested slotted host");
+  return requiredElement(host.shadowRoot?.querySelector("button"), "nested internal action");
+}
+
 function appendFocusTarget(text: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.textContent = text;
@@ -410,4 +426,22 @@ class ModalSurfaceTestNested extends HTMLElement {
 
 if (customElements.get("modal-surface-test-nested") === undefined) {
   customElements.define("modal-surface-test-nested", ModalSurfaceTestNested);
+}
+
+class ModalSurfaceTestSlotted extends HTMLElement {
+  constructor() {
+    super();
+    const root = this.attachShadow({ mode: "open" });
+    const actionSlot = document.createElement("slot");
+    actionSlot.name = "actions";
+    const action = document.createElement("button");
+    action.id = "internal-action";
+    action.textContent = "Internal action";
+    actionSlot.append(action);
+    root.append(actionSlot, document.createElement("slot"));
+  }
+}
+
+if (customElements.get("modal-surface-test-slotted") === undefined) {
+  customElements.define("modal-surface-test-slotted", ModalSurfaceTestSlotted);
 }
