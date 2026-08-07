@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PiSessionService, type PiAgentSession } from "./piSessionService.js";
 import type { SpawnTargetDecision } from "./spawnTargetResolver.js";
-import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
+import { CapturingSessionEventHub, emptyArchiveStore, fakeRuntime, fakeSessionManager, resolveSessionFileFromList, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 
@@ -279,7 +279,7 @@ describe("PiSessionService", () => {
             index += 1;
             return Promise.resolve(runtime);
           },
-          sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, open },
+          sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, resolveSessionFile: () => Promise.resolve(undefined), open },
           archiveStore: emptyArchiveStore(),
           heartbeatIntervalMs: 60_000,
         });
@@ -318,7 +318,7 @@ describe("PiSessionService", () => {
           agentDir: TEST_AGENT_DIR,
       modelRuntime: testModelRuntime,
           createAgentRuntime: runtimeCreator(parent.runtime),
-          sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, open: () => fakeSessionManager() },
+          sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, resolveSessionFile: () => Promise.resolve(undefined), open: () => fakeSessionManager() },
           archiveStore: emptyArchiveStore(),
           heartbeatIntervalMs: 60_000,
         });
@@ -344,7 +344,7 @@ describe("PiSessionService", () => {
         agentDir: TEST_AGENT_DIR,
       modelRuntime: testModelRuntime,
         createAgentRuntime: runtimeCreator(parent.runtime),
-        sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, open: () => fakeSessionManager() },
+        sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, resolveSessionFile: () => Promise.resolve(undefined), open: () => fakeSessionManager() },
         archiveStore: emptyArchiveStore(),
         heartbeatIntervalMs: 60_000,
       });
@@ -367,7 +367,7 @@ describe("PiSessionService", () => {
         agentDir: TEST_AGENT_DIR,
       modelRuntime: testModelRuntime,
         createAgentRuntime: runtimeCreator(parent.runtime),
-        sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, open: () => fakeSessionManager() },
+        sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, resolveSessionFile: () => Promise.resolve(undefined), open: () => fakeSessionManager() },
         archiveStore: emptyArchiveStore(),
         heartbeatIntervalMs: 60_000,
       });
@@ -389,7 +389,7 @@ describe("PiSessionService", () => {
         agentDir: TEST_AGENT_DIR,
       modelRuntime: testModelRuntime,
         createAgentRuntime: runtimeCreator(parent.runtime),
-        sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([childRecord]), invalidateSessionFile: () => undefined, open: () => fakeSessionManager() },
+        sessionManager: { create: () => parent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([childRecord]), invalidateSessionFile: () => undefined, resolveSessionFile: () => Promise.resolve(undefined), open: () => fakeSessionManager() },
         archiveStore: emptyArchiveStore(),
         heartbeatIntervalMs: 60_000,
       });
@@ -411,7 +411,7 @@ describe("PiSessionService", () => {
         agentDir: TEST_AGENT_DIR,
       modelRuntime: testModelRuntime,
         createAgentRuntime: runtimeCreator(forkedParent.runtime),
-        sessionManager: { create: () => forkedParent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, open: () => fakeSessionManager() },
+        sessionManager: { create: () => forkedParent.session.sessionManager, list: () => Promise.resolve([]), listAll: () => Promise.resolve([]), invalidateSessionFile: () => undefined, resolveSessionFile: () => Promise.resolve(undefined), open: () => fakeSessionManager() },
         archiveStore: emptyArchiveStore(),
         heartbeatIntervalMs: 60_000,
       });
@@ -461,6 +461,7 @@ describe("PiSessionService", () => {
             list: () => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }]),
             listAll: () => Promise.resolve([]),
             invalidateSessionFile: () => undefined,
+            resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }])),
             open,
           },
           archiveStore: emptyArchiveStore(),
@@ -530,6 +531,9 @@ describe("PiSessionService", () => {
               : [{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }]),
             listAll: () => Promise.resolve([]),
             invalidateSessionFile: () => undefined,
+            resolveSessionFile: resolveSessionFileFromList((cwd: string) => Promise.resolve(cwd === "/workspace"
+              ? [{ ...sessionRecord("parent-1-fork", "/workspace"), path: forkParentFile }]
+              : [{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }])),
             open,
           },
           archiveStore: emptyArchiveStore(),
@@ -590,6 +594,7 @@ describe("PiSessionService", () => {
             list: () => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), path: copiedChildFile, parentSessionPath: parentFile }]),
             listAll: () => Promise.resolve([]),
             invalidateSessionFile: () => undefined,
+            resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), path: copiedChildFile, parentSessionPath: parentFile }])),
             open,
           },
           archiveStore: emptyArchiveStore(),
@@ -655,6 +660,7 @@ describe("PiSessionService", () => {
             list: (cwd: string) => Promise.resolve(cwd === "/workspace-feature" ? [{ ...sessionRecord("child-1", "/workspace-feature"), path: copiedChildFile, parentSessionPath: parentFile }] : []),
             listAll: () => Promise.resolve([]),
             invalidateSessionFile: () => undefined,
+            resolveSessionFile: resolveSessionFileFromList((cwd: string) => Promise.resolve(cwd === "/workspace-feature" ? [{ ...sessionRecord("child-1", "/workspace-feature"), path: copiedChildFile, parentSessionPath: parentFile }] : [])),
             open,
           },
           archiveStore: emptyArchiveStore(),
@@ -737,6 +743,9 @@ describe("PiSessionService", () => {
               : [{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }]),
             listAll: () => Promise.resolve([]),
             invalidateSessionFile: () => undefined,
+            resolveSessionFile: resolveSessionFileFromList((cwd: string) => Promise.resolve(cwd === "/workspace"
+              ? [{ ...sessionRecord("parent-1", "/workspace"), path: copiedParentFile }]
+              : [{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }])),
             open,
           },
           archiveStore: emptyArchiveStore(),
@@ -801,6 +810,7 @@ describe("PiSessionService", () => {
             list: () => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }]),
             listAll: () => Promise.resolve([]),
             invalidateSessionFile: () => undefined,
+            resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }])),
             open,
           },
           archiveStore: {
@@ -857,6 +867,7 @@ describe("PiSessionService", () => {
             list: () => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: mismatchedParentFile }]),
             listAll: () => Promise.resolve([{ ...sessionRecord("parent-1", "/workspace"), path: actualParentFile }]),
             invalidateSessionFile: () => undefined,
+            resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([{ ...sessionRecord("child-1", "/workspace-feature"), path: childFile, parentSessionPath: mismatchedParentFile }])),
             open,
           },
           archiveStore: emptyArchiveStore(),
@@ -897,6 +908,7 @@ describe("PiSessionService", () => {
           list: () => Promise.resolve([{ ...sessionRecord("child-fork-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }]),
           listAll: () => Promise.resolve([]),
           invalidateSessionFile: () => undefined,
+          resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([{ ...sessionRecord("child-fork-1", "/workspace-feature"), path: childFile, parentSessionPath: parentFile }])),
           open,
         },
         archiveStore: emptyArchiveStore(),

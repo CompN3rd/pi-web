@@ -54,6 +54,7 @@ describe("PiSessionService listing of replaced session files", () => {
         create: () => fakeSessionManager(),
         list: (refCwd: string) => realGateway.list(refCwd),
         listAll: () => realGateway.listAll(),
+        resolveSessionFile: (refCwd: string, sessionId: string) => realGateway.resolveSessionFile(refCwd, sessionId),
         invalidateSessionFile: (sessionFile: string) => {
           realGateway.invalidateSessionFile(sessionFile);
         },
@@ -120,6 +121,7 @@ describe("PiSessionService.detachParent summary memo", () => {
         create: () => fakeSessionManager(),
         list: (refCwd: string) => realGateway.list(refCwd),
         listAll: () => realGateway.listAll(),
+        resolveSessionFile: (refCwd: string, sessionId: string) => realGateway.resolveSessionFile(refCwd, sessionId),
         invalidateSessionFile: (sessionFile: string) => {
           invalidated.push(sessionFile);
           realGateway.invalidateSessionFile(sessionFile);

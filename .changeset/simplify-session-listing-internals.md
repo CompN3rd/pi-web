@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Make opening a session and listing sessions share one code path, so the two can no longer disagree about which session a short id refers to or how recently it was modified. The list's cached scan is now also what resolves an open-by-id request, and the cache re-reads a changed session file whole rather than tracking partial parse state, which removes a class of stale-row bugs after a session file is rewritten. Sessions you have not opened yet in a large session directory may take marginally longer to open the first time, since the first open warms that shared cache.
+Speed up session listing and make its cached rows more reliable. Listing reads only as much of each session file as a row needs, and its cache re-reads a changed session file whole rather than tracking partial parse state, which removes a class of stale-row bugs after a session file is rewritten in place. Opening, prompting, or running a command in a session you name directly stays independent of listing, so a large or busy session directory does not slow those down or make them wait behind a listing already in progress.

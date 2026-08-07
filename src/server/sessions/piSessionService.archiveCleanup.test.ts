@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PiSessionService } from "./piSessionService.js";
 import { SessionNotificationStore } from "./sessionNotificationStore.js";
-import { CapturingSessionEventHub, fakeRuntime, fakeSessionManager, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModelRuntime } from "./piSessionService.testSupport.js";
+import { CapturingSessionEventHub, fakeRuntime, fakeSessionManager, resolveSessionFileFromList, runtimeCreator, sessionGateway, sessionRecord, sessionRef, testModelRuntime } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 
@@ -74,6 +74,7 @@ describe("PiSessionService archive and cleanup", () => {
         list: (cwd) => Promise.resolve(cwd === "/workspace" ? [root, directChild, archivedChild, grandchild] : [otherWorkspaceChild]),
         listAll: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
+        resolveSessionFile: resolveSessionFileFromList((cwd) => Promise.resolve(cwd === "/workspace" ? [root, directChild, archivedChild, grandchild] : [otherWorkspaceChild])),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -257,6 +258,7 @@ describe("PiSessionService archive and cleanup", () => {
         },
         listAll: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
+        resolveSessionFile: () => Promise.resolve(undefined),
         open,
       },
       heartbeatIntervalMs: 60_000,
@@ -297,6 +299,7 @@ describe("PiSessionService archive and cleanup", () => {
         list: () => Promise.resolve([sessionRecord("busy"), sessionRecord("ok")]),
         listAll: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
+        resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([sessionRecord("busy"), sessionRecord("ok")])),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -339,6 +342,7 @@ describe("PiSessionService archive and cleanup", () => {
         list: () => Promise.resolve([sessionRecord("unarchived")]),
         listAll: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
+        resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -386,6 +390,7 @@ describe("PiSessionService archive and cleanup", () => {
         },
         listAll: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
+        resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -444,6 +449,7 @@ describe("PiSessionService archive and cleanup", () => {
           ]);
         },
         invalidateSessionFile: () => undefined,
+        resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -495,6 +501,7 @@ describe("PiSessionService archive and cleanup", () => {
         },
         listAll: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
+        resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
       },
       heartbeatIntervalMs: 60_000,
@@ -533,6 +540,7 @@ describe("PiSessionService archive and cleanup", () => {
         list: () => Promise.resolve([sessionRecord("busy-open", "/old-project")]),
         listAll: () => Promise.resolve([sessionRecord("busy-open", "/old-project")]),
         invalidateSessionFile: () => undefined,
+        resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([sessionRecord("busy-open", "/old-project")])),
         open: () => fakeSessionManager("/old-project"),
       },
       heartbeatIntervalMs: 60_000,

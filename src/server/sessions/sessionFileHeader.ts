@@ -30,6 +30,9 @@ export interface SessionHeaderSummary {
   parentSession?: string;
 }
 
+/** Reads a session file header; injected so header-driven lookups are testable without a filesystem. */
+export type SessionHeaderReader = (sessionFile: string) => Promise<SessionHeaderSummary | undefined>;
+
 /**
  * Read a Pi session file's header without loading the whole transcript.
  *
