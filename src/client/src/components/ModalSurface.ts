@@ -2,6 +2,9 @@ import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 
 const FOCUSABLE_SELECTOR = "button, input, select, textarea, a[href], [tabindex]";
+const connectedModalSurfaces = new Set<ModalSurface>();
+const modalSurfaceConnectionOrders = new WeakMap<ModalSurface, number>();
+let modalSurfaceConnectionOrder = 0;
 
 /**
  * Shared modal surface for the client's custom overlay dialogs. It owns the
@@ -13,7 +16,8 @@ const FOCUSABLE_SELECTOR = "button, input, select, textarea, a[href], [tabindex]
  *   `busy` opt-out (Escape is then routed to the optional `onBusyEscape`),
  * - traps Tab/Shift+Tab within the dialog's focusable elements, including
  *   controls inside nested shadow roots,
- * - restores focus to the previously focused element on disconnect.
+ * - keeps focus and modal accessibility ownership on the visually top surface,
+ * - restores focus to the previous control or surviving lower dialog on disconnect.
  *
  * The host dialog keeps its own fixed positioning and z-index, renders its
  * content as this element's children, and tunes the shared backdrop/section
@@ -51,6 +55,9 @@ export class ModalSurface extends LitElement {
     } else {
       this.focusRestorationPath = [];
     }
+    modalSurfaceConnectionOrders.set(this, ++modalSurfaceConnectionOrder);
+    connectedModalSurfaces.add(this);
+    requestModalSurfaceUpdates(this.ownerDocument);
     // Key handling lives on the host, not the shadow section: slotted dialog
     // content bubbles key events up its light-DOM tree to this element, and
     // key presses inside the surface's own shadow section reach it as composed
@@ -60,6 +67,8 @@ export class ModalSurface extends LitElement {
 
   override disconnectedCallback(): void {
     this.removeEventListener("keydown", this.handleKeyDown);
+    connectedModalSurfaces.delete(this);
+    requestModalSurfaceUpdates(this.ownerDocument);
     super.disconnectedCallback();
     const restorationPath = this.focusRestorationPath;
     this.focusRestorationPath = [];
@@ -69,7 +78,17 @@ export class ModalSurface extends LitElement {
     const active = deepActiveElement();
     const focusWasReset = active === null || active === document.body || active === document.documentElement;
     if (!focusWasReset && !composedContains(this, active)) return;
-    restorationPath.find((target) => target.isConnected)?.focus();
+
+    // A lower visible modal takes precedence over an opener behind it. Prefer
+    // the exact remembered control when it still belongs to that modal, then
+    // fall back to the lower modal's own initial-focus contract.
+    const lowerSurface = topModalSurface(this.ownerDocument);
+    if (lowerSurface !== undefined) {
+      if (restoreFocus(restorationPath.filter((target) => composedContains(lowerSurface, target)))) return;
+      lowerSurface.focusDialog();
+      return;
+    }
+    restoreFocus(restorationPath);
   }
 
   protected override firstUpdated(): void {
@@ -82,15 +101,23 @@ export class ModalSurface extends LitElement {
    * held focus (for example a step change) so keys keep reaching the dialog.
    */
   focusDialog(): void {
-    (this.initialFocusTarget() ?? this.section)?.focus();
+    // Async dialog data can resolve after a visually higher modal has opened.
+    // Only the actual top layer may claim focus; when that layer closes,
+    // disconnectedCallback asks the next surface to apply this contract.
+    if (!isTopModalSurface(this)) return;
+    const initialTarget = this.initialFocusTarget();
+    if (initialTarget !== null && focusElement(initialTarget)) return;
+    if (this.section !== undefined) focusElement(this.section);
   }
 
   override render(): TemplateResult {
+    const isTop = isTopModalSurface(this);
     return html`
       <div class="backdrop" @mousedown=${(event: MouseEvent) => { this.handleBackdropMouseDown(event); }}>
         <section
           role="dialog"
-          aria-modal="true"
+          aria-modal=${isTop ? "true" : "false"}
+          aria-hidden=${isTop ? nothing : "true"}
           aria-busy=${this.busy ? "true" : "false"}
           aria-label=${this.label ?? nothing}
           tabindex="-1"
@@ -199,11 +226,36 @@ function modalSurfaceFocusableElements(surface: ModalSurface): HTMLElement[] {
 }
 
 function isSequentiallyFocusable(element: HTMLElement): boolean {
-  if (element.matches(":disabled")) return false;
+  if (element.matches(":disabled") || isHiddenOrInertInComposedTree(element)) return false;
   if (element instanceof HTMLInputElement && element.type === "hidden") return false;
   // Native controls match by tag even when an explicit negative tabindex has
   // removed them from sequential keyboard navigation.
   return element.matches(FOCUSABLE_SELECTOR) && element.tabIndex >= 0;
+}
+
+/** Hidden/inert content is absent from the browser's sequential focus order. */
+function isHiddenOrInertInComposedTree(element: HTMLElement): boolean {
+  const view = element.ownerDocument.defaultView;
+  const elementStyle = view?.getComputedStyle(element);
+  if (elementStyle?.visibility === "hidden" || elementStyle?.visibility === "collapse") return true;
+
+  let current: Element | null = element;
+  while (current !== null) {
+    if (current.hasAttribute("hidden") || current.hasAttribute("inert")) return true;
+    const style = view?.getComputedStyle(current);
+    if (style?.display === "none" || style?.getPropertyValue("content-visibility") === "hidden") return true;
+    current = composedParentElement(current);
+  }
+  return false;
+}
+
+function composedParentElement(element: Element): Element | null {
+  const assignedSlot = element.assignedSlot;
+  if (assignedSlot instanceof HTMLSlotElement) return assignedSlot;
+  const parent = element.parentElement;
+  if (parent instanceof Element) return parent;
+  const root = element.getRootNode();
+  return root instanceof ShadowRoot && root.host instanceof Element ? root.host : null;
 }
 
 function flattenedChildElements(parent: Element | ShadowRoot): Element[] {
@@ -216,6 +268,66 @@ function flattenedChildElements(parent: Element | ShadowRoot): Element[] {
   }
   const renderedRoot = parent instanceof Element ? parent.shadowRoot ?? parent : parent;
   return Array.from(renderedRoot.children);
+}
+
+function requestModalSurfaceUpdates(ownerDocument: Document): void {
+  for (const surface of connectedModalSurfaces) {
+    if (surface.ownerDocument === ownerDocument) surface.requestUpdate();
+  }
+}
+
+function topModalSurface(ownerDocument: Document): ModalSurface | undefined {
+  let top: ModalSurface | undefined;
+  for (const surface of connectedModalSurfaces) {
+    if (!surface.isConnected || surface.ownerDocument !== ownerDocument) continue;
+    if (top === undefined || compareModalPaintOrder(surface, top) > 0) top = surface;
+  }
+  return top;
+}
+
+function isTopModalSurface(surface: ModalSurface): boolean {
+  return topModalSurface(surface.ownerDocument) === surface;
+}
+
+/** Compare the app's fixed modal hosts by z-index, then DOM paint order. */
+function compareModalPaintOrder(left: ModalSurface, right: ModalSurface): number {
+  const leftHost = modalLayerHost(left);
+  const rightHost = modalLayerHost(right);
+  const layerDifference = modalLayerZIndex(leftHost) - modalLayerZIndex(rightHost);
+  if (layerDifference !== 0) return layerDifference;
+  if (leftHost !== rightHost) {
+    const position = leftHost.compareDocumentPosition(rightHost);
+    if ((position & Node.DOCUMENT_POSITION_DISCONNECTED) === 0) {
+      if ((position & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return -1;
+      if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return 1;
+    }
+  }
+  return (modalSurfaceConnectionOrders.get(left) ?? 0) - (modalSurfaceConnectionOrders.get(right) ?? 0);
+}
+
+function modalLayerHost(surface: ModalSurface): HTMLElement {
+  const root = surface.getRootNode();
+  return root instanceof ShadowRoot && root.host instanceof HTMLElement ? root.host : surface;
+}
+
+function modalLayerZIndex(host: HTMLElement): number {
+  const value = host.ownerDocument.defaultView?.getComputedStyle(host).zIndex ?? "";
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function restoreFocus(path: readonly HTMLElement[]): boolean {
+  for (const target of path) {
+    if (focusElement(target)) return true;
+  }
+  return false;
+}
+
+function focusElement(target: HTMLElement): boolean {
+  if (!target.isConnected || target.matches(":disabled") || isHiddenOrInertInComposedTree(target)) return false;
+  target.focus();
+  const active = deepActiveElement();
+  return active === target || (active !== null && composedContains(target, active));
 }
 
 /** Nearest modal surface containing `node`, crossing open shadow boundaries. */

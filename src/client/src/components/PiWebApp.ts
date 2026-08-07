@@ -355,12 +355,14 @@ export class PiWebApp extends LitElement {
       || this.state.actionPaletteOpen
       || this.state.projectDialogOpen
       || this.state.machineDialogOpen
-      || this.state.commandDialog !== undefined
       || this.state.treeDialog !== undefined
-      || this.state.modelDialog !== undefined
-      || this.state.thinkingDialog !== undefined
       || this.state.themeDialog !== undefined
-      || this.state.authDialog !== undefined;
+      || this.state.authDialog !== undefined
+      || (this.state.selectedSession !== undefined && (
+        this.state.commandDialog !== undefined
+        || this.state.modelDialog !== undefined
+        || this.state.thinkingDialog !== undefined
+      ));
   }
 
   override connectedCallback(): void {
@@ -760,7 +762,7 @@ export class PiWebApp extends LitElement {
   }
 
   private shouldAutoFocusPrompt(): boolean {
-    return this.appShell.shouldAutoFocusPrompt();
+    return !this.isModalOverlayOpen() && this.appShell.shouldAutoFocusPrompt();
   }
 
   private async withChatPrependTransition(action: () => Promise<void>) {
@@ -2173,11 +2175,11 @@ export class PiWebApp extends LitElement {
             ${state.commandDialog !== undefined ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog?.requestId ?? "", value)} .onCancel=${() => { this.sessions.cancelCommand(); }}></command-picker>` : null}
             ${state.modelDialog !== undefined ? html`<command-picker title=${state.modelDialog.title} .searchable=${true} .options=${state.modelDialog.options} .selectedValue=${state.modelDialog.selectedValue} .onPick=${(value: string) => { void this.pickModel(value); }} .onCancel=${() => { this.setState({ modelDialog: undefined }); }}></command-picker>` : null}
             ${state.thinkingDialog !== undefined ? html`<command-picker title=${state.thinkingDialog.title} .options=${state.thinkingDialog.options} .selectedValue=${state.thinkingDialog.selectedValue} .onPick=${(value: string) => { void this.pickThinking(value); }} .onCancel=${() => { this.setState({ thinkingDialog: undefined }); }}></command-picker>` : null}
-            ${state.authDialog !== undefined ? html`<auth-dialog .state=${state.authDialog} .onChooseMethod=${(authType: "oauth" | "api_key") => { void this.auth.chooseLoginMethod(authType); }} .onSelectProvider=${(providerId: string, authType: "oauth" | "api_key") => { void this.auth.selectLoginProvider(providerId, authType); }} .onLogoutProvider=${(providerId: string) => { void this.auth.logoutProvider(providerId); }} .onOAuthInput=${(value: string) => { this.auth.updateOAuthInput(value); }} .onOAuthRespond=${(value?: string) => { void this.auth.respondOAuth(value); }} .onOAuthCancel=${() => { void this.auth.cancelOAuth(); }} .onCancel=${() => { this.auth.closeDialog(); }}></auth-dialog>` : null}
           ` : html`<div class="empty">${this.sessionEmptyMessage()}</div>`}
         </main>
         ${this.renderWorkspacePanelEdgeControl()}
         ${this.renderWorkspacePanel()}
+        ${state.authDialog !== undefined ? html`<auth-dialog .state=${state.authDialog} .onChooseMethod=${(authType: "oauth" | "api_key") => { void this.auth.chooseLoginMethod(authType); }} .onSelectProvider=${(providerId: string, authType: "oauth" | "api_key") => { void this.auth.selectLoginProvider(providerId, authType); }} .onLogoutProvider=${(providerId: string) => { void this.auth.logoutProvider(providerId); }} .onOAuthInput=${(value: string) => { this.auth.updateOAuthInput(value); }} .onOAuthRespond=${(value?: string) => { void this.auth.respondOAuth(value); }} .onOAuthCancel=${() => { void this.auth.cancelOAuth(); }} .onCancel=${() => { this.auth.closeDialog(); }}></auth-dialog>` : null}
         ${state.actionPaletteOpen ? html`<action-palette .actions=${this.getActions()} .onRun=${(action: AppAction) => { this.setState({ actionPaletteOpen: false }); this.runAction(action); }} .onCancel=${() => { this.setState({ actionPaletteOpen: false }); }}></action-palette>` : null}
         ${this.renderSessionTreeNavigator(state)}
         ${state.projectDialogOpen ? html`<project-dialog .machineId=${selectedMachineId(state)} .onSubmit=${(path: string, create: boolean) => this.projects.addProject(path, create)} .onCancel=${() => { this.setState({ projectDialogOpen: false }); }}></project-dialog>` : null}

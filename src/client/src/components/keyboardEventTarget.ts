@@ -1,8 +1,9 @@
 /**
- * Whether a composed keyboard event originated from a native button, including
- * one inside an open shadow root. List-level keyboard shortcuts must defer to
- * these controls so Enter keeps the button's native activation behavior.
+ * Whether a composed keyboard event originated from a native control with its
+ * own Enter activation, including one inside an open shadow root. List-level
+ * shortcuts must defer so buttons click and links navigate normally.
  */
-export function keyboardEventOriginatesFromButton(event: KeyboardEvent): boolean {
-  return event.composedPath().some((target) => target instanceof HTMLButtonElement);
+export function keyboardEventOriginatesFromNativeActivationControl(event: KeyboardEvent): boolean {
+  return event.composedPath().some((target) => target instanceof HTMLButtonElement
+    || (target instanceof HTMLAnchorElement && target.hasAttribute("href")));
 }

@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing, type PropertyValues, type TemplateResul
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { AuthDialogState } from "../appState";
 import type { AuthProviderOption, OAuthFlowState } from "../api";
-import { keyboardEventOriginatesFromButton } from "./keyboardEventTarget";
+import { keyboardEventOriginatesFromNativeActivationControl } from "./keyboardEventTarget";
 import "./ModalSurface";
 import type { ModalSurface } from "./ModalSurface";
 import { scrollWhenSelected } from "./scrollWhenSelected";
@@ -177,7 +177,7 @@ export class AuthDialog extends LitElement {
   // their focused Enter behavior remains authoritative.
   private handleKeyDown(event: KeyboardEvent): void {
     const state = this.state;
-    if (state === undefined || keyboardEventOriginatesFromButton(event)) return;
+    if (state === undefined || keyboardEventOriginatesFromNativeActivationControl(event)) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       const options = this.optionsFor(state);
       if (options === undefined || options.length === 0) return;
@@ -258,7 +258,10 @@ function oauthInteractionKey(value: unknown): string | undefined {
   if (typeof flow !== "object" || flow === null) return undefined;
   const flowId = "flowId" in flow && typeof flow.flowId === "string" ? flow.flowId : "";
   const promptRequestId = "prompt" in flow ? oauthInteractionRequestId(flow.prompt) : undefined;
-  if (promptRequestId !== undefined) return `${flowId}:prompt:${promptRequestId}`;
+  if (promptRequestId !== undefined) {
+    const responsePhase = "responding" in value && value.responding === true ? "responding" : "ready";
+    return `${flowId}:prompt:${promptRequestId}:${responsePhase}`;
+  }
   const selectRequestId = "select" in flow ? oauthInteractionRequestId(flow.select) : undefined;
   if (selectRequestId !== undefined) return `${flowId}:select:${selectRequestId}`;
   const status = "status" in flow && typeof flow.status === "string" ? flow.status : "unknown";

@@ -112,6 +112,21 @@ describe("auth-dialog focus on open", () => {
     pressKey(dialogSurface(dialog), "Escape");
     expect(onOAuthCancel).toHaveBeenCalledOnce();
   });
+
+  it("returns focus to the prompt when the focused Submit button becomes disabled", async () => {
+    const onOAuthCancel = vi.fn<() => void>();
+    const prompt = { requestId: "req-1", message: "Enter the code", promptType: "text" } as const;
+    const dialog = await mountDialog(oauthState({ prompt }), { onOAuthCancel });
+    oauthActionButton(dialog, "Submit").focus();
+
+    dialog.state = { ...oauthState({ prompt }), responding: true };
+    await settleDialog(dialog);
+
+    expect(oauthActionButton(dialog, "Submit").disabled).toBe(true);
+    expect(deepActiveElement()).toBe(promptInput(dialog));
+    pressKey(promptInput(dialog), "Escape");
+    expect(onOAuthCancel).toHaveBeenCalledOnce();
+  });
 });
 
 describe("auth-dialog Escape", () => {
@@ -278,6 +293,24 @@ describe("auth-dialog OAuth prompt keys", () => {
     expect(onOAuthCancel).toHaveBeenCalledOnce();
     expect(onOAuthRespond).not.toHaveBeenCalled();
   });
+
+  it("lets a focused OAuth authorization link own Enter instead of submitting", async () => {
+    const onOAuthRespond = vi.fn<(value?: string) => void>();
+    const dialog = await mountDialog(
+      oauthState({
+        auth: { url: "https://auth.example.test/login" },
+        prompt: { requestId: "req-1", message: "Enter the code", promptType: "text" },
+      }),
+      { onOAuthRespond },
+    );
+    const link = oauthAuthorizationLink(dialog);
+    link.focus();
+
+    const event = pressKey(link, "Enter");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onOAuthRespond).not.toHaveBeenCalled();
+  });
 });
 
 interface AuthDialogCallbacks {
@@ -331,6 +364,10 @@ function oauthSelectButtons(dialog: AuthDialog): HTMLButtonElement[] {
   return [...(dialog.shadowRoot?.querySelectorAll<HTMLButtonElement>(".inline-options button") ?? [])];
 }
 
+function oauthAuthorizationLink(dialog: AuthDialog): HTMLAnchorElement {
+  return requiredElement(dialog.shadowRoot?.querySelector<HTMLAnchorElement>(".form a[href]"), "OAuth authorization link");
+}
+
 function oauthActionButton(dialog: AuthDialog, label: string): HTMLButtonElement {
   const button = [...(dialog.shadowRoot?.querySelectorAll<HTMLButtonElement>(".actions button") ?? [])]
     .find((candidate) => candidate.textContent.trim() === label);
@@ -345,7 +382,7 @@ function providerOption(id: string, name: string): AuthProviderOption {
   return { id, name, authType: "oauth", status: { configured: false } };
 }
 
-function oauthState(flow: Partial<OAuthFlowState> = {}): AuthDialogState {
+function oauthState(flow: Partial<OAuthFlowState> = {}): Extract<AuthDialogState, { step: "oauth" }> {
   return {
     step: "oauth",
     machineId: "machine-1",

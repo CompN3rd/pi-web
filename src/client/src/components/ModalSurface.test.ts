@@ -17,6 +17,7 @@ describe("modal-surface rendering", () => {
     const section = dialogSection(surface);
 
     expect(section.getAttribute("aria-modal")).toBe("true");
+    expect(section.getAttribute("aria-hidden")).toBeNull();
     expect(section.getAttribute("aria-busy")).toBe("false");
     expect(section.getAttribute("aria-label")).toBe("Greeting dialog");
     expect(section.getAttribute("aria-labelledby")).toBeNull();
@@ -214,6 +215,28 @@ describe("modal-surface Tab trap", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  it("excludes controls hidden by themselves or a composed ancestor", async () => {
+    const surface = await mountSurface({
+      content: `
+        <button id="visible-first">First</button>
+        <button id="visible-last">Last</button>
+        <button hidden>Hidden control</button>
+        <div inert><button>Inert control</button></div>
+        <div style="display: none"><button>Display-none control</button></div>
+      `,
+    });
+    const first = requiredElement(surface.querySelector<HTMLButtonElement>("#visible-first"), "first visible button");
+    const last = requiredElement(surface.querySelector<HTMLButtonElement>("#visible-last"), "last visible button");
+
+    last.focus();
+    pressKey(last, "Tab");
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    pressKey(first, "Tab", { shift: true });
+    expect(document.activeElement).toBe(last);
+  });
+
   it("keeps focus on the section when the dialog has no focusable controls", async () => {
     const surface = await mountSurface({ content: `<p>Nothing to focus</p>` });
     const section = dialogSection(surface);
@@ -335,6 +358,48 @@ describe("modal-surface focus restoration", () => {
     second.remove();
     expect(document.activeElement).toBe(trigger);
   });
+
+  it("does not let a lower visual layer steal focus when it connects late", async () => {
+    const trigger = appendFocusTarget("Opener");
+    trigger.focus();
+    const higher = await mountLayeredSurface(30, `<button id="higher-control">Higher dialog</button>`);
+    const higherControl = requiredElement(higher.surface.querySelector<HTMLButtonElement>("#higher-control"), "higher-layer control");
+    expect(document.activeElement).toBe(higher.host);
+    expect(deepActiveElement()).toBe(higherControl);
+
+    const lower = await mountLayeredSurface(10, `<button id="lower-control">Lower dialog</button>`);
+    await higher.surface.updateComplete;
+
+    expect(document.activeElement).toBe(higher.host);
+    expect(dialogSection(higher.surface).getAttribute("aria-modal")).toBe("true");
+    expect(dialogSection(lower.surface).getAttribute("aria-hidden")).toBe("true");
+    higher.host.remove();
+    await lower.surface.updateComplete;
+    expect(deepActiveElement()).toBe(lower.surface.querySelector("#lower-control"));
+    expect(dialogSection(lower.surface).getAttribute("aria-modal")).toBe("true");
+    expect(dialogSection(lower.surface).getAttribute("aria-hidden")).toBeNull();
+
+    lower.host.remove();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("falls back inside a surviving lower dialog when its remembered control is disabled", async () => {
+    const trigger = appendFocusTarget("Opener");
+    trigger.focus();
+    const lower = await mountSurface({
+      content: `<button id="lower-control">Lower dialog</button>`,
+      configure: (surface) => { surface.initialFocus = "button"; },
+    });
+    const lowerControl = requiredElement(lower.querySelector<HTMLButtonElement>("#lower-control"), "lower dialog control");
+    const higher = await mountSurface({ content: `<button>Higher dialog</button>` });
+    lowerControl.disabled = true;
+
+    higher.remove();
+
+    expect(lower.shadowRoot?.activeElement).toBe(dialogSection(lower));
+    lower.remove();
+    expect(document.activeElement).toBe(trigger);
+  });
 });
 
 interface MountSurfaceOptions {
@@ -353,6 +418,20 @@ async function mountSurface(options: MountSurfaceOptions): Promise<ModalSurface>
 
 async function mountTrapSurface(): Promise<ModalSurface> {
   return mountSurface({ content: `<button id="one">One</button><button id="two">Two</button><button id="three">Three</button>` });
+}
+
+async function mountLayeredSurface(zIndex: number, content: string): Promise<{ host: HTMLElement; surface: ModalSurface }> {
+  const host = document.createElement("div");
+  host.style.position = "fixed";
+  host.style.zIndex = String(zIndex);
+  const root = host.attachShadow({ mode: "open" });
+  const surface = new ModalSurface();
+  surface.initialFocus = "button";
+  surface.innerHTML = content;
+  root.append(surface);
+  document.body.append(host);
+  await surface.updateComplete;
+  return { host, surface };
 }
 
 function dialogSection(surface: ModalSurface): HTMLElement {
