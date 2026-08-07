@@ -231,8 +231,10 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     return html`
       <div class="bulk-row selecting">
         ${this.renderSelectionControls("current", visibleSessions)}
-        <button ?disabled=${archivableSessions.length === 0} @click=${() => { this.archiveSelectedCurrent(); }}>Archive</button>
-        <button ?disabled=${unreadSelectedSessions.length === 0} @click=${() => { this.markSelectedCurrentRead(); }}>Mark read</button>
+        <div class="bulk-actions">
+          <button ?disabled=${archivableSessions.length === 0} @click=${() => { this.archiveSelectedCurrent(); }}>Archive</button>
+          <button ?disabled=${unreadSelectedSessions.length === 0} @click=${() => { this.markSelectedCurrentRead(); }}>Mark read</button>
+        </div>
       </div>
     `;
   }
@@ -244,27 +246,26 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     return html`
       <div class="bulk-row selecting">
         ${this.renderSelectionControls("archived", visibleSessions)}
-        <button class="danger" title="Permanently delete selected archived sessions" ?disabled=${selectedSessions.length === 0} @click=${() => { this.confirmDeleteSelectedArchived(); }}>Delete</button>
+        <div class="bulk-actions">
+          <button class="danger" title="Permanently delete selected archived sessions" ?disabled=${selectedSessions.length === 0} @click=${() => { this.confirmDeleteSelectedArchived(); }}>Delete</button>
+        </div>
       </div>
     `;
   }
 
   /**
-   * Shared selection toggle and count for both scopes. The toggle is binary:
-   * an empty selection offers to select every visible session, and any
-   * existing selection offers to clear the whole scope. Selection mode itself
-   * is exited from the same ☑ heading button that opened it, so the toolbar
-   * carries no separate Done or Clear buttons.
+   * Shared selection toggle for both scopes. The toggle is binary: an empty
+   * selection offers to select every visible session, and any existing
+   * selection offers to clear the whole scope. The selected count stays inside
+   * the clear action so it cannot become a separate wrapping flex item.
+   * Selection mode itself is exited from the same ☑ heading button that opened
+   * it, so the toolbar carries no separate Done or Clear buttons.
    */
   private renderSelectionControls(scope: SessionSelectionScope, visibleSessions: SessionInfo[]) {
     const selectedCount = this.selectedSessions(scope).length;
-    const visibleSelectedCount = visibleSessions.filter((session) => this.selectedSessionIds.has(session.id)).length;
-    return html`
-      ${selectedCount === 0
-        ? html`<button @click=${() => { this.selectVisibleSessions(visibleSessions); }}>Select visible</button>`
-        : html`<button @click=${() => { this.clearSelection(scope); }}>Clear selected</button>`}
-      <small>${selectedCount} selected${visibleSelectedCount !== selectedCount ? html` · ${visibleSelectedCount} visible` : null}</small>
-    `;
+    return selectedCount === 0
+      ? html`<button @click=${() => { this.selectVisibleSessions(visibleSessions); }}>Select visible</button>`
+      : html`<button @click=${() => { this.clearSelection(scope); }}>Clear selected (${selectedCount})</button>`;
   }
 
   private renderSession(row: SessionRow, descendantCount: number, scope: SessionSelectionScope) {
@@ -482,8 +483,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .start-session-button { box-sizing: border-box; flex: 0 0 auto; display: inline-grid; place-items: center; min-width: 30px; height: 30px; padding: 0 9px; }
     .cleanup-entry { flex: 0 0 auto; padding: 5px 7px; font-size: 12px; text-transform: none; }
     .bulk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 6px; }
-    .bulk-row button { padding: 5px 7px; font-size: 12px; }
-    .bulk-row small { display: inline; min-width: 0; color: var(--pi-muted); }
+    .bulk-row button { padding: 5px 7px; font-size: 12px; white-space: nowrap; }
+    .bulk-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; margin-left: auto; }
     .action-name, .section-selected { text-align: start; unicode-bidi: plaintext; }
     .action-row.unread .action-name { color: var(--pi-text-bright); font-weight: 650; }
     .plain-heading { min-width: 0; }

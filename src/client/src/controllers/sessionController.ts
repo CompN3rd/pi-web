@@ -1,4 +1,4 @@
-import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, type CommandResult, type ExtensionDialogAnswer, type ExtensionDialogCloseReason, type ExtensionDialogCloseResponse, type ExtensionDialogOutcome, type PendingAskUser, type PendingExtensionDialog, type PromptAttachment, type QueuedSessionMessage, type SessionActivity, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionInfo, type SessionRef, type SessionStatus, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type Workspace } from "../api";
+import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, type CommandResult, type ExtensionDialogAnswer, type ExtensionDialogCloseReason, type ExtensionDialogCloseResponse, type ExtensionDialogOutcome, type PendingAskUser, type PendingExtensionDialog, type PromptAttachment, type QueuedSessionMessage, type SessionActivity, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionInfo, type SessionRef, type SessionStatus, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type Workspace } from "../api";
 import type { AppState, ClosedExtensionDialog } from "../appState";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
 import { textMessage } from "../chatMessages";
@@ -510,6 +510,45 @@ export class SessionController {
       throw authoritativeRefreshFailure.error;
     }
     if (this.isSelectedSessionIdentity(session.id, machineId) && this.getState().treeDialog === tree) this.setState({ treeDialog: undefined });
+    return result;
+  }
+
+  async forkFromTree(entryId: string): Promise<SessionTreeForkResult> {
+    const state = this.getState();
+    const session = state.selectedSession;
+    const tree = state.treeDialog;
+    if (session === undefined || tree === undefined || session.archived === true || isClientPendingStartSessionInfo(session)) {
+      throw new Error("The session tree navigator is no longer available");
+    }
+
+    const machineId = selectedMachineId(state);
+    const selectionSeq = this.selectionSeq;
+    const originalCacheKey = machineSessionKey(machineId, session.id);
+    let result: SessionTreeForkResult;
+    try {
+      result = await this.api.forkTree(session, { entryId, expectedLeafId: tree.activeLeafId }, machineId);
+    } catch (error) {
+      if (this.isCurrentSessionSelection(session.id, machineId, selectionSeq)) this.setState({ error: String(error) });
+      throw error;
+    }
+
+    if (result.cancelled) return result;
+
+    const forked = result.session;
+    // The draft belongs to the forked session file; the original keeps its own.
+    if (result.promptDraft !== undefined) saveDraft(machineSessionKey(machineId, forked.id), result.promptDraft);
+    // The daemon replaced the runtime behind the original session identity with
+    // the fork while the request was in flight, so any cached projection of the
+    // original transcript is suspect; drop it so a later reselection reads the
+    // untouched original file authoritatively.
+    this.transcripts.discard(originalCacheKey);
+
+    // The fork happened regardless, but the list/selection update belongs to
+    // whoever owns the selection now; a changed selection may already reflect it.
+    if (!this.isSelectedSessionIdentity(session.id, machineId)) return result;
+    const sessions = [forked, ...this.getState().sessions.filter((candidate) => candidate.id !== forked.id)];
+    this.setState({ sessions, treeDialog: undefined });
+    void this.selectSession(forked);
     return result;
   }
 
