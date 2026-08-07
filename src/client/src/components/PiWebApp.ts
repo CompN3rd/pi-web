@@ -1,6 +1,6 @@
 import { LitElement, html } from "lit";
 import { customElement, query, state } from "lit/decorators.js";
-import { configApi, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveUploadFolder, type AskUserSubmission, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
+import { configApi, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveUploadFolder, type AskUserSubmission, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState } from "../appState";
 import { isSessionActive } from "../../../shared/activity";
@@ -64,6 +64,7 @@ import "./AuthDialog";
 import "./ProjectDialog";
 import "./MachineDialog";
 import type { MachineDialogSubmit } from "./MachineDialog";
+import { hasRenderedModal } from "./modalLayerRegistry";
 import "./SettingsDialog";
 import "./WorkspacePanel";
 import type { WorkspacePanelEmptyState } from "./WorkspacePanel";
@@ -266,7 +267,7 @@ export class PiWebApp extends LitElement {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (this.settingsSection !== undefined || this.state.treeDialog !== undefined) return;
+    if (this.isRenderedModalOpen()) return;
     if (this.keyboard.handle(event, this.getDefaultActions(), { shortcuts: this.shortcutConfig })) {
       event.preventDefault();
       event.stopPropagation();
@@ -343,24 +344,14 @@ export class PiWebApp extends LitElement {
       if (document.visibilityState !== "visible") return false;
       if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
     }
-    if (this.isChatObscured()) return false;
+    if (this.isRenderedModalOpen()) return false;
     if (this.state.mainView === "chat") return true;
     if (this.state.mainView === "navigation") return !this.appShell.isMobileNavigationLayout;
     return this.isDesktopSideBySideLayout();
   }
 
-  private isChatObscured(): boolean {
-    return this.settingsSection !== undefined
-      || this.sessionCleanupDialog !== undefined
-      || this.state.actionPaletteOpen
-      || this.state.projectDialogOpen
-      || this.state.machineDialogOpen
-      || this.state.commandDialog !== undefined
-      || this.state.treeDialog !== undefined
-      || this.state.modelDialog !== undefined
-      || this.state.thinkingDialog !== undefined
-      || this.state.themeDialog !== undefined
-      || this.state.authDialog !== undefined;
+  private isRenderedModalOpen(): boolean {
+    return hasRenderedModal(this.ownerDocument);
   }
 
   override connectedCallback(): void {
@@ -760,7 +751,7 @@ export class PiWebApp extends LitElement {
   }
 
   private shouldAutoFocusPrompt(): boolean {
-    return this.appShell.shouldAutoFocusPrompt();
+    return !this.isRenderedModalOpen() && this.appShell.shouldAutoFocusPrompt();
   }
 
   private async withChatPrependTransition(action: () => Promise<void>) {
@@ -1391,6 +1382,10 @@ export class PiWebApp extends LitElement {
     if (this.state.mainView !== "chat") this.selectMainView("chat");
     await this.updateComplete;
     await nextFrame();
+    // The focus request may outlive the dialog transition that scheduled it.
+    // Recheck the rendered boundary at the final side-effect point so a newer
+    // or surviving modal keeps visual and keyboard focus ownership.
+    if (this.isRenderedModalOpen()) return;
     this.promptEditor?.focusInput();
   }
 
@@ -1407,6 +1402,11 @@ export class PiWebApp extends LitElement {
     return result;
   }
 
+  private async forkSessionTree(entryId: string): Promise<SessionTreeForkResult> {
+    // The controller selects the forked session and closes the dialog on success.
+    return this.sessions.forkFromTree(entryId);
+  }
+
   private closeSessionTreeNavigator(): void {
     this.sessions.closeTreeDialog();
     void this.focusChatComposer();
@@ -1417,6 +1417,7 @@ export class PiWebApp extends LitElement {
       <session-tree-navigator
         .tree=${state.treeDialog}
         .onNavigate=${(targetId: string, summaryChoice: SessionTreeSummaryChoice) => this.navigateSessionTree(targetId, summaryChoice)}
+        .onFork=${(entryId: string) => this.forkSessionTree(entryId)}
         .onAbort=${() => this.sessions.abortTreeNavigation()}
         .onCancel=${() => { this.closeSessionTreeNavigator(); }}
       ></session-tree-navigator>
@@ -2169,11 +2170,11 @@ export class PiWebApp extends LitElement {
             ${state.commandDialog !== undefined ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog?.requestId ?? "", value)} .onCancel=${() => { this.sessions.cancelCommand(); }}></command-picker>` : null}
             ${state.modelDialog !== undefined ? html`<command-picker title=${state.modelDialog.title} .searchable=${true} .options=${state.modelDialog.options} .selectedValue=${state.modelDialog.selectedValue} .onPick=${(value: string) => { void this.pickModel(value); }} .onCancel=${() => { this.setState({ modelDialog: undefined }); }}></command-picker>` : null}
             ${state.thinkingDialog !== undefined ? html`<command-picker title=${state.thinkingDialog.title} .options=${state.thinkingDialog.options} .selectedValue=${state.thinkingDialog.selectedValue} .onPick=${(value: string) => { void this.pickThinking(value); }} .onCancel=${() => { this.setState({ thinkingDialog: undefined }); }}></command-picker>` : null}
-            ${state.authDialog !== undefined ? html`<auth-dialog .state=${state.authDialog} .onChooseMethod=${(authType: "oauth" | "api_key") => { void this.auth.chooseLoginMethod(authType); }} .onSelectProvider=${(providerId: string, authType: "oauth" | "api_key") => { void this.auth.selectLoginProvider(providerId, authType); }} .onLogoutProvider=${(providerId: string) => { void this.auth.logoutProvider(providerId); }} .onOAuthInput=${(value: string) => { this.auth.updateOAuthInput(value); }} .onOAuthRespond=${(value?: string) => { void this.auth.respondOAuth(value); }} .onOAuthCancel=${() => { void this.auth.cancelOAuth(); }} .onCancel=${() => { this.auth.closeDialog(); }}></auth-dialog>` : null}
           ` : html`<div class="empty">${this.sessionEmptyMessage()}</div>`}
         </main>
         ${this.renderWorkspacePanelEdgeControl()}
         ${this.renderWorkspacePanel()}
+        ${state.authDialog !== undefined ? html`<auth-dialog .state=${state.authDialog} .onChooseMethod=${(authType: "oauth" | "api_key") => { void this.auth.chooseLoginMethod(authType); }} .onSelectProvider=${(providerId: string, authType: "oauth" | "api_key") => { void this.auth.selectLoginProvider(providerId, authType); }} .onLogoutProvider=${(providerId: string) => { void this.auth.logoutProvider(providerId); }} .onOAuthInput=${(value: string) => { this.auth.updateOAuthInput(value); }} .onOAuthRespond=${(value?: string) => { void this.auth.respondOAuth(value); }} .onOAuthCancel=${() => { void this.auth.cancelOAuth(); }} .onCancel=${() => { this.auth.closeDialog(); }}></auth-dialog>` : null}
         ${state.actionPaletteOpen ? html`<action-palette .actions=${this.getActions()} .onRun=${(action: AppAction) => { this.setState({ actionPaletteOpen: false }); this.runAction(action); }} .onCancel=${() => { this.setState({ actionPaletteOpen: false }); }}></action-palette>` : null}
         ${this.renderSessionTreeNavigator(state)}
         ${state.projectDialogOpen ? html`<project-dialog .machineId=${selectedMachineId(state)} .onSubmit=${(path: string, create: boolean) => this.projects.addProject(path, create)} .onCancel=${() => { this.setState({ projectDialogOpen: false }); }}></project-dialog>` : null}

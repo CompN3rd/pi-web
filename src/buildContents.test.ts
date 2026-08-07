@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,13 +21,16 @@ describe("production build contents", () => {
     expect(projectSources.filter(isTestSupportPath)).toEqual([]);
   });
 
-  it("keeps test-support artifacts out of the npm tarball", async () => {
+  it("keeps test-support artifacts out of the npm tarball", { timeout: 15_000 }, async () => {
     const fixtureRoot = await mkdtemp(join(tmpdir(), "pi-web-package-contents-"));
     try {
       const fixtureDist = join(fixtureRoot, "dist", "server");
       await mkdir(fixtureDist, { recursive: true });
       await Promise.all([
-        copyFile(join(repoRoot, "package.json"), join(fixtureRoot, "package.json")),
+        // Lifecycle hooks do not affect which files are packed, and npm 10 runs
+        // `prepare` during `npm pack` even with `--ignore-scripts`, so strip
+        // them: the fixture has no scripts/ tree for a hook to resolve.
+        writeFixtureManifest(fixtureRoot),
         writeFile(join(fixtureDist, "app.js"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.testSupport.js"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.testSupport.js.map"), "{}\n", "utf8"),
@@ -67,6 +70,13 @@ function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]): string {
     getCurrentDirectory: () => repoRoot,
     getNewLine: () => "\n",
   });
+}
+
+async function writeFixtureManifest(fixtureRoot: string): Promise<void> {
+  const manifest: unknown = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
+  if (!isRecord(manifest)) throw new Error("package.json was not an object");
+  delete manifest["scripts"];
+  await writeFile(join(fixtureRoot, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
 function normalizePath(path: string): string {

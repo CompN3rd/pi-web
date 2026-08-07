@@ -1,3 +1,5 @@
+// @vitest-environment happy-dom
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileContentResponse, FileTreeEntry } from "../api";
 import { initialAppState } from "../appState";
@@ -9,9 +11,14 @@ import type { WorkspaceUploadBatchState } from "../workspaceUploadState";
 // rationale. Viewer content messaging is asserted via the public
 // workspaceFileViewerStatusLabel seam instead of scraping Lit markup.
 import { findOptionalTemplateEventHandlerAfterMarker, templateClickHandlerForText, templateEventHandlerAfterMarker } from "../templateInspection.testSupport";
+import { ModalSurface } from "./ModalSurface";
+import { deepActiveElement } from "./modalLayerRegistry";
 import { WorkspaceFilesPanel, startDirectWorkspaceUpload, uploadBatchProgressValue, uploadBatchStatusLabel, workspaceFileViewerStatusLabel, workspaceUploadBatchesForScope, workspaceUploadReviewDefaults, workspaceUploadReviewError } from "./WorkspaceFilesPanel";
 
 afterEach(() => {
+  document.body.replaceChildren();
+  localStorage.clear();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -42,6 +49,114 @@ describe("workspace-files-panel upload review", () => {
       selectUploadedFile: true,
     });
     expect(findOptionalTemplateEventHandlerAfterMarker<SubmitEvent>(panel.render(), "<form @submit=")).toBeUndefined();
+  });
+
+  it("owns focus while rendered and restores the Upload trigger after Escape and backdrop close", async () => {
+    const panel = new WorkspaceFilesPanel();
+    panel.context = workspacePanelContext({ workspaceUploadDefaultFolder: "project/uploads" });
+    document.body.append(panel);
+    await panel.updateComplete;
+    const upload = buttonWithText(panel.shadowRoot, "Upload");
+    const input = requiredElement(panel.shadowRoot?.querySelector<HTMLInputElement>("#workspace-upload-input"), "workspace upload input");
+
+    upload.focus();
+    openUploadReview(input, new File(["a"], "a.txt"));
+    await panel.updateComplete;
+    const firstDestination = requiredElement(panel.shadowRoot?.querySelector<HTMLInputElement>("#workspace-upload-destination"), "first upload destination");
+    expect(panel.shadowRoot?.activeElement).toBe(firstDestination);
+    expect(uploadDialog(panel).getAttribute("aria-modal")).toBe("true");
+
+    const escape = pressKey(firstDestination, "Escape");
+    await panel.updateComplete;
+    expect(escape.defaultPrevented).toBe(true);
+    expect(panel.shadowRoot?.querySelector(".upload-dialog")).toBeNull();
+    expect(panel.shadowRoot?.activeElement).toBe(upload);
+
+    openUploadReview(input, new File(["b"], "b.txt"));
+    await panel.updateComplete;
+    const backdrop = requiredElement(panel.shadowRoot?.querySelector<HTMLElement>(".dialog-backdrop"), "upload backdrop");
+    backdrop.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true }));
+    await panel.updateComplete;
+
+    expect(panel.shadowRoot?.querySelector(".upload-dialog")).toBeNull();
+    expect(panel.shadowRoot?.activeElement).toBe(upload);
+  });
+
+  it("takes visual focus ownership from a lower shared modal and restores it on close", async () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open lower dialog";
+    document.body.append(trigger);
+    trigger.focus();
+    const lower = new ModalSurface();
+    lower.initialFocus = "button";
+    lower.innerHTML = "<button>Lower action</button>";
+    document.body.append(lower);
+    await lower.updateComplete;
+    const lowerButton = requiredElement(lower.querySelector<HTMLButtonElement>("button"), "lower modal button");
+
+    const panel = new WorkspaceFilesPanel();
+    panel.context = workspacePanelContext();
+    document.body.append(panel);
+    await panel.updateComplete;
+    const input = requiredElement(panel.shadowRoot?.querySelector<HTMLInputElement>("#workspace-upload-input"), "workspace upload input");
+    openUploadReview(input, new File(["a"], "a.txt"));
+    await panel.updateComplete;
+    await lower.updateComplete;
+    const destination = requiredElement(panel.shadowRoot?.querySelector<HTMLInputElement>("#workspace-upload-destination"), "upload destination");
+
+    expect(panel.shadowRoot?.activeElement).toBe(destination);
+    expect(modalSection(lower).getAttribute("aria-modal")).toBe("false");
+    expect(modalSection(lower).getAttribute("aria-hidden")).toBe("true");
+
+    pressKey(destination, "Escape");
+    await panel.updateComplete;
+    await lower.updateComplete;
+
+    expect(document.activeElement).toBe(lowerButton);
+    expect(modalSection(lower).getAttribute("aria-modal")).toBe("true");
+    expect(modalSection(lower).getAttribute("aria-hidden")).toBeNull();
+    lower.remove();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("does not steal focus from a higher shared layer while a file picker resolves", async () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open upload";
+    document.body.append(trigger);
+    trigger.focus();
+    const higherHost = document.createElement("div");
+    higherHost.style.position = "fixed";
+    higherHost.style.zIndex = "30";
+    const higherRoot = higherHost.attachShadow({ mode: "open" });
+    const higher = new ModalSurface();
+    higher.initialFocus = "button";
+    higher.innerHTML = "<button>Higher action</button>";
+    higherRoot.append(higher);
+    document.body.append(higherHost);
+    await higher.updateComplete;
+    const higherButton = requiredElement(higher.querySelector<HTMLButtonElement>("button"), "higher modal button");
+
+    const panel = new WorkspaceFilesPanel();
+    panel.context = workspacePanelContext();
+    document.body.append(panel);
+    await panel.updateComplete;
+    const input = requiredElement(panel.shadowRoot?.querySelector<HTMLInputElement>("#workspace-upload-input"), "workspace upload input");
+    openUploadReview(input, new File(["a"], "a.txt"));
+    await panel.updateComplete;
+    const destination = requiredElement(panel.shadowRoot?.querySelector<HTMLInputElement>("#workspace-upload-destination"), "upload destination");
+
+    expect(deepActiveElement(document)).toBe(higherButton);
+    expect(uploadDialog(panel).getAttribute("aria-modal")).toBe("false");
+    expect(uploadDialog(panel).getAttribute("aria-hidden")).toBe("true");
+
+    higherHost.remove();
+    expect(panel.shadowRoot?.activeElement).toBe(destination);
+    expect(uploadDialog(panel).getAttribute("aria-modal")).toBe("true");
+    expect(uploadDialog(panel).getAttribute("aria-hidden")).toBeNull();
+
+    pressKey(destination, "Escape");
+    await panel.updateComplete;
+    expect(document.activeElement).toBe(trigger);
   });
 });
 
@@ -170,6 +285,35 @@ describe("workspaceUploadReviewError", () => {
     expect(workspaceUploadReviewError([new File(["a"], "a.txt")], "../outside")).toContain("path traversal");
   });
 });
+
+function openUploadReview(input: HTMLInputElement, file: File): void {
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+}
+
+function uploadDialog(panel: WorkspaceFilesPanel): HTMLElement {
+  return requiredElement(panel.shadowRoot?.querySelector<HTMLElement>(".upload-dialog"), "upload dialog");
+}
+
+function modalSection(surface: ModalSurface): HTMLElement {
+  return requiredElement(surface.shadowRoot?.querySelector<HTMLElement>("section[role='dialog']"), "modal section");
+}
+
+function buttonWithText(root: ParentNode | null | undefined, text: string): HTMLButtonElement {
+  const button = [...(root?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((candidate) => candidate.textContent.trim() === text);
+  return requiredElement(button, `${text} button`);
+}
+
+function pressKey(target: Element, key: string): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, composed: true });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function requiredElement<T>(value: T | null | undefined, label: string): T {
+  if (value === null || value === undefined) throw new Error(`Expected ${label}`);
+  return value;
+}
 
 class FakeFileList implements FileList {
   readonly length: number;
