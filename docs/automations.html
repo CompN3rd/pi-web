@@ -65,6 +65,7 @@
           <aside class="toc" aria-label="Automations page contents">
             <strong>On this page</strong>
             <a href="#workflow">Create and test</a>
+            <a href="#disable">Disable automations</a>
             <a href="#federation">Machine federation</a>
             <a href="#triggers">Triggers</a>
             <a href="#models">Models</a>
@@ -79,6 +80,12 @@
               <h2>Create, test, then enable</h2>
               <p>Select a machine, project, and workspace, then open <strong>Automations</strong> in the workspace panel. New definitions are saved disabled. Use <strong>Run now</strong> to test the exact revision before enabling its schedule.</p>
               <p>Editing a job creates a new revision, pauses it, and requires another completed manual test. Each run gets a fresh, independent Pi session.</p>
+            </section>
+
+            <section id="disable">
+              <h2>Disable automations on a machine</h2>
+              <p>Automations are enabled by default. To turn the feature off for the selected machine, disable <strong>Settings → Session daemon → Workspace automations</strong>, then restart that machine's session daemon.</p>
+              <p>While disabled, the daemon does not load the automation runtime or SQLite native binding, open the automation database, acquire its ownership record, register automation routes, or poll for due work. The workspace Automations panel is hidden. Definitions and history stay unchanged on disk; re-enabling resumes from that durable state and applies the normal missed-occurrence rules.</p>
             </section>
 
             <section id="federation">

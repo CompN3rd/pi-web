@@ -3,11 +3,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import Fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
-import { AutomationService } from "./automations/automationService.js";
-import { registerAutomationRoutes } from "./automations/automationRoutes.js";
-import { AutomationSessionRunner } from "./automations/automationSessionRunner.js";
-import { defaultAutomationDatabasePath, AutomationStore } from "./automations/automationStore.js";
-import { AutomationWorkspaceAuthorizer } from "./automations/automationWorkspaceAuthorizer.js";
+import { loadOptionalSessiondAutomationRuntime } from "./sessiond/optionalSessiondAutomationRuntime.js";
 import { WorkspaceActivityService } from "./activity/workspaceActivityService.js";
 import { registerWorkspaceActivityRoutes } from "./activity/workspaceActivityRoutes.js";
 import { SessionEventHub } from "./realtime/sessionEventHub.js";
@@ -30,7 +26,7 @@ import { sessiondSocketPath } from "../sessiond/config.js";
 import { TerminalService } from "./terminals/terminalService.js";
 import { registerTerminalRoutes } from "./terminals/terminalRoutes.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
-import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
+import { sessiondRuntimeCapabilities } from "../shared/capabilities.js";
 import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled } from "../config.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { applyAgentHttpIdleTimeout } from "./sessiond/agentHttpDispatcher.js";
@@ -125,16 +121,18 @@ async function createSessionDaemonRuntime() {
   }));
   auth.subscribe((change) => { sessions.applyAuthChange(change); });
   const terminals = new TerminalService(eventHub, workspaceActivity);
-  const automationStore = new AutomationStore(defaultAutomationDatabasePath(daemonEnvironment));
-  const automations = new AutomationService(
-    automationStore,
-    new AutomationWorkspaceAuthorizer(projectWorkspaceDeps.projects, projectWorkspaceDeps.workspaces),
-    new AutomationSessionRunner(sessions),
-    eventHub,
-    app.log,
-  );
+  // Keep disabled automations out of the module graph as well as the runtime:
+  // no SQLite native binding, database, ownership file, or scheduler timer.
+  const automations = await loadOptionalSessiondAutomationRuntime(config.automations, {
+    env: daemonEnvironment,
+    projects: projectWorkspaceDeps.projects,
+    workspaces: projectWorkspaceDeps.workspaces,
+    sessions,
+    events: eventHub,
+    logger: app.log,
+  });
   const runtimeComponent = Object.freeze({
-    ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES),
+    ...getPiWebRuntimeComponent("sessiond", sessiondRuntimeCapabilities(config.automations)),
     activeAgentProfile,
   });
   return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, automations, activeAgentProfile, runtimeComponent, catalogRefresher };
@@ -145,7 +143,7 @@ function registerSessionDaemonRoutes({ eventHub, workspaceActivity, auth, sessio
   registerAuthRoutes(app, auth);
   registerSessionRoutes(app, sessions, eventHub);
   registerTerminalRoutes(app, terminals);
-  registerAutomationRoutes(app, automations);
+  automations?.registerRoutes(app);
 
   app.get("/health", () => ({
     ok: true,
@@ -177,7 +175,7 @@ async function listenSessionDaemon({ auth, sessions, terminals, unreadStore, aut
         app.log.error({ err: error, operation }, "session daemon shutdown operation failed");
       }
     };
-    await attempt("stop automations scheduler", () => automations.stop());
+    if (automations !== undefined) await attempt("stop automations scheduler", () => automations.stop());
     await attempt("dispose terminals", () => { terminals.dispose(); });
     await attempt("dispose catalog refresher", () => { catalogRefresher.dispose(); });
     await attempt("dispose auth", () => { auth.dispose(); });
@@ -186,7 +184,7 @@ async function listenSessionDaemon({ auth, sessions, terminals, unreadStore, aut
     await attempt("close server", () => app.close());
     // Keep the durable scheduler fence until the listener and every session
     // runtime have stopped, preventing split-owner restart races.
-    await attempt("dispose automations scheduler fence", () => { automations.dispose(); });
+    if (automations !== undefined) await attempt("dispose automations scheduler fence", () => { automations.dispose(); });
   }
 
   process.once("SIGINT", (signal) => { void shutdown(signal); });
@@ -194,7 +192,7 @@ async function listenSessionDaemon({ auth, sessions, terminals, unreadStore, aut
 
   // Fence the durable scheduler before touching the listener. A second daemon
   // must not unlink the active socket or recover/dispatch the same database.
-  automations.acquireOwnership();
+  automations?.acquireOwnership();
 
   const portValue = daemonEnvironment["PI_WEB_SESSIOND_PORT"];
   const port = portValue !== undefined && portValue !== "" ? Number(portValue) : undefined;
@@ -210,5 +208,5 @@ async function listenSessionDaemon({ auth, sessions, terminals, unreadStore, aut
     process.on("exit", () => void rm(path, { force: true }));
   }
 
-  automations.start();
+  automations?.start();
 }

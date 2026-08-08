@@ -77,6 +77,8 @@ export interface PiWebConfigValues {
   uploads?: PiWebUploadsConfig;
   /** Maximum accepted HTTP request body size in bytes (uploads/attachments). */
   maxUploadBytes?: number;
+  /** When true, the session daemon schedules and runs workspace automations. */
+  automations?: boolean;
   /** When true, LLMs can start new sessions via the spawn_session tool. */
   spawnSessions?: boolean;
   /**

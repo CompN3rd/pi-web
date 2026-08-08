@@ -17,6 +17,10 @@ export const SESSIOND_RUNTIME_CAPABILITIES = [
   PI_WEB_CAPABILITIES.automations,
 ] as const satisfies readonly PiWebCapability[];
 
+export function sessiondRuntimeCapabilities(automationsEnabled: boolean): readonly PiWebCapability[] {
+  return automationsEnabled ? SESSIOND_RUNTIME_CAPABILITIES : [];
+}
+
 const EFFECTIVE_CAPABILITY_REQUIREMENTS = {
   [PI_WEB_CAPABILITIES.automations]: ["web", "sessiond"],
 } as const satisfies Record<PiWebCapability, readonly PiWebServiceComponent[]>;

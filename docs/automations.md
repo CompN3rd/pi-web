@@ -14,6 +14,12 @@ The target machine and its session daemon must be running to execute a due run. 
 
 Editing an automation creates a new revision, pauses its schedule, and requires another successful manual test before it can be enabled again.
 
+## Disable automations on a machine
+
+Automations are enabled by default. To turn the feature off for the selected machine, disable **Settings → Session daemon → Workspace automations**, then restart that machine's session daemon.
+
+While disabled, the daemon does not load the automation runtime or SQLite native binding, open the automation database, acquire its ownership record, register automation routes, or poll for due work. The workspace Automations panel is hidden because that daemon no longer advertises support. Definitions and history remain unchanged in `automations.sqlite`; re-enabling resumes from that durable state and coalesces missed recurring occurrences under the normal restart rules.
+
 ## Machine federation
 
 Automations belong to the machine that owns the selected workspace. For a federated remote machine, the controlling PI WEB gateway forwards definition, history, model, run, and cancellation requests to that machine. The remote machine's `pi-web-sessiond` stores the automation in its own `$PI_WEB_DATA_DIR`, resolves its own workspace and model configuration, and executes the schedule locally.

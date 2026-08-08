@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { effectivePiWebCapabilities, isPiWebCapability, PI_WEB_CAPABILITIES, SESSIOND_RUNTIME_CAPABILITIES, WEB_RUNTIME_CAPABILITIES, parseKnownPiWebCapabilities } from "./capabilities";
+import { effectivePiWebCapabilities, isPiWebCapability, PI_WEB_CAPABILITIES, SESSIOND_RUNTIME_CAPABILITIES, WEB_RUNTIME_CAPABILITIES, parseKnownPiWebCapabilities, sessiondRuntimeCapabilities } from "./capabilities";
 
 describe("PI WEB capabilities", () => {
   it("requires both web and sessiond to advertise Automations", () => {
     const automations = PI_WEB_CAPABILITIES.automations;
     expect(WEB_RUNTIME_CAPABILITIES).toEqual([automations]);
     expect(SESSIOND_RUNTIME_CAPABILITIES).toEqual([automations]);
+    expect(sessiondRuntimeCapabilities(true)).toEqual([automations]);
+    expect(sessiondRuntimeCapabilities(false)).toEqual([]);
 
     expect(effectivePiWebCapabilities({
       web: { available: true, capabilities: [automations] },
