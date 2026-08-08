@@ -47,7 +47,7 @@ export function researchPilotCommands(
   const command = (label, args) => ({ label, command: invocation.command, args: [...invocation.prefix, ...args] });
   return [
     command("session daemon", ["run", "start:sessiond"]),
-    command("web/API", ["run", "dev:web"]),
+    command("web/API", ["run", "start"]),
     command("Vite UI", ["run", "dev:client", "--", "--port", String(ports.ui)]),
   ];
 }

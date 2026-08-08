@@ -41,7 +41,7 @@ describe("research pilot launcher", () => {
   it("builds the three long-lived commands including the alternate Vite port", () => {
     expect(researchPilotCommands("npm-test")).toEqual([
       { label: "session daemon", command: "npm-test", args: ["run", "start:sessiond"] },
-      { label: "web/API", command: "npm-test", args: ["run", "dev:web"] },
+      { label: "web/API", command: "npm-test", args: ["run", "start"] },
       { label: "Vite UI", command: "npm-test", args: ["run", "dev:client", "--", "--port", "8605"] },
     ]);
   });

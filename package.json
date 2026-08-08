@@ -32,7 +32,7 @@
     "dev:server": "npm run dev:web",
     "dev:client": "vite --host 0.0.0.0",
     "dev:plugins": "node scripts/build-plugins.mjs --watch",
-    "dev:research-pilot": "node scripts/dev-research-pilot.mjs",
+    "dev:research-pilot": "npm run build:plugins && node scripts/dev-research-pilot.mjs",
     "build": "npm run clean && tsc -p tsconfig.build.json && npm run build:plugin-api && npm run build:plugins && vite build",
     "build:plugin-api": "tsc -p tsconfig.plugin-api.json",
     "build:plugins": "tsc -p tsconfig.plugins.json && node scripts/build-plugins.mjs",
