@@ -350,11 +350,6 @@ fi
 persisted_host_profile=$(existing_env_value PI_WEB_DOCKER_HOST_PROFILE || true)
 persisted_hostexec_mode=$(existing_env_value HOSTEXEC_MODE || true)
 persisted_socket_source=$(existing_env_value PI_WEB_DOCKER_SOCKET_SOURCE || true)
-if [ -z "$persisted_socket_source" ]; then
-  # Installs made before the socket source was persisted still carry it in the
-  # generated Compose override.
-  persisted_socket_source=$(pi_web_docker_host_socket_source_from_override "$install_dir/compose.override.yml" 2>/dev/null || true)
-fi
 
 if pi_web_docker_host_in_container && [ -z "$persisted_host_profile" ]; then
   die "this installer is running inside a PI WEB container but $env_file has no recorded Docker host setup; run the installer on the Docker host first"

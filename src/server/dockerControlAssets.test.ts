@@ -631,32 +631,6 @@ describe("Docker command assets", () => {
     expect(await readFile(join(installDir, "compose.yml"), "utf8")).toContain("container.env");
   });
 
-  dockerCommandIt("recovers a missing socket source from the generated Compose override", async () => {
-    const installDir = await createRecordedHostInstall("recorded-mac-install-legacy", [
-      "PI_WEB_DOCKER_HOST_PROFILE=mac-docker-desktop",
-      "HOSTEXEC_MODE=disabled",
-    ], [
-      "x-pi-web-host-volumes: &pi-web-host-volumes",
-      "  - type: bind",
-      "    source: '/Users/dev/.docker/run/docker.sock'",
-      "    target: '/var/run/docker.sock'",
-      "services: {}",
-      "",
-    ].join("\n"));
-    const envFile = join(installDir, ".env");
-
-    await execUtf8("sh", [
-      join(repoRoot, "docker", "install.sh"),
-      "--install-dir", installDir,
-      "--asset-dir", join(repoRoot, "docker"),
-      "--skip-compose",
-    ], { ...cleanProcessEnv(), PI_WEB_DOCKER_RUNTIME: "1" });
-
-    // Installs made before the socket source was persisted still carry it in
-    // their generated override, so a rerun must not fall back to the Linux path.
-    expect(await readFile(envFile, "utf8")).toContain("PI_WEB_DOCKER_SOCKET_SOURCE=/Users/dev/.docker/run/docker.sock");
-  });
-
   dockerCommandIt("reuses the recorded Docker host setup for dev Compose inside a container", async () => {
     const devRoot = await createDevRepoFixture();
     const fakeDocker = await installFakeDocker();

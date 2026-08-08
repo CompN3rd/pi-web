@@ -107,34 +107,6 @@ pi_web_docker_host_in_container() {
   esac
 }
 
-# Read the Docker socket bind source back out of a generated Compose override,
-# so installs made before the socket source was persisted stay refreshable.
-pi_web_docker_host_socket_source_from_override() {
-  pi_web_socket_override_file=$1
-  [ -f "$pi_web_socket_override_file" ] || return 1
-  awk '
-    {
-      line = $0
-      if (line ~ /^[ \t]*source:[ \t]*/) {
-        sub(/^[ \t]*source:[ \t]*/, "", line)
-        gsub("\047", "", line)
-        candidate = line
-        next
-      }
-      if (line ~ /^[ \t]*target:[ \t]*/) {
-        sub(/^[ \t]*target:[ \t]*/, "", line)
-        gsub("\047", "", line)
-        if (line == "/var/run/docker.sock" && candidate != "") {
-          print candidate
-          found = 1
-          exit
-        }
-      }
-    }
-    END { if (!found) exit 1 }
-  ' "$pi_web_socket_override_file"
-}
-
 # Host facts are detected once on the host and then persisted. A container
 # cannot observe the host it runs on: from inside a Linux container, a Docker
 # Desktop for Mac host is indistinguishable from native Linux Docker. Reuse the

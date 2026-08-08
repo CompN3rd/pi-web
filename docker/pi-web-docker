@@ -374,8 +374,8 @@ container_env_file_for_data_dir() {
   esac
 }
 
-# Compose fails when a declared env_file is absent, so guarantee the
-# user-owned file exists for installs made before it was introduced.
+# Compose fails when a declared env_file is absent, so guarantee the user-owned
+# file exists before any Compose command runs.
 ensure_runtime_container_env() {
   container_env_root=$1
   container_env_data_dir=$(required_env_file_value "$container_env_root/.env" PI_WEB_DOCKER_DATA_DIR)
