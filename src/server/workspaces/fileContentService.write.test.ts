@@ -1,4 +1,4 @@
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeWorkspaceFile } from "./fileContentService.js";
@@ -51,6 +51,25 @@ describe("writeWorkspaceFile", () => {
     await expect(writeWorkspaceFile(root, "existing.txt", Buffer.from("new"), { overwrite: false })).rejects.toThrow("File already exists");
   });
 
+  it("allows exactly one concurrent create-only writer", async () => {
+    const root = await createTempWorkspace();
+    const payloads = Array.from({ length: 16 }, (_value, index) => `writer-${String(index)}`);
+
+    const results = await Promise.allSettled(payloads.map((payload) =>
+      writeWorkspaceFile(root, "exclusive.txt", Buffer.from(payload), { overwrite: false })));
+
+    const fulfilledIndexes = results.flatMap((result, index) => result.status === "fulfilled" ? [index] : []);
+    expect(fulfilledIndexes).toHaveLength(1);
+    for (const result of results) {
+      if (result.status !== "rejected") continue;
+      expect(result.reason).toBeInstanceOf(Error);
+      if (!(result.reason instanceof Error)) throw new Error("Expected create-only rejection to be an Error");
+      expect(result.reason.message).toContain("File already exists");
+    }
+    await expect(readFile(join(root, "exclusive.txt"), "utf8")).resolves.toBe(payloads[fulfilledIndexes[0] ?? -1]);
+    expect((await readdir(root)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
   it("creates intermediate directories by default", async () => {
     const root = await createTempWorkspace();
 
@@ -81,13 +100,35 @@ describe("writeWorkspaceFile", () => {
     await expect(writeWorkspaceFile(root, "mydir", Buffer.from("data"))).rejects.toThrow("Path is not a file");
   });
 
-  it("prevents writing through symlinks that escape the workspace", async () => {
+  it("prevents creating directories through symlinks that escape the workspace", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, "subdir"), { recursive: true });
     const outsideDir = await createTempWorkspace("pi-web-outside-");
     await symlink(outsideDir, join(root, "subdir", "escape"), "junction");
 
-    await expect(writeWorkspaceFile(root, "subdir/escape/evil.txt", Buffer.from("evil"))).rejects.toThrow("Path escapes workspace");
-    await expect(readFile(join(outsideDir, "evil.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(writeWorkspaceFile(root, "subdir/escape/new/deep/evil.txt", Buffer.from("evil"))).rejects.toThrow("Path escapes workspace");
+    await expect(readFile(join(outsideDir, "new", "deep", "evil.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readdir(outsideDir)).resolves.toEqual([]);
+  });
+
+  it("rejects a dangling final symlink instead of creating its external target", async () => {
+    const root = await createTempWorkspace();
+    const outsideDir = await createTempWorkspace("pi-web-outside-");
+    const outsideTarget = join(outsideDir, "created.txt");
+    await symlink(outsideTarget, join(root, "escape.txt"));
+
+    await expect(writeWorkspaceFile(root, "escape.txt", Buffer.from("escape"))).rejects.toThrow("cannot be safely resolved");
+    await expect(readFile(outsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("creates nested files through symlinks that resolve inside the workspace", async () => {
+    const root = await createTempWorkspace();
+    const internalDir = join(root, "internal");
+    await mkdir(join(root, "subdir"), { recursive: true });
+    await mkdir(internalDir);
+    await symlink(internalDir, join(root, "subdir", "inside"), "junction");
+
+    await expect(writeWorkspaceFile(root, "subdir/inside/new/deep/file.txt", Buffer.from("inside"), { overwrite: false })).resolves.toMatchObject({ created: true });
+    await expect(readFile(join(internalDir, "new", "deep", "file.txt"), "utf8")).resolves.toBe("inside");
   });
 });

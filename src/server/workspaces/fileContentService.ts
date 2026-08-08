@@ -1,5 +1,6 @@
-import { lstat, mkdir, open, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { link, lstat, mkdir, open, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, sep } from "node:path";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebPathAccessConfig, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "../../shared/apiTypes.js";
 import { imageMimeTypeForPath } from "./imagePreviewService.js";
 import { resolveWorkspacePathAccessTarget } from "./pathAccessPolicy.js";
@@ -47,37 +48,53 @@ export async function writeWorkspaceFile(rootPath: string, path: string | undefi
   const createDirs = options.createDirs ?? true;
   const overwrite = options.overwrite ?? true;
 
-  let exists = false;
-  try {
-    const { target, relativePath } = await resolveInsideWorkspace(rootPath, path);
-    const s = await stat(target);
-    if (!s.isFile()) throw new Error("Path is not a file");
-    if (!overwrite) throw new Error(`File already exists: ${relativePath}`);
-    exists = true;
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message.startsWith("File already exists")) throw error;
-    if (isNodeErrorWithCode(error, "ENOENT")) { /* expected for creation — continue */ }
-    else if (error instanceof Error && error.message === "Path does not exist") { /* expected for creation — continue */ }
-    else throw error; // re-throw permission errors, "not a file", traversal errors, etc.
+  let existingTarget: string | undefined;
+  if (overwrite) {
+    try {
+      const resolved = await resolveInsideWorkspace(rootPath, path);
+      const s = await stat(resolved.target);
+      if (!s.isFile()) throw new Error("Path is not a file");
+      existingTarget = resolved.target;
+    } catch (error: unknown) {
+      if (isNodeErrorWithCode(error, "ENOENT")) { /* expected for creation — continue */ }
+      else if (error instanceof Error && error.message === "Path does not exist") { /* expected for creation — continue */ }
+      else throw error; // re-throw permission errors, "not a file", traversal errors, etc.
+    }
   }
 
   // Use resolveParentInsideWorkspace for the actual write since the target may not exist yet
   const { root, target, relativePath } = await resolveParentInsideWorkspace(rootPath, path);
+  const newTarget = await resolveOrCreateWorkspaceFileTarget(root, target, createDirs);
 
-  if (createDirs) await mkdir(dirname(target), { recursive: true });
+  let writtenTarget: string;
+  let created = false;
+  if (existingTarget !== undefined) {
+    await writeFile(existingTarget, content);
+    writtenTarget = existingTarget;
+  } else if (await publishFileExclusive(newTarget, content)) {
+    writtenTarget = newTarget;
+    created = true;
+  } else {
+    if (!overwrite) throw new Error(`File already exists: ${relativePath}`);
+    let racedTarget: string;
+    try {
+      const resolved = await resolveInsideWorkspace(rootPath, path);
+      racedTarget = resolved.target;
+    } catch (error) {
+      throw new Error(`File exists but cannot be safely resolved: ${relativePath}`, { cause: error });
+    }
+    const racedStat = await stat(racedTarget);
+    if (!racedStat.isFile()) throw new Error("Path is not a file");
+    await writeFile(racedTarget, content);
+    writtenTarget = racedTarget;
+  }
 
-  // Resolve symlinks in the parent path to prevent escape via symlink
-  const realParent = await realpath(dirname(target));
-  const realTarget = join(realParent, basename(target));
-  ensureInside(root, realTarget);
-  await writeFile(realTarget, content);
-
-  const s = await stat(realTarget);
+  const s = await stat(writtenTarget);
   return {
     path: relativePath,
     size: s.size,
     modifiedAt: s.mtime.toISOString(),
-    created: !exists,
+    created,
   };
 }
 
@@ -123,12 +140,7 @@ export async function moveWorkspaceFile(rootPath: string, fromPath: string | und
   // Target: uses resolveParentInsideWorkspace + realpath(dirname) pattern (same as writeFile)
   const { root, target: dest, relativePath: destRelative } = await resolveParentInsideWorkspace(rootPath, toPath);
 
-  if (createDirs) await mkdir(dirname(dest), { recursive: true });
-
-  // Resolve symlinks in the parent path to prevent escape via symlink
-  const realParent = await realpath(dirname(dest));
-  const realDest = join(realParent, basename(dest));
-  ensureInside(root, realDest);
+  const realDest = await resolveOrCreateWorkspaceFileTarget(root, dest, createDirs);
 
   if (!overwrite) {
     try {
@@ -144,6 +156,64 @@ export async function moveWorkspaceFile(rootPath: string, fromPath: string | und
   await rename(source, realDest);
   const finalStat = await stat(realDest);
   return { fromPath: fromRelative, toPath: destRelative, size: finalStat.size, modifiedAt: finalStat.mtime.toISOString() };
+}
+
+async function publishFileExclusive(target: string, content: Buffer): Promise<boolean> {
+  const parent = dirname(target);
+  const temporary = join(parent, `.${basename(target)}.${randomUUID()}.tmp`);
+  let temporaryCreated = false;
+  try {
+    const handle = await open(temporary, "wx", 0o600);
+    temporaryCreated = true;
+    try {
+      await handle.writeFile(content);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      await link(temporary, target);
+      return true;
+    } catch (error) {
+      if (isNodeErrorWithCode(error, "EEXIST")) return false;
+      throw error;
+    }
+  } finally {
+    if (temporaryCreated) {
+      await unlink(temporary).catch((error: unknown) => {
+        if (!isNodeErrorWithCode(error, "ENOENT")) throw error;
+      });
+    }
+  }
+}
+
+async function resolveOrCreateWorkspaceFileTarget(root: string, target: string, createDirs: boolean): Promise<string> {
+  const parentRelation = relative(root, dirname(target));
+  const parentParts = parentRelation === "" ? [] : parentRelation.split(sep);
+  let current = root;
+  for (const part of parentParts) {
+    const candidate = join(current, part);
+    try {
+      const resolved = await realpath(candidate);
+      ensureInside(root, resolved);
+      if (!(await stat(resolved)).isDirectory()) throw new Error("Parent path is not a directory");
+      current = resolved;
+      continue;
+    } catch (error: unknown) {
+      if (!isNodeErrorWithCode(error, "ENOENT")) throw error;
+      if (!createDirs) throw error;
+    }
+    await mkdir(candidate).catch((error: unknown) => {
+      if (!isNodeErrorWithCode(error, "EEXIST")) throw error;
+    });
+    const created = await realpath(candidate);
+    ensureInside(root, created);
+    if (!(await stat(created)).isDirectory()) throw new Error("Created parent path is not a directory");
+    current = created;
+  }
+  const resolvedTarget = join(current, basename(target));
+  ensureInside(root, resolvedTarget);
+  return resolvedTarget;
 }
 
 function isProbablyBinary(buffer: Buffer): boolean {
