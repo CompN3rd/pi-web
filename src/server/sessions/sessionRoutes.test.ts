@@ -1270,10 +1270,6 @@ class RejectingSessionManager implements PiSessionManagerGateway {
     return Promise.resolve([]);
   }
 
-  listParentSessionPaths() {
-    return Promise.resolve([]);
-  }
-
   resolveSessionFile() {
     return Promise.resolve(undefined);
   }

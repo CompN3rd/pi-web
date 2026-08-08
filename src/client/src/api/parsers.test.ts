@@ -684,7 +684,6 @@ describe("API parsers", () => {
       id: "forked-session",
       path: "/sessions/forked-session.jsonl",
       cwd: "/repo",
-      parentSessionId: "old-session",
       created: "2026-01-01T00:00:00.000Z",
       modified: "2026-01-01T00:01:00.000Z",
       messageCount: 2,

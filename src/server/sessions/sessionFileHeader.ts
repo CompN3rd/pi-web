@@ -1,4 +1,5 @@
 import { open, type FileHandle } from "node:fs/promises";
+import { tryParseEntry } from "./sessionFileFormat.js";
 
 /** Chunk size for streaming a session file's header region. */
 const HEADER_READ_CHUNK_BYTES = 8192;
@@ -28,6 +29,9 @@ export interface SessionHeaderSummary {
   /** Session file of the parent session, when this session was spawned or forked from one. */
   parentSession?: string;
 }
+
+/** Reads a session file header; injected so lookups can replace or observe their header reads. */
+export type SessionHeaderReader = (sessionFile: string) => Promise<SessionHeaderSummary | undefined>;
 
 /**
  * Read a Pi session file's header without loading the whole transcript.
@@ -111,21 +115,7 @@ function classifyHeaderLine(lineBytes: Buffer): SessionHeaderSummary | undefined
   };
 }
 
-function tryParseEntry(line: string): Record<string, unknown> | undefined {
-  if (line.trim() === "") return undefined;
-  try {
-    const parsed: unknown = JSON.parse(line);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function nonEmptyStringField(header: Record<string, unknown>, key: string): string | undefined {
   const value = header[key];
   return typeof value === "string" && value !== "" ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

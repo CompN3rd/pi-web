@@ -236,7 +236,6 @@ export function sessionGateway(records: ReturnType<typeof sessionRecord>[]): Ses
     create: (cwd) => fakeSessionManager(cwd),
     list: () => Promise.resolve(records),
     listAll: () => Promise.resolve(records),
-    listParentSessionPaths: () => Promise.resolve([]),
     invalidateSessionFile: () => undefined,
     resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve(records)),
     open: () => fakeSessionManager(),
@@ -245,15 +244,18 @@ export function sessionGateway(records: ReturnType<typeof sessionRecord>[]): Ses
 
 /**
  * Build a gateway `resolveSessionFile` on top of a `list` implementation,
- * picking the session exactly the way a full listing would (exact id or id
- * prefix). For test gateways whose `list` fake is the source of truth, this
- * keeps id resolution consistent with what the fake lists.
+ * mirroring the real resolver's precedence: an exact id wins over a prefix
+ * match wherever it appears. For test gateways whose `list` fake is the source
+ * of truth, this keeps id resolution consistent with what the fake lists
+ * without letting the fake disagree with the production ordering rule.
  */
 export function resolveSessionFileFromList(
   list: (cwd: string) => Promise<PiSessionListEntry[]>,
 ): (cwd: string, sessionId: string) => Promise<ResolvedSessionFile | undefined> {
   return async (cwd, sessionId) => {
-    const match = (await list(cwd)).find((record) => record.id === sessionId || record.id.startsWith(sessionId));
+    const records = await list(cwd);
+    const match = records.find((record) => record.id === sessionId)
+      ?? records.find((record) => record.id.startsWith(sessionId));
     return match === undefined ? undefined : { id: match.id, cwd: match.cwd, path: match.path };
   };
 }

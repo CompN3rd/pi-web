@@ -17,7 +17,6 @@ import { SessionNotificationStore } from "./sessions/sessionNotificationStore.js
 import { SessionArchiveStore, defaultSessionArchiveFilePath } from "./sessions/sessionArchiveStore.js";
 import { FileSessionUnreadPersistence, SessionUnreadStore, defaultSessionUnreadFilePath } from "./sessions/sessionUnreadStore.js";
 import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver.js";
-import { RegisteredProjectWorkspaceCwds } from "./workspaces/projectWorkspaceCwds.js";
 import { ProjectService } from "./projects/projectService.js";
 import { ProjectStore, projectStorePath } from "./storage/projectStore.js";
 import { WorkspaceService } from "./workspaces/workspaceService.js";
@@ -92,11 +91,7 @@ async function createSessionDaemonRuntime() {
   });
   catalogRefresher.start();
   auth.subscribe(() => { catalogRefresher.requestRefresh(); });
-  // Cross-workspace session relationships are reported regardless of whether
-  // agents may spawn sessions: children can predate a config change, and the
-  // session tree should stay honest about them either way.
   const projectWorkspaceDeps = { projects: new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment))), workspaces: new WorkspaceService() };
-  const projectWorkspaces = new RegisteredProjectWorkspaceCwds(projectWorkspaceDeps);
   const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
   const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
     modelRuntime: auth.runtime,
@@ -105,7 +100,6 @@ async function createSessionDaemonRuntime() {
     workspaceActivity,
     logger: app.log,
     ...(spawnTargets === undefined ? {} : { spawnTargets }),
-    projectWorkspaces,
     subsessionsEnabled: config.subsessions,
     askUserEnabled: config.askUser,
     extensionDialogsTimeoutMs: config.extensionDialogsTimeoutMs,

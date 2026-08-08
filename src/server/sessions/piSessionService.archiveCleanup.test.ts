@@ -73,7 +73,6 @@ describe("PiSessionService archive and cleanup", () => {
         create: () => fakeSessionManager(),
         list: (cwd) => Promise.resolve(cwd === "/workspace" ? [root, directChild, archivedChild, grandchild] : [otherWorkspaceChild]),
         listAll: () => Promise.resolve([]),
-        listParentSessionPaths: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
         resolveSessionFile: resolveSessionFileFromList((cwd) => Promise.resolve(cwd === "/workspace" ? [root, directChild, archivedChild, grandchild] : [otherWorkspaceChild])),
         open: () => fakeSessionManager(),
@@ -258,7 +257,6 @@ describe("PiSessionService archive and cleanup", () => {
           return Promise.resolve(recordsByCwd.get(cwd) ?? []);
         },
         listAll: () => Promise.resolve([]),
-        listParentSessionPaths: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
         resolveSessionFile: () => Promise.resolve(undefined),
         open,
@@ -300,7 +298,6 @@ describe("PiSessionService archive and cleanup", () => {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([sessionRecord("busy"), sessionRecord("ok")]),
         listAll: () => Promise.resolve([]),
-        listParentSessionPaths: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
         resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([sessionRecord("busy"), sessionRecord("ok")])),
         open: () => fakeSessionManager(),
@@ -344,7 +341,6 @@ describe("PiSessionService archive and cleanup", () => {
         create: () => fakeSessionManager(),
         list: () => Promise.resolve([sessionRecord("unarchived")]),
         listAll: () => Promise.resolve([]),
-        listParentSessionPaths: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
         resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
@@ -393,7 +389,6 @@ describe("PiSessionService archive and cleanup", () => {
           return Promise.resolve([sessionRecord("legacy-a"), sessionRecord("legacy-b"), sessionRecord("unarchived")]);
         },
         listAll: () => Promise.resolve([]),
-        listParentSessionPaths: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
         resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
@@ -453,7 +448,6 @@ describe("PiSessionService archive and cleanup", () => {
             listAllCalls === 1 ? sessionRecord("preview-other", "/other-project") : sessionRecord("execute-other", "/other-project"),
           ]);
         },
-        listParentSessionPaths: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
         resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
@@ -506,7 +500,6 @@ describe("PiSessionService archive and cleanup", () => {
           return Promise.resolve([sessionRecord("legacy-a", cwd), sessionRecord("legacy-b", cwd)]);
         },
         listAll: () => Promise.resolve([]),
-        listParentSessionPaths: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
         resolveSessionFile: () => Promise.resolve(undefined),
         open: () => fakeSessionManager(),
@@ -546,7 +539,6 @@ describe("PiSessionService archive and cleanup", () => {
         create: () => fakeSessionManager("/old-project"),
         list: () => Promise.resolve([sessionRecord("busy-open", "/old-project")]),
         listAll: () => Promise.resolve([sessionRecord("busy-open", "/old-project")]),
-        listParentSessionPaths: () => Promise.resolve([]),
         invalidateSessionFile: () => undefined,
         resolveSessionFile: resolveSessionFileFromList(() => Promise.resolve([sessionRecord("busy-open", "/old-project")])),
         open: () => fakeSessionManager("/old-project"),
