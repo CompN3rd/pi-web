@@ -5,6 +5,7 @@ import {
   defineResearchLibraryPdfViewerElement,
   MAX_PDF_RENDER_DIMENSION,
   MAX_PDF_RENDER_PIXELS,
+  isPdfJsModule,
   ResearchLibraryPdfViewerElement,
   researchLibraryPdfViewerTagName,
   type PdfJsModule,
@@ -174,6 +175,13 @@ describe("ResearchLibraryPdfViewerElement", () => {
 
     expect(shadowRoot(element).querySelector("script")).toBeNull();
     expect(shadow(element, "[data-status]", HTMLElement).textContent).toContain("broken <module>");
+  });
+});
+
+describe("PDF.js module validation", () => {
+  it("accepts PDF.js 6's function-shaped GlobalWorkerOptions export", () => {
+    const GlobalWorkerOptions = Object.assign(() => undefined, { workerSrc: "" });
+    expect(isPdfJsModule({ GlobalWorkerOptions, getDocument: () => ({}) })).toBe(true);
   });
 });
 

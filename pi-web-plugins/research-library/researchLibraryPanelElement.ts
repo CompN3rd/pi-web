@@ -434,7 +434,9 @@ function styles(): string {
     input, select { min-width: 0; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-bg); color: var(--pi-text); padding: 7px; font: inherit; }
     .library-layout { display: grid; grid-template-columns: minmax(150px, 0.38fr) minmax(0, 1fr); gap: 12px; }
     .paper-list { display: grid; align-content: start; gap: 7px; }
-    .paper-button { display: grid; gap: 3px; width: 100%; text-align: left; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 9px; cursor: pointer; }
+    .pilot-layout { grid-template-columns: minmax(0, 1fr); }
+    .pilot-layout .paper-list { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .paper-button { display: grid; gap: 3px; width: 100%; min-width: 0; overflow-wrap: anywhere; text-align: left; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 9px; cursor: pointer; }
     .paper-button.selected { border-color: var(--pi-accent-border); background: var(--pi-bg-overlay-soft); }
     .paper-detail { min-width: 0; }
     .paper-header h2 { margin: 0; font-size: 18px; }

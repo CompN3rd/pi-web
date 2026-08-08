@@ -311,15 +311,19 @@ async function loadBundledPdfJs(): Promise<PdfJsModule> {
   return value;
 }
 
-function isPdfJsModule(value: unknown): value is PdfJsModule {
+export function isPdfJsModule(value: unknown): value is PdfJsModule {
   return isRecord(value)
-    && isRecord(value["GlobalWorkerOptions"])
+    && isPropertyContainer(value["GlobalWorkerOptions"])
     && typeof value["GlobalWorkerOptions"]["workerSrc"] === "string"
     && typeof value["getDocument"] === "function";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isPropertyContainer(value: unknown): value is Record<string, unknown> {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
 }
 
 function required<T>(value: Element | null, type: abstract new (...args: never[]) => T): T {
