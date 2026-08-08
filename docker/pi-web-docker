@@ -484,6 +484,18 @@ run_runtime_host_update() {
   exec "$installer" --install-dir "$root"
 }
 
+# An update launched from inside the runtime rebuilds and recreates using the
+# Compose files in the install directory, so those files must be refreshed
+# first or Docker asset changes never reach a running install. Host-derived
+# values stay untouched, because a container cannot detect the Docker host.
+run_runtime_container_asset_refresh() {
+  root=$(runtime_root)
+  require_runtime_compose_assets "$root"
+  installer=$(runtime_installer "$root")
+  log "Refreshing PI WEB Docker assets in $root ..."
+  PI_WEB_DOCKER_REFRESH_ASSETS=1 "$installer" --install-dir "$root" --assets-only
+}
+
 dev_update_fast_forward() {
   root=$(dev_root)
   require_command git
@@ -524,7 +536,9 @@ run_update() {
   require_clean_dev_update_checkout
   case "$(docker_mode)" in
     runtime)
-      if ! is_truthy "${PI_WEB_DOCKER_RUNTIME:-}"; then
+      if is_truthy "${PI_WEB_DOCKER_RUNTIME:-}"; then
+        run_runtime_container_asset_refresh
+      else
         run_runtime_host_update
       fi
       cache_bust=${CACHE_BUST:-pi-web-docker-$(date -u +%Y%m%dT%H%M%SZ)}

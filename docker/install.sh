@@ -36,6 +36,12 @@ Options:
   --asset-dir DIR         Copy Docker assets from a local docker/ directory
   --asset-ref REF         Fetch Docker assets from a Git ref (default: main)
   --skip-compose          Write assets/.env but skip build and service recreate
+  --assets-only           Refresh only the Docker asset files of an existing
+                          install. Host-derived .env values and the host
+                          Compose override are left as the host installer
+                          wrote them, and no image build or recreate runs.
+                          Used by in-container updates, which cannot detect the
+                          Docker host setup from inside a container.
   -h, --help              Show this help
 
 Progressive host setup:
@@ -116,6 +122,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip-compose)
       PI_WEB_DOCKER_SKIP_COMPOSE=1
+      shift
+      ;;
+    --assets-only)
+      PI_WEB_DOCKER_ASSETS_ONLY=1
       shift
       ;;
     -h|--help)
@@ -339,7 +349,13 @@ fi
 # shellcheck disable=SC1091
 . "$profile_helper"
 
-if ! pi_web_docker_host_detect_profile; then
+# Host detection reads the host OS and Docker context, which a container cannot
+# observe: inside a Linux container a Docker Desktop for Mac host looks like a
+# native Linux host. An assets-only refresh therefore keeps the host-derived
+# values the host installer recorded instead of detecting them again.
+if [ "${PI_WEB_DOCKER_ASSETS_ONLY:-0}" = 1 ]; then
+  [ -f "$env_file" ] || die "--assets-only refreshes an existing install, but $env_file was not found; run the installer without --assets-only first"
+elif ! pi_web_docker_host_detect_profile; then
   pi_web_docker_host_print_detection_failure
   die "refusing to install on an unsupported or unknown Docker host setup"
 fi
@@ -357,6 +373,12 @@ custom_image_hooks_dir=$install_dir/custom-image.d
 mkdir -p "$custom_image_hooks_dir" || die "could not create custom image hooks directory: $custom_image_hooks_dir"
 if [ ! -e "$custom_image_hooks_dir/.gitkeep" ]; then
   : >"$custom_image_hooks_dir/.gitkeep" || die "could not initialize custom image hooks directory: $custom_image_hooks_dir"
+fi
+
+if [ "${PI_WEB_DOCKER_ASSETS_ONLY:-0}" = 1 ]; then
+  log "Refreshed Docker assets in $install_dir"
+  log "Left host-derived values in $env_file and $install_dir/compose.override.yml unchanged"
+  exit 0
 fi
 
 pi_web_uid=$(value_from_env_or_default PI_WEB_UID "$(id -u)")

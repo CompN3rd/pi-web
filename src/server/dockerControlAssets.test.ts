@@ -600,6 +600,59 @@ describe("Docker command assets", () => {
     expect(log).toContain("compose --project-name pi-web-test --env-file .env -f compose.yml -f compose.override.yml up -d --force-recreate --remove-orphans");
     expect(log).not.toContain("run -d");
   });
+
+  dockerCommandIt("refreshes Docker assets before rebuilding when a runtime update runs inside the container", async () => {
+    const installDir = await createRuntimeInstall();
+    const fakeDocker = await installFakeDocker();
+
+    const result = await runDockerCommand(["__run-detached", "update"], runtimeEnv(fakeDocker, installDir));
+
+    // Rebuild and recreate use the Compose files in the install directory, so
+    // stale assets there would otherwise survive every in-container update.
+    const installerCalls = await readFile(join(installDir, "installer-calls.log"), "utf8");
+    expect(installerCalls).toContain(`install.sh --install-dir ${installDir} --assets-only`);
+    expect(result.stderr).toContain(`Refreshing PI WEB Docker assets in ${installDir}`);
+    const dockerLog = await readFile(fakeDocker.logPath, "utf8");
+    expect(dockerLog).toContain("build --pull --no-cache");
+  });
+
+  dockerCommandIt("keeps host-derived values when refreshing assets only", async () => {
+    const installDir = await createRuntimeInstall();
+    const envFile = join(installDir, ".env");
+    const overrideFile = join(installDir, "compose.override.yml");
+    await writeFile(join(installDir, "compose.yml"), "# stale compose\n", "utf8");
+    const originalEnv = await readFile(envFile, "utf8");
+    const originalOverride = await readFile(overrideFile, "utf8");
+
+    await execUtf8("sh", [
+      join(repoRoot, "docker", "install.sh"),
+      "--install-dir", installDir,
+      "--asset-dir", join(repoRoot, "docker"),
+      "--assets-only",
+    ], cleanProcessEnv());
+
+    // A container cannot observe the Docker host, so an assets-only refresh must
+    // not regenerate host-detected values such as the profile-specific mounts.
+    expect(await readFile(join(installDir, "compose.yml"), "utf8")).toContain("container.env");
+    expect(await readFile(envFile, "utf8")).toBe(originalEnv);
+    expect(await readFile(overrideFile, "utf8")).toBe(originalOverride);
+  });
+
+  dockerCommandIt("refuses an assets-only refresh outside an existing install", async () => {
+    const freshDir = join(tempDir, "not-installed");
+
+    // Intentional failure path: the installer must not create a half-configured
+    // install directory that has assets but no generated environment.
+    const result = await execUtf8AllowFailure("sh", [
+      join(repoRoot, "docker", "install.sh"),
+      "--install-dir", freshDir,
+      "--asset-dir", join(repoRoot, "docker"),
+      "--assets-only",
+    ], cleanProcessEnv());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--assets-only refreshes an existing install");
+  });
 });
 
 async function readRepoFile(relativePath: string): Promise<string> {
@@ -658,6 +711,14 @@ async function createRuntimeInstall(): Promise<string> {
   // create the user-owned container environment file when it is missing.
   await mkdir(join(installDir, "internal"), { recursive: true });
   await copyFile(join(repoRoot, "docker", "internal", "host-profile.sh"), join(installDir, "internal", "host-profile.sh"));
+  // Updates run the installed installer to refresh Docker assets. Record its
+  // arguments instead of fetching real assets.
+  const installerPath = join(installDir, "install.sh");
+  await writeFile(installerPath, `#!/usr/bin/env sh
+set -eu
+printf 'install.sh %s\n' "$*" >>${shellSingleQuote(join(installDir, "installer-calls.log"))}
+`, "utf8");
+  await chmod(installerPath, 0o755);
   return installDir;
 }
 

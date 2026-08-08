@@ -59,6 +59,8 @@ Defaults:
 
 Updating recreates the Docker `sessiond` container. Active Pi agent runtimes in this Docker install may stop, so update while sessions are idle. Persisted PI WEB state, Pi config, and session history under the data directory are kept.
 
+A runtime update refreshes the Docker asset files in the install directory before it rebuilds the image and recreates the services, so changes to `compose.yml`, the `Dockerfile`, `pi-web-docker`, and the internal helpers reach a running install. An update launched from the host runs the full installer, which also refreshes host-derived `.env` values and the host Compose override. An update launched from inside the runtime refreshes only the asset files, because a container cannot observe the Docker host setup: from inside a Linux container, a Docker Desktop for Mac host is indistinguishable from a native Linux host. Rerun the installer from the host when host-derived values need to change, such as after moving the data directory or adding host mounts.
+
 Inside the Docker runtime, the Updates panel uses `pi-web-docker` for status, update, and restart commands. Update and restart commands first start a detached helper container with the same Docker/host mounts and generated Compose environment, including the project name, ports/data paths, helper image, and generated UID/GID/Docker group. After scheduling the helper, the command streams that helper's logs inline and prints the `docker logs -f` command needed to reconnect. The helper still runs independently, so work continues even when `web`, `sessiond`, or the PI WEB terminal that launched the command exits.
 
 ### Command matrix
