@@ -49,7 +49,7 @@ export function researchPilotCommands(
   return [
     command("session daemon", ["run", "start:sessiond"]),
     command("web/API", ["run", webScript]),
-    command("Vite UI", ["run", "dev:client", "--", "--port", String(ports.ui)]),
+    command("Vite UI", ["run", "dev:client", "--", "--host", "127.0.0.1", "--port", String(ports.ui)]),
   ];
 }
 
