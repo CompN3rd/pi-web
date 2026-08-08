@@ -29,6 +29,7 @@ import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes, offlineMo
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { applyAgentHttpIdleTimeout } from "./sessiond/agentHttpDispatcher.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
+import { dockerEnvironmentPromptSections } from "./sessions/dockerEnvironmentFacts.js";
 import { scrubNonAgentVisibleEnvKeys } from "./sessiond/agentProcessEnvironment.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
@@ -102,6 +103,14 @@ async function createSessionDaemonRuntime() {
     ...(spawnTargets === undefined ? {} : { spawnTargets }),
     subsessionsEnabled: config.subsessions,
     askUserEnabled: config.askUser,
+    // Docker deployments describe their container to agents; ordinary installs
+    // add nothing. Resolved once here, from the captured daemon environment,
+    // because the deployment cannot change while the daemon runs.
+    appendSystemPromptSections: dockerEnvironmentPromptSections({
+      env: daemonEnvironment,
+      enabled: config.environmentFacts,
+      logger: app.log,
+    }),
     extensionDialogsTimeoutMs: config.extensionDialogsTimeoutMs,
     notificationStore,
     unreadStore,

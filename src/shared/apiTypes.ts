@@ -95,6 +95,12 @@ export interface PiWebConfigValues {
    */
   askUser?: boolean;
   /**
+   * When true, PI WEB appends deployment environment facts to session system
+   * prompts. On by default. Only Docker deployments have facts to add today, so
+   * the value has no effect elsewhere.
+   */
+  environmentFacts?: boolean;
+  /**
    * How long an extension dialog may wait for an answer before the daemon
    * auto-cancels it, in milliseconds. Applies only when the extension set no
    * `timeout` of its own (the sooner of the two wins); `0` waits forever.

@@ -14,6 +14,7 @@ import {
   type AgentSessionRuntimeDiagnostic,
   type AgentSessionServices,
   type CreateAgentSessionRuntimeFactory,
+  type CreateAgentSessionServicesOptions,
   type EditToolDetails,
   type ExtensionUIDialogOptions,
   type ExtensionUIContext,
@@ -709,15 +710,37 @@ export function createPiWebCustomToolDefinitions(
   ];
 }
 
+/**
+ * Resource-loader options that append PI WEB's own system-prompt sections.
+ *
+ * `appendSystemPromptOverride` composes with what the loader already resolved,
+ * so the operator's `SYSTEM.md` / `APPEND_SYSTEM.md` files keep their content
+ * and PI WEB's sections land after them. Returns `undefined` when there is
+ * nothing to add, leaving the loader exactly as pi configures it.
+ */
+export function piWebResourceLoaderOptions(
+  appendSystemPromptSections: readonly string[],
+): CreateAgentSessionServicesOptions["resourceLoaderOptions"] | undefined {
+  if (appendSystemPromptSections.length === 0) return undefined;
+  return { appendSystemPromptOverride: (base) => [...base, ...appendSystemPromptSections] };
+}
+
 function createDefaultRuntimeFactory(
   modelRuntime: ModelRuntime,
   sessionManagers: Pick<PiSessionManagerGateway, "open">,
   spawn?: SpawnSessionFn,
   subsessions?: SubsessionToolDeps,
   askUser?: AskUserToolDeps,
+  appendSystemPromptSections: readonly string[] = [],
 ): PiWebCreateAgentSessionRuntimeFactory {
+  const resourceLoaderOptions = piWebResourceLoaderOptions(appendSystemPromptSections);
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, initialThinkingLevel, delegationToolsEnabled }) => {
-    const services: AgentSessionServices = await createAgentSessionServices({ cwd, agentDir, modelRuntime });
+    const services: AgentSessionServices = await createAgentSessionServices({
+      cwd,
+      agentDir,
+      modelRuntime,
+      ...(resourceLoaderOptions === undefined ? {} : { resourceLoaderOptions }),
+    });
     const resolvedDelegationToolsEnabled = delegationToolsEnabled
       ?? await sessionAllowsDelegationTools(sessionManager, sessionManagers);
     const customTools = createPiWebCustomToolDefinitions(cwd, resolvedDelegationToolsEnabled, spawn, subsessions, askUser);
@@ -785,6 +808,12 @@ export interface PiSessionServiceDependencies {
    * questions reach the user of the asking session, not another session.
    */
   askUserEnabled?: boolean;
+  /**
+   * Deployment facts appended to every session's system prompt, after the
+   * operator's own pi prompt files. Empty in ordinary installs; sessiond fills
+   * it with container environment facts in Docker deployments.
+   */
+  appendSystemPromptSections?: readonly string[];
   /** Daemon-lifetime open-ask state; defaults to an in-memory store in tests. */
   pendingAskStore?: PendingAskStore;
   /** Daemon-lifetime open-dialog state; defaults to an in-memory store in tests. */
@@ -913,6 +942,7 @@ export class PiSessionService implements SessionRouteService {
         read: (parentSessionId, sessionId, query, parentSessionFile) => this.readSubsession(parentSessionId, sessionId, query, parentSessionFile),
       },
       deps.askUserEnabled === true ? { open: (input) => this.openAsk(input) } : undefined,
+      deps.appendSystemPromptSections ?? [],
     );
     this.createAgentRuntime = deps.createAgentRuntime ?? defaultCreateAgentRuntime;
     this.workspaceActivity = deps.workspaceActivity;

@@ -26,6 +26,7 @@ function daemonCollaborators(patch: Partial<SessionServiceDependencyInput> = {})
     catalogRefreshStatus: { isRefreshInFlight: () => false },
     subsessionsEnabled: false,
     askUserEnabled: true,
+    appendSystemPromptSections: [],
     extensionDialogsTimeoutMs: 300_000,
     ...patch,
   };
@@ -97,5 +98,11 @@ describe("sessiond session service dependency assembly", () => {
 
   it("passes the extension-dialog timeout through to the session service", () => {
     expect(sessionServiceDependencies(daemonCollaborators({ extensionDialogsTimeoutMs: 60_000 })).extensionDialogsTimeoutMs).toBe(60_000);
+  });
+
+  it("passes deployment system-prompt sections through to the session service", () => {
+    const sections = ["<pi_web_docker_environment>\n- fact\n</pi_web_docker_environment>"];
+
+    expect(sessionServiceDependencies(daemonCollaborators({ appendSystemPromptSections: sections })).appendSystemPromptSections).toEqual(sections);
   });
 });

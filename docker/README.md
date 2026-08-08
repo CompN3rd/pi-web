@@ -169,6 +169,22 @@ docker/custom-image.d/
 
 Files in that development hook directory are ignored by Git except for the placeholder that keeps the directory available to Docker builds.
 
+### Agent environment facts
+
+Sessions started by a PI WEB Docker deployment get one short block of environment facts appended to their system prompt, after any `SYSTEM.md` / `APPEND_SYSTEM.md` content of your own. The block exists because a Docker deployment changes what is true about the machine an agent works on, in ways nothing in the working directory reveals:
+
+- shell commands, edits, and tool installs happen in the container, not on the Docker host;
+- the container filesystem is discarded on the next image build, so tools installed mid-session disappear, while `PI_WEB_EXTRA_ZYPPER_PACKAGES` and `custom-image.d/*.sh` hooks persist;
+- `/data` persists, selected host paths are mounted read/write at identical absolute paths, and the host root is mounted read-only at `/host`;
+- the Docker socket is mounted, and `hostexec` is either available or explicitly disabled for this host profile;
+- in development mode, the checkout is bind-mounted at `/workspace` and `/workspace/node_modules` is a separate container-managed mount rather than the host directory.
+
+The block states facts only and gives no workflow advice, so your own context and prompt files stay authoritative. Facts are derived from the running container, including its mount table, so extra mounts from `PI_WEB_DOCKER_EXTRA_HOST_PATHS` are described automatically without extra configuration. No deployment descriptor variables were added to the container environment for this, so nothing new is inherited by the commands agents run.
+
+To turn the block off, set `"environmentFacts": false` in the PI WEB config file (`/data/config/pi-web/config.json` in these containers), or set `PI_WEB_ENVIRONMENT_FACTS=false` for the `sessiond` service. The environment value accepts `0|1|true|false` and takes precedence over the config file; the default is on. Restart `sessiond` after changing it, and note that sessions keep the system prompt they started with, so the change applies to sessions started afterwards.
+
+This switch only has an effect where PI WEB has facts to add, which today means Docker deployments.
+
 ### Version pinning
 
 Pi Coding Agent is resolved from PI WEB's npm peer dependency, and Docker links the peer-provided `pi` binary into `PATH`. Pin the PI WEB npm package when you want to stay on a specific PI WEB release:
