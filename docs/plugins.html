@@ -364,10 +364,10 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
 
               <h3>Research Library (synthetic tools and read-only PDF pilot)</h3>
               <p>
-                <strong>Research Library</strong> has two mutually exclusive modes. The synthetic mode provides the
-                existing bounded Pi tools, opaque prompt token, generated citation preview, and additive answer drafts.
-                The independent local-pilot mode displays manifest-declared llmwiki metadata and local PDFs without
-                exposing real paper content to the agent.
+                <strong>Research Library</strong> has two mutually exclusive modes. The synthetic mode retains the
+                historical bounded Pi tools, opaque prompt-token, generated citation preview, and additive answer-draft
+                fixture. The independent local-pilot mode displays manifest-declared llmwiki metadata and local PDFs,
+                and exposes only bounded read tools for the real pilot; it does not insert prompts or publish answers.
               </p>
               <ul>
                 <li>Plugin id: <code>research-library</code></li>
@@ -407,7 +407,8 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                 removing, or changing the fixture, or after installing/updating the paired Pi extension. Then run
                 <code>/research-library</code> to check its status. Keep the synthetic fixture, runtime directory, and
                 both <code>raw/research-library-pilot/</code> and
-                <code>raw/_processed/research-library-pilot/</code> out of Git.
+                <code>raw/_processed/research-library-pilot/</code> out of Git. If both source files exist, the extension
+                and panel refuse to choose an implicit precedence.
               </p>
               <p>
                 The pilot requires strict <code>pilot: true</code> records with manifest-declared source-note/PDF SHA-256
@@ -416,6 +417,7 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                 <code>local-research-copy; redistribution-not-asserted</code>. Topics, meta categories, and thesis source
                 paths are contextual wiki relations—not citation edges. The browser validates manifest shape only; it
                 does not rehash note/PDF bytes, confirm declared size, or prove URL ownership or authority at panel-render time.
+                The raw Pi extension independently validates the same pilot contract before registering real-content read tools.
               </p>
               <div class="code-card">
                 <pre><code>raw/
@@ -432,7 +434,11 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                 prompt insertion, runtime intent, search-budget tool, or answer queue; real-content disclosure remains
                 separately gated. A future downloader/import step must independently verify downloaded bytes, sizes,
                 SHA-256 values, approved source hosts, and source-note digests before publishing the manifest; this is not
-                performed by the current panel.
+                performed by the current panel. In pilot mode the Pi extension provides
+                <code>research_library_list_papers</code>, <code>research_library_list_annotations</code>, and
+                <code>research_library_get_annotation</code>. These tools read manifest metadata and digest-checked
+                annotation records as untrusted quoted data; they do not access the network, insert prompt text, write
+                answers, or promote content into the wiki.
               </p>
               <p>
                 Choose <strong>Mark region</strong> in the reader and drag across a passage to record a question or note.
@@ -441,7 +447,9 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                 manifest-declared PDF digest and holding the page, a page-relative rectangle, and the PDF text under it.
                 That anchor is written once; editing changes only kind, text, and open/resolved status, advancing a
                 revision that a competing writer's change is detected against. Marked regions are painted over their page
-                and can be resolved, reopened, edited, or deleted. PDFs, source notes, and the manifest are never written.
+                and can be resolved, reopened, edited, or deleted. The raw extension rejects malformed, foreign-library,
+                foreign-paper, and stale-PDF-digest records instead of presenting them as valid evidence. PDFs, source
+                notes, and the manifest are never written.
               </p>
               <p>
                 For collision-safe development, <code>npm run dev:research-pilot</code> uses API 8604, UI 8605, session
