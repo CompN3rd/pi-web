@@ -36,12 +36,28 @@ export function researchPilotEnvironment(baseEnv = process.env, paths = research
   };
 }
 
-export function researchPilotCommands(npmExecutable = process.platform === "win32" ? "npm.cmd" : "npm", ports = RESEARCH_PILOT_PORTS) {
+export function researchPilotCommands(
+  npmExecutable,
+  ports = RESEARCH_PILOT_PORTS,
+  runtime = { platform: process.platform, nodeExecutable: process.execPath, npmExecPath: process.env.npm_execpath },
+) {
+  const invocation = npmExecutable === undefined
+    ? defaultNpmInvocation(runtime)
+    : { command: npmExecutable, prefix: [] };
+  const command = (label, args) => ({ label, command: invocation.command, args: [...invocation.prefix, ...args] });
   return [
-    { label: "session daemon", command: npmExecutable, args: ["run", "start:sessiond"] },
-    { label: "web/API", command: npmExecutable, args: ["run", "dev:web"] },
-    { label: "Vite UI", command: npmExecutable, args: ["run", "dev:client", "--", "--port", String(ports.ui)] },
+    command("session daemon", ["run", "start:sessiond"]),
+    command("web/API", ["run", "dev:web"]),
+    command("Vite UI", ["run", "dev:client", "--", "--port", String(ports.ui)]),
   ];
+}
+
+function defaultNpmInvocation(runtime) {
+  if (runtime.platform !== "win32") return { command: "npm", prefix: [] };
+  // Node 24 rejects direct shell:false spawning of .cmd shims with EINVAL.
+  // Invoke npm's JavaScript entry through the current Node executable instead.
+  const npmExecPath = runtime.npmExecPath ?? join(dirname(runtime.nodeExecutable), "node_modules", "npm", "bin", "npm-cli.js");
+  return { command: runtime.nodeExecutable, prefix: [npmExecPath] };
 }
 
 export async function portIsAvailable(port, host = "127.0.0.1", connect = createConnection) {

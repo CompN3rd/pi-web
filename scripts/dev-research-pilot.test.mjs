@@ -46,6 +46,22 @@ describe("research pilot launcher", () => {
     ]);
   });
 
+  it("invokes npm through Node on Windows instead of spawning a .cmd shim", () => {
+    const commands = researchPilotCommands(undefined, RESEARCH_PILOT_PORTS, {
+      platform: "win32",
+      nodeExecutable: "C:/Program Files/nodejs/node.exe",
+      npmExecPath: "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js",
+    });
+    expect(commands[0]).toEqual({
+      label: "session daemon",
+      command: "C:/Program Files/nodejs/node.exe",
+      args: ["C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js", "run", "start:sessiond"],
+    });
+    expect(commands[2]?.args).toEqual([
+      "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js", "run", "dev:client", "--", "--port", "8605",
+    ]);
+  });
+
   it("detects a genuinely occupied local TCP port without disturbing its listener", async () => {
     const server = createServer();
     await new Promise((resolve, reject) => {
