@@ -38,12 +38,20 @@ describe("research pilot launcher", () => {
     expect(paths.dataDir).not.toContain(".pi-web");
   });
 
-  it("builds the three long-lived commands including the alternate Vite port", () => {
-    expect(researchPilotCommands("npm-test")).toEqual([
+  it("builds the Windows commands including the direct API and alternate Vite port", () => {
+    const runtime = { platform: "win32", nodeExecutable: "node-test", npmExecPath: "npm-cli-test" };
+    expect(researchPilotCommands("npm-test", RESEARCH_PILOT_PORTS, runtime)).toEqual([
       { label: "session daemon", command: "npm-test", args: ["run", "start:sessiond"] },
       { label: "web/API", command: "npm-test", args: ["run", "start"] },
       { label: "Vite UI", command: "npm-test", args: ["run", "dev:client", "--", "--port", "8605"] },
     ]);
+  });
+
+  it("preserves the plugin-watching API command on non-Windows platforms", () => {
+    const runtime = { platform: "linux", nodeExecutable: "node-test", npmExecPath: undefined };
+    expect(researchPilotCommands("npm-test", RESEARCH_PILOT_PORTS, runtime)[1]).toEqual({
+      label: "web/API", command: "npm-test", args: ["run", "dev:web"],
+    });
   });
 
   it("invokes npm through Node on Windows instead of spawning a .cmd shim", () => {

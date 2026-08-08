@@ -45,9 +45,10 @@ export function researchPilotCommands(
     ? defaultNpmInvocation(runtime)
     : { command: npmExecutable, prefix: [] };
   const command = (label, args) => ({ label, command: invocation.command, args: [...invocation.prefix, ...args] });
+  const webScript = runtime.platform === "win32" ? "start" : "dev:web";
   return [
     command("session daemon", ["run", "start:sessiond"]),
-    command("web/API", ["run", "start"]),
+    command("web/API", ["run", webScript]),
     command("Vite UI", ["run", "dev:client", "--", "--port", String(ports.ui)]),
   ];
 }
