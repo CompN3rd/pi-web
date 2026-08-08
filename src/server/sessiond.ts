@@ -14,11 +14,11 @@ import { PiSessionService } from "./sessions/piSessionService.js";
 import { createPiSessionManagerGateway } from "./sessions/piSessionManagerGateway.js";
 import { registerSessionRoutes } from "./sessions/sessionRoutes.js";
 import { SessionNotificationStore } from "./sessions/sessionNotificationStore.js";
-import { FileSessionUnreadPersistence, SessionUnreadStore } from "./sessions/sessionUnreadStore.js";
+import { SessionArchiveStore, defaultSessionArchiveFilePath } from "./sessions/sessionArchiveStore.js";
+import { FileSessionUnreadPersistence, SessionUnreadStore, defaultSessionUnreadFilePath } from "./sessions/sessionUnreadStore.js";
 import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver.js";
-import { RegisteredProjectWorkspaceCwds } from "./workspaces/projectWorkspaceCwds.js";
 import { ProjectService } from "./projects/projectService.js";
-import { ProjectStore } from "./storage/projectStore.js";
+import { ProjectStore, projectStorePath } from "./storage/projectStore.js";
 import {
   eligibleWorkspaceProviderContributions,
   WorkspaceProviderRegistry,
@@ -32,6 +32,9 @@ import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes, offlineMo
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
 import { PiWebPluginCatalog } from "./piWebPluginCatalog.js";
+import { applyAgentHttpIdleTimeout } from "./sessiond/agentHttpDispatcher.js";
+import { scrubNonAgentVisibleEnvKeys } from "./sessiond/agentProcessEnvironment.js";
+import { dockerEnvironmentPromptSections } from "./sessions/dockerEnvironmentFacts.js";
 import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
 import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
 import { runSessionDaemonShutdown } from "./sessiond/sessionDaemonShutdown.js";
@@ -89,6 +92,14 @@ async function requestShutdown(signal: NodeJS.Signals): Promise<void> {
 process.once("SIGINT", (signal) => { void requestShutdown(signal); });
 process.once("SIGTERM", (signal) => { void requestShutdown(signal); });
 
+// Agent-executed processes (bash tool, terminals, subsessions) are spawned from
+// this process and inherit its environment, so hide the daemon's own
+// configuration keys before any of them can start. The daemon keeps using the
+// captured daemonEnvironment above; its runtime stores resolve their paths from
+// it explicitly below.
+const scrubbedEnvKeys = scrubNonAgentVisibleEnvKeys(process.env);
+app.log.info({ scrubbedEnvKeys }, "daemon-only environment keys hidden from agent processes");
+
 const runtime = await createSessionDaemonRuntime();
 try {
   registerSessionDaemonRoutes(runtime);
@@ -105,6 +116,15 @@ try {
 type SessionDaemonRuntime = Awaited<ReturnType<typeof createSessionDaemonRuntime>>;
 
 async function createSessionDaemonRuntime() {
+  // Apply the active agent profile's httpIdleTimeoutMs before any other
+  // startup work so even catalog-refresh fetches run under the configured
+  // HTTP idle timeouts (issue #113).
+  const appliedHttpIdleTimeout = applyAgentHttpIdleTimeout({ agentDir: activeAgentProfile.dir, cwd: process.cwd() });
+  if (appliedHttpIdleTimeout.warning !== undefined) {
+    app.log.warn({ httpIdleTimeoutMs: appliedHttpIdleTimeout.timeoutMs }, appliedHttpIdleTimeout.warning);
+  } else {
+    app.log.info({ httpIdleTimeoutMs: appliedHttpIdleTimeout.timeoutMs }, "applied agent profile HTTP idle timeout to the session daemon HTTP stack");
+  }
   const serverPlugins = await createServerPluginRuntime({
     catalog: serverPluginCatalog,
     ...(serverPluginRecovery.safeStart === undefined ? {} : { safeStart: serverPluginRecovery.safeStart }),
@@ -115,7 +135,7 @@ async function createSessionDaemonRuntime() {
     const eventHub = new SessionEventHub();
     const notificationStore = new SessionNotificationStore();
     const unreadStore = new SessionUnreadStore({
-      persistence: new FileSessionUnreadPersistence(),
+      persistence: new FileSessionUnreadPersistence(defaultSessionUnreadFilePath(daemonEnvironment)),
       onPersistenceError(operation, error) {
         app.log.error({ err: error, operation }, "session unread persistence failed");
       },
@@ -138,7 +158,7 @@ async function createSessionDaemonRuntime() {
     });
     catalogRefresher.start();
     auth.subscribe(() => { catalogRefresher.requestRefresh(); });
-    const projects = new ProjectService(new ProjectStore());
+    const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
     const providerHealth = await serverPlugins.inspectHealth();
     const workspaceProviders = new WorkspaceProviderRegistry({
       contributions: eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth),
@@ -150,21 +170,25 @@ async function createSessionDaemonRuntime() {
       serverPlugins.safeStartLevel(),
       serverPlugins.catalogDiagnostics(),
     );
-    // Cross-workspace session relationships are reported regardless of whether
-    // agents may spawn sessions: children can predate a config change, and the
-    // session tree should stay honest about them either way.
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
-    const projectWorkspaces = new RegisteredProjectWorkspaceCwds(projectWorkspaceDeps);
     const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
     const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
       modelRuntime: auth.runtime,
       agentDir: activeAgentProfile.dir,
+      archiveStore: new SessionArchiveStore(defaultSessionArchiveFilePath(daemonEnvironment)),
       workspaceActivity,
       logger: app.log,
       ...(spawnTargets === undefined ? {} : { spawnTargets }),
-      projectWorkspaces,
       subsessionsEnabled: config.subsessions,
       askUserEnabled: config.askUser,
+      // Docker deployments describe their container to agents; ordinary installs
+      // add nothing. Resolved once here, from the captured daemon environment,
+      // because the deployment cannot change while the daemon runs.
+      appendSystemPromptSections: dockerEnvironmentPromptSections({
+        env: daemonEnvironment,
+        enabled: config.environmentFacts,
+        logger: app.log,
+      }),
       extensionDialogsTimeoutMs: config.extensionDialogsTimeoutMs,
       notificationStore,
       unreadStore,
@@ -261,7 +285,7 @@ async function listenSessionDaemon({ shutdown }: SessionDaemonRuntime): Promise<
   if (port !== undefined) {
     await app.listen({ port, host });
   } else {
-    const path = sessiondSocketPath();
+    const path = sessiondSocketPath(daemonEnvironment);
     await mkdir(dirname(path), { recursive: true });
     await rm(path, { force: true });
     await app.listen({ path });

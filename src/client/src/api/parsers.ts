@@ -1,5 +1,5 @@
 import { PI_WEB_PLUGIN_LIFECYCLE_VERSION, ASK_USER_ID_MAX_LENGTH, ASK_USER_OPTION_LIMIT, ASK_USER_OTHER_TEXT_MAX_LENGTH, ASK_USER_QUESTION_LIMIT, ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_ID_MAX_LENGTH, EXTENSION_DIALOG_INPUT_MAX_LENGTH, EXTENSION_DIALOG_OPTION_LIMIT, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH, SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH, SESSION_UNREAD_CWD_MAX_LENGTH, SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH, type ArchiveSessionsResponse, type AskUserCloseReason, type AskUserCloseResponse, type AskUserOutcome, type AskUserQuestion, type AskUserQuestionOption, type AskUserQuestionRecord, type PendingAskUser, type PendingExtensionDialog, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type ExtensionDialogAnswer, type ExtensionDialogCloseReason, type ExtensionDialogCloseResponse, type ExtensionDialogKind, type ExtensionDialogOutcome, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type GlobalSessionEvent, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionUiEvent, type SessionUnreadCatalogSnapshot, type SessionUnreadEvent, type SessionUnreadSummary, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type TerminalUiEvent, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceEffectiveConfig, type WorkspaceActivity, type WorkspaceActivityUiEvent, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
-import type { JsonValue, PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot, WorkspaceProviderDiagnostic, WorkspaceProviderDiagnosticCode, WorkspaceProviderResolution, WorkspaceProviderResolutionStatus, WorkspaceProviderTier } from "../../../shared/apiTypes";
+import type { JsonValue, PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse, SessionActivity, SessionStartupProgressEvent, SessionTreeForkResult, SessionTreeNavigateResult, SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot, WorkspaceProviderDiagnostic, WorkspaceProviderDiagnosticCode, WorkspaceProviderResolution, WorkspaceProviderResolutionStatus, WorkspaceProviderTier } from "../../../shared/apiTypes";
 import { parseActiveAgentProfileDescriptor } from "../../../shared/activeAgentProfile";
 import { parseKnownPiWebCapabilities } from "../../../shared/capabilities";
 import { PI_WEB_PLUGIN_RECOVERY_COMMANDS, pluginDisableRecoveryCommand } from "../../../shared/pluginRecoveryCommands";
@@ -249,9 +249,6 @@ export function parseSessionInfo(value: unknown): SessionInfo {
   const name = optionalString(record, "name");
   const persisted = parseOptionalBoolean(record["persisted"], "persisted");
   const parentSessionPath = optionalString(record, "parentSessionPath");
-  const parentSessionCwd = optionalString(record, "parentSessionCwd");
-  const parentSessionId = optionalString(record, "parentSessionId");
-  const childSessionsElsewhere = parseOptionalCount(record["childSessionsElsewhere"], "childSessionsElsewhere");
   const archivedAt = optionalString(record, "archivedAt");
   return {
     id: requireString(record, "id"),
@@ -264,9 +261,6 @@ export function parseSessionInfo(value: unknown): SessionInfo {
     messageCount: requireNumber(record, "messageCount"),
     firstMessage: requireString(record, "firstMessage"),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
-    ...(parentSessionCwd === undefined ? {} : { parentSessionCwd }),
-    ...(parentSessionId === undefined ? {} : { parentSessionId }),
-    ...(childSessionsElsewhere === undefined ? {} : { childSessionsElsewhere }),
     ...(record["archived"] === true ? { archived: true } : {}),
     ...(archivedAt === undefined ? {} : { archivedAt }),
   };
@@ -1712,13 +1706,6 @@ function parseOptionalBoolean(value: unknown, key: string): boolean | undefined 
   return value;
 }
 
-/** Optional non-negative integer count; zero is normalized away so absent and none read alike. */
-function parseOptionalCount(value: unknown, key: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error(`Expected optional count field: ${key}`);
-  return value === 0 ? undefined : value;
-}
-
 export function parsePiWebStatusResponse(value: unknown): PiWebStatusResponse {
   const record = requireRecord(value);
   return {
@@ -1920,6 +1907,21 @@ export function parseSessionTreeNavigateResult(value: unknown): SessionTreeNavig
   }
   rejectResponseField(record, "aborted", "session tree navigation result");
   return { cancelled, ...optionalField("editorText", optionalString(record, "editorText")) };
+}
+
+export function parseSessionTreeForkResult(value: unknown): SessionTreeForkResult {
+  const record = requireRecord(value);
+  const cancelled = requireBoolean(record, "cancelled");
+  if (cancelled) {
+    rejectResponseField(record, "session", "session tree fork cancellation result");
+    rejectResponseField(record, "promptDraft", "session tree fork cancellation result");
+    return { cancelled };
+  }
+  return {
+    cancelled,
+    session: parseSessionInfo(record["session"]),
+    ...optionalField("promptDraft", optionalString(record, "promptDraft")),
+  };
 }
 
 function rejectResponseField(record: Record<string, unknown>, field: string, label: string): void {

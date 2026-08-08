@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse, parseWorkspaceProviderResolution } from "./parsers";
+import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse, parseWorkspaceProviderResolution } from "./parsers";
 
 describe("API parsers", () => {
   it("preserves interactive API-key flow hints and defaults providers without one", () => {
@@ -854,6 +854,30 @@ describe("API parsers", () => {
     expect(() => parseSessionTreeNavigateResult({ cancelled: false, summaryEntry: { raw: true } })).toThrow("summaryEntry");
     expect(() => parseSessionTreeNavigateResult({ cancelled: true, summaryEntry: { raw: true } })).toThrow("summaryEntry");
     expect(() => parseSessionTreeNavigateResult({ editorText: "missing discriminator" })).toThrow("cancelled");
+  });
+
+  it("strictly parses session tree fork results", () => {
+    const session = {
+      id: "forked-session",
+      path: "/sessions/forked-session.jsonl",
+      cwd: "/repo",
+      created: "2026-01-01T00:00:00.000Z",
+      modified: "2026-01-01T00:01:00.000Z",
+      messageCount: 2,
+      firstMessage: "original prompt",
+    };
+    expect(parseSessionTreeForkResult({ cancelled: false, session })).toEqual({ cancelled: false, session });
+    expect(parseSessionTreeForkResult({ cancelled: false, session, promptDraft: "resend me" })).toEqual({ cancelled: false, session, promptDraft: "resend me" });
+    expect(parseSessionTreeForkResult({ cancelled: true })).toEqual({ cancelled: true });
+    expect(parseSessionTreeForkResult({ cancelled: false, session, promptDraft: "resend me", operationId: "future-metadata" })).toEqual({ cancelled: false, session, promptDraft: "resend me" });
+    expect(parseSessionTreeForkResult({ cancelled: true, operationId: "future-metadata" })).toEqual({ cancelled: true });
+
+    expect(() => parseSessionTreeForkResult({ cancelled: false })).toThrow("Expected object response");
+    expect(() => parseSessionTreeForkResult({ cancelled: false, session: { ...session, id: 42 } })).toThrow("Expected string field: id");
+    expect(() => parseSessionTreeForkResult({ cancelled: false, session, promptDraft: 42 })).toThrow("promptDraft");
+    expect(() => parseSessionTreeForkResult({ cancelled: true, session })).toThrow("session");
+    expect(() => parseSessionTreeForkResult({ cancelled: true, promptDraft: "wrong branch" })).toThrow("promptDraft");
+    expect(() => parseSessionTreeForkResult({ session })).toThrow("cancelled");
   });
 
   it("strictly parses selected notification snapshots and realtime events", () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PiWebConfigValues, TerminalCommandRun, Workspace } from "../../../shared/apiTypes";
-import { configApi, filesApi, machinesApi, piPackagesApi, piWebApi, pluginsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
+import { configApi, filesApi, machinesApi, piPackagesApi, piWebApi, pluginsApi, SessionTreeForkUnavailableError, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 
 const workspace: Workspace = {
   id: "w/1",
@@ -362,6 +362,48 @@ describe("session API compatibility", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/nested/pi-web/api/machines/remote%20%2F%3F/sessions/session%20%2F%3F/tree/navigate");
+  });
+
+  it("posts session tree forks through an encoded cwd-scoped machine route", async () => {
+    const fetchMock = stubJsonFetch({ cancelled: true });
+    const fork = { entryId: "entry /?", expectedLeafId: "leaf-1" };
+
+    await expect(sessionsApi.forkTree({ id: "s /?", cwd: "/repo with spaces" }, fork, "remote /?")).resolves.toEqual({ cancelled: true });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchCall(fetchMock, 0);
+    expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/tree/fork");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo with spaces", ...fork });
+  });
+
+  it("recognizes an old daemon only from the missing tree/fork route response", async () => {
+    stubResponseFetch(new Response(JSON.stringify({
+      statusCode: 404,
+      error: "Not Found",
+      message: "Route POST:/sessions/s-1/tree/fork not found",
+    }), { status: 404, headers: { "content-type": "application/json" } }));
+
+    const request = sessionsApi.forkTree({ id: "s-1", cwd: "/repo" }, { entryId: "entry-1", expectedLeafId: "leaf-1" });
+
+    await expect(request).rejects.toBeInstanceOf(SessionTreeForkUnavailableError);
+    await expect(request).rejects.toThrow("Restart the session daemon");
+  });
+
+  it.each([
+    { status: 404, message: "Session not found" },
+    { status: 404, message: "Machine not found" },
+    { status: 502, message: "Remote machine unavailable" },
+  ])("preserves a genuine API error: $message", async ({ status, message }) => {
+    stubResponseFetch(new Response(JSON.stringify({ error: message }), {
+      status,
+      headers: { "content-type": "application/json" },
+    }));
+
+    const request = sessionsApi.forkTree({ id: "s-1", cwd: "/repo" }, { entryId: "entry-1", expectedLeafId: "leaf-1" });
+
+    await expect(request).rejects.toThrow(message);
+    await expect(request).rejects.not.toBeInstanceOf(SessionTreeForkUnavailableError);
   });
 
   it("reads a session stream snapshot through an encoded machine route with cwd context", async () => {

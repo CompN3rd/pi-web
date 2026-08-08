@@ -40,11 +40,11 @@ describe("production build contents", () => {
     try {
       const fixtureDist = join(fixtureRoot, "dist", "server");
       await mkdir(fixtureDist, { recursive: true });
-      // npm 10 runs `prepare` even under `pack --ignore-scripts`; the hook installer exits 0 without a .git directory.
-      await mkdir(join(fixtureRoot, "scripts"), { recursive: true });
       await Promise.all([
-        copyFile(join(repoRoot, "package.json"), join(fixtureRoot, "package.json")),
-        copyFile(join(repoRoot, "scripts", "install-git-hooks.mjs"), join(fixtureRoot, "scripts", "install-git-hooks.mjs")),
+        // Lifecycle hooks do not affect which files are packed, and npm 10 runs
+        // `prepare` during `npm pack` even with `--ignore-scripts`, so strip
+        // them: the fixture has no scripts/ tree for a hook to resolve.
+        writeFixtureManifest(fixtureRoot),
         copyFile(join(repoRoot, "plugin-api.d.ts"), join(fixtureRoot, "plugin-api.d.ts")),
         copyFile(join(repoRoot, "server-plugin-api.d.ts"), join(fixtureRoot, "server-plugin-api.d.ts")),
         writeFile(join(fixtureRoot, "dist", "plugin-api.d.ts"), "export {};\n", "utf8"),
@@ -264,6 +264,13 @@ function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]): string {
     getCurrentDirectory: () => repoRoot,
     getNewLine: () => "\n",
   });
+}
+
+async function writeFixtureManifest(fixtureRoot: string): Promise<void> {
+  const manifest: unknown = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
+  if (!isRecord(manifest)) throw new Error("package.json was not an object");
+  delete manifest["scripts"];
+  await writeFile(join(fixtureRoot, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
 function normalizePath(path: string): string {

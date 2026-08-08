@@ -95,8 +95,6 @@ export const appStyles = css`
   aside app-navigation-panel { flex: 1 1 auto; min-height: 0; }
   header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
   .header-actions { display: flex; align-items: center; gap: 8px; }
-  project-list, workspace-list { flex: 0 0 auto; max-height: 26%; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
-  session-list { flex: 1 1 auto; min-height: 0; overflow: hidden; }
   main { grid-column: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .context-bar { position: relative; flex: 0 0 auto; min-width: 0; display: none; align-items: center; gap: 0; padding: 6px 0; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-bg); }
   .context-bar::before, .context-bar::after { content: ""; position: absolute; top: 0; bottom: 0; z-index: 2; width: 20px; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
@@ -168,12 +166,6 @@ export const appStyles = css`
     main.navigation-view .empty { display: none; }
     main.navigation-view .mobile-navigation-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     main.navigation-view .mobile-navigation-panel app-navigation-panel { flex: 1 1 auto; min-height: 0; }
-    main.navigation-view .mobile-navigation-panel project-list,
-    main.navigation-view .mobile-navigation-panel workspace-list,
-    main.navigation-view .mobile-navigation-panel session-list { flex: 1 1 auto; max-height: none; min-height: 0; overflow: hidden; }
-    main.navigation-view .mobile-navigation-panel project-list[collapsed],
-    main.navigation-view .mobile-navigation-panel workspace-list[collapsed],
-    main.navigation-view .mobile-navigation-panel session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
   }
   status-bar { flex: 0 0 auto; }
   chat-view { flex: 1 1 auto; min-height: 0; overflow: hidden; }
@@ -522,45 +514,6 @@ export const autocompleteStyles = css`
   button.selected, button:hover { background: var(--pi-selection-bg); }
   span { color: var(--pi-muted); font-size: 12px; }
   small { grid-column: 1 / -1; color: var(--pi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-`;
-
-export const commandPickerStyles = css`
-  :host { position: fixed; inset: 0; z-index: 10; color: var(--pi-text); font: 14px system-ui, sans-serif; }
-  .backdrop { display: grid; place-items: center; width: 100%; height: 100%; background: var(--pi-overlay); }
-  section { width: min(720px, calc(100vw - 40px)); max-height: min(640px, calc(100vh - 40px)); display: flex; flex-direction: column; border: 1px solid var(--pi-border); border-radius: 12px; background: var(--pi-bg); box-shadow: 0 20px 60px var(--pi-shadow-strong); overflow: hidden; }
-  header { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--pi-border); }
-  .options { min-height: 0; overflow: auto; outline: none; }
-  button { border: 0; background: transparent; color: var(--pi-text); cursor: pointer; }
-  header button { font-size: 20px; color: var(--pi-muted); }
-  input { margin: 10px 12px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); font: var(--pi-control-font-size, 16px) var(--pi-control-font-family, system-ui, sans-serif); padding: 8px 10px; outline: none; }
-  input:focus { border-color: var(--pi-accent); }
-  .options button { display: block; width: 100%; padding: 10px 12px; border-bottom: 1px solid var(--pi-border-muted); text-align: left; }
-  .options button.selected, .options button:hover { background: var(--pi-selection-bg); }
-  small { display: block; margin-top: 4px; color: var(--pi-muted); }
-  .empty { padding: 24px; color: var(--pi-muted); text-align: center; }
-`;
-
-export const actionPaletteStyles = css`
-  :host { position: fixed; inset: 0; z-index: 20; color: var(--pi-text); font: 14px system-ui, sans-serif; }
-  .backdrop { --palette-top: min(12dvh, 90px); --palette-bottom: max(20px, env(safe-area-inset-bottom)); display: grid; align-items: start; justify-items: center; width: 100%; height: 100dvh; background: var(--pi-overlay); padding: var(--palette-top) 20px var(--palette-bottom); box-sizing: border-box; overflow: hidden; }
-  section { width: min(720px, 100%); max-height: min(640px, calc(100dvh - var(--palette-top) - var(--palette-bottom))); display: flex; flex-direction: column; border: 1px solid var(--pi-border); border-radius: 12px; background: var(--pi-bg); box-shadow: 0 20px 60px var(--pi-shadow-strong); overflow: hidden; }
-  header { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px; border-bottom: 1px solid var(--pi-border); }
-  input { min-width: 0; border: 0; outline: none; background: transparent; color: var(--pi-text); font: var(--pi-control-font-size, 16px) var(--pi-control-font-family, system-ui, sans-serif); padding: 8px; }
-  input::placeholder { color: var(--pi-dim); }
-  button { border: 0; background: transparent; color: var(--pi-text); cursor: pointer; }
-  header button { color: var(--pi-muted); font-size: 22px; padding: 2px 8px; }
-  .options { flex: 1 1 auto; min-height: 0; overflow: auto; }
-  .options button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; width: 100%; padding: 10px 12px; border-bottom: 1px solid var(--pi-border-muted); text-align: left; }
-  .options button.selected, .options button:hover:not(:disabled) { background: var(--pi-selection-bg); }
-  .options button:disabled { cursor: not-allowed; opacity: .68; }
-  .options button.disabled.selected { background: color-mix(in srgb, var(--pi-selection-bg) 55%, transparent); }
-  .main { min-width: 0; }
-  strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  small { display: block; color: var(--pi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .disabled-reason { color: var(--pi-warning); }
-  .group { grid-column: 1 / -1; font-size: 12px; }
-  kbd { align-self: center; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-muted); padding: 2px 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
-  .empty { padding: 24px; color: var(--pi-muted); text-align: center; }
 `;
 
 export const promptEditorStyles = css`

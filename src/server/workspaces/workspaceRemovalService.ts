@@ -11,6 +11,12 @@ import {
   WorkspaceProviderRemovalError,
   type WorkspaceProviderRemovalTarget,
 } from "./workspaceProviderRegistry.js";
+import {
+  composeWorktreePreRemoveCommand,
+  realWorktreePreRemoveHookProbe,
+  worktreePreRemoveHookPath,
+  type WorktreePreRemoveHookProbe,
+} from "./worktreePreRemoveHook.js";
 
 export interface WorkspaceRemovalProvider {
   resolveRemoval(
@@ -27,6 +33,7 @@ export interface WorkspaceRemovalTerminalHost {
 
 export interface WorkspaceRemovalServiceOptions {
   timeoutMs?: number;
+  preRemoveHook?: WorktreePreRemoveHookProbe;
 }
 
 interface WorkspaceRemovalFlight {
@@ -52,6 +59,7 @@ export class WorkspaceRemovalError extends Error {
  */
 export class WorkspaceRemovalService {
   private readonly timeoutMs: number;
+  private readonly preRemoveHook: WorktreePreRemoveHookProbe;
   private readonly flights = new Map<string, WorkspaceRemovalFlight>();
 
   constructor(
@@ -60,6 +68,7 @@ export class WorkspaceRemovalService {
     options: WorkspaceRemovalServiceOptions = {},
   ) {
     this.timeoutMs = positiveInteger(options.timeoutMs ?? WORKSPACE_REMOVAL_OPERATION_TIMEOUT_MS, "timeoutMs");
+    this.preRemoveHook = options.preRemoveHook ?? realWorktreePreRemoveHookProbe;
   }
 
   async remove(
@@ -119,6 +128,24 @@ export class WorkspaceRemovalService {
         const plan = await current.prepare();
         throwIfAborted(signal);
 
+        // Probe the repo-provided hook before any side effect, so an unexpected
+        // filesystem failure aborts before terminals are closed.
+        const hookPath = worktreePreRemoveHookPath(commandWorkspace.path);
+        let hookExecutable: boolean;
+        try {
+          hookExecutable = await this.preRemoveHook.isExecutable(hookPath);
+        } catch (error) {
+          throw new WorkspaceRemovalError(
+            `Failed to inspect the workspace pre-remove hook: ${errorMessage(error)}`,
+            500,
+            { cause: error },
+          );
+        }
+        const command = hookExecutable
+          ? composeWorktreePreRemoveCommand(hookPath, target.path, plan.command)
+          : plan.command;
+        throwIfAborted(signal);
+
         try {
           this.terminals.closeForCwd(target.path);
         } catch (error) {
@@ -137,7 +164,7 @@ export class WorkspaceRemovalService {
             workspaceId: commandWorkspace.id,
             cwd: commandWorkspace.path,
             title: plan.title,
-            command: plan.command,
+            command,
             metadata: workspaceDeletionMetadata(target),
           });
         } catch (error) {

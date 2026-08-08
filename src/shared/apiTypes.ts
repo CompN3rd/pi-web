@@ -96,6 +96,12 @@ export interface PiWebConfigValues {
    */
   askUser?: boolean;
   /**
+   * When true, PI WEB appends deployment environment facts to session system
+   * prompts. On by default. Only Docker deployments have facts to add today, so
+   * the value has no effect elsewhere.
+   */
+  environmentFacts?: boolean;
+  /**
    * How long an extension dialog may wait for an answer before the daemon
    * auto-cancels it, in milliseconds. Applies only when the extension set no
    * `timeout` of its own (the sooner of the two wins); `0` waits forever.
@@ -468,21 +474,6 @@ export interface SessionInfo extends SessionRef {
   messageCount: number;
   firstMessage: string;
   parentSessionPath?: string;
-  /**
-   * Working directory of the parent session, read from the parent session file
-   * header. Only populated when the parent is outside this listing's cwd, so a
-   * child whose parent lives in another worktree can point at it instead of
-   * only reporting that the parent is unavailable here.
-   */
-  parentSessionCwd?: string;
-  /** Session id of an out-of-cwd parent, so the browser can select it after switching workspace. */
-  parentSessionId?: string;
-  /**
-   * Number of sessions in other workspaces of the same project that record this
-   * session as their parent. Only set when non-zero, so a parent can show that
-   * it has children which are not nested beneath it in this workspace.
-   */
-  childSessionsElsewhere?: number;
   archived?: boolean;
   archivedAt?: string;
 }
@@ -1284,6 +1275,22 @@ export interface SessionTreeNavigateRequest {
 export type SessionTreeNavigateResult =
   | { cancelled: false; editorText?: string }
   | { cancelled: true; aborted?: boolean };
+
+export interface SessionTreeForkRequest {
+  entryId: string;
+  /** Leaf shown when the navigator opened; null is valid for an empty/root position. */
+  expectedLeafId: string | null;
+}
+
+/**
+ * Fork-from-entry creates a new session file up to the selected entry and
+ * switches the runtime to it, leaving the original session untouched. User
+ * entries fork from "before" so their text returns as a `promptDraft` for the
+ * forked session; every other entry forks "at".
+ */
+export type SessionTreeForkResult =
+  | { cancelled: false; session: SessionInfo; promptDraft?: string }
+  | { cancelled: true };
 
 export interface MessagePage {
   messages: unknown[];

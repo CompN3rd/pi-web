@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Workspace } from "../../../shared/apiTypes";
-import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS, WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS, type FederatedHttpRouteSpec } from "../../../shared/federatedRoutes";
+import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, SESSION_TREE_FORK_PROXY_TIMEOUT_MS, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS, WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS, type FederatedHttpRouteSpec } from "../../../shared/federatedRoutes";
 import { PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES, PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES } from "../../../shared/pluginBackendProtocol";
 import { activityApi, configApi, filesApi, piPackagesApi, piWebApi, pluginsApi, projectsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 import { globalSessionEvents, realtimeEvents, sessionEvents, terminalSocket } from "./sockets";
@@ -61,13 +61,19 @@ describe("federated route contract", () => {
     expect(FEDERATED_WEBSOCKET_ROUTES.some((path) => path.includes("unread"))).toBe(false);
   });
 
-  it("allowlists session tree navigation with a long model-operation timeout and no new WebSocket", () => {
+  it("allowlists session tree mutations with long model-operation timeouts and no new WebSocket", () => {
     expect(FEDERATED_HTTP_ROUTES.find((route) => route.path === "/sessions/:sessionId/tree/navigate")).toEqual({
       method: "POST",
       path: "/sessions/:sessionId/tree/navigate",
       timeoutMs: SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS,
     });
+    expect(FEDERATED_HTTP_ROUTES.find((route) => route.path === "/sessions/:sessionId/tree/fork")).toEqual({
+      method: "POST",
+      path: "/sessions/:sessionId/tree/fork",
+      timeoutMs: SESSION_TREE_FORK_PROXY_TIMEOUT_MS,
+    });
     expect(SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS).toBe(5 * 60_000);
+    expect(SESSION_TREE_FORK_PROXY_TIMEOUT_MS).toBe(5 * 60_000);
     expect(FEDERATED_WEBSOCKET_ROUTES.some((path) => path.includes("tree"))).toBe(false);
   });
 
@@ -149,6 +155,7 @@ describe("federated route contract", () => {
       ignoreParseFailure(sessionsApi.runCommand(session, "/help", machineId)),
       ignoreParseFailure(sessionsApi.respondToCommand(session, "req 1", "yes", machineId)),
       ignoreParseFailure(sessionsApi.navigateTree(session, { targetId: "entry-1", expectedLeafId: "leaf-1", summary: { mode: "none" } }, machineId)),
+      ignoreParseFailure(sessionsApi.forkTree(session, { entryId: "entry-1", expectedLeafId: "leaf-1" }, machineId)),
       ignoreParseFailure(sessionsApi.abort(session, machineId)),
       ignoreParseFailure(sessionsApi.stop(session, machineId)),
       ignoreParseFailure(sessionsApi.archive(session, machineId)),

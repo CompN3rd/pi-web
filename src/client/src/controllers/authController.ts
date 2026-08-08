@@ -4,6 +4,12 @@ import { selectedMachineId, type GetState, type SetState } from "./types";
 
 type OAuthDialogState = Extract<AuthDialogState, { step: "oauth" }>;
 
+/** The one-shot server request a response is being submitted for. */
+interface OAuthResponseTarget {
+  flowId: string;
+  requestId: string;
+}
+
 export interface AuthControllerDependencies {
   api?: typeof defaultApi;
   pollIntervalMs?: number;
@@ -15,6 +21,13 @@ export class AuthController {
   private oauthOperationGeneration = 0;
   private pollGeneration = 0;
   private pollTimer: number | undefined;
+  /**
+   * Response already in flight, if any. A login prompt or selection is a
+   * one-shot server request, so a second Enter or option click while the POST
+   * is in flight must be dropped instead of racing the first response.
+   * Cancellation deliberately ignores this guard and stays available.
+   */
+  private inFlightResponse: OAuthResponseTarget | undefined;
 
   constructor(
     private readonly getState: GetState,
@@ -108,9 +121,12 @@ export class AuthController {
     const operationGeneration = this.oauthOperationGeneration;
     const flowId = dialog.flow.flowId;
     const requestId = request.requestId;
+    const target: OAuthResponseTarget = { flowId, requestId };
+    if (isSameOAuthResponseTarget(this.inFlightResponse, target)) return;
     const responseValue = value ?? dialog.inputValue ?? "";
     const clean = { ...dialog };
     delete clean.error;
+    this.inFlightResponse = target;
     this.setState({ authDialog: { ...clean, responding: true } });
     try {
       const flow = await this.api.respondOAuthFlow(flowId, requestId, responseValue, dialog.machineId);
@@ -121,6 +137,9 @@ export class AuthController {
       const current = this.currentOAuthDialog(operationGeneration, flowId);
       if (current === undefined || oauthRequestId(current.flow) !== requestId) return;
       this.setState({ authDialog: { ...current, responding: false, error: String(error) } });
+    } finally {
+      // Only release the guard this call took: a later request may already own it.
+      if (isSameOAuthResponseTarget(this.inFlightResponse, target)) this.inFlightResponse = undefined;
     }
   }
 
@@ -284,6 +303,10 @@ export class AuthController {
     if (session === undefined || session.archived === true) return undefined;
     return session;
   }
+}
+
+function isSameOAuthResponseTarget(a: OAuthResponseTarget | undefined, b: OAuthResponseTarget): boolean {
+  return a?.flowId === b.flowId && a.requestId === b.requestId;
 }
 
 function oauthRequestId(flow: OAuthFlowState): string | undefined {

@@ -6,7 +6,6 @@ import type { NavigationSection } from "../../appShell/navigationState";
 import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
 import { EMPTY_UNREAD_PRESENCE, type UnreadPresence } from "../../unreadPresence";
 import type { KeyboardNavigableSection } from "../navigationFocus";
-import type { ParentSessionLocation } from "../../parentSessionLocation";
 import "../MachineList";
 import "../MachineSwitcher";
 import "../ProjectList";
@@ -64,8 +63,6 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onDeleteArchivedSession?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onDeleteArchivedSessions?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onDetachParentSession?: (session: SessionInfo) => void | Promise<void>;
-  @property({ attribute: false }) parentSessionLocation?: (session: SessionInfo) => ParentSessionLocation;
-  @property({ attribute: false }) onGoToParentSession?: (session: SessionInfo, location: ParentSessionLocation) => void | Promise<void>;
   @property({ attribute: false }) onMarkSessionRead?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onMarkSessionsRead?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onReloadSession?: (session: SessionInfo) => void | Promise<void>;
@@ -184,8 +181,6 @@ export class AppNavigationPanel extends LitElement {
         .onDeleteArchived=${(session: SessionInfo) => this.onDeleteArchivedSession?.(session)}
         .onDeleteArchivedMany=${(sessions: SessionInfo[]) => this.onDeleteArchivedSessions?.(sessions)}
         .onDetachParent=${(session: SessionInfo) => this.onDetachParentSession?.(session)}
-        .parentLocation=${this.parentSessionLocation ?? unknownParentSessionLocation}
-        .onGoToParent=${this.onGoToParentSession === undefined ? undefined : (session: SessionInfo, location: ParentSessionLocation) => this.onGoToParentSession?.(session, location)}
         .onMarkRead=${(session: SessionInfo) => this.onMarkSessionRead?.(session)}
         .onMarkReadMany=${(sessions: SessionInfo[]) => this.onMarkSessionsRead?.(sessions)}
         .onReload=${(session: SessionInfo) => this.onReloadSession?.(session)}
@@ -223,26 +218,17 @@ export class AppNavigationPanel extends LitElement {
     machine-switcher { flex: 1 1 auto; min-width: 0; }
     :host([compact]) header { display: none; }
     .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
-    machine-list, project-list, workspace-list { flex: 0 0 auto; max-height: 26%; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
-    session-list { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+    /* Expanded sections share the panel height equally, so collapsing one
+       section distributes its space to every remaining section, not just the
+       session list. Collapsed sections keep only their heading height. */
+    machine-list, project-list, workspace-list, session-list { flex: 1 1 0px; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
     machine-list[collapsed],
     project-list[collapsed],
     workspace-list[collapsed],
     session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
-    :host([compact]) machine-list,
-    :host([compact]) project-list,
-    :host([compact]) workspace-list,
-    :host([compact]) session-list { flex: 1 1 auto; max-height: none; min-height: 0; overflow: hidden; }
-    :host([compact]) machine-list[collapsed],
-    :host([compact]) project-list[collapsed],
-    :host([compact]) workspace-list[collapsed],
-    :host([compact]) session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
   `;
 }
-
-/** Stable default so the session list does not see a new resolver identity each render. */
-const unknownParentSessionLocation = (): ParentSessionLocation => ({ kind: "unknown" });
 
 export function shouldShowMachinesSection(machines: readonly Machine[]): boolean {
   return machines.length > 1;

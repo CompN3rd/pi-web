@@ -1,6 +1,6 @@
 {
   "name": "@jmfederico/pi-web",
-  "version": "1.202607.3",
+  "version": "1.202608.0",
   "description": "Web UI for persistent Pi Coding Agent sessions in real workspaces.",
   "license": "MIT",
   "author": "Federico Jaramillo Martinez",
@@ -83,7 +83,7 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.6",
     "@fastify/compress": "^9.0.0",
-    "@fastify/static": "^9.3.0",
+    "@fastify/static": "^10.1.2",
     "@fastify/websocket": "^11.3.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
@@ -92,14 +92,15 @@
     "lit": "^3.3.3",
     "marked": "^18.0.6",
     "node-pty": "^1.1.0",
-    "typebox": "1.3.6",
+    "typebox": "1.3.7",
+    "undici": "^8.5.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
-    "@earendil-works/pi-agent-core": "^0.82.1",
-    "@earendil-works/pi-ai": "^0.82.1",
-    "@earendil-works/pi-coding-agent": "^0.82.1",
+    "@earendil-works/pi-agent-core": "^0.83.0",
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
     "@types/ws": "^8.18.1",
@@ -129,9 +130,9 @@
   "homepage": "https://pi-web.dev/",
   "packageManager": "npm@11.11.0",
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": ">=0.82.1 <0.83",
-    "@earendil-works/pi-ai": ">=0.82.1 <0.83",
-    "@earendil-works/pi-coding-agent": ">=0.82.1 <0.83"
+    "@earendil-works/pi-agent-core": ">=0.83.0",
+    "@earendil-works/pi-ai": ">=0.83.0",
+    "@earendil-works/pi-coding-agent": ">=0.83.0"
   },
   "keywords": [
     "pi-package",

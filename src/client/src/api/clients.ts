@@ -1,4 +1,4 @@
-import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, RunTerminalCommandInput, SessionBulkMutationRef, SessionCleanupRequest, SessionNotificationDismissThrough, SessionRef, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, TerminalCommandRun, TerminalCommandRunFilter, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
+import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, RunTerminalCommandInput, SessionBulkMutationRef, SessionCleanupRequest, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, TerminalCommandRun, TerminalCommandRunFilter, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { resolveAppUrl } from "../appUrl";
 import { request } from "./http";
 import {
@@ -43,6 +43,7 @@ import {
   parseSessionStatus,
   parseSessionUnreadCatalogSnapshot,
   parseSessionStreamSnapshot,
+  parseSessionTreeForkResult,
   parseSessionTreeNavigateResult,
   parseSlashCommand,
   parseStopped,
@@ -246,6 +247,7 @@ export const sessionsApi = {
     method: "POST",
     body: sessionBody(session, { targetId: navigation.targetId, expectedLeafId: navigation.expectedLeafId, summary: navigation.summary }),
   }),
+  forkTree: (session: SessionRef, fork: SessionTreeForkRequest, machineId = "local") => requestSessionTreeFork(session, fork, machineId),
   abort: (session: SessionRef, machineId = "local") => request(sessionPath(session, "abort", machineId), parseAborted, { method: "POST", body: sessionBody(session) }),
   stop: (session: SessionRef, machineId = "local") => request(sessionPath(session, "stop", machineId), parseStopped, { method: "POST", body: sessionBody(session) }),
   archive: (session: SessionRef, machineId = "local") => request(sessionPath(session, "archive", machineId), parseArchived, { method: "POST", body: sessionBody(session) }),
@@ -279,6 +281,38 @@ export const terminalsApi = {
   getCommandRun: (runId: string, machineId = "local") => getOptionalTerminalCommandRun(runId, machineId),
   cancelCommandRun: (runId: string, machineId = "local") => request(`${machinePrefix(machineId)}/terminal-command-runs/${encodeURIComponent(runId)}/cancel`, parseTerminalCommandRun, { method: "POST" }),
 };
+
+/**
+ * Raised when an older session daemon cannot serve the specific `tree/fork`
+ * route. The message is user-facing and explains how to enable the operation.
+ */
+export class SessionTreeForkUnavailableError extends Error {
+  constructor() {
+    super("Fork from the session tree is unavailable. Restart the session daemon to enable it.");
+    this.name = "SessionTreeForkUnavailableError";
+  }
+}
+
+async function requestSessionTreeFork(session: SessionRef, fork: SessionTreeForkRequest, machineId: string): Promise<SessionTreeForkResult> {
+  const response = await fetch(resolveAppUrl(sessionPath(session, "tree/fork", machineId)), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: sessionBody(session, { entryId: fork.entryId, expectedLeafId: fork.expectedLeafId }),
+  });
+  if (!response.ok) {
+    const body: unknown = await response.json().catch((): unknown => ({}));
+    if (isMissingSessionTreeForkRoute(response.status, body)) throw new SessionTreeForkUnavailableError();
+    throw new Error(apiErrorMessage(body) ?? response.statusText);
+  }
+  return parseSessionTreeForkResult(await response.json());
+}
+
+function isMissingSessionTreeForkRoute(status: number, value: unknown): boolean {
+  if (status !== 404 || !isRecord(value)) return false;
+  if (value["statusCode"] !== 404 || value["error"] !== "Not Found") return false;
+  const message = value["message"];
+  return typeof message === "string" && /^Route POST:.*\/tree\/fork not found$/i.test(message);
+}
 
 async function getOptionalTerminalCommandRun(runId: string, machineId: string): Promise<TerminalCommandRun | undefined> {
   const response = await fetch(resolveAppUrl(`${machinePrefix(machineId)}/terminal-command-runs/${encodeURIComponent(runId)}`));

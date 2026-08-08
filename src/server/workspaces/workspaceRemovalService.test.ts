@@ -18,6 +18,10 @@ import {
   type WorkspaceRemovalProvider,
   type WorkspaceRemovalTerminalHost,
 } from "./workspaceRemovalService.js";
+import {
+  worktreePreRemoveHookPath,
+  type WorktreePreRemoveHookProbe,
+} from "./worktreePreRemoveHook.js";
 
 const project: Project = {
   id: "project-1",
@@ -322,6 +326,65 @@ describe("WorkspaceRemovalService", () => {
     }
   });
 
+  it("chains an executable repo pre-remove hook before the provider's removal command", async () => {
+    const target = hostWorkspace("target", "/repo/wt 'x'", false);
+    const calls: string[] = [];
+    const terminals = terminalHost(calls);
+    const probedPaths: string[] = [];
+    const removals = new WorkspaceRemovalService(removalProvider({
+      ownerPluginId: "neutral",
+      target,
+      workspaces: [hostWorkspace("main", "/repo", true), target],
+      prepare: () => { calls.push("prepare"); return Promise.resolve({ title: "Remove", command: "neutral remove" }); },
+    }), terminals, { preRemoveHook: hookProbe(probedPaths, true) });
+
+    await removals.remove(project, target.id, removalPrecondition(target));
+
+    const hookPath = worktreePreRemoveHookPath("/repo");
+    expect(probedPaths).toEqual([hookPath]);
+    // `&&` is the fail-closed guarantee: a non-zero hook exit blocks the removal.
+    expect(terminals.runOptions[0]?.command).toBe(`'${hookPath}' '/repo/wt '\\''x'\\''' && neutral remove`);
+    expect(calls).toEqual(["prepare", "close", "run"]);
+  });
+
+  it("leaves the provider's removal command unchanged when no hook is executable", async () => {
+    const target = hostWorkspace("target", "/linked", false);
+    const terminals = terminalHost();
+    const probedPaths: string[] = [];
+    const removals = new WorkspaceRemovalService(removalProvider({
+      ownerPluginId: "neutral",
+      target,
+      workspaces: [hostWorkspace("main", "/repo", true), target],
+      prepare: () => Promise.resolve({ title: "Remove", command: "neutral remove" }),
+    }), terminals, { preRemoveHook: hookProbe(probedPaths, false) });
+
+    await removals.remove(project, target.id, removalPrecondition(target));
+
+    expect(probedPaths).toEqual([worktreePreRemoveHookPath("/repo")]);
+    expect(terminals.runOptions[0]?.command).toBe("neutral remove");
+  });
+
+  it("fails before closing terminals when the hook probe hits an unexpected filesystem error", async () => {
+    const target = hostWorkspace("target", "/linked", false);
+    const terminals = terminalHost();
+    const removals = new WorkspaceRemovalService(removalProvider({
+      ownerPluginId: "neutral",
+      target,
+      workspaces: [hostWorkspace("main", "/repo", true), target],
+      prepare: () => Promise.resolve({ title: "Remove", command: "neutral remove" }),
+    }), terminals, {
+      preRemoveHook: { isExecutable: () => Promise.reject(Object.assign(new Error("probe I/O error"), { code: "EIO" })) },
+    });
+
+    await expect(removals.remove(project, target.id, removalPrecondition(target))).rejects.toMatchObject({
+      statusCode: 500,
+      message: "Failed to inspect the workspace pre-remove hook: probe I/O error",
+    });
+
+    expect(terminals.closedCwds).toEqual([]);
+    expect(terminals.runOptions).toEqual([]);
+  });
+
   it("closes target terminals before command creation and never starts after cleanup failure", async () => {
     const target = hostWorkspace("target", "/linked", false);
     const calls: string[] = [];
@@ -387,6 +450,15 @@ function hostWorkspace(id: string, path: string, isMain: boolean): WorkspaceList
 
 function removalProvider(target: WorkspaceProviderRemovalTarget): WorkspaceRemovalProvider {
   return { resolveRemoval: () => Promise.resolve(target) };
+}
+
+function hookProbe(probedPaths: string[], executable: boolean): WorktreePreRemoveHookProbe {
+  return {
+    isExecutable(path) {
+      probedPaths.push(path);
+      return Promise.resolve(executable);
+    },
+  };
 }
 
 function removalPrecondition(workspace: WorkspaceListing): string {
