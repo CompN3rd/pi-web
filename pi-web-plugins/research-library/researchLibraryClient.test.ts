@@ -4,6 +4,7 @@ import {
   loadResearchLibraryFixture,
   prepareResearchDispatch,
   RESEARCH_DISPATCH_TTL_MS,
+  sha256Hex,
   tokenIdFromDispatchToken,
   type LoadedResearchLibraryFixture,
   type ResearchLibraryFileContent,
@@ -29,6 +30,12 @@ const fixtureValue = {
 };
 
 describe("research library browser client", () => {
+  it("uses a standards-compatible SHA-256 fallback without SubtleCrypto", async () => {
+    await expect(sha256Hex("", null)).resolves.toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    await expect(sha256Hex("abc", null)).resolves.toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    await expect(sha256Hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", null)).resolves.toBe("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+  });
+
   it("loads and hashes a bounded synthetic fixture", async () => {
     const text = JSON.stringify(fixtureValue);
     const readFile = vi.fn(() => Promise.resolve(fileContent(text)));
