@@ -137,10 +137,11 @@ export class AuthDialog extends LitElement {
     const prompt = flow.prompt;
     const select = flow.select;
     const promptInputType = prompt === undefined ? undefined : oauthPromptInputType(prompt.promptType);
+    // Only a manual-code prompt accepts a pasted redirect URL, so the note stays out of
+    // device-code and browser-callback flows that offer the user nothing to paste.
     const showPasteNote = isBrowserRemoteOAuthMachine(state.machineId, window.location.hostname)
       && flow.status === "running"
-      && flow.auth !== undefined
-      && flow.auth.deviceCode === undefined;
+      && prompt?.promptType === "manual_code";
     return html`
       <div class="form">
         ${flow.auth !== undefined ? html`
@@ -149,8 +150,8 @@ export class AuthDialog extends LitElement {
           ${flow.auth.deviceCode !== undefined ? html`
             <p class="warning">Enter code: <code>${flow.auth.deviceCode.userCode}</code></p>
           ` : flow.auth.instructions !== undefined ? html`<p class="warning">${flow.auth.instructions}</p>` : null}
-          ${showPasteNote ? html`<p class="warning">After you approve, the redirect page will probably fail to load — that is expected. Copy the full URL from your browser's address bar and paste it below.</p>` : null}
         ` : html`<p>Starting login flow…</p>`}
+        ${showPasteNote ? html`<p class="warning">After you approve, the redirect page will probably fail to load — that is expected. Copy the full URL from your browser's address bar and paste it below.</p>` : null}
         ${flow.progress.length > 0 ? html`<ul class="progress">${flow.progress.map((line) => html`<li>${line}</li>`)}</ul>` : null}
         ${flow.info?.map((item) => item.links === undefined || item.links.length === 0 ? null : html`
           <div class="info-links" aria-label="Related information">
