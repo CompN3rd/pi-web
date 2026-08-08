@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   boundedOutputScale,
   defineResearchLibraryPdfViewerElement,
+  researchPdfAnnotationEventName,
+  researchPdfSelectionEventName,
+  type ResearchPdfSelectionDetail,
   MAX_PDF_RENDER_DIMENSION,
   MAX_PDF_RENDER_PIXELS,
   isPdfJsModule,
@@ -178,6 +181,109 @@ describe("ResearchLibraryPdfViewerElement", () => {
   });
 });
 
+describe("region marking", () => {
+  it("reports a dragged region with the page text it covers", async () => {
+    const harness = fakePdfJs(1);
+    const element = createViewer();
+    element.pdfJsLoader = harness.loader;
+    document.body.append(element);
+    element.sourceUrl = "paper.pdf";
+    await statusIncludes(element, "Page 1 of 1");
+    const selections: ResearchPdfSelectionDetail[] = [];
+    element.addEventListener(researchPdfSelectionEventName, (event) => { selections.push(selectionDetail(event)); });
+
+    shadowButton(element, "[data-mark]").click();
+    expect(shadowButton(element, "[data-mark]").getAttribute("aria-pressed")).toBe("true");
+    dragRegion(element, { fromX: 60, fromY: 80, toX: 300, toY: 160 });
+    await waitFor(() => selections.length === 1);
+
+    expect(selections[0]).toEqual({ page: 1, rect: { x: 0.1, y: 0.1, width: 0.4, height: 0.1 }, quote: "Inside the region" });
+    expect(shadowButton(element, "[data-mark]").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("keeps a too-small drag out of the annotation flow", async () => {
+    const harness = fakePdfJs(1);
+    const element = createViewer();
+    element.pdfJsLoader = harness.loader;
+    document.body.append(element);
+    element.sourceUrl = "paper.pdf";
+    await statusIncludes(element, "Page 1 of 1");
+    const selections: Event[] = [];
+    element.addEventListener(researchPdfSelectionEventName, (event) => { selections.push(event); });
+
+    shadowButton(element, "[data-mark]").click();
+    dragRegion(element, { fromX: 60, fromY: 80, toX: 61, toY: 81 });
+    await settle();
+
+    expect(selections).toEqual([]);
+    await statusIncludes(element, "too small to mark");
+  });
+
+  it("ignores drags while marking is disarmed", async () => {
+    const harness = fakePdfJs(1);
+    const element = createViewer();
+    element.pdfJsLoader = harness.loader;
+    document.body.append(element);
+    element.sourceUrl = "paper.pdf";
+    await statusIncludes(element, "Page 1 of 1");
+    const selections: Event[] = [];
+    element.addEventListener(researchPdfSelectionEventName, (event) => { selections.push(event); });
+
+    dragRegion(element, { fromX: 60, fromY: 80, toX: 300, toY: 160 });
+    await settle();
+
+    expect(selections).toEqual([]);
+  });
+
+  it("paints stored annotations for the visible page and reports taps on them", async () => {
+    const harness = fakePdfJs(2);
+    const element = createViewer();
+    element.pdfJsLoader = harness.loader;
+    document.body.append(element);
+    element.sourceUrl = "paper.pdf";
+    await statusIncludes(element, "Page 1 of 2");
+
+    element.annotations = [
+      { id: "ann-1", page: 1, rect: { x: 0.1, y: 0.2, width: 0.3, height: 0.05 }, kind: "question", status: "open", label: "Why?" },
+      { id: "ann-2", page: 2, rect: { x: 0.1, y: 0.2, width: 0.3, height: 0.05 }, kind: "note", status: "resolved", label: "Later" },
+    ];
+    element.activeAnnotationId = "ann-1";
+
+    const markers = shadowRoot(element).querySelectorAll("[data-annotation-id]");
+    expect([...markers].map((marker) => marker.getAttribute("data-annotation-id"))).toEqual(["ann-1"]);
+    const marker = markers[0];
+    if (!(marker instanceof HTMLElement)) throw new Error("Expected a rendered marker");
+    expect(marker.dataset["active"]).toBe("true");
+    expect(marker.style.left).toBe("10%");
+    expect(marker.getAttribute("aria-label")).toContain("Question on page 1: Why?");
+
+    const activated: string[] = [];
+    element.addEventListener(researchPdfAnnotationEventName, (event) => { activated.push(activatedAnnotationId(event)); });
+    marker.click();
+    expect(activated).toEqual(["ann-1"]);
+
+    shadowButton(element, "[data-next]").click();
+    await statusIncludes(element, "Page 2 of 2");
+    expect([...shadowRoot(element).querySelectorAll("[data-annotation-id]")].map((entry) => entry.getAttribute("data-annotation-id"))).toEqual(["ann-2"]);
+  });
+
+  it("jumps to a page on request and clamps out-of-range requests", async () => {
+    const harness = fakePdfJs(3);
+    const element = createViewer();
+    element.pdfJsLoader = harness.loader;
+    document.body.append(element);
+    element.sourceUrl = "paper.pdf";
+    await statusIncludes(element, "Page 1 of 3");
+
+    element.showPage(3);
+    await statusIncludes(element, "Page 3 of 3");
+    element.showPage(99);
+    await settle();
+    expect(element.currentPage).toBe(3);
+    expect(element.pageCount).toBe(3);
+  });
+});
+
 describe("PDF.js module validation", () => {
   it("accepts PDF.js 6's function-shaped GlobalWorkerOptions export", () => {
     const GlobalWorkerOptions = Object.assign(() => undefined, { workerSrc: "" });
@@ -198,6 +304,12 @@ function fakePdfJs(numPages: number, renderPromise: Promise<unknown> = Promise.r
   const renderTasks: { promise: Promise<unknown>; cancel: ReturnType<typeof vi.fn> }[] = [];
   const pages = Array.from({ length: numPages }, () => ({
     getViewport: vi.fn(({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale })),
+    getTextContent: vi.fn(() => Promise.resolve({
+      items: [
+        { str: "Inside the region", transform: [10, 0, 0, 10, 100, 700], width: 100, height: 10 },
+        { str: "Outside the region", transform: [10, 0, 0, 10, 100, 200], width: 100, height: 10 },
+      ],
+    })),
     render: vi.fn(() => {
       const task = { promise: renderPromise, cancel: vi.fn() };
       renderTasks.push(task);
@@ -268,4 +380,53 @@ function shadow<T extends Element>(element: ResearchLibraryPdfViewerElement, sel
   const value = shadowRoot(element).querySelector(selector);
   if (!(value instanceof type)) throw new Error(`Missing ${selector}`);
   return value;
+}
+
+/** Drive one pointer drag across the overlay, whose layout happy-dom cannot provide. */
+function dragRegion(element: ResearchLibraryPdfViewerElement, drag: { fromX: number; fromY: number; toX: number; toY: number }): void {
+  const overlay = shadow(element, "[data-overlay]", HTMLElement);
+  vi.spyOn(overlay, "getBoundingClientRect").mockReturnValue({
+    x: 0, y: 0, left: 0, top: 0, right: 600, bottom: 800, width: 600, height: 800, toJSON: () => ({}),
+  });
+  overlay.setPointerCapture = vi.fn();
+  overlay.releasePointerCapture = vi.fn();
+  overlay.hasPointerCapture = vi.fn(() => true);
+  overlay.dispatchEvent(pointerEvent("pointerdown", drag.fromX, drag.fromY));
+  overlay.dispatchEvent(pointerEvent("pointermove", drag.toX, drag.toY));
+  overlay.dispatchEvent(pointerEvent("pointerup", drag.toX, drag.toY));
+}
+
+function pointerEvent(type: string, clientX: number, clientY: number): Event {
+  const event = new MouseEvent(type, { clientX, clientY, bubbles: true, cancelable: true });
+  Object.defineProperties(event, { pointerId: { value: 1 }, isPrimary: { value: true } });
+  return event;
+}
+
+function selectionDetail(event: Event): ResearchPdfSelectionDetail {
+  const detail = eventDetail(event);
+  const rect = detail["rect"];
+  if (typeof detail["page"] !== "number" || typeof detail["quote"] !== "string" || !isRecord(rect)) throw new Error("Unexpected selection detail");
+  const bounds = ["x", "y", "width", "height"].map((key) => {
+    const value = rect[key];
+    if (typeof value !== "number") throw new Error(`Unexpected selection rect ${key}`);
+    return value;
+  });
+  return { page: detail["page"], quote: detail["quote"], rect: { x: bounds[0] ?? 0, y: bounds[1] ?? 0, width: bounds[2] ?? 0, height: bounds[3] ?? 0 } };
+}
+
+function activatedAnnotationId(event: Event): string {
+  const id = eventDetail(event)["id"];
+  if (typeof id !== "string") throw new Error("Unexpected annotation detail");
+  return id;
+}
+
+function eventDetail(event: Event): Record<string, unknown> {
+  if (!(event instanceof CustomEvent)) throw new Error("Expected a CustomEvent");
+  const detail: unknown = event.detail;
+  if (!isRecord(detail)) throw new Error("Expected an event detail object");
+  return detail;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

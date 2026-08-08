@@ -1,3 +1,5 @@
+import { normalizedRect, type ResearchAnnotationRect } from "./annotationModel.js";
+import { quoteFromTextItems, textItemsToQuoteItems, type PdfTextContentItem } from "./annotationQuote.js";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 const MIN_ZOOM = 0.5;
@@ -8,6 +10,28 @@ export const MAX_PDF_RENDER_DIMENSION = 16_384;
 export const MAX_PDF_RENDER_PIXELS = 16_000_000;
 
 export const researchLibraryPdfViewerTagName = "pi-web-research-library-pdf-viewer";
+export const researchPdfSelectionEventName = "research-pdf-region-selected";
+export const researchPdfAnnotationEventName = "research-pdf-annotation-activated";
+
+/** Smallest drag the viewer accepts, as a fraction of the page box. */
+const MIN_SELECTION_FRACTION = 0.01;
+
+/** A region the reader marked on the current page, with any text it covers. */
+export interface ResearchPdfSelectionDetail {
+  page: number;
+  rect: ResearchAnnotationRect;
+  quote: string;
+}
+
+/** An existing annotation the viewer paints over the page. */
+export interface ResearchPdfAnnotationMarker {
+  id: string;
+  page: number;
+  rect: ResearchAnnotationRect;
+  kind: "question" | "note";
+  status: "open" | "resolved";
+  label: string;
+}
 
 interface PdfViewport {
   width: number;
@@ -22,6 +46,7 @@ interface PdfRenderTask {
 interface PdfPage {
   getViewport(input: { scale: number }): PdfViewport;
   render(input: { canvasContext: unknown; viewport: PdfViewport; transform?: number[] }): PdfRenderTask;
+  getTextContent?(): Promise<{ items: PdfTextContentItem[] }>;
   cleanup?(): void;
 }
 
@@ -63,6 +88,14 @@ export class ResearchLibraryPdfViewerElement extends HTMLElement {
   private readonly nextButton: HTMLButtonElement;
   private readonly zoomOutButton: HTMLButtonElement;
   private readonly zoomInButton: HTMLButtonElement;
+  private readonly markButton: HTMLButtonElement;
+  private readonly overlay: HTMLElement;
+  private readonly marquee: HTMLElement;
+  private markers: ResearchPdfAnnotationMarker[] = [];
+  private activeMarkerId: string | undefined;
+  private marking = false;
+  private dragPointerId: number | undefined;
+  private dragOrigin: { x: number; y: number } | undefined;
   private source: string | undefined;
   private generation = 0;
   private renderGeneration = 0;
@@ -85,11 +118,57 @@ export class ResearchLibraryPdfViewerElement extends HTMLElement {
     this.nextButton = required(this.root.querySelector("[data-next]"), HTMLButtonElement);
     this.zoomOutButton = required(this.root.querySelector("[data-zoom-out]"), HTMLButtonElement);
     this.zoomInButton = required(this.root.querySelector("[data-zoom-in]"), HTMLButtonElement);
+    this.markButton = required(this.root.querySelector("[data-mark]"), HTMLButtonElement);
+    this.overlay = required(this.root.querySelector("[data-overlay]"), HTMLElement);
+    this.marquee = required(this.root.querySelector("[data-marquee]"), HTMLElement);
     this.previousButton.addEventListener("click", () => { this.runInteraction(() => this.goToPage(this.pageNumber - 1)); });
     this.nextButton.addEventListener("click", () => { this.runInteraction(() => this.goToPage(this.pageNumber + 1)); });
     this.zoomOutButton.addEventListener("click", () => { this.runInteraction(() => this.setZoom(this.zoom - ZOOM_STEP)); });
     this.zoomInButton.addEventListener("click", () => { this.runInteraction(() => this.setZoom(this.zoom + ZOOM_STEP)); });
+    this.markButton.addEventListener("click", () => { this.setMarking(!this.marking); });
+    this.overlay.addEventListener("pointerdown", (event) => { this.startSelection(event); });
+    this.overlay.addEventListener("pointermove", (event) => { this.updateSelection(event); });
+    this.overlay.addEventListener("pointerup", (event) => { this.runInteraction(() => this.finishSelection(event)); });
+    this.overlay.addEventListener("pointercancel", () => { this.cancelSelection(); });
+    this.overlay.addEventListener("click", (event) => { this.activateMarker(event); });
     this.hideFallback();
+    this.updateControls();
+  }
+
+  /** Existing annotations to paint over their pages. */
+  set annotations(markers: readonly ResearchPdfAnnotationMarker[]) {
+    this.markers = [...markers];
+    this.renderMarkers();
+  }
+
+  /** Emphasize one annotation without changing the stored list. */
+  set activeAnnotationId(id: string | undefined) {
+    this.activeMarkerId = id;
+    this.renderMarkers();
+  }
+
+  get currentPage(): number {
+    return this.pageNumber;
+  }
+
+  get pageCount(): number {
+    return this.document?.numPages ?? 0;
+  }
+
+  /** Bring one page into view; out-of-range pages are clamped, not rejected. */
+  showPage(page: number): void {
+    this.runInteraction(() => this.goToPage(page));
+  }
+
+  /** Arm or disarm region marking; disarming always releases a pointer capture. */
+  setMarking(marking: boolean): void {
+    const armed = marking && this.document !== undefined;
+    if (armed === this.marking) {
+      if (!armed) this.cancelSelection();
+      return;
+    }
+    this.marking = armed;
+    if (!armed) this.cancelSelection();
     this.updateControls();
   }
 
@@ -135,6 +214,10 @@ export class ResearchLibraryPdfViewerElement extends HTMLElement {
     this.canvas.style.width = "";
     this.canvas.style.height = "";
     this.canvas.setAttribute("aria-label", "PDF visual preview. No page rendered; use Open PDF when available for the complete document.");
+    this.overlay.style.width = "";
+    this.overlay.style.height = "";
+    this.setMarking(false);
+    this.renderMarkers();
     this.updateControls();
     if (value === undefined || value === "") {
       this.setStatus("No PDF selected.", "idle");
@@ -223,6 +306,8 @@ export class ResearchLibraryPdfViewerElement extends HTMLElement {
     this.canvas.height = Math.max(1, Math.floor(viewport.height * outputScale));
     this.canvas.style.width = `${String(Math.floor(viewport.width))}px`;
     this.canvas.style.height = `${String(Math.floor(viewport.height))}px`;
+    this.overlay.style.width = this.canvas.style.width;
+    this.overlay.style.height = this.canvas.style.height;
     const context = this.contextFactory(this.canvas);
     if (context === null || context === undefined) throw new Error("Canvas rendering is unavailable");
     const renderTask = page.render({
@@ -239,6 +324,7 @@ export class ResearchLibraryPdfViewerElement extends HTMLElement {
     if (generation !== this.generation || renderGeneration !== this.renderGeneration) return;
     this.canvas.setAttribute("aria-label", `Visual preview of PDF page ${String(this.pageNumber)} of ${String(document.numPages)}. Use Open PDF for the complete accessible document.`);
     this.setStatus(`Page ${String(this.pageNumber)} of ${String(document.numPages)} · ${String(Math.round(this.zoom * 100))}%`, "ready");
+    this.renderMarkers();
     this.updateControls();
   }
 
@@ -293,7 +379,114 @@ export class ResearchLibraryPdfViewerElement extends HTMLElement {
     this.nextButton.disabled = pages === 0 || this.pageNumber >= pages;
     this.zoomOutButton.disabled = pages === 0 || this.zoom <= MIN_ZOOM;
     this.zoomInButton.disabled = pages === 0 || this.zoom >= MAX_ZOOM;
+    this.markButton.disabled = pages === 0;
+    this.markButton.textContent = this.marking ? "Cancel marking" : "Mark region";
+    this.markButton.setAttribute("aria-pressed", this.marking ? "true" : "false");
+    this.overlay.dataset["marking"] = this.marking ? "on" : "off";
   }
+
+  private startSelection(event: PointerEvent): void {
+    if (!this.marking || !event.isPrimary || this.dragPointerId !== undefined) return;
+    const origin = this.pointFromEvent(event);
+    if (origin === undefined) return;
+    this.dragPointerId = event.pointerId;
+    this.dragOrigin = origin;
+    this.overlay.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    this.paintMarquee(origin, origin);
+  }
+
+  private updateSelection(event: PointerEvent): void {
+    if (this.dragPointerId !== event.pointerId || this.dragOrigin === undefined) return;
+    const point = this.pointFromEvent(event);
+    if (point === undefined) return;
+    event.preventDefault();
+    this.paintMarquee(this.dragOrigin, point);
+  }
+
+  private async finishSelection(event: PointerEvent): Promise<void> {
+    if (this.dragPointerId !== event.pointerId || this.dragOrigin === undefined) return;
+    const origin = this.dragOrigin;
+    const point = this.pointFromEvent(event) ?? origin;
+    this.cancelSelection();
+    const rect = normalizedRect({ x: origin.x, y: origin.y, width: point.x - origin.x, height: point.y - origin.y });
+    if (rect.width < MIN_SELECTION_FRACTION || rect.height < MIN_SELECTION_FRACTION) {
+      this.setStatus("That region was too small to mark. Drag across the passage you want.", "idle");
+      return;
+    }
+    this.setMarking(false);
+    const detail: ResearchPdfSelectionDetail = { page: this.pageNumber, rect, quote: await this.quoteForRect(rect) };
+    this.dispatchEvent(new CustomEvent<ResearchPdfSelectionDetail>(researchPdfSelectionEventName, { detail, bubbles: true, composed: true }));
+  }
+
+  private cancelSelection(): void {
+    if (this.dragPointerId !== undefined && this.overlay.hasPointerCapture(this.dragPointerId)) {
+      this.overlay.releasePointerCapture(this.dragPointerId);
+    }
+    this.dragPointerId = undefined;
+    this.dragOrigin = undefined;
+    this.marquee.hidden = true;
+  }
+
+  /** Read the text under a marked region; an unreadable page yields no quote. */
+  private async quoteForRect(rect: ResearchAnnotationRect): Promise<string> {
+    const page = this.renderedPage;
+    if (page?.getTextContent === undefined) return "";
+    try {
+      const viewport = page.getViewport({ scale: 1 });
+      const content = await page.getTextContent();
+      return quoteFromTextItems(textItemsToQuoteItems(content.items, viewport.width, viewport.height), rect);
+    } catch {
+      return "";
+    }
+  }
+
+  private activateMarker(event: Event): void {
+    const target = event.target instanceof Element ? event.target.closest("[data-annotation-id]") : null;
+    const id = target?.getAttribute("data-annotation-id");
+    if (id === null || id === undefined) return;
+    this.dispatchEvent(new CustomEvent<{ id: string }>(researchPdfAnnotationEventName, { detail: { id }, bubbles: true, composed: true }));
+  }
+
+  private paintMarquee(origin: { x: number; y: number }, point: { x: number; y: number }): void {
+    const rect = normalizedRect({ x: origin.x, y: origin.y, width: point.x - origin.x, height: point.y - origin.y });
+    this.marquee.hidden = false;
+    applyRectStyle(this.marquee, rect);
+  }
+
+  private pointFromEvent(event: PointerEvent): { x: number; y: number } | undefined {
+    const bounds = this.overlay.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return undefined;
+    return {
+      x: Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height)),
+    };
+  }
+
+  private renderMarkers(): void {
+    const visible = this.document === undefined ? [] : this.markers.filter((marker) => marker.page === this.pageNumber);
+    const elements = visible.map((marker) => {
+      const element = document.createElement("button");
+      element.type = "button";
+      element.className = "marker";
+      element.dataset["annotationId"] = marker.id;
+      element.dataset["kind"] = marker.kind;
+      element.dataset["status"] = marker.status;
+      if (marker.id === this.activeMarkerId) element.dataset["active"] = "true";
+      element.title = marker.label;
+      element.setAttribute("aria-label", `${marker.kind === "question" ? "Question" : "Note"} on page ${String(marker.page)}: ${marker.label}`);
+      applyRectStyle(element, marker.rect);
+      return element;
+    });
+    this.overlay.replaceChildren(this.marquee, ...elements);
+  }
+}
+
+function applyRectStyle(element: HTMLElement, rect: ResearchAnnotationRect): void {
+  element.style.left = `${String(rect.x * 100)}%`;
+  element.style.top = `${String(rect.y * 100)}%`;
+  element.style.width = `${String(rect.width * 100)}%`;
+  element.style.height = `${String(rect.height * 100)}%`;
 }
 
 export function boundedOutputScale(width: number, height: number, desiredScale: number): number {
@@ -350,16 +543,32 @@ function template(): string {
       [data-status] { flex: 1; min-width: 10rem; font-size: .85rem; }
       [data-state="error"] { color: var(--danger-color, #c33); }
       .viewport { overflow: auto; max-height: min(70vh, 900px); border: 1px solid var(--border-color, #7776); background: #7772; text-align: center; }
+      .page { position: relative; display: inline-block; line-height: 0; }
       canvas { display: inline-block; max-width: none; background: white; }
+      .overlay { position: absolute; inset: 0; pointer-events: none; }
+      .overlay[data-marking="on"] { pointer-events: auto; cursor: crosshair; touch-action: none; }
+      .marker, .marquee { position: absolute; box-sizing: border-box; padding: 0; }
+      .marquee { border: 2px dashed var(--pi-accent, #58a6ff); background: #58a6ff33; }
+      .marker { border: 2px solid var(--pi-warning, #d29922); background: #d2992226; cursor: pointer; pointer-events: auto; }
+      .marker[data-kind="note"] { border-color: var(--pi-purple, #d2a8ff); background: #d2a8ff26; }
+      .marker[data-status="resolved"] { border-style: dashed; opacity: .65; }
+      .marker[data-active="true"] { border-color: var(--pi-accent, #58a6ff); background: #58a6ff40; }
+      .overlay[data-marking="on"] .marker { pointer-events: none; }
     </style>
     <div class="toolbar">
       <button type="button" data-previous aria-label="Previous PDF page">Previous</button>
       <button type="button" data-next aria-label="Next PDF page">Next</button>
       <button type="button" data-zoom-out aria-label="Zoom PDF out">−</button>
       <button type="button" data-zoom-in aria-label="Zoom PDF in">+</button>
+      <button type="button" data-mark aria-pressed="false">Mark region</button>
       <span data-status role="status" aria-live="polite">No PDF selected.</span>
       <a data-open-pdf target="_blank" rel="noopener noreferrer" hidden aria-disabled="true" tabindex="-1">Open PDF</a>
     </div>
-    <div class="viewport"><canvas aria-label="PDF visual preview. No page rendered; use Open PDF when available for the complete document."></canvas></div>
+    <div class="viewport">
+      <div class="page">
+        <canvas aria-label="PDF visual preview. No page rendered; use Open PDF when available for the complete document."></canvas>
+        <div class="overlay" data-overlay data-marking="off"><div class="marquee" data-marquee hidden></div></div>
+      </div>
+    </div>
   `;
 }

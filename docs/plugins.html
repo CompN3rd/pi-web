@@ -435,6 +435,15 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                 performed by the current panel.
               </p>
               <p>
+                Choose <strong>Mark region</strong> in the reader and drag across a passage to record a question or note.
+                Each annotation is one create-only JSON file under
+                <code>.pi-web/research-library-runtime/annotations/&lt;paperId&gt;/</code>, bound to the paper's
+                manifest-declared PDF digest and holding the page, a page-relative rectangle, and the PDF text under it.
+                That anchor is written once; editing changes only kind, text, and open/resolved status, advancing a
+                revision that a competing writer's change is detected against. Marked regions are painted over their page
+                and can be resolved, reopened, edited, or deleted. PDFs, source notes, and the manifest are never written.
+              </p>
+              <p>
                 For collision-safe development, <code>npm run dev:research-pilot</code> uses API 8604, UI 8605, session
                 daemon 8606, and isolated PI WEB data/config and agent sessions. The UI binds to all IPv4 interfaces for
                 trusted-LAN testing; API and sessiond remain loopback-only behind the UI proxy. Do not forward port 8605

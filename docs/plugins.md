@@ -361,7 +361,13 @@ raw/_processed/research-library-pilot/
 
 After adding, removing, or changing the fixture, reload the browser page and type `/reload` in each affected idle PI WEB session so tool registration matches the current valid fixture. Do the same after installing/updating the Pi extension, then use `/research-library` to confirm that its three synthetic tools are available. Browser prompt insertion is best effort: keep the intended session mounted, verify the token appears, and submit it normally. An abandoned prompt may leave a harmless expiring intent.
 
-The local pilot is deliberately read-only and browser-only. It renders one PDF page at a time with the packaged PDF.js worker over PI WEB's bounded same-origin range transport and provides an Open PDF fallback. It never modifies source notes or PDFs and exposes no send-to-agent button, prompt insertion, runtime intent, search-budget tool, or answer queue. Agent disclosure for real paper content requires separate approval; the Pi extension continues to recognize only the synthetic fixture.
+The local pilot renders one PDF page at a time with the packaged PDF.js worker over PI WEB's bounded same-origin range transport and provides an Open PDF fallback. It never modifies source notes or PDFs and exposes no send-to-agent button, prompt insertion, runtime intent, search-budget tool, or answer queue. Agent disclosure for real paper content requires separate approval; the Pi extension continues to recognize only the synthetic fixture.
+
+### Marking questions and notes
+
+Choose **Mark region** in the reader and drag across a passage. The plugin records the page, a page-relative rectangle, and the PDF text under that rectangle, then asks for a question or note. Each annotation is one JSON file under `.pi-web/research-library-runtime/annotations/<paperId>/`, created without overwriting and bound to the paper's manifest-declared PDF digest, so a replaced PDF revision is visible in the record rather than silently re-anchored.
+
+The page, rectangle, and captured quote are written once; editing changes only the kind, text, and open/resolved status and advances a revision counter. Saving an edit re-reads the stored file first and refuses the write when its revision moved, which detects a competing writer rather than preventing one. Stored annotations are painted over their page, can be reopened or resolved, and can be deleted; deletion removes only that record's own file. Source PDFs, `Thesis/Citations/` notes, and the pilot manifest are never written.
 
 Use this workspace layout for the pilot:
 

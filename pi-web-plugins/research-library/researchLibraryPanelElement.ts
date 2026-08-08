@@ -1,15 +1,27 @@
 import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import { MAX_RESEARCH_ANNOTATION_BODY, RESEARCH_ANNOTATIONS_ROOT, type ResearchAnnotation, type ResearchAnnotationKind } from "./annotationModel.js";
+import { createPaperAnnotation, deleteAnnotationRecord, loadPaperAnnotations, saveAnnotationChanges } from "./annotationsClient.js";
 import { citedByPaperIds, paperById, RESEARCH_LIBRARY_CONFIG_PATH, type SyntheticPaper, type SyntheticResearchLibraryConfig } from "./config.js";
 import { loadSyntheticAnswerDrafts, type SyntheticAnswerDraft, type SyntheticDraftsLoadResult } from "./draftsClient.js";
 import { getOrLoadResearchLibrarySource, refreshResearchLibrarySource, type ResearchLibrarySourceState } from "./fixtureCache.js";
 import { pilotPaperById, RESEARCH_LIBRARY_PILOT_CONFIG_PATH, type LocalPilotPaper, type LocalResearchLibraryPilotConfig } from "./pilotConfig.js";
-import { researchLibraryPdfViewerTagName, type ResearchLibraryPdfViewerElement } from "./pdfViewerElement.js";
+import {
+  researchLibraryPdfViewerTagName,
+  researchPdfAnnotationEventName,
+  researchPdfSelectionEventName,
+  type ResearchLibraryPdfViewerElement,
+  type ResearchPdfSelectionDetail,
+} from "./pdfViewerElement.js";
 import { prepareResearchDispatch, type ResearchDispatchIntent } from "./researchLibraryClient.js";
 
 export const researchLibraryPanelTagName = "pi-web-research-library-panel";
 
 interface PanelStatus { kind: "info" | "success" | "error"; message: string }
 type DraftState = { kind: "loading" } | SyntheticDraftsLoadResult;
+type AnnotationState =
+  | { kind: "loading" }
+  | { kind: "loaded"; annotations: ResearchAnnotation[]; warnings: string[] }
+  | { kind: "unavailable"; error: string };
 
 export function defineResearchLibraryPanelElement(): void {
   if (!customElements.get(researchLibraryPanelTagName)) customElements.define(researchLibraryPanelTagName, PiWebResearchLibraryPanel);
@@ -22,7 +34,17 @@ class PiWebResearchLibraryPanel extends HTMLElement {
   private scopeKind: ResearchDispatchIntent["scope"]["kind"] = "current-paper";
   private status: PanelStatus | undefined;
   private draftState: DraftState = { kind: "loading" };
+  private annotationState: AnnotationState = { kind: "loading" };
+  private annotationStatus: PanelStatus | undefined;
+  private pendingSelection: ResearchPdfSelectionDetail | undefined;
+  private draftKind: ResearchAnnotationKind = "question";
+  private draftBody = "";
+  private editingAnnotationId: string | undefined;
+  private editBody = "";
+  private activeAnnotationId: string | undefined;
+  private annotationBusy = false;
   private loadToken = 0;
+  private annotationToken = 0;
   private readonly root: ShadowRoot;
 
   constructor() {
@@ -31,6 +53,8 @@ class PiWebResearchLibraryPanel extends HTMLElement {
     this.root.addEventListener("click", (event) => { this.handleClick(event); });
     this.root.addEventListener("input", (event) => { this.handleInput(event); });
     this.root.addEventListener("change", (event) => { this.handleChange(event); });
+    this.root.addEventListener(researchPdfSelectionEventName, (event) => { this.handleRegionSelected(event); });
+    this.root.addEventListener(researchPdfAnnotationEventName, (event) => { this.handleMarkerActivated(event); });
   }
 
   set context(value: WorkspacePanelContext | undefined) {
@@ -42,8 +66,12 @@ class PiWebResearchLibraryPanel extends HTMLElement {
     this.searchQuery = "";
     this.status = undefined;
     this.draftState = { kind: "loading" };
+    this.resetAnnotationEditing();
     this.render();
-    if (value !== undefined) void this.loadDrafts(value);
+    if (value !== undefined) {
+      void this.loadDrafts(value);
+      void this.loadAnnotations(value);
+    }
   }
 
   connectedCallback(): void {
@@ -67,9 +95,14 @@ class PiWebResearchLibraryPanel extends HTMLElement {
     if (paperButton !== null && paperButton !== undefined) {
       this.selectedPaperId = paperButton.getAttribute("data-paper-id") ?? undefined;
       this.status = undefined;
+      this.resetAnnotationEditing();
+      this.annotationState = { kind: "loading" };
       this.render();
+      const context = this.contextValue;
+      if (context !== undefined) void this.loadAnnotations(context);
       return;
     }
+    if (this.handleAnnotationClick(target)) return;
     const passageButton = target?.closest("button[data-passage-id]");
     if (passageButton !== null && passageButton !== undefined) {
       const passageId = passageButton.getAttribute("data-passage-id");
@@ -78,6 +111,12 @@ class PiWebResearchLibraryPanel extends HTMLElement {
   }
 
   private handleInput(event: Event): void {
+    const field = event.target;
+    if (field instanceof HTMLTextAreaElement) {
+      if (field.matches("textarea[data-annotation-body]")) this.draftBody = field.value;
+      if (field.matches("textarea[data-annotation-edit-body]")) this.editBody = field.value;
+      return;
+    }
     const input = event.target;
     if (!(input instanceof HTMLInputElement) || !input.matches("input[data-paper-search]")) return;
     this.searchQuery = input.value;
@@ -92,7 +131,12 @@ class PiWebResearchLibraryPanel extends HTMLElement {
 
   private handleChange(event: Event): void {
     const select = event.target;
-    if (!(select instanceof HTMLSelectElement) || !select.matches("select[data-search-scope]")) return;
+    if (!(select instanceof HTMLSelectElement)) return;
+    if (select.matches("select[data-annotation-kind]")) {
+      if (select.value === "question" || select.value === "note") this.draftKind = select.value;
+      return;
+    }
+    if (!select.matches("select[data-search-scope]")) return;
     if (select.value === "current-paper" || select.value === "synthetic-library") this.scopeKind = select.value;
   }
 
@@ -107,8 +151,192 @@ class PiWebResearchLibraryPanel extends HTMLElement {
     this.status = state.kind === "loaded"
       ? { kind: "success", message: state.source.mode === "synthetic" ? "Synthetic research fixture refreshed." : "Read-only local pilot refreshed." }
       : undefined;
+    this.resetAnnotationEditing();
     this.render();
     await this.loadDrafts(context);
+    await this.loadAnnotations(context);
+  }
+
+  private async loadAnnotations(context: WorkspacePanelContext): Promise<void> {
+    const scope = this.pilotScope(context);
+    const token = ++this.annotationToken;
+    if (scope === undefined) {
+      this.annotationState = { kind: "loaded", annotations: [], warnings: [] };
+      this.updateAnnotationsSection();
+      return;
+    }
+    this.annotationState = { kind: "loading" };
+    this.updateAnnotationsSection();
+    const result = await loadPaperAnnotations(context.files, scope);
+    if (!this.isCurrentContext(context) || token !== this.annotationToken) return;
+    this.annotationState = result;
+    this.updateAnnotationsSection();
+  }
+
+  /** The pilot library, paper, and PDF revision every annotation write binds to. */
+  private pilotScope(context: WorkspacePanelContext): { libraryId: string; paperId: string; pdfSha256: string } | undefined {
+    const state = getOrLoadResearchLibrarySource(context);
+    if (state.kind !== "loaded" || state.source.mode !== "local-pilot") return undefined;
+    const config = state.source.pilot.config;
+    const paper = pilotPaperById(config, this.selectedPaperId ?? "") ?? config.papers[0];
+    return paper === undefined ? undefined : { libraryId: config.libraryId, paperId: paper.id, pdfSha256: paper.pdf.sha256 };
+  }
+
+  private handleRegionSelected(event: Event): void {
+    if (!(event instanceof CustomEvent)) return;
+    const detail: unknown = event.detail;
+    if (!isSelectionDetail(detail)) return;
+    this.pendingSelection = detail;
+    this.editingAnnotationId = undefined;
+    this.annotationStatus = undefined;
+    this.updateAnnotationsSection();
+    this.root.querySelector<HTMLTextAreaElement>("textarea[data-annotation-body]")?.focus();
+  }
+
+  private handleMarkerActivated(event: Event): void {
+    if (!(event instanceof CustomEvent)) return;
+    const detail: unknown = event.detail;
+    if (!isRecord(detail) || typeof detail["id"] !== "string") return;
+    this.activeAnnotationId = detail["id"];
+    this.updateAnnotationsSection();
+  }
+
+  private handleAnnotationClick(target: Element | null): boolean {
+    const button = target?.closest("button[data-annotation-action]");
+    if (button === null || button === undefined) return false;
+    const id = button.getAttribute("data-annotation-id") ?? undefined;
+    switch (button.getAttribute("data-annotation-action") ?? "") {
+      case "save": void this.saveNewAnnotation(); return true;
+      case "cancel": this.resetAnnotationEditing(); this.updateAnnotationsSection(); return true;
+      case "show": this.showAnnotation(id); return true;
+      case "edit": this.beginAnnotationEdit(id); return true;
+      case "edit-save": void this.commitAnnotationEdit(id); return true;
+      case "edit-cancel": this.editingAnnotationId = undefined; this.editBody = ""; this.updateAnnotationsSection(); return true;
+      case "toggle-status": void this.toggleAnnotationStatus(id); return true;
+      case "delete": void this.deleteAnnotation(id); return true;
+      default: return false;
+    }
+  }
+
+  private async saveNewAnnotation(): Promise<void> {
+    const context = this.contextValue;
+    const selection = this.pendingSelection;
+    const scope = context === undefined ? undefined : this.pilotScope(context);
+    if (context === undefined || selection === undefined || scope === undefined) return;
+    const body = this.draftBody.trim();
+    if (body === "") {
+      this.annotationStatus = { kind: "error", message: "Write the question or note before saving this region." };
+      this.updateAnnotationsSection();
+      return;
+    }
+    await this.runAnnotationWrite(context, async () => {
+      const created = await createPaperAnnotation(context.files, {
+        ...scope,
+        page: selection.page,
+        rect: selection.rect,
+        quote: selection.quote,
+        kind: this.draftKind,
+        body,
+      });
+      this.pendingSelection = undefined;
+      this.draftBody = "";
+      this.activeAnnotationId = created.id;
+      return `Saved ${created.kind === "question" ? "question" : "note"} on page ${String(created.page)}.`;
+    });
+  }
+
+  private beginAnnotationEdit(id: string | undefined): void {
+    const annotation = this.annotationById(id);
+    if (annotation === undefined) return;
+    this.editingAnnotationId = annotation.id;
+    this.editBody = annotation.body;
+    this.activeAnnotationId = annotation.id;
+    this.annotationStatus = undefined;
+    this.updateAnnotationsSection();
+    this.root.querySelector<HTMLTextAreaElement>("textarea[data-annotation-edit-body]")?.focus();
+  }
+
+  private async commitAnnotationEdit(id: string | undefined): Promise<void> {
+    const context = this.contextValue;
+    const annotation = this.annotationById(id);
+    if (context === undefined || annotation === undefined) return;
+    const body = this.editBody.trim();
+    if (body === "") {
+      this.annotationStatus = { kind: "error", message: "An annotation cannot be emptied. Delete it instead." };
+      this.updateAnnotationsSection();
+      return;
+    }
+    await this.runAnnotationWrite(context, async () => {
+      await saveAnnotationChanges(context.files, annotation, { body });
+      this.editingAnnotationId = undefined;
+      this.editBody = "";
+      return "Annotation updated.";
+    });
+  }
+
+  private async toggleAnnotationStatus(id: string | undefined): Promise<void> {
+    const context = this.contextValue;
+    const annotation = this.annotationById(id);
+    if (context === undefined || annotation === undefined) return;
+    const status = annotation.status === "open" ? "resolved" : "open";
+    await this.runAnnotationWrite(context, async () => {
+      await saveAnnotationChanges(context.files, annotation, { status });
+      return status === "resolved" ? "Marked resolved." : "Reopened.";
+    });
+  }
+
+  private async deleteAnnotation(id: string | undefined): Promise<void> {
+    const context = this.contextValue;
+    const annotation = this.annotationById(id);
+    if (context === undefined || annotation === undefined) return;
+    if (!window.confirm(`Delete this ${annotation.kind} on page ${String(annotation.page)}? The PDF and source note are not changed.`)) return;
+    await this.runAnnotationWrite(context, async () => {
+      await deleteAnnotationRecord(context.files, annotation);
+      if (this.activeAnnotationId === annotation.id) this.activeAnnotationId = undefined;
+      if (this.editingAnnotationId === annotation.id) this.editingAnnotationId = undefined;
+      return "Annotation deleted.";
+    });
+  }
+
+  /** Run one annotation write, then reload the durable list it changed. */
+  private async runAnnotationWrite(context: WorkspacePanelContext, operation: () => Promise<string>): Promise<void> {
+    if (this.annotationBusy) return;
+    this.annotationBusy = true;
+    this.annotationStatus = undefined;
+    this.updateAnnotationsSection();
+    let status: PanelStatus;
+    try {
+      status = { kind: "success", message: await operation() };
+    } catch (error) {
+      status = { kind: "error", message: error instanceof Error ? error.message : String(error) };
+    }
+    this.annotationBusy = false;
+    if (!this.isCurrentContext(context)) return;
+    this.annotationStatus = status;
+    await this.loadAnnotations(context);
+  }
+
+  private showAnnotation(id: string | undefined): void {
+    const annotation = this.annotationById(id);
+    if (annotation === undefined) return;
+    this.activeAnnotationId = annotation.id;
+    this.root.querySelector<ResearchLibraryPdfViewerElement>(researchLibraryPdfViewerTagName)?.showPage(annotation.page);
+    this.updateAnnotationsSection();
+  }
+
+  private annotationById(id: string | undefined): ResearchAnnotation | undefined {
+    if (id === undefined || this.annotationState.kind !== "loaded") return undefined;
+    return this.annotationState.annotations.find((annotation) => annotation.id === id);
+  }
+
+  private resetAnnotationEditing(): void {
+    this.pendingSelection = undefined;
+    this.draftBody = "";
+    this.draftKind = "question";
+    this.editingAnnotationId = undefined;
+    this.editBody = "";
+    this.annotationStatus = undefined;
+    this.activeAnnotationId = undefined;
   }
 
   private async loadDrafts(context: WorkspacePanelContext): Promise<void> {
@@ -296,8 +524,107 @@ class PiWebResearchLibraryPanel extends HTMLElement {
         </dl>
       </section>
       <section class="pdf-section"><h3>PDF reader</h3><div data-pdf-reader-host>${viewer}</div></section>
+      <section class="annotations" data-annotations-host>${this.renderAnnotationsInner()}</section>
       <div class="safety-note"><strong>Agent tools disabled for this pilot.</strong> No prompt insertion, runtime intent, answer queue, or search-budget operation is available for real papers.</div>
     `;
+  }
+
+  private renderAnnotationsInner(): string {
+    const state = this.annotationState;
+    const pending = this.pendingSelection;
+    const status = this.annotationStatus === undefined
+      ? ""
+      : `<div class="status ${escapeAttr(this.annotationStatus.kind)}" ${this.annotationStatus.kind === "error" ? `role="alert"` : `role="status" aria-live="polite"`}>${escapeHtml(this.annotationStatus.message)}</div>`;
+    const body = state.kind === "loading"
+      ? `<p class="muted" role="status" aria-live="polite">Loading annotations…</p>`
+      : state.kind === "unavailable"
+        ? `<div class="status error" role="alert">${escapeHtml(state.error)}</div>`
+        : this.renderAnnotationList(state.annotations, state.warnings);
+    return `
+      <div class="section-heading">
+        <h3>Marked questions and notes</h3>
+        <span class="muted">${escapeHtml(annotationCountLabel(state))}</span>
+      </div>
+      <p class="muted">Choose <strong>Mark region</strong> in the reader, then drag across a passage. Records are stored under <code>${escapeHtml(RESEARCH_ANNOTATIONS_ROOT)}</code>; the PDF and its source note are never changed.</p>
+      ${status}
+      ${pending === undefined ? "" : this.renderPendingSelection(pending)}
+      ${body}
+    `;
+  }
+
+  private renderPendingSelection(selection: ResearchPdfSelectionDetail): string {
+    return `
+      <form class="annotation-form" data-annotation-form>
+        <div class="section-heading"><strong>New annotation · page ${String(selection.page)}</strong></div>
+        ${selection.quote === ""
+          ? `<p class="muted">No text was found in that region; the marked area is still recorded.</p>`
+          : `<blockquote>${escapeHtml(selection.quote)}</blockquote>`}
+        <label>Kind
+          <select data-annotation-kind>
+            <option value="question" ${this.draftKind === "question" ? "selected" : ""}>Question</option>
+            <option value="note" ${this.draftKind === "note" ? "selected" : ""}>Note</option>
+          </select>
+        </label>
+        <label>Text
+          <textarea data-annotation-body rows="3" maxlength="${String(MAX_RESEARCH_ANNOTATION_BODY)}" placeholder="What do you want to ask or remember about this passage?">${escapeHtml(this.draftBody)}</textarea>
+        </label>
+        <div class="annotation-actions">
+          <button type="button" data-annotation-action="save" ${this.annotationBusy ? "disabled" : ""}>Save annotation</button>
+          <button type="button" class="secondary" data-annotation-action="cancel" ${this.annotationBusy ? "disabled" : ""}>Discard region</button>
+        </div>
+      </form>
+    `;
+  }
+
+  private renderAnnotationList(annotations: ResearchAnnotation[], warnings: string[]): string {
+    const skipped = warnings.length === 0 ? "" : `<div class="status error">Ignored ${String(warnings.length)} unreadable annotation file(s).</div>`;
+    if (annotations.length === 0) return `${skipped}<p class="muted">No annotations yet for this paper.</p>`;
+    return `${skipped}${annotations.map((annotation) => this.renderAnnotationCard(annotation)).join("")}`;
+  }
+
+  private renderAnnotationCard(annotation: ResearchAnnotation): string {
+    const editing = this.editingAnnotationId === annotation.id;
+    const busy = this.annotationBusy ? "disabled" : "";
+    const action = (name: string, label: string, extraClass = "secondary"): string =>
+      `<button type="button" class="${extraClass}" data-annotation-action="${name}" data-annotation-id="${escapeAttr(annotation.id)}" ${busy}>${escapeHtml(label)}</button>`;
+    return `
+      <article class="annotation-card${annotation.id === this.activeAnnotationId ? " selected" : ""}" data-annotation-card="${escapeAttr(annotation.id)}">
+        <span class="locator">${escapeHtml(annotation.kind === "question" ? "Question" : "Note")} · page ${String(annotation.page)} · ${escapeHtml(annotation.status)}</span>
+        ${annotation.quote === "" ? "" : `<blockquote>${escapeHtml(annotation.quote)}</blockquote>`}
+        ${editing
+          ? `<label>Text<textarea data-annotation-edit-body rows="3" maxlength="${String(MAX_RESEARCH_ANNOTATION_BODY)}">${escapeHtml(this.editBody)}</textarea></label>`
+          : `<p class="annotation-body">${escapeHtml(annotation.body)}</p>`}
+        <div class="annotation-actions">
+          ${action("show", "Show on page")}
+          ${editing ? action("edit-save", "Save", "") : action("edit", "Edit")}
+          ${editing ? action("edit-cancel", "Cancel") : action("toggle-status", annotation.status === "open" ? "Mark resolved" : "Reopen")}
+          ${editing ? "" : action("delete", "Delete")}
+        </div>
+      </article>
+    `;
+  }
+
+  /** Patch only the annotation section so the mounted PDF is never reloaded. */
+  private updateAnnotationsSection(): void {
+    const host = this.root.querySelector<HTMLElement>("[data-annotations-host]");
+    if (host !== null) host.innerHTML = this.renderAnnotationsInner();
+    this.updateViewerMarkers();
+  }
+
+  private updateViewerMarkers(): void {
+    const viewer = this.root.querySelector<ResearchLibraryPdfViewerElement>(researchLibraryPdfViewerTagName);
+    if (viewer === null) return;
+    viewer.annotations = this.annotationState.kind === "loaded"
+      ? this.annotationState.annotations.map((annotation) => ({
+        id: annotation.id,
+        page: annotation.page,
+        rect: annotation.rect,
+        kind: annotation.kind,
+        status: annotation.status,
+        label: annotation.body,
+      }))
+      : [];
+    viewer.activeAnnotationId = this.activeAnnotationId;
   }
 
   private bindPilotPdfViewer(state: ResearchLibrarySourceState, context: WorkspacePanelContext): void {
@@ -307,6 +634,7 @@ class PiWebResearchLibraryPanel extends HTMLElement {
     if (paper === undefined) return;
     const viewer = this.root.querySelector<ResearchLibraryPdfViewerElement>(researchLibraryPdfViewerTagName);
     if (viewer === null) return;
+    this.updateViewerMarkers();
     try {
       viewer.sourceUrl = context.files.pdfPreviewUrl(paper.pdf.path, { modifiedAt: paper.pdf.sha256 });
     } catch (error) {
@@ -403,6 +731,28 @@ function renderDraft(draft: SyntheticAnswerDraft): string {
   return `<article class="draft-card"><span class="locator">Draft · ${escapeHtml(new Date(draft.createdAt).toLocaleString())}</span><strong>${escapeHtml(draft.question)}</strong><p>${escapeHtml(draft.answer)}</p><small>${String(draft.evidenceIds.length)} evidence reference(s)</small></article>`;
 }
 
+function annotationCountLabel(state: AnnotationState): string {
+  if (state.kind !== "loaded") return "";
+  const open = state.annotations.filter((annotation) => annotation.status === "open").length;
+  return `${String(state.annotations.length)} total · ${String(open)} open`;
+}
+
+function isSelectionDetail(value: unknown): value is ResearchPdfSelectionDetail {
+  if (!isRecord(value) || typeof value["quote"] !== "string") return false;
+  const page = value["page"];
+  if (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1) return false;
+  const rect = value["rect"];
+  if (!isRecord(rect)) return false;
+  return ["x", "y", "width", "height"].every((key) => {
+    const candidate = rect[key];
+    return typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 && candidate <= 1;
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${String(bytes)} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -450,6 +800,13 @@ function styles(): string {
     .connections > div { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
     .passage-card, .draft-card, .provenance { border: 1px solid var(--pi-border); border-radius: 9px; background: var(--pi-surface); padding: 10px; }
     .passage-card, .draft-card { display: grid; gap: 8px; }
+    .annotations { scroll-margin-top: 8px; }
+    .annotation-form, .annotation-card { display: grid; gap: 8px; border: 1px solid var(--pi-border); border-radius: 9px; background: var(--pi-surface); padding: 10px; }
+    .annotation-card.selected { border-color: var(--pi-accent-border); background: var(--pi-bg-overlay-soft); }
+    .annotation-body { margin: 0; white-space: pre-wrap; }
+    .annotation-form label, .annotation-card label { display: grid; gap: 4px; font-size: 12px; color: var(--pi-text-secondary); }
+    textarea { min-width: 0; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-bg); color: var(--pi-text); padding: 7px; font: inherit; resize: vertical; }
+    .annotation-actions { display: flex; flex-wrap: wrap; gap: 6px; }
     dl { display: grid; grid-template-columns: minmax(95px, .25fr) minmax(0, 1fr); gap: 6px 10px; margin: 0; }
     dt { color: var(--pi-muted); font-size: 12px; }
     dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }

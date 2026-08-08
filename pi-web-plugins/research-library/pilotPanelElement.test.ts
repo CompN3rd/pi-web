@@ -60,6 +60,10 @@ const pilotText = JSON.stringify({
 
 class FakePdfViewer extends HTMLElement {
   sourceUrl: string | undefined;
+  annotations: readonly unknown[] = [];
+  activeAnnotationId: string | undefined;
+  shownPages: number[] = [];
+  showPage(page: number): void { this.shownPages.push(page); }
 }
 
 beforeAll(() => {
@@ -99,7 +103,7 @@ describe("read-only local research pilot panel", () => {
       ".pi-web/research-library.synthetic.json",
       "raw/_processed/research-library-pilot/library.json",
     ]);
-    expect(listFiles).not.toHaveBeenCalled();
+    expect(listFiles.mock.calls.map(([path]) => path)).toEqual([".pi-web/research-library-runtime/annotations/pilot-barron2021"]);
     expect(writeFile).not.toHaveBeenCalled();
     expect(insertText).not.toHaveBeenCalled();
 
@@ -199,7 +203,12 @@ function createPilotContext(withPreview = true) {
   const writeFile = vi.fn<WorkspacePanelContext["files"]["writeFile"]>();
   const insertText = vi.fn((text: string) => { promptText += text; });
   const pdfPreviewUrl = vi.fn((path: string, options?: { modifiedAt?: string }) => `https://pi.example.test/api/paper.pdf?digest=${encodeURIComponent(options?.modifiedAt ?? "")}&path=${encodeURIComponent(path)}`);
-  const listFiles = vi.fn<WorkspacePanelContext["files"]["listFiles"]>();
+  const listFiles = vi.fn<WorkspacePanelContext["files"]["listFiles"]>((path) => Promise.resolve({
+    path,
+    entries: [],
+    scannedAt: new Date(0).toISOString(),
+    truncated: false,
+  }));
   const readFile = vi.fn<WorkspacePanelContext["files"]["readFile"]>((path) => {
     if (path === "raw/_processed/research-library-pilot/library.json") {
       return Promise.resolve({ path, content: pilotText, encoding: "utf8" as const, size: pilotText.length, modifiedAt: new Date(0).toISOString(), truncated: false, binary: false });
