@@ -36,13 +36,15 @@ Options:
   --asset-dir DIR         Copy Docker assets from a local docker/ directory
   --asset-ref REF         Fetch Docker assets from a Git ref (default: main)
   --skip-compose          Write assets/.env but skip build and service recreate
-  --assets-only           Refresh only the Docker asset files of an existing
-                          install. Host-derived .env values and the host
-                          Compose override are left as the host installer
-                          wrote them, and no image build or recreate runs.
-                          Used by in-container updates, which cannot detect the
-                          Docker host setup from inside a container.
   -h, --help              Show this help
+
+Where it runs:
+  On the host, the installer detects the Docker host setup. Inside a PI WEB
+  container it reuses the host facts recorded in .env, because a container
+  cannot observe its host: from inside a Linux container, a Docker Desktop for
+  Mac host looks like native Linux Docker. Rerun the installer on the host
+  after changing the host itself, such as moving the Docker socket or the
+  docker group.
 
 Progressive host setup:
   The installer supports native Linux Docker Engine and Docker Desktop for Mac.
@@ -122,10 +124,6 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip-compose)
       PI_WEB_DOCKER_SKIP_COMPOSE=1
-      shift
-      ;;
-    --assets-only)
-      PI_WEB_DOCKER_ASSETS_ONLY=1
       shift
       ;;
     -h|--help)
@@ -349,13 +347,20 @@ fi
 # shellcheck disable=SC1091
 . "$profile_helper"
 
-# Host detection reads the host OS and Docker context, which a container cannot
-# observe: inside a Linux container a Docker Desktop for Mac host looks like a
-# native Linux host. An assets-only refresh therefore keeps the host-derived
-# values the host installer recorded instead of detecting them again.
-if [ "${PI_WEB_DOCKER_ASSETS_ONLY:-0}" = 1 ]; then
-  [ -f "$env_file" ] || die "--assets-only refreshes an existing install, but $env_file was not found; run the installer without --assets-only first"
-elif ! pi_web_docker_host_detect_profile; then
+persisted_host_profile=$(existing_env_value PI_WEB_DOCKER_HOST_PROFILE || true)
+persisted_hostexec_mode=$(existing_env_value HOSTEXEC_MODE || true)
+persisted_socket_source=$(existing_env_value PI_WEB_DOCKER_SOCKET_SOURCE || true)
+if [ -z "$persisted_socket_source" ]; then
+  # Installs made before the socket source was persisted still carry it in the
+  # generated Compose override.
+  persisted_socket_source=$(pi_web_docker_host_socket_source_from_override "$install_dir/compose.override.yml" 2>/dev/null || true)
+fi
+
+if pi_web_docker_host_in_container && [ -z "$persisted_host_profile" ]; then
+  die "this installer is running inside a PI WEB container but $env_file has no recorded Docker host setup; run the installer on the Docker host first"
+fi
+
+if ! pi_web_docker_host_resolve_profile "$persisted_host_profile" "$persisted_hostexec_mode" "$persisted_socket_source"; then
   pi_web_docker_host_print_detection_failure
   die "refusing to install on an unsupported or unknown Docker host setup"
 fi
@@ -375,17 +380,21 @@ if [ ! -e "$custom_image_hooks_dir/.gitkeep" ]; then
   : >"$custom_image_hooks_dir/.gitkeep" || die "could not initialize custom image hooks directory: $custom_image_hooks_dir"
 fi
 
-if [ "${PI_WEB_DOCKER_ASSETS_ONLY:-0}" = 1 ]; then
-  log "Refreshed Docker assets in $install_dir"
-  log "Left host-derived values in $env_file and $install_dir/compose.override.yml unchanged"
-  exit 0
+if [ "${PI_WEB_DOCKER_HOST_PROFILE_REUSED:-0}" = 1 ]; then
+  # Container identity and the Docker group are host facts too: a container sees
+  # its own account and its own view of the mounted socket, so keep what the
+  # host installer recorded.
+  pi_web_uid=$(value_from_env_or_existing_or_default PI_WEB_UID "$(id -u)")
+  pi_web_gid=$(value_from_env_or_existing_or_default PI_WEB_GID "$(id -g)")
+  docker_gid=$(value_from_env_or_existing_or_default DOCKER_GID "$(pi_web_docker_host_detect_docker_gid)")
+else
+  pi_web_uid=$(value_from_env_or_default PI_WEB_UID "$(id -u)")
+  pi_web_gid=$(value_from_env_or_default PI_WEB_GID "$(id -g)")
+  docker_gid=$(value_from_env_or_default DOCKER_GID "$(pi_web_docker_host_detect_docker_gid)")
 fi
-
-pi_web_uid=$(value_from_env_or_default PI_WEB_UID "$(id -u)")
-pi_web_gid=$(value_from_env_or_default PI_WEB_GID "$(id -g)")
-docker_gid=$(value_from_env_or_default DOCKER_GID "$(pi_web_docker_host_detect_docker_gid)")
 pi_web_host_profile=$PI_WEB_DETECTED_DOCKER_HOST_PROFILE
 hostexec_mode=$PI_WEB_DETECTED_HOSTEXEC_MODE
+docker_socket_source=$PI_WEB_DETECTED_DOCKER_SOCKET_SOURCE
 
 raw_data_dir=$(value_from_env_or_existing_or_default PI_WEB_DOCKER_DATA_DIR "$install_dir/data")
 data_dir=$(absolute_dir "$(path_from_base "$install_dir" "$raw_data_dir")") || die "could not create data directory"
@@ -407,6 +416,7 @@ require_non_empty PI_WEB_UID "$pi_web_uid"
 require_non_empty PI_WEB_GID "$pi_web_gid"
 require_non_empty DOCKER_GID "$docker_gid"
 require_non_empty PI_WEB_DOCKER_HOST_PROFILE "$pi_web_host_profile"
+require_non_empty PI_WEB_DOCKER_SOCKET_SOURCE "$docker_socket_source"
 require_non_empty HOSTEXEC_MODE "$hostexec_mode"
 require_non_empty PI_WEB_DOCKER_DATA_DIR "$data_dir"
 require_non_empty PI_WEB_DOCKER_INSTALL_DIR "$install_dir"
@@ -446,8 +456,9 @@ PI_WEB_UID=$pi_web_uid
 PI_WEB_GID=$pi_web_gid
 DOCKER_GID=$docker_gid
 
-# Detected Docker host profile and host capability toggles.
+# Docker host facts, detected on the host and reused by in-container reruns.
 PI_WEB_DOCKER_HOST_PROFILE=$pi_web_host_profile
+PI_WEB_DOCKER_SOCKET_SOURCE=$docker_socket_source
 HOSTEXEC_MODE=$hostexec_mode
 PI_WEB_DOCKER_EXTRA_HOST_PATHS=$pi_web_extra_host_paths_env
 
@@ -478,7 +489,12 @@ mv "$temp_env" "$env_file"
 log "Wrote Docker assets to $install_dir"
 log "Wrote runtime environment to $env_file"
 log "Wrote host Compose override to $compose_override_file"
-log "Selected PI WEB Docker host profile: $pi_web_host_profile"
+if [ "${PI_WEB_DOCKER_HOST_PROFILE_REUSED:-0}" = 1 ]; then
+  log "Reused the recorded PI WEB Docker host profile: $pi_web_host_profile"
+  log "Rerun the installer on the Docker host to pick up host changes."
+else
+  log "Selected PI WEB Docker host profile: $pi_web_host_profile"
+fi
 case "$pi_web_host_profile" in
   linux-native-docker)
     log "Enabled Linux host mounts and hostexec namespace bridge."
