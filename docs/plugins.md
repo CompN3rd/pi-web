@@ -379,7 +379,7 @@ raw/
 
 The intended downloader writes each exact PDF and its receipt under `raw/research-library-pilot/`; the derived strict browser manifest and checksum inventory live under `raw/_processed/research-library-pilot/`. Existing `Thesis/Citations/` notes are manifest-referenced read-only inputs and are never edited by the plugin. A future pilot downloader/import step must independently verify downloaded bytes, sizes, SHA-256 values, approved source hosts, and source-note digests before publishing the manifest; the current browser panel does not perform that downloader-time verification.
 
-For collision-safe local development, `npm run dev:research-pilot` starts API `8604`, UI `8605`, and TCP session daemon `8606`. It places PI WEB data/config and agent sessions under the platform app-data directory while deliberately sharing the current Pi agent profile. The launcher refuses occupied ports and never stops another instance. Because auth, settings, packages, and providers remain shared, do not install, remove, or update Pi packages from the pilot process.
+For collision-safe local development, `npm run dev:research-pilot` starts API `8604`, UI `8605`, and TCP session daemon `8606`. The UI binds to all IPv4 interfaces for trusted-LAN testing; API and sessiond remain loopback-only behind the UI proxy. It places PI WEB data/config and agent sessions under the platform app-data directory while deliberately sharing the current Pi agent profile. The launcher refuses occupied ports and never stops another instance. Do not forward UI port `8605` to the public internet. Because auth, settings, packages, and providers remain shared, do not install, remove, or update Pi packages from the pilot process.
 
 ### Relays
 

@@ -43,7 +43,7 @@ describe("research pilot launcher", () => {
     expect(researchPilotCommands("npm-test", RESEARCH_PILOT_PORTS, runtime)).toEqual([
       { label: "session daemon", command: "npm-test", args: ["run", "start:sessiond"] },
       { label: "web/API", command: "npm-test", args: ["run", "start"] },
-      { label: "Vite UI", command: "npm-test", args: ["run", "dev:client", "--", "--host", "127.0.0.1", "--port", "8605"] },
+      { label: "Vite UI", command: "npm-test", args: ["run", "dev:client", "--", "--host", "0.0.0.0", "--port", "8605"] },
     ]);
   });
 
@@ -66,7 +66,7 @@ describe("research pilot launcher", () => {
       args: ["C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js", "run", "start:sessiond"],
     });
     expect(commands[2]?.args).toEqual([
-      "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js", "run", "dev:client", "--", "--host", "127.0.0.1", "--port", "8605",
+      "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js", "run", "dev:client", "--", "--host", "0.0.0.0", "--port", "8605",
     ]);
   });
 

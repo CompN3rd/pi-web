@@ -436,8 +436,10 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
               </p>
               <p>
                 For collision-safe development, <code>npm run dev:research-pilot</code> uses API 8604, UI 8605, session
-                daemon 8606, and isolated PI WEB data/config and agent sessions. It deliberately shares the current Pi
-                agent profile, so do not install, remove, or update Pi packages from the pilot process.
+                daemon 8606, and isolated PI WEB data/config and agent sessions. The UI binds to all IPv4 interfaces for
+                trusted-LAN testing; API and sessiond remain loopback-only behind the UI proxy. Do not forward port 8605
+                to the public internet. The pilot deliberately shares the current Pi agent profile, so do not install,
+                remove, or update Pi packages from the pilot process.
               </p>
             </section>
 

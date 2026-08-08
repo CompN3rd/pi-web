@@ -49,7 +49,7 @@ export function researchPilotCommands(
   return [
     command("session daemon", ["run", "start:sessiond"]),
     command("web/API", ["run", webScript]),
-    command("Vite UI", ["run", "dev:client", "--", "--host", "127.0.0.1", "--port", String(ports.ui)]),
+    command("Vite UI", ["run", "dev:client", "--", "--host", "0.0.0.0", "--port", String(ports.ui)]),
   ];
 }
 
@@ -127,9 +127,10 @@ export async function runResearchPilot(options = {}) {
     throw error;
   }
 
-  console.warn("[research-pilot] ISOLATED: ports, PI WEB data/config, socket/TCP endpoint, and agent session directory.");
+  console.warn("[research-pilot] ISOLATED: ports, PI WEB data/config, backend TCP endpoints, and agent session directory.");
   console.warn(`[research-pilot] SHARED: agent auth/settings/packages/providers at ${paths.sharedAgentDir}. Do not install, remove, or update Pi packages from this pilot.`);
-  console.log(`[research-pilot] UI: http://127.0.0.1:${String(ports.ui)}  API: ${String(ports.api)}  sessiond: ${String(ports.sessiond)}`);
+  console.warn(`[research-pilot] LAN-EXPOSED UI: all IPv4 interfaces on port ${String(ports.ui)}; API and sessiond stay loopback-only behind the UI proxy.`);
+  console.log(`[research-pilot] Local UI: http://127.0.0.1:${String(ports.ui)}  API: ${String(ports.api)}  sessiond: ${String(ports.sessiond)}`);
 
   return await new Promise((resolvePromise, reject) => {
     let stopping = false;
