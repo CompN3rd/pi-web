@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "synthetic": true,
+  "libraryId": "synthetic-demo-library",
+  "papers": [
+    {
+      "id": "synthetic-paper-alpha",
+      "title": "Synthetic Evidence Graphs",
+      "authors": ["Ada Example", "Lin Example"],
+      "year": 2026,
+      "abstract": "Generated test metadata for exercising the PI WEB research-library boundary.",
+      "tags": ["synthetic", "graphs"],
+      "collections": ["PI WEB Demo"],
+      "passages": [
+        {
+          "id": "synthetic-passage-alpha",
+          "page": 3,
+          "quote": "Citation edges are useful only when their source occurrence remains inspectable.",
+          "question": "Why must a citation graph retain occurrence-level provenance?"
+        }
+      ],
+      "cites": ["synthetic-paper-beta"]
+    },
+    {
+      "id": "synthetic-paper-beta",
+      "title": "Bounded Agent Contexts",
+      "authors": ["Sam Example"],
+      "year": 2025,
+      "abstract": "Generated test metadata about explicit context scope and additive answer drafts.",
+      "tags": ["synthetic", "agents"],
+      "collections": ["PI WEB Demo"],
+      "passages": [
+        {
+          "id": "synthetic-passage-beta",
+          "page": 7,
+          "quote": "A dispatch token identifies a bounded context without copying that context into the prompt.",
+          "question": "What privacy property does an opaque dispatch token provide?"
+        }
+      ],
+      "cites": []
+    }
+  ]
+}

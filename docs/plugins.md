@@ -294,6 +294,67 @@ Task fields:
 
 Review task configs before running them, especially in shared projects. Workspace Tasks runs trusted shell commands from your repositories.
 
+### Research Library (synthetic preview)
+
+**Plugin id:** `research-library`
+
+**Fixture:** `.pi-web/research-library.synthetic.json`
+
+**Runtime:** `.pi-web/research-library-runtime/`
+
+The Research Library preview is a synthetic-only vertical slice of a paired PI WEB plugin and Pi extension. It demonstrates the safe boundary before real PDF viewing, migration/import, networking, or external-library access is implemented:
+
+- the workspace panel searches generated paper metadata, shows marked passages, and previews outgoing citations plus derived “cited by” connections;
+- an explicit **Send token to active agent** click creates a bounded, expiring dispatch intent with create-only file semantics and inserts only a random opaque token into the mounted prompt;
+- PI WEB never submits the prompt automatically and never copies the passage/question into it;
+- the Pi extension claims a token for one session, searches only its immutable approved snapshot within persisted budgets, and may publish one additive answer draft;
+- **Refresh drafts** displays filename-bound, digest-verified drafts as escaped text for human review. There is no accept/write-back workflow yet.
+
+The token/runtime protocol limits accidental disclosure, cross-session claims, retries, and budget races. A claim freezes its approved snapshot and remains usable by its owning session until the token expires even if the live fixture changes; new claims require the exact fixture digest from their intent. It is not a sandbox or tamper-resistant authority against the same local user, another trusted plugin/extension, or any process that can rewrite workspace files. Keep this preview synthetic and do not treat its runtime JSON as a production research database.
+
+A missing fixture keeps the panel hidden; a present but malformed fixture surfaces an error panel so it can be repaired. It declares `machineSpecific: true`, so a selected remote machine must expose its own matching plugin/extension package rather than reusing the gateway copy. The parser requires `version: 1`, `synthetic: true`, generated IDs beginning with `synthetic-`, bounded text/arrays, unique IDs, and citation targets that resolve inside the fixture. Unknown fields, real-looking IDs, oversized/truncated files, and malformed relationships fail closed. A complete copyable fixture ships as `pi-web-plugins/research-library/example.synthetic.json` in the source tree and beside the built plugin module.
+
+Minimal shape:
+
+```json
+{
+  "version": 1,
+  "synthetic": true,
+  "libraryId": "synthetic-demo-library",
+  "papers": [
+    {
+      "id": "synthetic-paper-alpha",
+      "title": "Synthetic Evidence Graphs",
+      "authors": ["Ada Example"],
+      "year": 2026,
+      "abstract": "Generated metadata only.",
+      "tags": ["synthetic"],
+      "collections": ["Demo"],
+      "passages": [
+        {
+          "id": "synthetic-passage-alpha",
+          "page": 3,
+          "quote": "Generated evidence.",
+          "question": "Why retain occurrence-level provenance?"
+        }
+      ],
+      "cites": []
+    }
+  ]
+}
+```
+
+Keep both files out of Git whenever they contain anything sensitive:
+
+```gitignore
+.pi-web/research-library.synthetic.json
+.pi-web/research-library-runtime/
+```
+
+After adding, removing, or changing the fixture, reload the browser page and type `/reload` in each affected idle PI WEB session so tool registration matches the current valid fixture. Do the same after installing/updating the Pi extension, then use `/research-library` to confirm that its three synthetic tools are available. Browser prompt insertion is best effort: keep the intended session mounted, verify the token appears, and submit it normally. An abandoned prompt may leave a harmless expiring intent.
+
+This preview deliberately does not render/open PDFs, ingest Paperpile exports, generate persistent Obsidian nodes, use an LLM or network by itself, edit metadata, accept drafts, or support real data. Those capabilities require separately reviewed core, viewer, privacy, migration, and persistence contracts.
+
 ### Relays
 
 **Plugin id:** `relays`

@@ -17,6 +17,7 @@
     "README.md",
     "LICENSE",
     "extensions",
+    "!extensions/**/*.test.ts",
     "docs/plugins.md",
     "docs/config.md",
     "docs/assets",

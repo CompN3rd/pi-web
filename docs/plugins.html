@@ -361,6 +361,57 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                 Review task configs before running them, especially in shared projects. Workspace Tasks runs trusted
                 shell commands from your repositories.
               </p>
+
+              <h3>Research Library (synthetic preview)</h3>
+              <p>
+                <strong>Research Library</strong> adds a workspace-only synthetic paper panel plus three bounded Pi
+                extension tools. It searches generated metadata, previews citation/backlink connections and marked
+                passages, inserts only an opaque dispatch token into the active prompt after an explicit click, and
+                displays additive answer drafts for human review. It never submits the prompt automatically.
+              </p>
+              <ul>
+                <li>Plugin id: <code>research-library</code></li>
+                <li>Fixture: <code>.pi-web/research-library.synthetic.json</code></li>
+                <li>Ignored runtime: <code>.pi-web/research-library-runtime/</code></li>
+                <li>Machine-specific: a selected remote machine must expose its own paired plugin/extension package.</li>
+                <li>A missing fixture hides the panel; a malformed fixture shows an error panel for repair.</li>
+              </ul>
+              <div class="code-card">
+                <div class="copy-row">
+                  <strong>Minimal synthetic fixture</strong>
+                  <button class="copy-button" data-copy="#research-library-config">Copy</button>
+                </div>
+                <pre id="research-library-config"><code>{
+  "version": 1,
+  "synthetic": true,
+  "libraryId": "synthetic-demo-library",
+  "papers": [{
+    "id": "synthetic-paper-alpha",
+    "title": "Synthetic Evidence Graphs",
+    "authors": ["Ada Example"],
+    "tags": ["synthetic"],
+    "collections": ["Demo"],
+    "passages": [{
+      "id": "synthetic-passage-alpha",
+      "page": 3,
+      "quote": "Generated evidence.",
+      "question": "Why retain provenance?"
+    }],
+    "cites": []
+  }]
+}</code></pre>
+              </div>
+              <p>
+                Reload the browser and type <code>/reload</code> in each affected idle PI WEB session after adding,
+                removing, or changing the fixture, or after installing/updating the paired Pi extension. Then run
+                <code>/research-library</code> to check its status. Keep the fixture and runtime directory out of Git whenever they contain anything sensitive.
+              </p>
+              <p>
+                Runtime claims, budgets, and drafts are bounded and digest-checked, but workspace JSON is not a
+                tamper-resistant authority against the same local user or other trusted code. This preview has no
+                real-PDF viewer, migration/import, persistent Obsidian publication, networking, metadata editing,
+                draft acceptance, or real-data support.
+              </p>
             </section>
 
             <section id="manage-plugins">

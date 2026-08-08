@@ -1,0 +1,9 @@
+{
+  "name": "@pi-web/research-library-plugin",
+  "private": true,
+  "piWeb": {
+    "plugins": [
+      { "id": "research-library", "module": "pi-web-plugin.js", "machineSpecific": true }
+    ]
+  }
+}
