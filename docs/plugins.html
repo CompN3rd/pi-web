@@ -408,9 +408,15 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
               </p>
               <p>
                 Runtime claims, budgets, and drafts are bounded and digest-checked, but workspace JSON is not a
-                tamper-resistant authority against the same local user or other trusted code. This preview has no
-                real-PDF viewer, migration/import, persistent Obsidian publication, networking, metadata editing,
-                draft acceptance, or real-data support.
+                tamper-resistant authority against the same local user or other trusted code. The synthetic fixture does
+                not activate PDFs or real data. The package includes an unwired bounded PDF.js reader and a public
+                same-origin PDF preview helper for a separately reviewed local-pilot parser; PDF previews are limited to
+                regular <code>.pdf</code> files up to 128 MB and one satisfiable HTTP byte range.
+              </p>
+              <p>
+                For collision-safe development, <code>npm run dev:research-pilot</code> uses API 8604, UI 8605, session
+                daemon 8606, and isolated PI WEB data/config and agent sessions. It deliberately shares the current Pi
+                agent profile, so do not install, remove, or update Pi packages from the pilot process.
               </p>
             </section>
 

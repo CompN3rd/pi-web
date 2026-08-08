@@ -8,6 +8,11 @@ const rootDir = resolve("pi-web-plugins");
 const outDir = resolve("dist/pi-web-plugins");
 const watchMode = process.argv.includes("--watch");
 const cwd = process.cwd();
+const pdfJsAssets = [
+  ["node_modules/pdfjs-dist/build/pdf.min.mjs", "research-library/pdfjs/pdf.min.mjs"],
+  ["node_modules/pdfjs-dist/build/pdf.worker.min.mjs", "research-library/pdfjs/pdf.worker.min.mjs"],
+  ["node_modules/pdfjs-dist/LICENSE", "research-library/pdfjs/LICENSE"],
+];
 
 if (watchMode) {
   await watchAndBuild();
@@ -18,6 +23,7 @@ if (watchMode) {
 async function buildAll() {
   await rm(outDir, { recursive: true, force: true });
   const result = await buildDirectory(rootDir, outDir);
+  await copyPdfJsAssets();
   const suffix = result.transpiled === 1 ? "file" : "files";
   console.log(`[plugins] built ${String(result.transpiled)} TypeScript plugin ${suffix} into ${relative(cwd, outDir)}`);
 }
@@ -78,6 +84,14 @@ async function buildFile(file, outputPath) {
   const output = `// Generated from ${relative(cwd, file)}. Do not edit directly.\n${transpiled.outputText}`;
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, output);
+}
+
+async function copyPdfJsAssets() {
+  for (const [source, destination] of pdfJsAssets) {
+    const target = resolve(outDir, destination);
+    await mkdir(dirname(target), { recursive: true });
+    await copyFile(resolve(source), target);
+  }
 }
 
 async function findPluginDirs(dir) {

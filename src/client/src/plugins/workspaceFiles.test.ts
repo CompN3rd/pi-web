@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, expect, it, vi } from "vitest";
 import type { FileContentResponse, FileTreeResponse } from "../api";
 import { createWorkspaceFiles, type WorkspaceFilesApi } from "./workspaceFiles";
@@ -28,6 +29,12 @@ describe("createWorkspaceFiles", () => {
 
     await expect(files.readFile("README.md")).resolves.toBe(content);
     expect(workspaceFile).toHaveBeenCalledWith("p-1", "w-1", "README.md", "remote-1");
+  });
+
+  it("binds PDF preview URLs to the workspace and selected machine", () => {
+    const files = createWorkspaceFiles(fakeApi(), { id: "w / 1", projectId: "p one" }, "remote / a");
+
+    expect(files.pdfPreviewUrl?.("raw/paper #1.pdf")).toContain("api/machines/remote%20%2F%20a/projects/p%20one/workspaces/w%20%2F%201/file/preview?path=raw%2Fpaper+%231.pdf");
   });
 
   it("writeFile reports the change after a successful write", async () => {

@@ -353,7 +353,9 @@ Keep both files out of Git whenever they contain anything sensitive:
 
 After adding, removing, or changing the fixture, reload the browser page and type `/reload` in each affected idle PI WEB session so tool registration matches the current valid fixture. Do the same after installing/updating the Pi extension, then use `/research-library` to confirm that its three synthetic tools are available. Browser prompt insertion is best effort: keep the intended session mounted, verify the token appears, and submit it normally. An abandoned prompt may leave a harmless expiring intent.
 
-This preview deliberately does not render/open PDFs, ingest Paperpile exports, generate persistent Obsidian nodes, use an LLM or network by itself, edit metadata, accept drafts, or support real data. Those capabilities require separately reviewed core, viewer, privacy, migration, and persistence contracts.
+This preview deliberately does not wire a PDF descriptor into its synthetic papers, ingest Paperpile exports, generate persistent Obsidian nodes, use an LLM or network by itself, edit metadata, accept drafts, or support real data. The package now contains an unwired, bounded PDF.js reader component and public PDF preview transport for the separately gated local pilot; the synthetic fixture cannot activate it. Real-corpus configuration still requires a separately reviewed parser and disclosure boundary.
+
+For collision-safe local development, `npm run dev:research-pilot` starts API `8604`, UI `8605`, and TCP session daemon `8606`. It places PI WEB data/config and agent sessions under the platform app-data directory while deliberately sharing the current Pi agent profile. The launcher refuses occupied ports and never stops another instance. Because auth, settings, packages, and providers remain shared, do not install, remove, or update Pi packages from the pilot process.
 
 ### Relays
 
@@ -681,6 +683,7 @@ interface WorkspacePanelContext {
   state?: PluginRuntimeState;
   files: {
     readFile(path: string): Promise<FileContentResponse>;
+    pdfPreviewUrl?(path: string, options?: { modifiedAt?: string }): string;
     listFiles(path: string): Promise<FileTreeResponse>;
     writeFile(path: string, content: string | Uint8Array, options?: WriteWorkspaceFileOptions): Promise<WriteWorkspaceFileResponse>;
     deleteFile(path: string): Promise<DeleteWorkspaceFileResponse>;
@@ -704,7 +707,7 @@ interface WorkspacePanelContext {
 
 `icon` is optional and is used in the compact mobile tab bar. Prefer an SVG rendered with the `svg` helper from `PluginActivationContext`; use `currentColor` so PI WEB themes can style it. If `icon` is omitted, mobile tabs fall back to initials from the panel title, or to the full title when initials collide.
 
-`machine`, `workspace`, `files`, `prompt`, `terminal`, and `host` are documented as stable for panel callbacks. The `files` helper supports `readFile`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Listing workspace files](#listing-workspace-files), and [Writing workspace files](#writing-workspace-files). The `prompt` helper supports panel interactions that insert workspace context into the current prompt — see [Prompt editor API](#prompt-editor-api). Use `terminal.open()` to switch to the built-in terminal panel; pass `{ terminalId }` to deep-link to a specific terminal. Call `host.requestRender()` when async plugin-owned state changes should make PI WEB re-evaluate panel callbacks such as `badge`, `visible`, or `render`.
+`machine`, `workspace`, `files`, `prompt`, `terminal`, and `host` are documented as stable for panel callbacks. The `files` helper supports `readFile`, optional rolling-compatible `pdfPreviewUrl`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Previewing workspace PDFs](#previewing-workspace-pdfs), [Listing workspace files](#listing-workspace-files), and [Writing workspace files](#writing-workspace-files). The `prompt` helper supports panel interactions that insert workspace context into the current prompt — see [Prompt editor API](#prompt-editor-api). Use `terminal.open()` to switch to the built-in terminal panel; pass `{ terminalId }` to deep-link to a specific terminal. Call `host.requestRender()` when async plugin-owned state changes should make PI WEB re-evaluate panel callbacks such as `badge`, `visible`, or `render`.
 
 For compatibility, PI WEB still provides the old `context.openTerminal()` workspace-panel helper at runtime. It is deprecated, intentionally omitted from the public TypeScript declarations, and planned for removal in v2. Existing JavaScript plugins keep working, while typed plugins should migrate to `context.terminal.open()`.
 
@@ -772,6 +775,7 @@ interface WorkspaceLabelContext {
   state?: PluginRuntimeState;
   files: {
     readFile(path: string): Promise<FileContentResponse>;
+    pdfPreviewUrl?(path: string, options?: { modifiedAt?: string }): string;
     listFiles(path: string): Promise<FileTreeResponse>;
     writeFile(path: string, content: string | Uint8Array, options?: WriteWorkspaceFileOptions): Promise<WriteWorkspaceFileResponse>;
     deleteFile(path: string): Promise<DeleteWorkspaceFileResponse>;
@@ -783,7 +787,7 @@ interface WorkspaceLabelContext {
 }
 ```
 
-`machine`, `workspace`, `files`, and `host` are documented as stable for label callbacks. The `files` helper supports `readFile`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Listing workspace files](#listing-workspace-files), and [Writing workspace files](#writing-workspace-files). Include `machine.id` in any label caches that depend on workspace data. Call `host.requestRender()` when async plugin-owned state changes should make PI WEB re-evaluate label `visible` or `items` callbacks.
+`machine`, `workspace`, `files`, and `host` are documented as stable for label callbacks. The `files` helper supports `readFile`, optional rolling-compatible `pdfPreviewUrl`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Previewing workspace PDFs](#previewing-workspace-pdfs), [Listing workspace files](#listing-workspace-files), and [Writing workspace files](#writing-workspace-files). Include `machine.id` in any label caches that depend on workspace data. Call `host.requestRender()` when async plugin-owned state changes should make PI WEB re-evaluate label `visible` or `items` callbacks.
 
 Items are sorted by `order` and then id. Return an empty array to render nothing. Keep callbacks synchronous and lightweight; start async work from the callback, return cached items, then call `host.requestRender()` when the cache changes.
 
@@ -921,6 +925,23 @@ workspaceLabels: [
 ```
 
 The file response includes fields such as `path`, `content`, `truncated`, and `binary`. Be careful with sensitive files such as `.env`: plugins are trusted browser code, and file contents are exposed to the plugin.
+
+## Previewing workspace PDFs
+
+`files.pdfPreviewUrl(path, options?)` returns a browser-ready, same-origin URL bound to the callback's machine, project, and workspace. It is optional so plugins can remain compatible with older hosts. Current hosts serve regular `.pdf` files up to 128 MB, verify the `%PDF-` signature, and support one satisfiable HTTP byte range for PDF.js or the browser's PDF viewer. Unsupported units, malformed syntax, multipart ranges, and `If-Range` requests fall back to the complete representation; a syntactically valid range beyond the file returns `416`.
+
+Workspace containment and configured allowed-path rules are checked before opening. The opened descriptor is then compared with the re-resolved approved path, and all response streams are bounded to the size validated on that descriptor. This narrows local path-replacement and append races, but it is not an OS sandbox against the same trusted local user.
+
+```js
+const url = context.files.pdfPreviewUrl?.("papers/example.pdf", {
+  modifiedAt: "2026-08-08T10:00:00.000Z",
+});
+if (url !== undefined) {
+  pdfViewer.sourceUrl = url;
+}
+```
+
+Treat the URL as a read capability for that workspace file. Do not send it off-origin, derive it by constructing private `/api/...` routes, or interpolate it into unsanitized HTML. The URL supports local and federated machines; PDF range requests are forwarded with identity encoding so byte offsets remain truthful. Files larger than the ceiling require a future dedicated transport rather than silently falling back to unbounded reads.
 
 ## Listing workspace files
 

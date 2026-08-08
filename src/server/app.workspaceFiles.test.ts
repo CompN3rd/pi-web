@@ -43,6 +43,66 @@ describe("buildApp workspace file routes", () => {
     expect(tooLargeResponse.json()).toEqual({ error: "Image is too large to preview (limit 10 MB)" });
   });
 
+  it("serves bounded PDFs with full and single-range responses", async () => {
+    const addResponse = await appTestContext.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "PDFs", path: appTestContext.projectDir, create: true },
+    });
+    const project = addResponse.json<Project>();
+    const pdf = Buffer.from("%PDF-1.7\n0123456789abcdef", "ascii");
+    await writeFile(join(appTestContext.projectDir, "paper.pdf"), pdf);
+    const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
+    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    if (workspace === undefined) throw new Error("Expected workspace");
+    const url = `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=paper.pdf`;
+
+    const full = await appTestContext.app.inject({ method: "GET", url });
+    expect(full.statusCode).toBe(200);
+    expect(full.rawPayload).toEqual(pdf);
+    expect(full.headers["accept-ranges"]).toBe("bytes");
+    expect(full.headers["cache-control"]).toBe("private, max-age=3600");
+    expect(full.headers["content-disposition"]).toContain("paper.pdf");
+    expect(full.headers["content-encoding"]).toBe("identity");
+    expect(full.headers["content-length"]).toBe(String(pdf.length));
+    expect(full.headers["content-type"]).toBe("application/pdf");
+    expect(full.headers["cross-origin-resource-policy"]).toBe("same-origin");
+    expect(full.headers["x-content-type-options"]).toBe("nosniff");
+
+    const closed = await appTestContext.app.inject({ method: "GET", url, headers: { range: "bytes=5-9", "accept-encoding": "gzip" } });
+    expect(closed.statusCode).toBe(206);
+    expect(closed.rawPayload).toEqual(pdf.subarray(5, 10));
+    expect(closed.headers["content-range"]).toBe(`bytes 5-9/${String(pdf.length)}`);
+    expect(closed.headers["content-length"]).toBe("5");
+    expect(closed.headers["content-encoding"]).toBe("identity");
+
+    const open = await appTestContext.app.inject({ method: "GET", url, headers: { range: "bytes=10-" } });
+    expect(open.statusCode).toBe(206);
+    expect(open.rawPayload).toEqual(pdf.subarray(10));
+
+    const suffix = await appTestContext.app.inject({ method: "GET", url, headers: { range: "bytes=-4" } });
+    expect(suffix.statusCode).toBe(206);
+    expect(suffix.rawPayload).toEqual(pdf.subarray(-4));
+
+    for (const range of ["bytes=1-2,4-5", "bytes=9-2", "garbage", "items=1-2"]) {
+      const ignored = await appTestContext.app.inject({ method: "GET", url, headers: { range } });
+      expect(ignored.statusCode).toBe(200);
+      expect(ignored.rawPayload).toEqual(pdf);
+      expect(ignored.headers["content-range"]).toBeUndefined();
+    }
+
+    for (const range of ["bytes=999-", "bytes=-0"]) {
+      const rejected = await appTestContext.app.inject({ method: "GET", url, headers: { range } });
+      expect(rejected.statusCode).toBe(416);
+      expect(rejected.headers["content-range"]).toBe(`bytes */${String(pdf.length)}`);
+    }
+
+    const ifRange = await appTestContext.app.inject({ method: "GET", url, headers: { range: "bytes=5-9", "if-range": "stale-validator" } });
+    expect(ifRange.statusCode).toBe(200);
+    expect(ifRange.rawPayload).toEqual(pdf);
+    expect(ifRange.headers["content-range"]).toBeUndefined();
+  });
+
   it("keeps normal file suggestions workspace-local when path access config is invalid", async () => {
     const addResponse = await appTestContext.app.inject({
       method: "POST",

@@ -6,6 +6,8 @@ export interface MachineHttpResponse {
   statusCode: number;
   headers: Record<string, string | string[] | undefined>;
   body?: NodeJS.ReadableStream;
+  /** Fetch decoded a non-identity wire representation before exposing `body`. */
+  bodyDecoded?: true;
 }
 
 export interface MachineJsonResponse {
@@ -17,6 +19,8 @@ export interface MachineJsonResponse {
 export interface MachineRequestOptions {
   timeoutMs?: number;
   contentType?: string;
+  range?: string;
+  acceptEncoding?: string;
 }
 
 export interface MachineClient {
@@ -43,6 +47,8 @@ const BLOCKED_CONFIGURED_HEADER_NAMES = new Set([
   "trailer",
   "authorization",
   "cookie",
+  "range",
+  "if-range",
 ]);
 
 export class RemoteMachineRequestError extends Error {
@@ -57,10 +63,12 @@ export class RemoteMachineClient implements MachineClient {
 
   async request(method: string, path: string, body?: unknown, options: MachineRequestOptions = {}): Promise<MachineHttpResponse> {
     const response = await this.fetchResponse(method, path, body, options);
+    const bodyDecoded = hasDecodedWireEncoding(response.headers);
     return {
       statusCode: response.status,
       headers: decodedResponseHeaders(response.headers),
       ...(response.body === null ? {} : { body: readableFromWebResponseBody(response.body) }),
+      ...(bodyDecoded ? { bodyDecoded: true as const } : {}),
     };
   }
 
@@ -105,7 +113,8 @@ export class RemoteMachineClient implements MachineClient {
   private requestHeaders(body: unknown, options: MachineRequestOptions): Headers {
     const headers = new Headers(this.remoteHeaders());
     headers.set("accept", "*/*");
-    headers.set("accept-encoding", REMOTE_RESPONSE_ACCEPT_ENCODING);
+    headers.set("accept-encoding", options.acceptEncoding ?? REMOTE_RESPONSE_ACCEPT_ENCODING);
+    if (options.range !== undefined) headers.set("range", options.range);
     if (body !== undefined) headers.set("content-type", options.contentType ?? defaultContentTypeForBody(body));
     return headers;
   }
@@ -149,14 +158,18 @@ function filterConfiguredHeaders(headers: Record<string, string> | undefined): R
 
 function decodedResponseHeaders(headers: Headers): Record<string, string> {
   const values: Record<string, string> = Object.fromEntries(headers.entries());
-  const contentEncoding = values["content-encoding"];
-  if (contentEncoding !== undefined && contentEncoding !== "identity") {
+  if (hasDecodedWireEncoding(headers)) {
     // Fetch decodes response bodies but retains headers for the encoded wire
     // representation. The outer HTTP edge must negotiate and frame the decoded body.
     delete values["content-encoding"];
     delete values["content-length"];
   }
   return values;
+}
+
+function hasDecodedWireEncoding(headers: Headers): boolean {
+  const contentEncoding = headers.get("content-encoding");
+  return contentEncoding !== null && contentEncoding.toLowerCase() !== "identity";
 }
 
 function serializeRequestBody(method: string, body: unknown): NonNullable<RequestInit["body"]> | undefined {

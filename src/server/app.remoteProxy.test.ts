@@ -158,7 +158,113 @@ describe("buildApp remote machine proxy routes", () => {
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
     expect(response.headers["set-cookie"]).toBeUndefined();
     expect(response.body).toBe("<svg xmlns=\"http://www.w3.org/2000/svg\" />");
-    expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces/w1/file/preview?path=diagram.svg", undefined);
+    expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces/w1/file/preview?path=diagram.svg", undefined, { acceptEncoding: "identity" });
+  });
+
+  it("forwards PDF byte ranges with identity encoding and preserves safe range headers", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote PDF", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const bytes = Buffer.from("range-bytes");
+    const request = vi.fn(() => Promise.resolve({
+      statusCode: 206,
+      headers: {
+        "content-type": "application/pdf",
+        "content-length": String(bytes.length),
+        "content-range": "bytes 10-20/100",
+        "accept-ranges": "bytes",
+        "content-disposition": "inline; filename=\"paper.pdf\"",
+        "content-encoding": "identity",
+        "cross-origin-resource-policy": "same-origin",
+        "set-cookie": "secret=yes",
+      },
+      body: Readable.from([bytes]),
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    const response = await appTestContext.app.inject({
+      method: "GET",
+      url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?path=paper.pdf`,
+      headers: { range: "bytes=10-20" },
+    });
+
+    expect(response.statusCode).toBe(206);
+    expect(response.rawPayload).toEqual(bytes);
+    expect(response.headers).toMatchObject({
+      "content-type": "application/pdf",
+      "content-range": "bytes 10-20/100",
+      "accept-ranges": "bytes",
+      "content-disposition": "inline; filename=\"paper.pdf\"",
+      "content-encoding": "identity",
+      "cross-origin-resource-policy": "same-origin",
+    });
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces/w1/file/preview?path=paper.pdf", undefined, { acceptEncoding: "identity", range: "bytes=10-20" });
+  });
+
+  it("drops Range when If-Range is present so the remote returns a full representation", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote If-Range", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const bytes = Buffer.from("%PDF-full");
+    const request = vi.fn(() => Promise.resolve({
+      statusCode: 200,
+      headers: { "content-type": "application/pdf", "content-length": String(bytes.length), "accept-ranges": "bytes" },
+      body: Readable.from([bytes]),
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    const response = await appTestContext.app.inject({
+      method: "GET",
+      url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?path=paper.pdf`,
+      headers: { range: "bytes=2-4", "if-range": "stale" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload).toEqual(bytes);
+    expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces/w1/file/preview?path=paper.pdf", undefined, { acceptEncoding: "identity" });
+  });
+
+  it("fails closed when Fetch decoded a remote 206 representation", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote decoded PDF", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const body = Readable.from(["decoded"]);
+    const request = vi.fn(() => Promise.resolve({
+      statusCode: 206,
+      headers: { "content-type": "application/pdf", "content-range": "bytes 0-6/100" },
+      body,
+      bodyDecoded: true as const,
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    const response = await appTestContext.app.inject({
+      method: "GET",
+      url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?path=paper.pdf`,
+      headers: { range: "bytes=0-6" },
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({ error: "Remote machine unavailable", detail: "Remote PDF range response was decoded in transit" });
+    expect(body.destroyed).toBe(true);
+  });
+
+  it("preserves federated 416 range metadata", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote 416", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const request = vi.fn(() => Promise.resolve({
+      statusCode: 416,
+      headers: { "content-type": "application/json", "content-range": "bytes */100", "accept-ranges": "bytes", "content-encoding": "identity" },
+      body: Readable.from([JSON.stringify({ error: "unsatisfiable" })]),
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    const response = await appTestContext.app.inject({
+      method: "GET",
+      url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?path=paper.pdf`,
+      headers: { range: "bytes=200-" },
+    });
+
+    expect(response.statusCode).toBe(416);
+    expect(response.headers["content-range"]).toBe("bytes */100");
+    expect(response.headers["accept-ranges"]).toBe("bytes");
   });
 
   it("proxies remote workspace file writes as raw request bodies", async () => {

@@ -135,6 +135,9 @@ export interface Workspace {
 export interface WorkspaceFiles {
   /** Read a file from the workspace. Works for local and federated machines. */
   readFile(path: string): Promise<FileContentResponse>;
+  /** Return a browser-ready same-origin URL for bounded PDF preview streaming.
+   *  Optional for rolling compatibility with older PI WEB hosts. */
+  pdfPreviewUrl?(path: string, options?: { modifiedAt?: string }): string;
   /** List the entries of a workspace directory. Pass "" for the workspace root.
    *  Works for local and federated machines. Rejects when the directory does not
    *  exist or cannot be read, matching readFile error behavior. */

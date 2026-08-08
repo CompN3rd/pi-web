@@ -1,11 +1,13 @@
 import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
 import { researchLibraryPanelVisible } from "./fixtureCache.js";
+import { defineResearchLibraryPdfViewerElement } from "./pdfViewerElement.js";
 import { defineResearchLibraryPanelElement } from "./researchLibraryPanelElement.js";
 
 const plugin: PiWebPlugin = {
   apiVersion: 1,
   name: "Research Library (Synthetic Preview)",
   activate: ({ html, svg }) => {
+    defineResearchLibraryPdfViewerElement();
     defineResearchLibraryPanelElement();
 
     return {

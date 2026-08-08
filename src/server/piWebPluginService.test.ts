@@ -54,6 +54,7 @@ describe("PiWebPluginService", () => {
       packageJson: { piWeb: { plugins: [{ id: "extension-only", module: ".js" }] } },
       files: {
         ".js": "export default {};",
+        "worker.mjs": "export default {};",
         ".svg": '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
       },
     });
@@ -61,6 +62,7 @@ describe("PiWebPluginService", () => {
     const service = new PiWebPluginService({ roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }], packageProvider: false });
 
     await expect(service.readAsset("extension-only", ".js")).resolves.toMatchObject({ contentType: "application/javascript; charset=utf-8" });
+    await expect(service.readAsset("extension-only", "worker.mjs")).resolves.toMatchObject({ contentType: "application/javascript; charset=utf-8" });
     await expect(service.readAsset("extension-only", ".svg")).resolves.toMatchObject({ contentType: "image/svg+xml" });
   });
 

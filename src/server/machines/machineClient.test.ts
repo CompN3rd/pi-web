@@ -43,7 +43,57 @@ describe("RemoteMachineClient", () => {
     expect(new Headers(init.headers).get("accept-encoding")).toBe("gzip, deflate");
   });
 
-  it("removes stale representation headers after Fetch decodes a compressed response", async () => {
+  it("forwards an explicit byte range with identity encoding without trusting configured range headers", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(new Response("ok", { status: 206 })));
+    const client = new RemoteMachineClient({
+      baseUrl: "https://remote.example.test/",
+      headers: { Range: "bytes=0-999", "If-Range": "stale", "Accept-Encoding": "gzip" },
+    }, fetchImpl);
+
+    await client.request("GET", "/api/file/preview", undefined, { range: "bytes=5-9", acceptEncoding: "identity" });
+
+    const { init } = onlyFetchCall(fetchImpl);
+    const headers = new Headers(init.headers);
+    expect(headers.get("range")).toBe("bytes=5-9");
+    expect(headers.get("if-range")).toBeNull();
+    expect(headers.get("accept-encoding")).toBe("identity");
+  });
+
+  it("drops configured range validators when a preview request intentionally has no range", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(new Response("ok", { status: 200 })));
+    const client = new RemoteMachineClient({
+      baseUrl: "https://remote.example.test/",
+      headers: { Range: "bytes=0-1", "If-Range": "stale" },
+    }, fetchImpl);
+
+    await client.request("GET", "/api/file/preview", undefined, { acceptEncoding: "identity" });
+
+    const headers = new Headers(onlyFetchCall(fetchImpl).init.headers);
+    expect(headers.get("range")).toBeNull();
+    expect(headers.get("if-range")).toBeNull();
+  });
+
+  it("marks decoded streamed responses and removes stale representation headers", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(new Response("decoded bytes", {
+      status: 206,
+      headers: {
+        "content-type": "application/pdf",
+        "content-encoding": "gzip",
+        "content-length": "31",
+        "content-range": "bytes 0-12/100",
+      },
+    })));
+    const client = new RemoteMachineClient({ baseUrl: "https://remote.example.test/" }, fetchImpl);
+
+    const response = await client.request("GET", "/api/file/preview");
+
+    expect(response.bodyDecoded).toBe(true);
+    expect(response.headers["content-encoding"]).toBeUndefined();
+    expect(response.headers["content-length"]).toBeUndefined();
+    expect(response.headers["content-range"]).toBe("bytes 0-12/100");
+  });
+
+  it("removes stale representation headers after Fetch decodes a compressed JSON response", async () => {
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: {

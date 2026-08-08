@@ -1,5 +1,5 @@
 import type { SessionRef } from "../../../shared/apiTypes";
-import { resolveAppUrl } from "../appUrl";
+import { resolveAppUrl, type AppUrlContext } from "../appUrl";
 
 export function machineGitDiffPath(machineId: string, projectId: string, workspaceId: string, options?: { path?: string; staged?: boolean }): string {
   const params = new URLSearchParams();
@@ -25,10 +25,15 @@ export function workspaceFileWriteUrl(projectId: string, workspaceId: string, pa
   return resolveAppUrl(`${prefix}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/file?${params.toString()}`);
 }
 
-export function workspaceImagePreviewUrl(projectId: string, workspaceId: string, path: string, options?: { modifiedAt?: string; machineId?: string }): string {
+export function workspaceFilePreviewUrl(projectId: string, workspaceId: string, path: string, options?: { modifiedAt?: string; machineId?: string; context?: AppUrlContext }): string {
   const params = new URLSearchParams();
   params.set("path", path);
   if (options?.modifiedAt !== undefined) params.set("v", options.modifiedAt);
   const prefix = `api/machines/${encodeURIComponent(options?.machineId ?? "local")}`;
-  return resolveAppUrl(`${prefix}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/file/preview?${params.toString()}`);
+  return resolveAppUrl(`${prefix}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/file/preview?${params.toString()}`, options?.context);
+}
+
+/** Backward-compatible image-specific name; images and PDFs share the bounded preview route. */
+export function workspaceImagePreviewUrl(projectId: string, workspaceId: string, path: string, options?: { modifiedAt?: string; machineId?: string; context?: AppUrlContext }): string {
+  return workspaceFilePreviewUrl(projectId, workspaceId, path, options);
 }

@@ -1,4 +1,5 @@
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
+import { workspaceFilePreviewUrl } from "../api/urls";
 import type { WorkspaceFiles } from "./types";
 
 /**
@@ -22,6 +23,7 @@ export interface WorkspaceFilesApi {
 export function createWorkspaceFiles(api: WorkspaceFilesApi, workspace: Pick<Workspace, "id" | "projectId">, machineId: string, onFilesChanged?: () => void): WorkspaceFiles {
   return {
     readFile: (path) => api.workspaceFile(workspace.projectId, workspace.id, path, machineId),
+    pdfPreviewUrl: (path, options) => workspaceFilePreviewUrl(workspace.projectId, workspace.id, path, { ...options, machineId }),
     listFiles: (path) => api.workspaceTree(workspace.projectId, workspace.id, path, machineId),
     writeFile: async (path, content, options) => {
       const result = await api.writeWorkspaceFile(workspace.projectId, workspace.id, path, content, options, machineId);

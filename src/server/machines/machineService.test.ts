@@ -119,6 +119,8 @@ describe("MachineService", () => {
   it("rejects configured machine headers that would override proxy transport semantics", async () => {
     await expect(service.add({ name: "Bad", baseUrl: "https://example.test", headers: { Authorization: "Bearer secret" } })).rejects.toThrow("not allowed");
     await expect(service.add({ name: "Bad", baseUrl: "https://example.test", headers: { Connection: "close" } })).rejects.toThrow("not allowed");
+    await expect(service.add({ name: "Bad", baseUrl: "https://example.test", headers: { Range: "bytes=0-1" } })).rejects.toThrow("not allowed");
+    await expect(service.add({ name: "Bad", baseUrl: "https://example.test", headers: { "If-Range": "stale" } })).rejects.toThrow("not allowed");
   });
 
   it("uses the lightweight runtime check for local machine health", async () => {

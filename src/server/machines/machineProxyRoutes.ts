@@ -12,6 +12,11 @@ export const REMOTE_WEBSOCKET_ROUTES = FEDERATED_WEBSOCKET_ROUTES;
 const SAFE_RESPONSE_HEADERS = new Set([
   "content-type",
   "content-length",
+  "content-disposition",
+  "content-range",
+  "accept-ranges",
+  "content-encoding",
+  "cross-origin-resource-policy",
   "cache-control",
   "last-modified",
   "etag",
@@ -24,7 +29,8 @@ export function registerMachineProxyRoutes(app: FastifyInstance, machines = new 
     app.route<{ Params: { machineId: string }; Body: unknown }>({
       method: spec.method,
       url: `/api/machines/:machineId${spec.path}`,
-      handler: (request, reply) => proxyHttpRequest(machines, spec, request.params.machineId, request.method, request.url, request.body, request.headers["content-type"], reply),
+      ...(spec.path.endsWith("/file/preview") ? { config: { compress: false } } : {}),
+      handler: (request, reply) => proxyHttpRequest(machines, spec, request.params.machineId, request.method, request.url, request.body, request.headers["content-type"], request.headers.range, firstHeaderValue(request.headers["if-range"]), reply),
     });
   }
 
@@ -35,7 +41,7 @@ export function registerMachineProxyRoutes(app: FastifyInstance, machines = new 
   }
 }
 
-async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRouteSpec, machineId: string, method: string, requestUrl: string, body: unknown, contentType: string | string[] | undefined, reply: FastifyReply): Promise<FastifyReply> {
+async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRouteSpec, machineId: string, method: string, requestUrl: string, body: unknown, contentType: string | string[] | undefined, range: string | undefined, ifRange: string | undefined, reply: FastifyReply): Promise<FastifyReply> {
   if (machineId === "local") {
     return reply.code(501).send({ error: "Local machine route is not registered for this endpoint" });
   }
@@ -49,10 +55,14 @@ async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRou
     const remotePath = remoteApiPath(machineId, requestUrl);
     if (spec.path === "/config") return await proxySelectedMachineConfigRequest(client, machineId, method, remotePath, body, reply);
 
-    const requestOptions = proxyRequestOptions(spec, body, contentType);
+    const requestOptions = proxyRequestOptions(spec, body, contentType, range, ifRange);
     const upstream = requestOptions === undefined
       ? await client.request(method, remotePath, body)
       : await client.request(method, remotePath, body, requestOptions);
+    if (upstream.statusCode === 206 && upstream.bodyDecoded === true) {
+      discardBody(upstream.body);
+      throw new Error("Remote PDF range response was decoded in transit");
+    }
     reply.code(upstream.statusCode);
     applySafeHeaders(reply, upstream.headers);
     if (upstream.body === undefined) return await reply.send();
@@ -129,14 +139,28 @@ function remoteApiPath(machineId: string, requestUrl: string): string {
   return `/api${compatPath}`;
 }
 
-function proxyRequestOptions(spec: Pick<FederatedHttpRouteSpec, "timeoutMs">, body: unknown, contentType: string | string[] | undefined): MachineRequestOptions | undefined {
+function proxyRequestOptions(spec: Pick<FederatedHttpRouteSpec, "path" | "timeoutMs">, body: unknown, contentType: string | string[] | undefined, range: string | undefined, ifRange: string | undefined): MachineRequestOptions | undefined {
   const options: MachineRequestOptions = {};
   if (spec.timeoutMs !== undefined) options.timeoutMs = spec.timeoutMs;
   if (isRawProxyBody(body)) {
     const value = firstHeaderValue(contentType);
     if (value !== undefined && value !== "") options.contentType = value;
   }
+  if (spec.path.endsWith("/file/preview")) {
+    options.acceptEncoding = "identity";
+    // Until the preview route exposes a stable strong validator, any If-Range
+    // request is forwarded as a full representation request.
+    if (ifRange === undefined && range !== undefined) options.range = range;
+  }
   return Object.keys(options).length === 0 ? undefined : options;
+}
+
+function discardBody(body: NodeJS.ReadableStream | undefined): void {
+  if (body !== undefined && isDestroyableStream(body)) body.destroy();
+}
+
+function isDestroyableStream(value: NodeJS.ReadableStream): value is NodeJS.ReadableStream & { destroy(): void } {
+  return "destroy" in value && typeof value.destroy === "function";
 }
 
 function isRawProxyBody(body: unknown): boolean {

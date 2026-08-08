@@ -50,6 +50,7 @@ export interface PluginMachine {
 
 export interface WorkspaceFiles {
   readFile(path: string): Promise<FileContentResponse>;
+  pdfPreviewUrl?(path: string, options?: { modifiedAt?: string }): string;
   listFiles(path: string): Promise<FileTreeResponse>;
   writeFile(path: string, content: string | Uint8Array, options?: WriteWorkspaceFileOptions): Promise<WriteWorkspaceFileResponse>;
   deleteFile(path: string): Promise<DeleteWorkspaceFileResponse>;

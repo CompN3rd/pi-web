@@ -6,6 +6,7 @@ import { deleteWorkspaceFile, moveWorkspaceFile, readWorkspaceFile, writeWorkspa
 import { isAbsoluteishFileSuggestionQuery, listFileSuggestions, listPathSuggestions } from "./workspaces/fileSuggestions.js";
 import { listWorkspaceTree } from "./workspaces/fileTreeService.js";
 import { readWorkspaceImagePreview } from "./workspaces/imagePreviewService.js";
+import { PdfRangeNotSatisfiableError, readWorkspacePdfPreview } from "./workspaces/pdfPreviewService.js";
 import { resolveWorkspaceContext } from "./workspaces/workspaceContext.js";
 import { pathAccessForWorkspaceContext } from "./workspaces/effectivePathAccess.js";
 import type { WorkspaceService } from "./workspaces/workspaceService.js";
@@ -69,10 +70,32 @@ export function registerWorkspaceExplorerRoutes(app: FastifyInstance, projects: 
     }
   });
 
-  app.get<{ Params: { projectId: string; workspaceId: string }; Querystring: { path?: string } }>(`${prefix}/projects/:projectId/workspaces/:workspaceId/file/preview`, async (request, reply) => {
+  app.get<{ Params: { projectId: string; workspaceId: string }; Querystring: { path?: string } }>(`${prefix}/projects/:projectId/workspaces/:workspaceId/file/preview`, { config: { compress: false } }, async (request, reply) => {
     try {
       const context = await resolveWorkspaceContext(projects, workspaces, request.params.projectId, request.params.workspaceId);
-      const preview = await readWorkspaceImagePreview(context.root, request.query.path, await pathAccessForWorkspaceContext(context, options.config));
+      const pathAccess = await pathAccessForWorkspaceContext(context, options.config);
+      if (request.query.path?.toLowerCase().endsWith(".pdf") === true) {
+        // A validator-bearing If-Range request is served conservatively in full;
+        // this route does not expose a stable strong validator for PDFs yet.
+        const range = request.headers["if-range"] === undefined ? firstHeaderValue(request.headers.range) : undefined;
+        const preview = await readWorkspacePdfPreview(context.root, request.query.path, range, pathAccess);
+        const response = reply
+          .code(preview.range === undefined ? 200 : 206)
+          .type(preview.mimeType)
+          .header("Accept-Ranges", "bytes")
+          .header("Cache-Control", "private, max-age=3600")
+          .header("Content-Disposition", preview.disposition)
+          .header("Content-Encoding", "identity")
+          .header("Content-Length", String(preview.contentLength))
+          .header("Content-Security-Policy", "sandbox; default-src 'none'; frame-ancestors 'self'")
+          .header("Cross-Origin-Resource-Policy", "same-origin")
+          .header("Last-Modified", new Date(preview.modifiedAt).toUTCString())
+          .header("X-Content-Type-Options", "nosniff");
+        if (preview.range !== undefined) response.header("Content-Range", `bytes ${String(preview.range.start)}-${String(preview.range.end)}/${String(preview.size)}`);
+        return await response.send(preview.stream);
+      }
+
+      const preview = await readWorkspaceImagePreview(context.root, request.query.path, pathAccess);
       return await reply
         .type(preview.mimeType)
         .header("Cache-Control", "private, max-age=3600")
@@ -82,6 +105,14 @@ export function registerWorkspaceExplorerRoutes(app: FastifyInstance, projects: 
         .header("X-Content-Type-Options", "nosniff")
         .send(preview.stream);
     } catch (error) {
+      if (error instanceof PdfRangeNotSatisfiableError) {
+        return reply
+          .code(416)
+          .header("Accept-Ranges", "bytes")
+          .header("Content-Encoding", "identity")
+          .header("Content-Range", `bytes */${String(error.size)}`)
+          .send({ error: error.message });
+      }
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }
   });
@@ -97,6 +128,10 @@ export function registerWorkspaceExplorerRoutes(app: FastifyInstance, projects: 
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }
   });
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function registerWorkspaceFileContentParsers(app: FastifyInstance): void {
