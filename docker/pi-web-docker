@@ -365,9 +365,35 @@ require_runtime_compose_assets() {
   [ -f "$root/.env" ] || die_missing_runtime_asset "$root" "$root/.env"
 }
 
+container_env_file_for_data_dir() {
+  container_env_root=$1
+  container_env_data_dir=$2
+  case "$container_env_data_dir" in
+    /*) printf '%s/container.env\n' "$container_env_data_dir" ;;
+    *) printf '%s/%s/container.env\n' "$container_env_root" "$container_env_data_dir" ;;
+  esac
+}
+
+# Compose fails when a declared env_file is absent, so guarantee the
+# user-owned file exists for installs made before it was introduced.
+ensure_runtime_container_env() {
+  container_env_root=$1
+  container_env_data_dir=$(required_env_file_value "$container_env_root/.env" PI_WEB_DOCKER_DATA_DIR)
+  container_env_path=$(container_env_file_for_data_dir "$container_env_root" "$container_env_data_dir")
+  [ ! -f "$container_env_path" ] || return 0
+  container_env_helper=$container_env_root/internal/host-profile.sh
+  [ -f "$container_env_helper" ] || die_missing_runtime_asset "$container_env_root" "$container_env_helper"
+  # shellcheck source=internal/host-profile.sh
+  # shellcheck disable=SC1091
+  . "$container_env_helper"
+  pi_web_docker_write_container_env_template "$container_env_path" \
+    || die "could not create container environment file: $container_env_path"
+}
+
 runtime_compose() {
   root=$(runtime_root)
   require_runtime_compose_assets "$root"
+  ensure_runtime_container_env "$root"
   project_name=$(required_env_file_value "$root/.env" COMPOSE_PROJECT_NAME)
   (
     cd "$root" || exit 1
@@ -567,6 +593,12 @@ run_doctor() {
       [ -f "$root/compose.yml" ] && printf 'Runtime Compose file: %s\n' "$root/compose.yml" || printf 'Runtime Compose file: missing (%s/compose.yml)\n' "$root"
       [ -f "$root/compose.override.yml" ] && printf 'Runtime Compose override: %s\n' "$root/compose.override.yml" || printf 'Runtime Compose override: missing (%s/compose.override.yml)\n' "$root"
       [ -x "$root/install.sh" ] && printf 'Runtime installer: %s\n' "$root/install.sh" || printf 'Runtime installer: missing or not executable (%s/install.sh)\n' "$root"
+      if runtime_data_dir=$(env_file_value "$root/.env" PI_WEB_DOCKER_DATA_DIR 2>/dev/null) && [ -n "$runtime_data_dir" ]; then
+        runtime_container_env=$(container_env_file_for_data_dir "$root" "$runtime_data_dir")
+        [ -f "$runtime_container_env" ] && printf 'Container environment: %s\n' "$runtime_container_env" || printf 'Container environment: created on next start (%s)\n' "$runtime_container_env"
+      else
+        printf 'Container environment: unknown (%s/.env has no PI_WEB_DOCKER_DATA_DIR)\n' "$root"
+      fi
       ;;
     dev)
       dev_config=$root/.pi-web/docker-compose-dev.local.env
@@ -579,6 +611,12 @@ run_doctor() {
       [ -f "$dev_override" ] && printf 'Generated dev Compose override: %s\n' "$dev_override" || printf 'Generated dev Compose override: missing (%s)\n' "$dev_override"
       [ -f "$dev_compose_file" ] && printf 'Dev Compose file: %s\n' "$dev_compose_file" || printf 'Dev Compose file: missing (%s)\n' "$dev_compose_file"
       [ -x "$dev_wrapper" ] && printf 'Dev Compose helper: %s\n' "$dev_wrapper" || printf 'Dev Compose helper: missing or not executable (%s)\n' "$dev_wrapper"
+      if dev_data_dir=$(env_file_value "$dev_env" PI_WEB_DOCKER_DATA_DIR 2>/dev/null) && [ -n "$dev_data_dir" ]; then
+        dev_container_env=$(container_env_file_for_data_dir "$root" "$dev_data_dir")
+        [ -f "$dev_container_env" ] && printf 'Container environment: %s\n' "$dev_container_env" || printf 'Container environment: created on next start (%s)\n' "$dev_container_env"
+      else
+        printf 'Container environment: created on next start (data directory not generated yet)\n'
+      fi
       if [ -f "$dev_env" ]; then
         dev_uid=$(env_file_value "$dev_env" PI_WEB_UID 2>/dev/null || true)
         dev_gid=$(env_file_value "$dev_env" PI_WEB_GID 2>/dev/null || true)

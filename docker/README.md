@@ -119,7 +119,7 @@ Common environment variables written to `.env`:
 
 Host-derived IDs and the Docker host profile are refreshed on rerun unless you explicitly override the IDs. User-facing values such as data directory, bind address, port, image names, upload limit, extra host paths, base image, Node.js settings, extra packages, and npm package selection are preserved from an existing `.env` unless you pass a flag or environment override.
 
-The installer also writes a generated `compose.override.yml` in the install directory. `pi-web-docker` loads the generated `.env` and Compose override explicitly for runtime commands and passes the generated `COMPOSE_PROJECT_NAME` to Docker Compose, so an unrelated ambient Compose project name cannot redirect lifecycle commands. The project name stays scoped to this lifecycle control path instead of entering web, terminal, or agent environments. Re-run `pi-web-docker install` or `pi-web-docker update` instead of editing generated files by hand.
+The installer also writes a generated `compose.override.yml` in the install directory. `pi-web-docker` loads the generated `.env` and Compose override explicitly for runtime commands and passes the generated `COMPOSE_PROJECT_NAME` to Docker Compose, so an unrelated ambient Compose project name cannot redirect lifecycle commands. The project name stays scoped to this lifecycle control path instead of entering web, terminal, or agent environments. Re-run `pi-web-docker install` or `pi-web-docker update` instead of editing generated files by hand. Extra environment variables for the containers go in `container.env` instead; see [Container environment](#container-environment).
 
 ### Base image and tooling
 
@@ -210,6 +210,37 @@ curl -fsSL "https://raw.githubusercontent.com/jmfederico/pi-web/$ref/docker/inst
   | sh -s -- --asset-ref "$ref"
 ```
 
+## Container environment
+
+Extra environment variables for the `sessiond` and `web` containers belong in one file inside the persistent data directory:
+
+```text
+$PI_WEB_DOCKER_DATA_DIR/container.env
+```
+
+By default that resolves to `$HOME/.local/share/pi-web-docker/data/container.env`. Runtime and development mode read the same file because they [share `/data`](#sharing-runtime-and-development-state). The installer and `pi-web-docker --dev` create it once with a commented template, with owner-only permissions, and never rewrite it, so it is safe to keep long-lived values there. `pi-web-docker doctor` prints the resolved path for the selected mode.
+
+Every `KEY=value` line joins the environment of both PI WEB services, and agent sessions, terminals, and the processes they start inherit it. Use it for proxy settings, provider credentials, and the runtime-only environment variables in the [configuration reference](https://pi-web.dev/config):
+
+```dotenv
+HTTPS_PROXY=http://proxy.example.internal:3128
+NO_PROXY=localhost,127.0.0.1
+PI_WEB_OFFLINE=1
+```
+
+Apply changes by recreating the containers:
+
+```bash
+~/.local/share/pi-web-docker/pi-web-docker start
+./docker/pi-web-docker --dev start
+```
+
+The `restart`, `restart-web`, and `restart-sessiond` commands reuse the existing containers, so they keep the environment those containers already have.
+
+The values PI WEB sets for a container stay authoritative: `HOME`, `XDG_CONFIG_HOME`, `PI_WEB_DATA_DIR`, `PI_WEB_SESSIOND_SOCKET`, `PI_CODING_AGENT_DIR`, `PI_WEB_MAX_UPLOAD_BYTES`, `HOSTEXEC_MODE`, `HOSTEXEC_IMAGE`, the `PI_WEB_DOCKER_*` keys, and the web server's `PI_WEB_HOST` and `PI_WEB_PORT` keep their generated values even when `container.env` lists them. Change those through installer flags, `.env`, or `.pi-web/docker-compose-dev.local.env`.
+
+The generated `.env` and `.pi-web/docker-compose-dev.generated.env` files serve a different purpose: Docker Compose reads them to fill in placeholders in the Compose files, so keys added there configure Compose itself and do not reach the container process environment.
+
 ## Localhost binding and remote access
 
 The runtime listens on `0.0.0.0:8504` inside the container but publishes it to `127.0.0.1:8504` on the host by default.
@@ -268,7 +299,7 @@ From the repository root, use the canonical Docker command so the same fail-clos
 ./docker/pi-web-docker --dev start
 ```
 
-The command creates `.pi-web/docker-compose-dev.local.env` on first run, writes `.pi-web/docker-compose-dev.generated.env` and `.pi-web/docker-compose-dev.host.generated.yml`, then runs Docker Compose with `docker/compose.dev.yml` plus that generated host override. The generated environment includes the host repository root as `PI_WEB_DOCKER_DEV_REPO_ROOT`, and the generated override mounts that path back into the containers so Docker helper commands can run Compose from the same absolute path. Edit only the `.local.env` file for persistent dev settings; the `.generated.env` and `.host.generated.yml` files are refreshed by the command.
+The command creates `.pi-web/docker-compose-dev.local.env` on first run, writes `.pi-web/docker-compose-dev.generated.env` and `.pi-web/docker-compose-dev.host.generated.yml`, then runs Docker Compose with `docker/compose.dev.yml` plus that generated host override. The generated environment includes the host repository root as `PI_WEB_DOCKER_DEV_REPO_ROOT`, and the generated override mounts that path back into the containers so Docker helper commands can run Compose from the same absolute path. Edit only the `.local.env` file for persistent dev settings; the `.generated.env` and `.host.generated.yml` files are refreshed by the command. Extra environment variables for the dev containers go in the shared [`container.env`](#container-environment).
 
 Values used by the command are resolved in this order:
 
@@ -341,6 +372,12 @@ Pi session files are therefore shared at:
 
 ```text
 $HOME/.local/share/pi-web-docker/data/pi-agent/sessions/
+```
+
+The [`container.env`](#container-environment) file for extra container environment variables is shared through the same directory:
+
+```text
+$HOME/.local/share/pi-web-docker/data/container.env
 ```
 
 Set `PI_WEB_DOCKER_DATA_DIR=/some/path` for both modes if you want that shared data somewhere else.

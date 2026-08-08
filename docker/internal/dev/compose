@@ -257,6 +257,11 @@ esac
 
 mkdir -p "$pi_web_data_dir" || die "could not create data directory: $pi_web_data_dir"
 
+container_env_file=$pi_web_data_dir/container.env
+if ! pi_web_docker_write_container_env_template "$container_env_file"; then
+  die "could not create container environment file: $container_env_file"
+fi
+
 env_file=$generated_env_file
 override_file=$repo_root/.pi-web/docker-compose-dev.host.generated.yml
 
@@ -305,6 +310,7 @@ case "$PI_WEB_DETECTED_DOCKER_HOST_PROFILE" in
     ;;
 esac
 log "User-editable dev config: $dev_config_file"
+log "Container environment (shared with runtime mode): $container_env_file"
 log "Generated dev env: $env_file"
 log "Generated dev Compose override: $override_file"
 

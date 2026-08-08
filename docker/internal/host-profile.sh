@@ -259,6 +259,53 @@ pi_web_docker_host_write_extra_volumes() {
   done
 }
 
+# Create the user-owned container environment file once, without ever
+# rewriting an existing one. Runtime and development mode share this file
+# because they share the persistent /data mount.
+pi_web_docker_write_container_env_template() {
+  pi_web_container_env_target=$1
+  [ ! -e "$pi_web_container_env_target" ] || return 0
+  pi_web_container_env_dir=$(dirname "$pi_web_container_env_target")
+  mkdir -p "$pi_web_container_env_dir" || return 1
+  pi_web_container_env_temp=$pi_web_container_env_target.$$
+  pi_web_container_env_umask=$(umask)
+  umask 077
+  cat >"$pi_web_container_env_temp" <<'EOF'
+# PI WEB Docker container environment. Safe to edit.
+#
+# Every KEY=value line here is added to the environment of the PI WEB
+# sessiond and web containers, in both runtime and development mode, and is
+# inherited by agent sessions, terminals, and the processes they start.
+#
+# This file is created once and is never rewritten. It is not the same as the
+# generated .env and .pi-web/docker-compose-dev.generated.env files: those only
+# give values to Docker Compose itself and never reach the container process
+# environment.
+#
+# Apply changes by recreating the containers:
+#   pi-web-docker start                (development: pi-web-docker --dev start)
+# The restart commands reuse the existing containers and do not re-read this
+# file.
+#
+# The values PI WEB sets for a container stay authoritative, so HOME,
+# XDG_CONFIG_HOME, PI_WEB_DATA_DIR, PI_WEB_SESSIOND_SOCKET, PI_CODING_AGENT_DIR,
+# PI_WEB_MAX_UPLOAD_BYTES, HOSTEXEC_MODE, HOSTEXEC_IMAGE, the PI_WEB_DOCKER_*
+# keys, and the web server's PI_WEB_HOST and PI_WEB_PORT keep their generated
+# values. Change those through installer flags, .env, or
+# .pi-web/docker-compose-dev.local.env instead.
+#
+# Use one KEY=value per line. Docker Compose dotenv rules apply, so $VAR and
+# ${VAR} expand; write $$ for a literal dollar sign.
+#
+# Examples:
+# HTTPS_PROXY=http://proxy.example.internal:3128
+# NO_PROXY=localhost,127.0.0.1
+# PI_WEB_OFFLINE=1
+EOF
+  umask "$pi_web_container_env_umask"
+  mv "$pi_web_container_env_temp" "$pi_web_container_env_target" || return 1
+}
+
 pi_web_docker_host_write_compose_override() {
   target_file=$1
   host_profile=$2

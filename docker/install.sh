@@ -44,6 +44,12 @@ Progressive host setup:
   PI_WEB_DOCKER_EXTRA_HOST_PATHS to a whitespace-separated list of additional
   existing absolute directories to bind-mount at the same path in the containers.
 
+Container environment:
+  Extra environment variables for the sessiond/web containers belong in
+  DATA_DIR/container.env. The installer creates that file once with a
+  commented template and never rewrites it. Development mode reads the same
+  file. Values in .env only configure Docker Compose itself.
+
 Environment variables with the same names used in .env may also be set before
 running the installer, for example:
 
@@ -401,6 +407,11 @@ if ! pi_web_docker_host_write_compose_override "$compose_override_file" "$pi_web
   die "could not write host-specific Compose override"
 fi
 
+container_env_file=$data_dir/container.env
+if ! pi_web_docker_write_container_env_template "$container_env_file"; then
+  die "could not create container environment file: $container_env_file"
+fi
+
 umask 077
 temp_env=$env_file.$$
 cat >"$temp_env" <<EOF
@@ -455,6 +466,7 @@ case "$pi_web_host_profile" in
     ;;
 esac
 log "Persistent PI WEB Docker data: $data_dir"
+log "Container environment (safe to edit): $container_env_file"
 log "Custom image hooks: $custom_image_hooks_dir"
 
 if [ "${PI_WEB_DOCKER_SKIP_COMPOSE:-0}" = 1 ]; then

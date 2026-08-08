@@ -99,6 +99,27 @@ describe("Docker command assets", () => {
     expect(devCompose.match(/volumes: \*pi-web-dev-volumes/g)).toHaveLength(3);
   });
 
+  it("gives both modes the same user-owned container environment file in the shared data directory", async () => {
+    const [runtimeCompose, devCompose, installer, devWrapper, hostProfile] = await Promise.all([
+      readRepoFile("docker/compose.yml"),
+      readRepoFile("docker/compose.dev.yml"),
+      readRepoFile("docker/install.sh"),
+      readRepoFile("docker/internal/dev/compose"),
+      readRepoFile("docker/internal/host-profile.sh"),
+    ]);
+
+    expect(runtimeCompose).toContain("- ${PI_WEB_DOCKER_DATA_DIR:-./data}/container.env");
+    expect(devCompose).toContain("- ${PI_WEB_DOCKER_DATA_DIR:-${HOME}/.local/share/pi-web-docker/data}/container.env");
+    // Only the two long-running PI WEB services take the file; data-init just prepares /data as root.
+    expect(runtimeCompose.match(/env_file: \*pi-web-env-file/g)).toHaveLength(2);
+    expect(devCompose.match(/env_file: \*pi-web-dev-env-file/g)).toHaveLength(2);
+    expect(installer).toContain("container_env_file=$data_dir/container.env");
+    expect(installer).toContain("pi_web_docker_write_container_env_template \"$container_env_file\"");
+    expect(devWrapper).toContain("container_env_file=$pi_web_data_dir/container.env");
+    expect(devWrapper).toContain("pi_web_docker_write_container_env_template \"$container_env_file\"");
+    expect(hostProfile).toContain("pi_web_docker_write_container_env_template() {");
+  });
+
   dockerCommandIt("fetches remote installer assets without clobbering the write target", async () => {
     const installDir = join(tempDir, "remote-runtime");
     const fakeDocker = await installFakeDocker();
@@ -128,6 +149,74 @@ describe("Docker command assets", () => {
     const env = await readFile(join(installDir, ".env"), "utf8");
     expect(env).toContain(`PI_WEB_DOCKER_INSTALL_DIR=${installDir}`);
     expect(env).toContain("PI_WEB_DOCKER_REF=test-assets");
+  });
+
+  dockerCommandIt("creates the shared container environment file during install without overwriting edits", async () => {
+    const installDir = join(tempDir, "container-env-runtime");
+    const dataDir = join(installDir, "data");
+    const containerEnvFile = join(dataDir, "container.env");
+    const fakeDocker = await installFakeDocker();
+    await installFakeUname(fakeDocker.binDir, "Darwin");
+    const home = join(tempDir, "container-env-home");
+    const socketPath = join(home, ".docker", "run", "docker.sock");
+    const installEnv = {
+      ...cleanProcessEnv(),
+      PATH: `${fakeDocker.binDir}:${process.env["PATH"] ?? ""}`,
+      HOME: home,
+      FAKE_DOCKER_LOG: fakeDocker.logPath,
+    };
+    const installArgs = [
+      join(repoRoot, "docker", "install.sh"),
+      "--install-dir", installDir,
+      "--data-dir", dataDir,
+      "--asset-dir", join(repoRoot, "docker"),
+      "--skip-compose",
+    ];
+
+    await withUnixSocket(socketPath, async () => {
+      const firstInstall = await execUtf8("sh", installArgs, installEnv);
+      expect(firstInstall.stderr).toContain(`Container environment (safe to edit): ${containerEnvFile}`);
+
+      const template = await readFile(containerEnvFile, "utf8");
+      expect(template).toContain("# PI WEB Docker container environment. Safe to edit.");
+      expect(template).toContain("pi-web-docker start");
+
+      await writeFile(containerEnvFile, `${template}HTTPS_PROXY=http://proxy.example.test:3128\n`, "utf8");
+      await execUtf8("sh", installArgs, installEnv);
+    });
+
+    expect(await readFile(containerEnvFile, "utf8")).toContain("HTTPS_PROXY=http://proxy.example.test:3128");
+  });
+
+  dockerCommandIt("recreates a missing container environment file before running runtime Compose", async () => {
+    const installDir = await createRuntimeInstall();
+    const containerEnvFile = join(installDir, "data", "container.env");
+    const fakeDocker = await installFakeDocker();
+
+    await runDockerCommand(["start"], runtimeHostEnv(fakeDocker, installDir));
+
+    // Compose refuses to start when a declared env_file is absent, so installs
+    // made before this file existed must get it before Compose runs.
+    expect(await readFile(containerEnvFile, "utf8")).toContain("# PI WEB Docker container environment. Safe to edit.");
+    const log = await readFile(fakeDocker.logPath, "utf8");
+    expect(log).toContain("compose --project-name pi-web-test --env-file .env -f compose.yml -f compose.override.yml up -d");
+  });
+
+  dockerCommandIt("reports the container environment file in doctor output for both modes", async () => {
+    const installDir = await createRuntimeInstall();
+    const devRoot = await createDevGeneratedEnv({ uid: 1234, gid: 2345, dockerGid: 3456 });
+    const fakeDocker = await installFakeDocker();
+
+    const runtimeDoctor = await runDockerCommand(["doctor"], runtimeHostEnv(fakeDocker, installDir));
+    const devDoctor = await runDockerCommand(["--dev", "doctor"], {
+      ...cleanProcessEnv(),
+      PATH: `${fakeDocker.binDir}:${process.env["PATH"] ?? ""}`,
+      FAKE_DOCKER_LOG: fakeDocker.logPath,
+      PI_WEB_DOCKER_DEV_REPO_ROOT: devRoot,
+    });
+
+    expect(runtimeDoctor.stdout).toContain(`Container environment: created on next start (${join(installDir, "data", "container.env")})`);
+    expect(devDoctor.stdout).toContain(`Container environment: created on next start (${join(tempDir, "dev-data", "container.env")})`);
   });
 
   dockerCommandIt("runs status through Docker Compose in the foreground", async () => {
@@ -565,6 +654,10 @@ async function createRuntimeInstall(): Promise<string> {
   ].join("\n"), "utf8");
   await writeFile(join(installDir, "compose.yml"), "name: pi-web\nservices: {}\n", "utf8");
   await writeFile(join(installDir, "compose.override.yml"), "services: {}\n", "utf8");
+  // Real installs always ship this helper, and runtime commands source it to
+  // create the user-owned container environment file when it is missing.
+  await mkdir(join(installDir, "internal"), { recursive: true });
+  await copyFile(join(repoRoot, "docker", "internal", "host-profile.sh"), join(installDir, "internal", "host-profile.sh"));
   return installDir;
 }
 
