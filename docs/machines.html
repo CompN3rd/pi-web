@@ -229,8 +229,19 @@ PI WEB gateway you opened
               </p>
               <ul>
                 <li>API-key provider configuration can be proxied through the gateway.</li>
-                <li>OAuth login should be completed by opening the remote PI WEB directly.</li>
+                <li>Subscription (OAuth) login and logout can be driven from the gateway while the machine is selected; the flow runs on the target machine and the credential is written there.</li>
                 <li>The optional machine bearer token is stored by the gateway and sent to the remote while proxying requests.</li>
+              </ul>
+              <p>
+                To sign in with a subscription, select the machine, open the login dialog, and choose
+                <strong>Use a subscription</strong>. Because the provider flow runs on the target machine, its loopback
+                redirect address (<code>http://localhost:&lt;port&gt;/…</code>) belongs to that machine, so the redirect
+                page will not load in a browser running elsewhere.
+              </p>
+              <ul>
+                <li>When the dialog asks for a code or redirect URL, approve the login in the provider's page, copy the full URL from your browser's address bar, and paste it into the dialog. PI WEB shows that reminder exactly when a paste is expected.</li>
+                <li>When the provider offers a device-code option, choose it. Device-code logins need no paste: enter the displayed code on the provider's page.</li>
+                <li>A provider flow that offers neither a pasted response nor a device code cannot be completed from another machine. Cancel it, then either restart with the device-code option or log in on the target machine directly.</li>
               </ul>
               <p>
                 Use <strong>Actions → Open Selected Machine PI WEB</strong> when you need to authenticate directly on a
