@@ -5,7 +5,7 @@ import { defineResearchLibraryPanelElement } from "./researchLibraryPanelElement
 
 const plugin: PiWebPlugin = {
   apiVersion: 1,
-  name: "Research Library (Synthetic Preview)",
+  name: "Research Library (Synthetic + Read-only Pilot)",
   activate: ({ html, svg }) => {
     defineResearchLibraryPdfViewerElement();
     defineResearchLibraryPanelElement();

@@ -362,19 +362,20 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                 shell commands from your repositories.
               </p>
 
-              <h3>Research Library (synthetic preview)</h3>
+              <h3>Research Library (synthetic tools and read-only PDF pilot)</h3>
               <p>
-                <strong>Research Library</strong> adds a workspace-only synthetic paper panel plus three bounded Pi
-                extension tools. It searches generated metadata, previews citation/backlink connections and marked
-                passages, inserts only an opaque dispatch token into the active prompt after an explicit click, and
-                displays additive answer drafts for human review. It never submits the prompt automatically.
+                <strong>Research Library</strong> has two mutually exclusive modes. The synthetic mode provides the
+                existing bounded Pi tools, opaque prompt token, generated citation preview, and additive answer drafts.
+                The independent local-pilot mode displays manifest-declared llmwiki metadata and local PDFs without
+                exposing real paper content to the agent.
               </p>
               <ul>
                 <li>Plugin id: <code>research-library</code></li>
-                <li>Fixture: <code>.pi-web/research-library.synthetic.json</code></li>
-                <li>Ignored runtime: <code>.pi-web/research-library-runtime/</code></li>
-                <li>Machine-specific: a selected remote machine must expose its own paired plugin/extension package.</li>
-                <li>A missing fixture hides the panel; a malformed fixture shows an error panel for repair.</li>
+                <li>Synthetic fixture: <code>.pi-web/research-library.synthetic.json</code></li>
+                <li>Read-only pilot manifest: <code>raw/_processed/research-library-pilot/library.json</code></li>
+                <li>Synthetic runtime: <code>.pi-web/research-library-runtime/</code></li>
+                <li>Machine-specific: a selected remote machine must expose its own matching package.</li>
+                <li>If both sources exist, the panel fails closed rather than choosing a precedence.</li>
               </ul>
               <div class="code-card">
                 <div class="copy-row">
@@ -404,14 +405,34 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
               <p>
                 Reload the browser and type <code>/reload</code> in each affected idle PI WEB session after adding,
                 removing, or changing the fixture, or after installing/updating the paired Pi extension. Then run
-                <code>/research-library</code> to check its status. Keep the fixture and runtime directory out of Git whenever they contain anything sensitive.
+                <code>/research-library</code> to check its status. Keep the synthetic fixture, runtime directory, and
+                both <code>raw/research-library-pilot/</code> and
+                <code>raw/_processed/research-library-pilot/</code> out of Git.
               </p>
               <p>
-                Runtime claims, budgets, and drafts are bounded and digest-checked, but workspace JSON is not a
-                tamper-resistant authority against the same local user or other trusted code. The synthetic fixture does
-                not activate PDFs or real data. The package includes an unwired bounded PDF.js reader and a public
-                same-origin PDF preview helper for a separately reviewed local-pilot parser; PDF previews are limited to
-                regular <code>.pdf</code> files up to 128 MB and one satisfiable HTTP byte range.
+                The pilot requires strict <code>pilot: true</code> records with manifest-declared source-note/PDF SHA-256
+                values and sizes, normalized PDF paths beneath <code>raw/research-library-pilot/</code>, declared HTTP(S)
+                source URLs, a canonical retrieval timestamp, and the rights marker
+                <code>local-research-copy; redistribution-not-asserted</code>. Topics, meta categories, and thesis source
+                paths are contextual wiki relations—not citation edges. The browser validates manifest shape only; it
+                does not rehash note/PDF bytes, confirm declared size, or prove URL ownership or authority at panel-render time.
+              </p>
+              <div class="code-card">
+                <pre><code>raw/
+├── research-library-pilot/
+│   ├── download-manifest.json
+│   └── pdfs/&lt;bibkey&gt;.pdf
+└── _processed/research-library-pilot/
+    ├── checksums.sha256
+    └── library.json</code></pre>
+              </div>
+              <p>
+                The packaged PDF.js reader renders one page at a time over the bounded same-origin range route and offers
+                an Open PDF fallback. Source notes and PDFs are never modified. Pilot mode has no send-to-agent button,
+                prompt insertion, runtime intent, search-budget tool, or answer queue; real-content disclosure remains
+                separately gated. A future downloader/import step must independently verify downloaded bytes, sizes,
+                SHA-256 values, approved source hosts, and source-note digests before publishing the manifest; this is not
+                performed by the current panel.
               </p>
               <p>
                 For collision-safe development, <code>npm run dev:research-pilot</code> uses API 8604, UI 8605, session

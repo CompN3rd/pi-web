@@ -294,15 +294,17 @@ Task fields:
 
 Review task configs before running them, especially in shared projects. Workspace Tasks runs trusted shell commands from your repositories.
 
-### Research Library (synthetic preview)
+### Research Library (synthetic tools and read-only PDF pilot)
 
 **Plugin id:** `research-library`
 
-**Fixture:** `.pi-web/research-library.synthetic.json`
+**Synthetic fixture:** `.pi-web/research-library.synthetic.json`
 
-**Runtime:** `.pi-web/research-library-runtime/`
+**Read-only pilot manifest:** `raw/_processed/research-library-pilot/library.json`
 
-The Research Library preview is a synthetic-only vertical slice of a paired PI WEB plugin and Pi extension. It demonstrates the safe boundary before real PDF viewing, migration/import, networking, or external-library access is implemented:
+**Synthetic runtime:** `.pi-web/research-library-runtime/`
+
+The Research Library preview has two mutually exclusive modes. Its synthetic vertical slice demonstrates the paired PI WEB plugin/Pi extension boundary:
 
 - the workspace panel searches generated paper metadata, shows marked passages, and previews outgoing citations plus derived “cited by” connections;
 - an explicit **Send token to active agent** click creates a bounded, expiring dispatch intent with create-only file semantics and inserts only a random opaque token into the mounted prompt;
@@ -312,7 +314,11 @@ The Research Library preview is a synthetic-only vertical slice of a paired PI W
 
 The token/runtime protocol limits accidental disclosure, cross-session claims, retries, and budget races. A claim freezes its approved snapshot and remains usable by its owning session until the token expires even if the live fixture changes; new claims require the exact fixture digest from their intent. It is not a sandbox or tamper-resistant authority against the same local user, another trusted plugin/extension, or any process that can rewrite workspace files. Keep this preview synthetic and do not treat its runtime JSON as a production research database.
 
-A missing fixture keeps the panel hidden; a present but malformed fixture surfaces an error panel so it can be repaired. It declares `machineSpecific: true`, so a selected remote machine must expose its own matching plugin/extension package rather than reusing the gateway copy. The parser requires `version: 1`, `synthetic: true`, generated IDs beginning with `synthetic-`, bounded text/arrays, unique IDs, and citation targets that resolve inside the fixture. Unknown fields, real-looking IDs, oversized/truncated files, and malformed relationships fail closed. A complete copyable fixture ships as `pi-web-plugins/research-library/example.synthetic.json` in the source tree and beside the built plugin module.
+A missing source keeps the panel hidden; a malformed present source surfaces an error panel so it can be repaired. If both fixed source files exist, the plugin fails closed rather than selecting an implicit precedence. It declares `machineSpecific: true`, so a selected remote machine must expose its own matching plugin/extension package rather than reusing the gateway copy.
+
+The synthetic parser requires `version: 1`, `synthetic: true`, generated IDs beginning with `synthetic-`, bounded text/arrays, unique IDs, and citation targets that resolve inside the fixture. Unknown fields, real-looking IDs, oversized/truncated files, and malformed relationships fail closed. A complete copyable fixture ships as `pi-web-plugins/research-library/example.synthetic.json` in the source tree and beside the built plugin module.
+
+The independent browser-only pilot parser requires `version: 1`, `pilot: true`, `pilot-*` identities, manifest-declared source-note and PDF digests, manifest-declared bounded PDF sizes and HTTP(S) source URLs, canonical retrieval timestamps, and the explicit rights marker `local-research-copy; redistribution-not-asserted`. PDF paths must be normalized workspace-relative paths beneath `raw/research-library-pilot/`; source notes must remain beneath `Thesis/Citations/`. Related topics, meta categories, and thesis source files are shown as wiki/context relations, never fabricated citation edges. The browser validates the manifest's shape and displays those values as declarations; it does not rehash the referenced note or PDF bytes, confirm the declared size, or prove ownership or authority of either URL at panel-render time.
 
 Minimal shape:
 
@@ -344,16 +350,34 @@ Minimal shape:
 }
 ```
 
-Keep both files out of Git whenever they contain anything sensitive:
+Keep preview data and runtime state out of Git:
 
 ```gitignore
 .pi-web/research-library.synthetic.json
 .pi-web/research-library-runtime/
+raw/research-library-pilot/
+raw/_processed/research-library-pilot/
 ```
 
 After adding, removing, or changing the fixture, reload the browser page and type `/reload` in each affected idle PI WEB session so tool registration matches the current valid fixture. Do the same after installing/updating the Pi extension, then use `/research-library` to confirm that its three synthetic tools are available. Browser prompt insertion is best effort: keep the intended session mounted, verify the token appears, and submit it normally. An abandoned prompt may leave a harmless expiring intent.
 
-This preview deliberately does not wire a PDF descriptor into its synthetic papers, ingest Paperpile exports, generate persistent Obsidian nodes, use an LLM or network by itself, edit metadata, accept drafts, or support real data. The package now contains an unwired, bounded PDF.js reader component and public PDF preview transport for the separately gated local pilot; the synthetic fixture cannot activate it. Real-corpus configuration still requires a separately reviewed parser and disclosure boundary.
+The local pilot is deliberately read-only and browser-only. It renders one PDF page at a time with the packaged PDF.js worker over PI WEB's bounded same-origin range transport and provides an Open PDF fallback. It never modifies source notes or PDFs and exposes no send-to-agent button, prompt insertion, runtime intent, search-budget tool, or answer queue. Agent disclosure for real paper content requires separate approval; the Pi extension continues to recognize only the synthetic fixture.
+
+Use this workspace layout for the pilot:
+
+```text
+raw/
+├── research-library-pilot/
+│   ├── download-manifest.json
+│   └── pdfs/
+│       └── <bibkey>.pdf
+└── _processed/
+    └── research-library-pilot/
+        ├── checksums.sha256
+        └── library.json
+```
+
+The intended downloader writes each exact PDF and its receipt under `raw/research-library-pilot/`; the derived strict browser manifest and checksum inventory live under `raw/_processed/research-library-pilot/`. Existing `Thesis/Citations/` notes are manifest-referenced read-only inputs and are never edited by the plugin. A future pilot downloader/import step must independently verify downloaded bytes, sizes, SHA-256 values, approved source hosts, and source-note digests before publishing the manifest; the current browser panel does not perform that downloader-time verification.
 
 For collision-safe local development, `npm run dev:research-pilot` starts API `8604`, UI `8605`, and TCP session daemon `8606`. It places PI WEB data/config and agent sessions under the platform app-data directory while deliberately sharing the current Pi agent profile. The launcher refuses occupied ports and never stops another instance. Because auth, settings, packages, and providers remain shared, do not install, remove, or update Pi packages from the pilot process.
 

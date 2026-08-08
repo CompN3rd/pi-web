@@ -1,7 +1,9 @@
 import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { citedByPaperIds, paperById, RESEARCH_LIBRARY_CONFIG_PATH, type SyntheticPaper, type SyntheticResearchLibraryConfig } from "./config.js";
 import { loadSyntheticAnswerDrafts, type SyntheticAnswerDraft, type SyntheticDraftsLoadResult } from "./draftsClient.js";
-import { getOrLoadResearchLibraryFixture, refreshResearchLibraryFixture, type ResearchLibraryFixtureState } from "./fixtureCache.js";
+import { getOrLoadResearchLibrarySource, refreshResearchLibrarySource, type ResearchLibrarySourceState } from "./fixtureCache.js";
+import { pilotPaperById, RESEARCH_LIBRARY_PILOT_CONFIG_PATH, type LocalPilotPaper, type LocalResearchLibraryPilotConfig } from "./pilotConfig.js";
+import { researchLibraryPdfViewerTagName, type ResearchLibraryPdfViewerElement } from "./pdfViewerElement.js";
 import { prepareResearchDispatch, type ResearchDispatchIntent } from "./researchLibraryClient.js";
 
 export const researchLibraryPanelTagName = "pi-web-research-library-panel";
@@ -45,7 +47,7 @@ class PiWebResearchLibraryPanel extends HTMLElement {
   }
 
   connectedCallback(): void {
-    this.render();
+    if (this.root.childNodes.length === 0) this.render();
   }
 
   private handleClick(event: Event): void {
@@ -79,6 +81,9 @@ class PiWebResearchLibraryPanel extends HTMLElement {
     const input = event.target;
     if (!(input instanceof HTMLInputElement) || !input.matches("input[data-paper-search]")) return;
     this.searchQuery = input.value;
+    const context = this.contextValue;
+    const state = context === undefined ? undefined : getOrLoadResearchLibrarySource(context);
+    if (state?.kind === "loaded" && state.source.mode === "local-pilot" && this.updatePilotSearchResults(state.source.pilot.config)) return;
     this.render();
     const replacement = this.root.querySelector<HTMLInputElement>("input[data-paper-search]");
     replacement?.focus();
@@ -94,23 +99,25 @@ class PiWebResearchLibraryPanel extends HTMLElement {
   private async refresh(): Promise<void> {
     const context = this.contextValue;
     if (context === undefined) return;
-    this.status = { kind: "info", message: `Refreshing ${RESEARCH_LIBRARY_CONFIG_PATH}…` };
+    this.status = { kind: "info", message: `Refreshing ${RESEARCH_LIBRARY_CONFIG_PATH} and ${RESEARCH_LIBRARY_PILOT_CONFIG_PATH}…` };
     this.render();
-    const state = await refreshResearchLibraryFixture(context);
+    const state = await refreshResearchLibrarySource(context);
     if (!this.isCurrentContext(context)) return;
-    this.selectedPaperId = state.kind === "loaded" ? state.fixture.config.papers[0]?.id : undefined;
-    this.status = state.kind === "loaded" ? { kind: "success", message: "Synthetic research fixture refreshed." } : undefined;
+    this.selectedPaperId = firstPaperId(state);
+    this.status = state.kind === "loaded"
+      ? { kind: "success", message: state.source.mode === "synthetic" ? "Synthetic research fixture refreshed." : "Read-only local pilot refreshed." }
+      : undefined;
     this.render();
     await this.loadDrafts(context);
   }
 
   private async loadDrafts(context: WorkspacePanelContext): Promise<void> {
+    const state = getOrLoadResearchLibrarySource(context);
+    if (state.kind !== "loaded" || state.source.mode !== "synthetic") return;
     const token = ++this.loadToken;
     this.draftState = { kind: "loading" };
     this.render();
-    const state = getOrLoadResearchLibraryFixture(context);
-    if (state.kind !== "loaded") return;
-    const drafts = await loadSyntheticAnswerDrafts(context.files, state.fixture.config.libraryId);
+    const drafts = await loadSyntheticAnswerDrafts(context.files, state.source.fixture.config.libraryId);
     if (!this.isCurrentContext(context) || token !== this.loadToken) return;
     this.draftState = drafts;
     this.render();
@@ -119,11 +126,12 @@ class PiWebResearchLibraryPanel extends HTMLElement {
   private async dispatchPassage(passageId: string): Promise<void> {
     const context = this.contextValue;
     if (context === undefined) return;
-    const state = getOrLoadResearchLibraryFixture(context);
-    if (state.kind !== "loaded") return;
-    const paperId = this.selectedPaperId ?? state.fixture.config.papers[0]?.id;
+    const state = getOrLoadResearchLibrarySource(context);
+    if (state.kind !== "loaded" || state.source.mode !== "synthetic") return;
+    const fixture = state.source.fixture;
+    const paperId = this.selectedPaperId ?? fixture.config.papers[0]?.id;
     if (paperId === undefined) return;
-    const paper = paperById(state.fixture.config, paperId);
+    const paper = paperById(fixture.config, paperId);
     const passage = paper?.passages.find((candidate) => candidate.id === passageId);
     if (paper === undefined || passage === undefined) {
       this.status = { kind: "error", message: "That synthetic passage is no longer available. Refresh and try again." };
@@ -135,7 +143,7 @@ class PiWebResearchLibraryPanel extends HTMLElement {
     this.status = { kind: "info", message: "Creating a bounded synthetic dispatch intent…" };
     this.render();
     try {
-      const dispatch = await prepareResearchDispatch({ fixture: state.fixture, paperId, passageId, scopeKind: this.scopeKind }, {
+      const dispatch = await prepareResearchDispatch({ fixture, paperId, passageId, scopeKind: this.scopeKind }, {
         files: context.files,
         prompt: context.prompt,
       });
@@ -154,30 +162,37 @@ class PiWebResearchLibraryPanel extends HTMLElement {
       this.root.innerHTML = `${styles()}<section class="empty">Select a workspace.</section>`;
       return;
     }
-    const state = getOrLoadResearchLibraryFixture(context);
+    const state = getOrLoadResearchLibrarySource(context);
+    const subtitle = state.kind === "loaded" && state.source.mode === "local-pilot" ? "Read-only local pilot" : "Synthetic contract preview";
     this.root.innerHTML = `
       ${styles()}
       <section class="toolbar">
-        <div><strong>Research Library</strong><small>Synthetic contract preview</small></div>
+        <div><strong>Research Library</strong><small>${escapeHtml(subtitle)}</small></div>
         <button class="secondary" data-refresh ${state.kind === "loading" ? "disabled" : ""}>Refresh</button>
       </section>
       ${this.renderStatus()}
-      <section class="viewer">${this.renderFixtureState(state)}</section>
+      <section class="viewer">${this.renderSourceState(state, context)}</section>
     `;
+    this.bindPilotPdfViewer(state, context);
   }
 
   private renderStatus(): string {
     if (this.status === undefined) return "";
-    return `<div class="status ${escapeAttr(this.status.kind)}">${escapeHtml(this.status.message)}</div>`;
+    const semantics = this.status.kind === "error" ? `role="alert"` : `role="status" aria-live="polite"`;
+    return `<div class="status ${escapeAttr(this.status.kind)}" ${semantics}>${escapeHtml(this.status.message)}</div>`;
   }
 
-  private renderFixtureState(state: ResearchLibraryFixtureState): string {
-    if (state.kind === "loading") return `<p class="muted">Loading ${escapeHtml(RESEARCH_LIBRARY_CONFIG_PATH)}…</p>`;
-    if (state.kind === "missing") return `<div class="empty-state"><strong>No synthetic research fixture.</strong><p>Create ${escapeHtml(RESEARCH_LIBRARY_CONFIG_PATH)} to enable this workspace-only preview.</p></div>`;
-    if (state.kind === "unavailable") return `<div class="status error"><strong>Fixture unavailable.</strong><p>${escapeHtml(state.error)}</p></div>`;
+  private renderSourceState(state: ResearchLibrarySourceState, context: WorkspacePanelContext): string {
+    if (state.kind === "loading") return `<p class="muted" role="status" aria-live="polite">Checking ${escapeHtml(RESEARCH_LIBRARY_CONFIG_PATH)} and ${escapeHtml(RESEARCH_LIBRARY_PILOT_CONFIG_PATH)}…</p>`;
+    if (state.kind === "missing") return `<div class="empty-state" role="status" aria-live="polite"><strong>No research preview source.</strong><p>Create either ${escapeHtml(RESEARCH_LIBRARY_CONFIG_PATH)} or ${escapeHtml(RESEARCH_LIBRARY_PILOT_CONFIG_PATH)}.</p></div>`;
+    if (state.kind === "unavailable") return `<div class="status error" role="alert"><strong>Research source unavailable.</strong><p class="pre-wrap">${escapeHtml(state.error)}</p></div>`;
+    return state.source.mode === "synthetic"
+      ? this.renderSyntheticFixture(state.source.fixture.config)
+      : this.renderPilot(state.source.pilot.config, context);
+  }
 
-    const config = state.fixture.config;
-    const papers = filteredPapers(config.papers, this.searchQuery);
+  private renderSyntheticFixture(config: SyntheticResearchLibraryConfig): string {
+    const papers = filteredSyntheticPapers(config.papers, this.searchQuery);
     const selected = paperById(config, this.selectedPaperId ?? "") ?? papers[0] ?? config.papers[0];
     this.selectedPaperId = selected?.id;
     return `
@@ -187,15 +202,15 @@ class PiWebResearchLibraryPanel extends HTMLElement {
       </label>
       <div class="library-layout">
         <nav class="paper-list" aria-label="Synthetic papers">
-          ${papers.length === 0 ? `<p class="muted">No matching papers.</p>` : papers.map((paper) => renderPaperButton(paper, paper.id === selected?.id)).join("")}
+          ${papers.length === 0 ? renderNoMatchingPapers() : papers.map((paper) => renderSyntheticPaperButton(paper, paper.id === selected?.id)).join("")}
         </nav>
-        <section class="paper-detail">${selected === undefined ? `<p class="muted">Select a paper.</p>` : this.renderPaper(config, selected)}</section>
+        <section class="paper-detail">${selected === undefined ? `<p class="muted">Select a paper.</p>` : this.renderSyntheticPaper(config, selected)}</section>
       </div>
       ${this.renderDrafts()}
     `;
   }
 
-  private renderPaper(config: SyntheticResearchLibraryConfig, paper: SyntheticPaper): string {
+  private renderSyntheticPaper(config: SyntheticResearchLibraryConfig, paper: SyntheticPaper): string {
     const citedPapers = paper.cites.map((id) => paperById(config, id)).filter((candidate): candidate is SyntheticPaper => candidate !== undefined);
     const backlinks = citedByPaperIds(config, paper.id).map((id) => paperById(config, id)).filter((candidate): candidate is SyntheticPaper => candidate !== undefined);
     return `
@@ -225,14 +240,105 @@ class PiWebResearchLibraryPanel extends HTMLElement {
           </article>
         `).join("")}
       </section>
-      <p class="muted">Actual PDF streaming/rendering is intentionally deferred until PI WEB has an approved bounded viewer transport.</p>
+      <p class="muted">Actual PDF streaming/rendering is intentionally deferred for the synthetic fixture.</p>
     `;
+  }
+
+  private renderPilot(config: LocalResearchLibraryPilotConfig, context: WorkspacePanelContext): string {
+    const papers = filteredPilotPapers(config.papers, this.searchQuery);
+    const selected = papers.find((paper) => paper.id === this.selectedPaperId) ?? papers[0];
+    this.selectedPaperId = selected?.id;
+    return `
+      <div class="safety-note"><strong>Read-only local pilot.</strong> Source notes and PDFs are displayed without modification. Agent dispatch is disabled pending disclosure approval. Digests, sizes, provenance, and source URLs are manifest-declared; the panel does not rehash note/PDF bytes or verify URL ownership at display time.</div>
+      <label class="search-label">Search pilot papers
+        <input type="search" data-paper-search value="${escapeAttr(this.searchQuery)}" placeholder="Title, author, bibkey, topic, meta category">
+      </label>
+      <div class="library-layout pilot-layout">
+        <nav class="paper-list" aria-label="Local pilot papers">
+          ${renderPilotPaperList(papers, selected?.id)}
+        </nav>
+        <section class="paper-detail">${selected === undefined ? `<p class="muted">Select a paper.</p>` : this.renderPilotPaper(selected, context)}</section>
+      </div>
+    `;
+  }
+
+  private renderPilotPaper(paper: LocalPilotPaper, context: WorkspacePanelContext): string {
+    const pdf = paper.pdf;
+    const viewer = context.files.pdfPreviewUrl === undefined
+      ? `<div class="status error compatibility-error" role="alert">This PI WEB host does not expose the bounded pdfPreviewUrl helper. Update the selected machine before opening pilot PDFs.</div>`
+      : `<${researchLibraryPdfViewerTagName} data-pilot-pdf-viewer></${researchLibraryPdfViewerTagName}>`;
+    return `
+      <header class="paper-header">
+        <h2>${escapeHtml(paper.title)}</h2>
+        <p>${escapeHtml(paper.authors.join(", "))}${paper.year === undefined ? "" : ` · ${String(paper.year)}`} · ${escapeHtml(paper.bibkey)}</p>
+      </header>
+      ${paper.abstract === undefined ? "" : `<p>${escapeHtml(paper.abstract)}</p>`}
+      ${renderChips("Related topics", paper.relatedTopics)}
+      ${renderChips("Meta categories", paper.metaCategories)}
+      <section class="provenance">
+        <h3>Manifest-declared wiki binding</h3>
+        <dl>
+          <dt>Source note</dt><dd>${escapeHtml(paper.sourceNotePath)}</dd>
+          <dt>Declared note SHA-256</dt><dd><code class="digest">${escapeHtml(paper.sourceNoteSha256)}</code></dd>
+          <dt>Used By</dt><dd>${paper.usedBy.length === 0 ? `<span class="muted">none recorded</span>` : `<ul>${paper.usedBy.map((path) => `<li>${escapeHtml(path)}</li>`).join("")}</ul>`}</dd>
+        </dl>
+      </section>
+      <section class="provenance">
+        <h3>Manifest-declared PDF provenance</h3>
+        <dl>
+          <dt>Path</dt><dd>${escapeHtml(pdf.path)}</dd>
+          <dt>Declared SHA-256</dt><dd><code class="digest">${escapeHtml(pdf.sha256)}</code></dd>
+          <dt>Declared size</dt><dd>${escapeHtml(formatBytes(pdf.size))}</dd>
+          <dt>Declared retrieval time</dt><dd>${escapeHtml(pdf.retrievedAt)}</dd>
+          <dt>Declared rights</dt><dd>${escapeHtml(pdf.rights)}</dd>
+          <dt>Declared PDF source URL</dt><dd class="url-text">${escapeHtml(pdf.sourceUrl)}</dd>
+          <dt>Declared source-page URL</dt><dd class="url-text">${escapeHtml(pdf.sourcePageUrl)}</dd>
+        </dl>
+      </section>
+      <section class="pdf-section"><h3>PDF reader</h3><div data-pdf-reader-host>${viewer}</div></section>
+      <div class="safety-note"><strong>Agent tools disabled for this pilot.</strong> No prompt insertion, runtime intent, answer queue, or search-budget operation is available for real papers.</div>
+    `;
+  }
+
+  private bindPilotPdfViewer(state: ResearchLibrarySourceState, context: WorkspacePanelContext): void {
+    if (state.kind !== "loaded" || state.source.mode !== "local-pilot" || context.files.pdfPreviewUrl === undefined) return;
+    const config = state.source.pilot.config;
+    const paper = pilotPaperById(config, this.selectedPaperId ?? "") ?? config.papers[0];
+    if (paper === undefined) return;
+    const viewer = this.root.querySelector<ResearchLibraryPdfViewerElement>(researchLibraryPdfViewerTagName);
+    if (viewer === null) return;
+    try {
+      viewer.sourceUrl = context.files.pdfPreviewUrl(paper.pdf.path, { modifiedAt: paper.pdf.sha256 });
+    } catch (error) {
+      const host = viewer.closest<HTMLElement>("[data-pdf-reader-host]");
+      if (host === null) return;
+      const message = document.createElement("div");
+      message.className = "status error compatibility-error";
+      message.setAttribute("role", "alert");
+      message.textContent = `Unable to create PDF preview URL: ${error instanceof Error ? error.message : String(error)}`;
+      host.replaceChildren(message);
+    }
+  }
+
+  private updatePilotSearchResults(config: LocalResearchLibraryPilotConfig): boolean {
+    const papers = filteredPilotPapers(config.papers, this.searchQuery);
+    const selected = pilotPaperById(config, this.selectedPaperId ?? "");
+    const selectedStillMatches = selected !== undefined && papers.some((paper) => paper.id === selected.id);
+    if (papers.length > 0 && !selectedStillMatches) {
+      this.selectedPaperId = papers[0]?.id;
+      return false;
+    }
+
+    const list = this.root.querySelector<HTMLElement>("nav.paper-list");
+    if (list === null) return false;
+    list.innerHTML = renderPilotPaperList(papers, selected?.id);
+    return true;
   }
 
   private renderDrafts(): string {
     const state = this.draftState;
-    if (state.kind === "loading") return `<section class="drafts"><h3>Answer queue</h3><p class="muted">Loading synthetic drafts…</p></section>`;
-    if (state.kind === "unavailable") return `<section class="drafts"><h3>Answer queue</h3><div class="status error">${escapeHtml(state.error)}</div></section>`;
+    if (state.kind === "loading") return `<section class="drafts"><h3>Answer queue</h3><p class="muted" role="status" aria-live="polite">Loading synthetic drafts…</p></section>`;
+    if (state.kind === "unavailable") return `<section class="drafts"><h3>Answer queue</h3><div class="status error" role="alert">${escapeHtml(state.error)}</div></section>`;
     return `
       <section class="drafts">
         <div class="section-heading"><h3>Answer queue</h3><button class="secondary" data-refresh-drafts>Refresh drafts</button></div>
@@ -247,15 +353,41 @@ class PiWebResearchLibraryPanel extends HTMLElement {
   }
 }
 
-function filteredPapers(papers: SyntheticPaper[], query: string): SyntheticPaper[] {
+function firstPaperId(state: ResearchLibrarySourceState): string | undefined {
+  if (state.kind !== "loaded") return undefined;
+  return state.source.mode === "synthetic" ? state.source.fixture.config.papers[0]?.id : state.source.pilot.config.papers[0]?.id;
+}
+
+function filteredSyntheticPapers(papers: SyntheticPaper[], query: string): SyntheticPaper[] {
   const normalized = query.trim().toLocaleLowerCase();
   if (normalized === "") return papers;
   return papers.filter((paper) => [paper.title, ...paper.authors, ...paper.tags, ...paper.collections]
     .some((value) => value.toLocaleLowerCase().includes(normalized)));
 }
 
-function renderPaperButton(paper: SyntheticPaper, selected: boolean): string {
+function filteredPilotPapers(papers: LocalPilotPaper[], query: string): LocalPilotPaper[] {
+  const normalized = query.trim().toLocaleLowerCase();
+  if (normalized === "") return papers;
+  return papers.filter((paper) => [paper.title, paper.bibkey, ...paper.authors, ...paper.relatedTopics, ...paper.metaCategories]
+    .some((value) => value.toLocaleLowerCase().includes(normalized)));
+}
+
+function renderSyntheticPaperButton(paper: SyntheticPaper, selected: boolean): string {
   return `<button class="paper-button ${selected ? "selected" : ""}" data-paper-id="${escapeAttr(paper.id)}" aria-pressed="${selected ? "true" : "false"}"><strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.authors.join(", "))}</span></button>`;
+}
+
+function renderPilotPaperList(papers: LocalPilotPaper[], selectedPaperId: string | undefined): string {
+  return papers.length === 0
+    ? renderNoMatchingPapers()
+    : papers.map((paper) => renderPilotPaperButton(paper, paper.id === selectedPaperId)).join("");
+}
+
+function renderPilotPaperButton(paper: LocalPilotPaper, selected: boolean): string {
+  return `<button class="paper-button ${selected ? "selected" : ""}" data-paper-id="${escapeAttr(paper.id)}" aria-pressed="${selected ? "true" : "false"}"><strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.bibkey)} · ${escapeHtml(paper.authors.join(", "))}</span></button>`;
+}
+
+function renderNoMatchingPapers(): string {
+  return `<p class="muted" role="status" aria-live="polite">No matching papers.</p>`;
 }
 
 function renderChips(label: string, values: string[]): string {
@@ -269,6 +401,12 @@ function renderConnections(label: string, papers: SyntheticPaper[]): string {
 
 function renderDraft(draft: SyntheticAnswerDraft): string {
   return `<article class="draft-card"><span class="locator">Draft · ${escapeHtml(new Date(draft.createdAt).toLocaleString())}</span><strong>${escapeHtml(draft.question)}</strong><p>${escapeHtml(draft.answer)}</p><small>${String(draft.evidenceIds.length)} evidence reference(s)</small></article>`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function contextKey(context: WorkspacePanelContext): string {
@@ -287,9 +425,11 @@ function styles(): string {
     .safety-note, .status, .empty-state { border: 1px solid var(--pi-border); border-radius: 8px; padding: 10px; }
     .safety-note { margin-bottom: 12px; border-color: var(--pi-accent-border); background: var(--pi-bg-overlay-soft); }
     .status { margin: 12px; }
+    .paper-detail .status { margin: 0; }
     .status.success { color: var(--pi-success); border-color: var(--pi-success-border); background: var(--pi-success-surface); }
     .status.error { color: var(--pi-danger); border-color: var(--pi-danger); }
     .status.info { border-color: var(--pi-accent-border); }
+    .pre-wrap { white-space: pre-wrap; }
     .search-label { display: grid; gap: 5px; margin-bottom: 12px; font-size: 12px; color: var(--pi-text-secondary); }
     input, select { min-width: 0; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-bg); color: var(--pi-text); padding: 7px; font: inherit; }
     .library-layout { display: grid; grid-template-columns: minmax(150px, 0.38fr) minmax(0, 1fr); gap: 12px; }
@@ -302,10 +442,17 @@ function styles(): string {
     .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 8px 0; }
     .chips > span { color: var(--pi-muted); font-size: 12px; }
     code, .connection { border: 1px solid var(--pi-border-muted); border-radius: 999px; padding: 2px 6px; font-size: 11px; }
-    .connections, .passages, .drafts { display: grid; gap: 9px; margin-top: 18px; }
+    code.digest { overflow-wrap: anywhere; border-radius: 4px; }
+    .connections, .passages, .drafts, .provenance, .pdf-section { display: grid; gap: 9px; margin-top: 18px; }
     h3 { margin: 0; font-size: 14px; }
     .connections > div { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-    .passage-card, .draft-card { display: grid; gap: 8px; border: 1px solid var(--pi-border); border-radius: 9px; background: var(--pi-surface); padding: 10px; }
+    .passage-card, .draft-card, .provenance { border: 1px solid var(--pi-border); border-radius: 9px; background: var(--pi-surface); padding: 10px; }
+    .passage-card, .draft-card { display: grid; gap: 8px; }
+    dl { display: grid; grid-template-columns: minmax(95px, .25fr) minmax(0, 1fr); gap: 6px 10px; margin: 0; }
+    dt { color: var(--pi-muted); font-size: 12px; }
+    dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    dd ul { margin: 0; padding-left: 18px; }
+    .url-text { font-family: ui-monospace, monospace; font-size: 11px; }
     blockquote { margin: 0; border-left: 3px solid var(--pi-accent-border); padding-left: 9px; color: var(--pi-text-secondary); white-space: pre-wrap; }
     .locator { color: var(--pi-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
     button { border: 1px solid var(--pi-accent-border); border-radius: 7px; background: var(--pi-accent); color: var(--pi-bg); cursor: pointer; padding: 6px 9px; font: inherit; }
