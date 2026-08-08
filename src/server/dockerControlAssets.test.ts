@@ -335,6 +335,52 @@ describe("Docker command assets", () => {
     expect(await readFile(helperLog, "utf8")).toContain("args=build --pull");
   });
 
+  dockerCommandIt("fast-forwards the development checkout before rebuilding", async () => {
+    const helperLog = join(tempDir, "dev-helper.log");
+    const devRoot = await createCleanDevGitRepoWithFakeHelper(helperLog);
+    const upstreamCommit = await addTrackedUpstreamCommit(devRoot, "pulled.txt");
+    const fakeDocker = await installFakeDocker();
+    await installFakeId(fakeDocker.binDir, 1234, 2345);
+
+    const result = await runDockerCommand(["--dev", "update"], devHostEnv(fakeDocker, devRoot, join(tempDir, "home")));
+
+    expect(result.stderr).toContain("Fast-forwarding");
+    expect(await gitHead(devRoot)).toBe(upstreamCommit);
+    expect(await readFile(join(devRoot, "pulled.txt"), "utf8")).toBe("from upstream\n");
+    expect(await readFile(helperLog, "utf8")).toContain("args=build --pull");
+  });
+
+  dockerCommandIt("warns and still rebuilds when the development checkout has no upstream", async () => {
+    const helperLog = join(tempDir, "dev-helper.log");
+    const devRoot = await createCleanDevGitRepoWithFakeHelper(helperLog);
+    const fakeDocker = await installFakeDocker();
+    await installFakeId(fakeDocker.binDir, 1234, 2345);
+
+    const result = await runDockerCommand(["--dev", "update"], devHostEnv(fakeDocker, devRoot, join(tempDir, "home")));
+
+    expect(result.stderr).toContain("has no upstream");
+    expect(result.stderr).toContain("without fetching new commits");
+    expect(await readFile(helperLog, "utf8")).toContain("args=build --pull");
+  });
+
+  dockerCommandIt("warns and still rebuilds when the development checkout cannot fast-forward", async () => {
+    const helperLog = join(tempDir, "dev-helper.log");
+    const devRoot = await createCleanDevGitRepoWithFakeHelper(helperLog);
+    await addTrackedUpstreamCommit(devRoot, "pulled.txt");
+    // Diverge locally so the tracked upstream commit can no longer fast-forward.
+    await commitFixtureFile(devRoot, "local-only.txt", "diverged\n");
+    const localCommit = await gitHead(devRoot);
+    const fakeDocker = await installFakeDocker();
+    await installFakeId(fakeDocker.binDir, 1234, 2345);
+
+    const result = await runDockerCommand(["--dev", "update"], devHostEnv(fakeDocker, devRoot, join(tempDir, "home")));
+
+    expect(result.stderr).toContain("git pull --ff-only failed");
+    expect(result.stderr).toContain("continuing with the existing checkout");
+    expect(await gitHead(devRoot)).toBe(localCommit);
+    expect(await readFile(helperLog, "utf8")).toContain("args=build --pull");
+  });
+
   dockerCommandIt("allows clean development updates and dirty development starts", async () => {
     const helperLog = join(tempDir, "dev-helper.log");
     const devRoot = await createCleanDevGitRepoWithFakeHelper(helperLog);
@@ -561,6 +607,42 @@ async function createCleanDevGitRepoWithFakeHelper(logPath: string): Promise<str
     "commit", "--quiet", "--no-gpg-sign", "-m", "test fixture",
   ], env);
   return devRoot;
+}
+
+async function commitFixtureFile(repoRootPath: string, relativePath: string, contents: string): Promise<string> {
+  const env = cleanProcessEnv();
+  await writeFile(join(repoRootPath, relativePath), contents, "utf8");
+  await execUtf8("git", ["-C", repoRootPath, "add", relativePath], env);
+  await execUtf8("git", [
+    "-C", repoRootPath,
+    "-c", "user.name=PI WEB Test",
+    "-c", "user.email=pi-web-test@example.invalid",
+    "-c", "core.hooksPath=/dev/null",
+    "commit", "--quiet", "--no-gpg-sign", "-m", `test fixture ${relativePath}`,
+  ], env);
+  return await gitHead(repoRootPath);
+}
+
+async function gitHead(repoRootPath: string): Promise<string> {
+  const result = await execUtf8("git", ["-C", repoRootPath, "rev-parse", "HEAD"], cleanProcessEnv());
+  return result.stdout.trim();
+}
+
+/** Give the dev checkout a tracked local upstream that is one commit ahead. */
+async function addTrackedUpstreamCommit(devRoot: string, relativePath: string): Promise<string> {
+  const env = cleanProcessEnv();
+  const originDir = join(tempDir, "dev-origin.git");
+  const upstreamWork = join(tempDir, "dev-upstream-work");
+  await execUtf8("git", ["clone", "--quiet", "--bare", devRoot, originDir], env);
+  await execUtf8("git", ["clone", "--quiet", originDir, upstreamWork], env);
+  const upstreamCommit = await commitFixtureFile(upstreamWork, relativePath, "from upstream\n");
+  await execUtf8("git", ["-C", upstreamWork, "push", "--quiet", "origin", "HEAD"], env);
+
+  const branch = (await execUtf8("git", ["-C", devRoot, "symbolic-ref", "--short", "HEAD"], env)).stdout.trim();
+  await execUtf8("git", ["-C", devRoot, "remote", "add", "origin", originDir], env);
+  await execUtf8("git", ["-C", devRoot, "fetch", "--quiet", "origin"], env);
+  await execUtf8("git", ["-C", devRoot, "branch", `--set-upstream-to=origin/${branch}`, branch], env);
+  return upstreamCommit;
 }
 
 async function createDevGeneratedEnv(ids: { uid: number; gid: number; dockerGid: number }): Promise<string> {
