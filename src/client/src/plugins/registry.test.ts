@@ -104,11 +104,14 @@ describe("PluginRegistry", () => {
     });
 
     expect(activate).toHaveBeenCalledOnce();
-    expect(activate.mock.calls[0]?.[0]).toMatchObject({
+    const activationContext = activate.mock.calls[0]?.[0];
+    if (activationContext === undefined) throw new Error("Expected browser plugin activation context");
+    expect(activationContext).toMatchObject({
       apiVersion: 2,
       pluginId: "board-tools",
       runtimePluginId,
     });
+    expect(Object.isFrozen(activationContext)).toBe(true);
 
     const owned = createContext({
       selectedMachine: testMachine("remote-1"),

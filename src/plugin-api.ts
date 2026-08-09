@@ -46,14 +46,15 @@ export interface PiWebPlugin {
   activate: (context: PluginActivationContext) => PluginActivationResult;
 }
 
+/** Host-owned frozen values supplied once during browser plugin activation. */
 export interface PluginActivationContext {
-  apiVersion: 2;
+  readonly apiVersion: 2;
   /** Stable package/source identity, including on federated machines. */
-  pluginId: PluginId;
+  readonly pluginId: PluginId;
   /** Host-unique identity for qualified contribution references in this runtime. */
-  runtimePluginId: PluginId;
-  html: HtmlTemplateTag;
-  svg: SvgTemplateTag;
+  readonly runtimePluginId: PluginId;
+  readonly html: HtmlTemplateTag;
+  readonly svg: SvgTemplateTag;
 }
 
 export interface PluginActivationResult {
@@ -133,16 +134,17 @@ export interface PluginAction {
   run: (context: PluginRuntimeContext) => void | Promise<void>;
 }
 
+/** Host-resolved workspace snapshot exposed to browser plugin callbacks. */
 export interface Workspace {
-  id: string;
-  projectId: string;
-  path: string;
-  label: string;
+  readonly id: string;
+  readonly projectId: string;
+  readonly path: string;
+  readonly label: string;
   /** @deprecated Provider-neutral browser integrations should use provider metadata. */
-  branch?: string;
-  isMain: boolean;
-  provider?: WorkspaceProviderMetadata;
-  removal?: WorkspaceRemovalPresentation;
+  readonly branch?: string;
+  readonly isMain: boolean;
+  readonly provider?: WorkspaceProviderMetadata;
+  readonly removal?: WorkspaceRemovalPresentation;
 }
 
 export interface WorkspaceFiles {

@@ -46,7 +46,13 @@ export class PluginRegistry {
     try {
       const apiVersion: unknown = plugin.apiVersion;
       if (apiVersion !== 2) throw new Error(`Unsupported browser plugin API version for ${sourcePluginId}: ${String(apiVersion)} (expected 2)`);
-      const contributions = plugin.activate({ apiVersion: 2, pluginId: sourcePluginId, runtimePluginId, html, svg }).contributions;
+      const contributions = plugin.activate(Object.freeze({
+        apiVersion: 2,
+        pluginId: sourcePluginId,
+        runtimePluginId,
+        html,
+        svg,
+      })).contributions;
       const contributionIds = new Set<QualifiedContributionId>();
       const actions = (contributions.actions ?? []).map((action) => this.qualifyAction(runtimePluginId, action, registration.machineId, registration.sourcePluginId, contributionIds));
       const workspacePanels = (contributions.workspacePanels ?? []).map((panel) => this.qualifyWorkspacePanel(runtimePluginId, panel, registration.machineId, registration.sourcePluginId, backendRevision, contributionIds));

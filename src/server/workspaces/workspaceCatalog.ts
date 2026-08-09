@@ -85,8 +85,8 @@ export function withBrowserV1WorkspaceCompatibility(workspace: WorkspaceListing)
   if (metadata === undefined) return workspace;
 
   const branch = metadata["branch"];
-  return {
+  return Object.freeze({
     ...workspace,
     ...(typeof branch === "string" ? { branch } : {}),
-  };
+  });
 }

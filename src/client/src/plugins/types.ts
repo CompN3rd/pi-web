@@ -31,13 +31,13 @@ export interface PiWebPlugin {
 }
 
 export interface PluginActivationContext {
-  apiVersion: 2;
+  readonly apiVersion: 2;
   /** Stable package/source identity, including on federated machines. */
-  pluginId: PluginId;
+  readonly pluginId: PluginId;
   /** Host-unique identity for qualified contribution references in this runtime. */
-  runtimePluginId: PluginId;
-  html: HtmlTemplateTag;
-  svg: SvgTemplateTag;
+  readonly runtimePluginId: PluginId;
+  readonly html: HtmlTemplateTag;
+  readonly svg: SvgTemplateTag;
 }
 
 export interface PluginActivationResult {

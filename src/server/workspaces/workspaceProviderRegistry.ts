@@ -16,7 +16,7 @@ import type {
   WorkspaceProviderAuthorityResolution,
   WorkspaceProviderDiagnostic,
   WorkspaceProviderTier,
-  WorkspaceRemovalPresentation as PublicWorkspaceRemovalPresentation,
+  WorkspaceRemovalHostState,
 } from "../../shared/apiTypes.js";
 import { isPiWebPluginId } from "../../shared/pluginIds.js";
 import {
@@ -155,7 +155,7 @@ interface TierSelectionConflict {
 
 interface ValidatedProviderWorkspace {
   workspace: WorkspaceListing;
-  providerWorkspace: ProviderWorkspace;
+  providerWorkspace: Readonly<ProviderWorkspace>;
 }
 
 type TierSelection = TierSelectionNone | TierSelectionWinner | TierSelectionConflict;
@@ -658,23 +658,24 @@ async function validateProviderWorkspaces(
     const publicRemoval = removal === undefined
       ? undefined
       : hostRemovalPresentation(project, contribution, candidate.key, path, removal);
+    const provider = Object.freeze({
+      pluginId: contribution.pluginId,
+      capabilities: Object.freeze({
+        request: contribution.provider.request !== undefined,
+        remove: removal !== undefined,
+      }),
+      ...(metadata === undefined ? {} : { metadata }),
+    });
     const workspace: WorkspaceListing = {
       id: workspaceId(project.id, candidate.key),
       projectId: project.id,
       path,
       label: candidate.label,
       isMain: candidate.isMain,
-      provider: {
-        pluginId: contribution.pluginId,
-        capabilities: {
-          request: contribution.provider.request !== undefined,
-          remove: contribution.provider.prepareRemove !== undefined,
-        },
-        ...(metadata === undefined ? {} : { metadata }),
-      },
+      provider,
       ...(publicRemoval === undefined ? {} : { removal: publicRemoval }),
     };
-    const providerWorkspace: ProviderWorkspace = Object.freeze({
+    const providerWorkspace: Readonly<ProviderWorkspace> = Object.freeze({
       key: candidate.key,
       path,
       label: candidate.label,
@@ -729,7 +730,7 @@ function hostRemovalPresentation(
   providerKey: string,
   path: string,
   removal: ProviderWorkspaceRemovalPresentation,
-): PublicWorkspaceRemovalPresentation {
+): WorkspaceRemovalHostState {
   const digest = createHash("sha256").update(JSON.stringify([
     contribution.pluginId,
     contribution.moduleRevision,

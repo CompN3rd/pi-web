@@ -256,32 +256,38 @@ export interface Project {
 }
 
 export interface WorkspaceEffectiveConfig {
-  uploads?: PiWebUploadsConfig;
+  readonly uploads?: Readonly<PiWebUploadsConfig>;
 }
 
 export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
 export interface JsonObject {
-  [key: string]: JsonValue;
+  readonly [key: string]: JsonValue;
 }
 
 export interface WorkspaceProviderCapabilities {
-  request: boolean;
-  remove: boolean;
+  readonly request: boolean;
+  /** True only when this specific workspace advertises removal. */
+  readonly remove: boolean;
 }
 
-/** Public identity and opaque browser data for the plugin that owns a workspace. */
+/** Public identity and browser-visible data for the plugin that owns a workspace. */
 export interface WorkspaceProviderMetadata {
-  pluginId: string;
-  capabilities: WorkspaceProviderCapabilities;
-  metadata?: JsonObject;
+  readonly pluginId: string;
+  readonly capabilities: WorkspaceProviderCapabilities;
+  readonly metadata?: JsonObject;
 }
 
+/** Provider-authored removal wording exposed to browser plugins. */
 export interface WorkspaceRemovalPresentation {
-  actionLabel: string;
-  confirmation: string;
-  /** Host-issued opaque token binding a removal confirmation to this exact owner snapshot. */
-  precondition: string;
+  readonly actionLabel: string;
+  readonly confirmation: string;
+}
+
+/** Host-only removal state carried by PI WEB's browser/sessiond protocol. */
+export interface WorkspaceRemovalHostState extends WorkspaceRemovalPresentation {
+  /** Opaque token binding a removal confirmation to this exact owner snapshot. */
+  readonly precondition: string;
 }
 
 export interface WorkspaceRemovalRequest {
@@ -293,34 +299,35 @@ export type WorkspaceProviderTier = "primary" | "fallback";
 export type WorkspaceProviderDiagnosticCode = "probe-failed" | "claim-conflict" | "list-failed";
 
 export interface WorkspaceProviderDiagnostic {
-  code: WorkspaceProviderDiagnosticCode;
-  message: string;
-  tier: WorkspaceProviderTier;
-  pluginId?: string;
-  pluginIds?: readonly string[];
+  readonly code: WorkspaceProviderDiagnosticCode;
+  readonly message: string;
+  readonly tier: WorkspaceProviderTier;
+  readonly pluginId?: string;
+  readonly pluginIds?: readonly string[];
 }
 
 /** Provider-neutral result of resolving one project's current workspace owner. */
 export interface WorkspaceProviderResolution {
-  status: WorkspaceProviderResolutionStatus;
-  projectId: string;
-  ownerPluginId?: string;
-  workspaces: readonly Workspace[];
-  diagnostics: readonly WorkspaceProviderDiagnostic[];
+  readonly status: WorkspaceProviderResolutionStatus;
+  readonly projectId: string;
+  readonly ownerPluginId?: string;
+  readonly workspaces: readonly Workspace[];
+  readonly diagnostics: readonly WorkspaceProviderDiagnostic[];
 }
 
+/** Host-resolved workspace snapshot. */
 export interface Workspace {
-  id: string;
-  projectId: string;
-  path: string;
-  label: string;
+  readonly id: string;
+  readonly projectId: string;
+  readonly path: string;
+  readonly label: string;
   /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
-  branch?: string;
-  isMain: boolean;
-  provider?: WorkspaceProviderMetadata;
-  removal?: WorkspaceRemovalPresentation;
+  readonly branch?: string;
+  readonly isMain: boolean;
+  readonly provider?: WorkspaceProviderMetadata;
+  readonly removal?: WorkspaceRemovalHostState;
   /** Workspace-effective project/global settings needed by workspace UI features. Always present on current server workspace responses. */
-  effectiveConfig: WorkspaceEffectiveConfig;
+  readonly effectiveConfig: WorkspaceEffectiveConfig;
 }
 
 /** Workspace as listed by the workspace authority, before the browser route layer attaches the wire-required effectiveConfig. */

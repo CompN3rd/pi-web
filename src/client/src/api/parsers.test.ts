@@ -622,8 +622,37 @@ describe("API parsers", () => {
     });
   });
 
+  it("freezes host-owned workspace snapshots recursively", () => {
+    const workspace = parseWorkspace({
+      id: "w1",
+      projectId: "p1",
+      path: "/repo/secondary",
+      label: "secondary",
+      isMain: false,
+      provider: {
+        pluginId: "workspace-provider",
+        capabilities: { request: true, remove: true },
+        metadata: { nested: [{ ready: true }] },
+      },
+      removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
+      effectiveConfig: { uploads: { defaultFolder: "manual/uploads" } },
+    });
+    const nested = workspace.provider?.metadata?.["nested"];
+    if (!Array.isArray(nested)) throw new Error("Expected nested workspace metadata fixture");
+
+    expect(Object.isFrozen(workspace)).toBe(true);
+    expect(Object.isFrozen(workspace.provider)).toBe(true);
+    expect(Object.isFrozen(workspace.provider?.capabilities)).toBe(true);
+    expect(Object.isFrozen(workspace.provider?.metadata)).toBe(true);
+    expect(Object.isFrozen(nested)).toBe(true);
+    expect(Object.isFrozen(nested[0])).toBe(true);
+    expect(Object.isFrozen(workspace.removal)).toBe(true);
+    expect(Object.isFrozen(workspace.effectiveConfig)).toBe(true);
+    expect(Object.isFrozen(workspace.effectiveConfig.uploads)).toBe(true);
+  });
+
   it("parses provider-neutral workspace resolution ownership and diagnostics", () => {
-    expect(parseWorkspaceProviderResolution({
+    const resolution = parseWorkspaceProviderResolution({
       status: "degraded",
       projectId: "p1",
       ownerPluginId: "replacement",
@@ -641,7 +670,9 @@ describe("API parsers", () => {
         tier: "primary",
         pluginIds: ["one", "two"],
       }],
-    })).toEqual({
+    });
+
+    expect(resolution).toEqual({
       status: "degraded",
       projectId: "p1",
       ownerPluginId: "replacement",
@@ -653,6 +684,11 @@ describe("API parsers", () => {
         pluginIds: ["one", "two"],
       }],
     });
+    expect(Object.isFrozen(resolution)).toBe(true);
+    expect(Object.isFrozen(resolution.workspaces)).toBe(true);
+    expect(Object.isFrozen(resolution.diagnostics)).toBe(true);
+    expect(Object.isFrozen(resolution.diagnostics[0])).toBe(true);
+    expect(Object.isFrozen(resolution.diagnostics[0]?.pluginIds)).toBe(true);
   });
 
   it("rejects malformed workspace resolution ownership and diagnostics", () => {

@@ -58,6 +58,14 @@ describe("SessionDaemonWorkspaceCatalog", () => {
       removal: { precondition: "v1.confirmed" },
     });
     expect(resolved).toMatchObject(listed[0] ?? {});
+    expect(Object.isFrozen(resolution)).toBe(true);
+    expect(Object.isFrozen(resolution.workspaces)).toBe(true);
+    expect(Object.isFrozen(listed[0])).toBe(true);
+    expect(Object.isFrozen(listed[0]?.provider)).toBe(true);
+    expect(Object.isFrozen(listed[0]?.provider?.capabilities)).toBe(true);
+    expect(Object.isFrozen(listed[0]?.provider?.metadata)).toBe(true);
+    expect(Object.isFrozen(listed[0]?.removal)).toBe(true);
+    expect(Object.isFrozen(resolved)).toBe(true);
   });
 
   it("parses the immutable provider runtime and startup-health snapshot", async () => {

@@ -190,7 +190,7 @@ function parseWorkspace(value: unknown, label: string): WorkspaceListing {
   const branch = optionalString(value, "branch", label);
   const provider = value["provider"] === undefined ? undefined : parseProvider(value["provider"], label);
   const removal = value["removal"] === undefined ? undefined : parseRemoval(value["removal"], label);
-  return {
+  return Object.freeze({
     id: requireString(value, "id", label),
     projectId: requireString(value, "projectId", label),
     path,
@@ -199,7 +199,7 @@ function parseWorkspace(value: unknown, label: string): WorkspaceListing {
     isMain: requireBoolean(value, "isMain", label),
     ...(provider === undefined ? {} : { provider }),
     ...(removal === undefined ? {} : { removal }),
-  };
+  });
 }
 
 function parseProvider(value: unknown, workspaceLabel: string): NonNullable<WorkspaceListing["provider"]> {
@@ -208,24 +208,24 @@ function parseProvider(value: unknown, workspaceLabel: string): NonNullable<Work
   const capabilities = value["capabilities"];
   if (!isRecord(capabilities)) throw protocolError(`${label} capabilities must be an object`);
   const metadata = value["metadata"] === undefined ? undefined : parseJsonObject(value["metadata"], `${label} metadata`);
-  return {
+  return Object.freeze({
     pluginId: requirePluginId(value, "pluginId", label),
-    capabilities: {
+    capabilities: Object.freeze({
       request: requireBoolean(capabilities, "request", `${label} capabilities`),
       remove: requireBoolean(capabilities, "remove", `${label} capabilities`),
-    },
+    }),
     ...(metadata === undefined ? {} : { metadata }),
-  };
+  });
 }
 
 function parseRemoval(value: unknown, workspaceLabel: string): NonNullable<WorkspaceListing["removal"]> {
   const label = `${workspaceLabel} removal`;
   if (!isRecord(value)) throw protocolError(`${label} must be an object`);
-  return {
+  return Object.freeze({
     actionLabel: requireString(value, "actionLabel", label),
     confirmation: requireString(value, "confirmation", label),
     precondition: requireString(value, "precondition", label),
-  };
+  });
 }
 
 function parseProviderRuntimeSnapshot(value: unknown): WorkspaceProviderRuntimeSnapshot {
