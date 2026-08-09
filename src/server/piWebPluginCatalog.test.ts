@@ -18,7 +18,7 @@ describe("PiWebPluginCatalog", () => {
   it("describes browser-only metadata and desired config without changing source or scope", async () => {
     const pluginRoot = join(tempDir, "plugins", "browser-only");
     await writePlugin(pluginRoot, {
-      packageJson: { piWeb: { plugins: [{ id: "browser-only", module: "dist/plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "browser-only", browserRoot: "dist", module: "dist/plugin.js" }] } },
       files: { "dist/plugin.js": "export default {};" },
     });
     const catalog = new PiWebPluginCatalog({
@@ -34,6 +34,10 @@ describe("PiWebPluginCatalog", () => {
     expect(plugin).toMatchObject({
       id: "browser-only",
       packageRoot: await realpath(pluginRoot),
+      browserRoot: {
+        path: "dist",
+        directoryPath: await realpath(join(pluginRoot, "dist")),
+      },
       browserModule: {
         path: "dist/plugin.js",
         filePath: await realpath(join(pluginRoot, "dist/plugin.js")),
@@ -48,11 +52,77 @@ describe("PiWebPluginCatalog", () => {
     expect(plugin?.settingsRevision).toMatch(/^sha256:[0-9a-f]{64}$/u);
   });
 
+  it("requires a safe browser root and keeps browser modules inside its logical and canonical boundary", async () => {
+    const pluginsRoot = join(tempDir, "plugins");
+    await writePlugin(join(pluginsRoot, "valid-root"), {
+      packageJson: { piWeb: { plugins: [{ id: "valid-root", browserRoot: "public", module: "public/plugin.js" }] } },
+      files: { "public/plugin.js": "export default {};", "private/server.js": "not browser public" },
+    });
+    await writePlugin(join(pluginsRoot, "missing-root"), {
+      packageJson: { piWeb: { plugins: [{ id: "missing-root", module: "browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    await writePlugin(join(pluginsRoot, "invalid-root"), {
+      packageJson: { piWeb: { plugins: [{ id: "invalid-root", browserRoot: "", module: "browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    await writePlugin(join(pluginsRoot, "unsafe-root"), {
+      packageJson: { piWeb: { plugins: [{ id: "unsafe-root", browserRoot: "../public", module: "browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    await writePlugin(join(pluginsRoot, "absent-root"), {
+      packageJson: { piWeb: { plugins: [{ id: "absent-root", browserRoot: "public", module: "public/browser.js" }] } },
+      files: {},
+    });
+    await writePlugin(join(pluginsRoot, "outside-root"), {
+      packageJson: { piWeb: { plugins: [{ id: "outside-root", browserRoot: "public", module: "private/browser.js" }] } },
+      files: { "public/asset.css": "", "private/browser.js": "export default {};" },
+    });
+
+    const symlinkedModuleRoot = join(pluginsRoot, "symlinked-module");
+    await writePlugin(symlinkedModuleRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "symlinked-module", browserRoot: "public", module: "public/browser.js" }] } },
+      files: { "private/browser.js": "export default {};" },
+    });
+    await mkdir(join(symlinkedModuleRoot, "public"), { recursive: true });
+    await symlink(join(symlinkedModuleRoot, "private", "browser.js"), join(symlinkedModuleRoot, "public", "browser.js"));
+
+    const escapedRoot = join(pluginsRoot, "escaped-root");
+    const externalBrowserRoot = join(tempDir, "external-browser-root");
+    await mkdir(externalBrowserRoot, { recursive: true });
+    await writeFile(join(externalBrowserRoot, "browser.js"), "export default {};\n");
+    await mkdir(escapedRoot, { recursive: true });
+    await writeFile(join(escapedRoot, "package.json"), `${JSON.stringify({
+      piWeb: { plugins: [{ id: "escaped-root", browserRoot: "public", module: "public/browser.js" }] },
+    }, null, 2)}\n`);
+    await symlink(externalBrowserRoot, join(escapedRoot, "public"), process.platform === "win32" ? "junction" : "dir");
+
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: pluginsRoot, source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["valid-root"]);
+    expect(snapshot.diagnostics).toHaveLength(7);
+    expect(snapshot.diagnostics.map(({ message }) => message)).toEqual(expect.arrayContaining([
+      expect.stringContaining("with a browser module must declare browserRoot"),
+      expect.stringContaining("Invalid PI WEB plugin browserRoot"),
+      expect.stringContaining("Unsafe PI WEB plugin browser root"),
+      expect.stringContaining("browser root not found for absent-root"),
+      expect.stringContaining("browser module is outside browser root for outside-root"),
+      expect.stringContaining("browser module is outside browser root for symlinked-module"),
+      expect.stringContaining("browser root escapes its package for escaped-root"),
+    ]));
+  });
+
   it("uses package content revisions even when browser asset timestamps are preserved", async () => {
     const pluginRoot = join(tempDir, "plugins", "content-revision");
     const browserPath = join(pluginRoot, "browser.js");
     await writePlugin(pluginRoot, {
-      packageJson: { piWeb: { plugins: [{ id: "content-revision", module: "browser.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "content-revision", browserRoot: ".", module: "browser.js" }] } },
       files: { "browser.js": "export const value = 'one';" },
     });
     const catalog = new PiWebPluginCatalog({
@@ -74,7 +144,7 @@ describe("PiWebPluginCatalog", () => {
   it("ignores excluded package metadata while bounding the serveable artifact", async () => {
     const pluginRoot = join(tempDir, "plugins", "bounded");
     await writePlugin(pluginRoot, {
-      packageJson: { piWeb: { plugins: [{ id: "bounded", module: "browser.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "bounded", browserRoot: ".", module: "browser.js" }] } },
       files: { "browser.js": "export default {};", ".git/objects/transient": "one" },
     });
     const catalog = new PiWebPluginCatalog({
@@ -128,7 +198,7 @@ describe("PiWebPluginCatalog", () => {
       files: { "server-plugin.js": `globalThis.${marker} = true; throw new Error("must not execute");` },
     });
     await writePlugin(join(tempDir, "plugins", "dual"), {
-      packageJson: { piWeb: { plugins: [{ id: "dual", module: "browser.js", serverModule: "server.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "dual", browserRoot: ".", module: "browser.js", serverModule: "server.js" }] } },
       files: { "browser.js": "export default {};", "server.js": "throw new Error('must not execute');" },
     });
     const catalog = new PiWebPluginCatalog({
@@ -176,7 +246,7 @@ describe("PiWebPluginCatalog", () => {
       files: {},
     });
     await writePlugin(join(pluginsRoot, "dual-unscoped"), {
-      packageJson: { piWeb: { plugins: [{ id: "dual-unscoped", module: "browser.js", serverModule: "server.js", machineSpecific: false }] } },
+      packageJson: { piWeb: { plugins: [{ id: "dual-unscoped", browserRoot: ".", module: "browser.js", serverModule: "server.js", machineSpecific: false }] } },
       files: { "browser.js": "export default {};", "server.js": "export default {};" },
     });
     const warnings: string[] = [];
@@ -209,12 +279,12 @@ describe("PiWebPluginCatalog", () => {
     ];
     for (const { directory, id } of reservedPlugins) {
       await writePlugin(join(pluginsRoot, directory), {
-        packageJson: { piWeb: { plugins: [{ id, module: "browser.js" }] } },
+        packageJson: { piWeb: { plugins: [{ id, browserRoot: ".", module: "browser.js" }] } },
         files: { "browser.js": "export default {};" },
       });
     }
     await writePlugin(join(pluginsRoot, "valid"), {
-      packageJson: { piWeb: { plugins: [{ id: "valid", module: "browser.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "valid", browserRoot: ".", module: "browser.js" }] } },
       files: { "browser.js": "export default {};" },
     });
     const catalog = new PiWebPluginCatalog({
@@ -243,7 +313,7 @@ describe("PiWebPluginCatalog", () => {
       files: { "server.js": "export default {};" },
     });
     await writePlugin(join(secondRoot, "duplicate"), {
-      packageJson: { piWeb: { plugins: [{ id: "duplicate", module: "browser.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "duplicate", browserRoot: ".", module: "browser.js" }] } },
       files: { "browser.js": "export default {};" },
     });
     const catalog = new PiWebPluginCatalog({

@@ -3,8 +3,8 @@
 import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonValue, PluginRuntimeContext, Workspace, WorkspaceBackend, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
-import { GIT_FILE_VIEW_STORAGE_KEY } from "./gitFileViewPreference.js";
-import plugin from "./pi-web-plugin.js";
+import { GIT_FILE_VIEW_STORAGE_KEY } from "./browser/gitFileViewPreference.js";
+import plugin from "./browser/pi-web-plugin.js";
 
 const projectId = "project-1";
 const workspaceId = "workspace-1";

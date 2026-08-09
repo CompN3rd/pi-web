@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import gitPlugin from "../../../../pi-web-plugins/git/pi-web-plugin.js";
+import gitPlugin from "../../../../pi-web-plugins/git/browser/pi-web-plugin.js";
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { loadExternalPlugins, resolvePluginModuleUrl } from "./external";
 import { PluginRegistry } from "./registry";

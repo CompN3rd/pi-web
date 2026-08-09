@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { GitStatusFile } from "./git-contract.js";
-import { buildGitFileList } from "./gitFileList.js";
+import type { GitStatusFile } from "./browser/git-contract.js";
+import { buildGitFileList } from "./browser/gitFileList.js";
 
 describe("buildGitFileList", () => {
   it("leaves non-submodule files flat in their original order", () => {

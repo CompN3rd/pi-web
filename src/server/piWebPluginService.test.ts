@@ -29,7 +29,7 @@ describe("PiWebPluginService", () => {
   it("discovers local plugins and serves assets", async () => {
     const pluginDir = join(tempDir, "plugins", "info");
     await writePlugin(pluginDir, {
-      packageJson: { piWeb: { plugins: [{ id: "info", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "info", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default { apiVersion: 2, name: 'Info', activate: () => ({ contributions: {} }) };" },
     });
 
@@ -53,7 +53,7 @@ describe("PiWebPluginService", () => {
   it("preserves content types for extension-only asset names", async () => {
     const pluginDir = join(tempDir, "plugins", "extension-only");
     await writePlugin(pluginDir, {
-      packageJson: { piWeb: { plugins: [{ id: "extension-only", module: ".js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "extension-only", browserRoot: ".", module: ".js" }] } },
       files: {
         ".js": "export default {};",
         ".svg": '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
@@ -66,31 +66,39 @@ describe("PiWebPluginService", () => {
     await expect(service.readAsset("extension-only", ".svg")).resolves.toMatchObject({ contentType: "image/svg+xml" });
   });
 
-  it("serves nested SVG assets with a browser-compatible content type", async () => {
+  it("serves only browser-root assets and gives .mjs modules an executable content type", async () => {
     const pluginDir = join(tempDir, "plugins", "icons");
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"></svg>';
     await writePlugin(pluginDir, {
-      packageJson: { piWeb: { plugins: [{ id: "icons", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "icons", browserRoot: "public", module: "public/pi-web-plugin.mjs" }] } },
       files: {
-        "pi-web-plugin.js": "export default {};",
-        "assets/icon.svg": svg,
-        "assets/uppercase.SVG": svg,
-        "assets/data.bin": "unknown",
+        "public/pi-web-plugin.mjs": "export default {};",
+        "public/assets/icon.svg": svg,
+        "public/assets/uppercase.SVG": svg,
+        "public/assets/data.bin": "unknown",
+        "private/secret.js": "not browser public",
       },
     });
+    await symlink(join(pluginDir, "private", "secret.js"), join(pluginDir, "public", "assets", "leak.js"));
 
     const service = new PiWebPluginService({ roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }], packageProvider: false });
 
-    const svgAsset = await service.readAsset("icons", "assets/icon.svg");
+    const manifest = await service.manifest();
+    expect(manifest.plugins[0]?.module).toContain("/icons/public/pi-web-plugin.mjs?");
+    await expect(service.readAsset("icons", "public/pi-web-plugin.mjs")).resolves.toMatchObject({ contentType: "application/javascript; charset=utf-8" });
+    const svgAsset = await service.readAsset("icons", "public/assets/icon.svg");
     expect(svgAsset?.contentType).toBe("image/svg+xml");
     expect(svgAsset?.content.toString("utf8")).toBe(svg);
-    await expect(service.readAsset("icons", "assets/uppercase.SVG")).resolves.toMatchObject({ contentType: "image/svg+xml" });
-    await expect(service.readAsset("icons", "assets/data.bin")).resolves.toMatchObject({ contentType: "application/octet-stream" });
+    await expect(service.readAsset("icons", "public/assets/uppercase.SVG")).resolves.toMatchObject({ contentType: "image/svg+xml" });
+    await expect(service.readAsset("icons", "public/assets/data.bin")).resolves.toMatchObject({ contentType: "application/octet-stream" });
+    await expect(service.readAsset("icons", "private/secret.js")).resolves.toBeUndefined();
+    await expect(service.readAsset("icons", "public/../private/secret.js")).resolves.toBeUndefined();
+    await expect(service.readAsset("icons", "public/assets/leak.js")).resolves.toBeUndefined();
   });
 
   it("includes machine-specific preferences in plugin manifests", async () => {
     await writePlugin(join(tempDir, "plugins", "updates"), {
-      packageJson: { piWeb: { plugins: [{ id: "updates", module: "pi-web-plugin.js", machineSpecific: true }] } },
+      packageJson: { piWeb: { plugins: [{ id: "updates", browserRoot: ".", module: "pi-web-plugin.js", machineSpecific: true }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
 
@@ -106,7 +114,7 @@ describe("PiWebPluginService", () => {
       files: { "server.js": "throw new Error('must not execute');" },
     });
     await writePlugin(join(tempDir, "plugins", "dual"), {
-      packageJson: { piWeb: { plugins: [{ id: "dual", module: "browser.js", serverModule: "server.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "dual", browserRoot: ".", module: "browser.js", serverModule: "server.js" }] } },
       files: { "browser.js": "export default {};", "server.js": "throw new Error('must not execute');" },
     });
     const catalog = new PiWebPluginCatalog({
@@ -139,7 +147,7 @@ describe("PiWebPluginService", () => {
     const pluginDir = join(tempDir, "plugins", "dual-assets");
     const chunkPath = join(pluginDir, "chunk.js");
     await writePlugin(pluginDir, {
-      packageJson: { piWeb: { plugins: [{ id: "dual-assets", module: "browser.js", serverModule: "server.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "dual-assets", browserRoot: ".", module: "browser.js", serverModule: "server.js" }] } },
       files: {
         "browser.js": "import './chunk.js'; export default {};",
         "chunk.js": "export const value = 'active';",
@@ -164,7 +172,7 @@ describe("PiWebPluginService", () => {
 
   it("withholds server-backed browser modules and reports an incompatible sessiond protocol", async () => {
     await writePlugin(join(tempDir, "plugins", "dual"), {
-      packageJson: { piWeb: { plugins: [{ id: "dual", module: "browser.js", serverModule: "server.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "dual", browserRoot: ".", module: "browser.js", serverModule: "server.js" }] } },
       files: { "browser.js": "export default {};", "server.js": "export default {};" },
     });
     const service = new PiWebPluginService({
@@ -184,7 +192,7 @@ describe("PiWebPluginService", () => {
 
   it.each(["bundled-only", "none"] as const)("reports desired %s safe start as restart-pending before sessiond imports plugins", async (safeStart) => {
     await writePlugin(join(tempDir, "plugins", "browser-only"), {
-      packageJson: { piWeb: { plugins: [{ id: "browser-only", module: "browser.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "browser-only", browserRoot: ".", module: "browser.js" }] } },
       files: { "browser.js": "export default {};" },
     });
     const service = new PiWebPluginService({
@@ -204,7 +212,7 @@ describe("PiWebPluginService", () => {
 
   it("encodes browser module path segments without changing revision query behavior", async () => {
     await writePlugin(join(tempDir, "plugins", "encoded"), {
-      packageJson: { piWeb: { plugins: [{ id: "encoded", module: "dist/plugin file#1.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "encoded", browserRoot: "dist", module: "dist/plugin file#1.js" }] } },
       files: { "dist/plugin file#1.js": "export default {};" },
     });
     const service = new PiWebPluginService({ roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }], packageProvider: false });
@@ -218,7 +226,7 @@ describe("PiWebPluginService", () => {
     const pluginDir = join(tempDir, "plugins", "changing");
     const browserPath = join(pluginDir, "browser.js");
     await writePlugin(pluginDir, {
-      packageJson: { piWeb: { plugins: [{ id: "changing", module: "browser.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "changing", browserRoot: ".", module: "browser.js" }] } },
       files: { "browser.js": "export default {};" },
     });
     const service = new PiWebPluginService({ roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }], packageProvider: false });
@@ -239,7 +247,7 @@ describe("PiWebPluginService", () => {
     process.env["PI_WEB_DOCKER_RUNTIME"] = "1";
     process.env["PI_WEB_DOCKER_MODE"] = "dev";
     await writePlugin(join(tempDir, "plugins", "updates"), {
-      packageJson: { piWeb: { plugins: [{ id: "updates", module: "pi-web-plugin.js", machineSpecific: true }] } },
+      packageJson: { piWeb: { plugins: [{ id: "updates", browserRoot: ".", module: "pi-web-plugin.js", machineSpecific: true }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
 
@@ -255,7 +263,7 @@ describe("PiWebPluginService", () => {
   it("discovers Pi package plugins through an injected package provider", async () => {
     const packageDir = join(tempDir, "pkg");
     await writePlugin(packageDir, {
-      packageJson: { piWeb: { plugins: [{ id: "review", module: "dist/review.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "review", browserRoot: "dist", module: "dist/review.js" }] } },
       files: { "dist/review.js": "export default { apiVersion: 2, name: 'Review', activate: () => ({ contributions: {} }) };" },
     });
     const packageProvider: PiPackageProvider = {
@@ -277,7 +285,7 @@ describe("PiWebPluginService", () => {
     const updatedAgentDir = join(tempDir, "updated-agent");
     let activeAgentDir = initialAgentDir;
     await writePlugin(packageDir, {
-      packageJson: { piWeb: { plugins: [{ id: "agent-package", module: "dist/plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "agent-package", browserRoot: "dist", module: "dist/plugin.js" }] } },
       files: { "dist/plugin.js": "export default {};" },
     });
     await mkdir(initialAgentDir, { recursive: true });
@@ -295,7 +303,7 @@ describe("PiWebPluginService", () => {
   it("fails complete package-backed discovery closed while keeping known local assets independent", async () => {
     const pluginDir = join(tempDir, "plugins", "local-only");
     await writePlugin(pluginDir, {
-      packageJson: { piWeb: { plugins: [{ id: "local-only", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "local-only", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
     const profileError = new ActiveAgentProfileAccessError({ status: "invalid", error: "missing descriptor" });
@@ -313,11 +321,11 @@ describe("PiWebPluginService", () => {
     const firstPackageDir = join(tempDir, "first-package");
     const secondPackageDir = join(tempDir, "second-package");
     await writePlugin(firstPackageDir, {
-      packageJson: { piWeb: { plugins: [{ id: "first", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "first", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
     await writePlugin(secondPackageDir, {
-      packageJson: { piWeb: { plugins: [{ id: "second", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "second", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
     await writePiPackageSettings(agentDir, [firstPackageDir]);
@@ -335,7 +343,7 @@ describe("PiWebPluginService", () => {
     await mkdir(join(tempDir, "src", "server"), { recursive: true });
     await writeFile(join(tempDir, "src", "server", "index.ts"), "export {};\n");
     await writePlugin(join(tempDir, "plugins", "source-dev"), {
-      packageJson: { piWeb: { plugins: [{ id: "source-dev", module: "dist/pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "source-dev", browserRoot: "dist", module: "dist/pi-web-plugin.js" }] } },
       files: { "dist/pi-web-plugin.js": "export default { apiVersion: 2, name: 'Source Dev', activate: () => ({ contributions: {} }) };" },
     });
 
@@ -351,7 +359,7 @@ describe("PiWebPluginService", () => {
   it("discovers local plugins through symlinks for development", async () => {
     const pluginDir = join(tempDir, "dev-plugin");
     await writePlugin(pluginDir, {
-      packageJson: { piWeb: { plugins: [{ id: "dev", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "dev", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default { apiVersion: 2, name: 'Dev', activate: () => ({ contributions: {} }) };" },
     });
     await mkdir(join(tempDir, "plugins"), { recursive: true });
@@ -367,11 +375,11 @@ describe("PiWebPluginService", () => {
 
   it("filters disabled plugins from the manifest while reporting them through plugin status", async () => {
     await writePlugin(join(tempDir, "plugins", "enabled"), {
-      packageJson: { piWeb: { plugins: [{ id: "enabled", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "enabled", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
     await writePlugin(join(tempDir, "plugins", "disabled"), {
-      packageJson: { piWeb: { plugins: [{ id: "disabled", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "disabled", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
 
@@ -394,11 +402,11 @@ describe("PiWebPluginService", () => {
     const firstRoot = join(tempDir, "first-root");
     const secondRoot = join(tempDir, "second-root");
     await writePlugin(join(firstRoot, "duplicate"), {
-      packageJson: { piWeb: { plugins: [{ id: "duplicate", module: "first.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "duplicate", browserRoot: ".", module: "first.js" }] } },
       files: { "first.js": "export default {};" },
     });
     await writePlugin(join(secondRoot, "duplicate"), {
-      packageJson: { piWeb: { plugins: [{ id: "duplicate", module: "second.js", machineSpecific: true }] } },
+      packageJson: { piWeb: { plugins: [{ id: "duplicate", browserRoot: ".", module: "second.js", machineSpecific: true }] } },
       files: { "second.js": "export default {};" },
     });
 
@@ -425,7 +433,7 @@ describe("PiWebPluginService", () => {
     });
     const unsafeRoot = join(tempDir, "unsafe-root");
     await writePlugin(join(unsafeRoot, "unsafe"), {
-      packageJson: { piWeb: { plugins: [{ id: "unsafe", module: "../escape.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "unsafe", browserRoot: ".", module: "../escape.js" }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
 
@@ -435,7 +443,7 @@ describe("PiWebPluginService", () => {
 
   it("continues discovering valid plugins when another local plugin is invalid", async () => {
     await writePlugin(join(tempDir, "plugins", "valid"), {
-      packageJson: { piWeb: { plugins: [{ id: "valid", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "valid", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
     await writePlugin(join(tempDir, "plugins", "legacy"), {
@@ -452,7 +460,7 @@ describe("PiWebPluginService", () => {
   it("rejects unsafe asset traversal", async () => {
     const pluginDir = join(tempDir, "plugins", "safe");
     await writePlugin(pluginDir, {
-      packageJson: { piWeb: { plugins: [{ id: "safe", module: "pi-web-plugin.js" }] } },
+      packageJson: { piWeb: { plugins: [{ id: "safe", browserRoot: ".", module: "pi-web-plugin.js" }] } },
       files: { "pi-web-plugin.js": "export default {};" },
     });
     await writeFile(join(tempDir, "plugins", "escape.js"), "nope");

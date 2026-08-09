@@ -34,9 +34,17 @@ export interface PiWebPluginCatalogModule {
   revision: string;
 }
 
+export interface PiWebPluginCatalogBrowserRoot {
+  /** Package-relative directory whose contents are browser-public. */
+  path: string;
+  /** Canonical directory path, already checked to remain inside packageRoot. */
+  directoryPath: string;
+}
+
 export interface PiWebPluginPackageEntry {
   id: string;
   packageRoot: string;
+  browserRoot?: PiWebPluginCatalogBrowserRoot;
   browserModule?: PiWebPluginCatalogModule;
   serverModule?: PiWebPluginCatalogModule;
   source: string;
@@ -91,6 +99,7 @@ interface PiWebPackageConfig {
 
 interface PiWebPluginMetadataEntry {
   id: string;
+  browserRoot?: string;
   module?: string;
   serverModule?: string;
   machineSpecific: boolean;
@@ -299,11 +308,19 @@ async function discoverPluginEntries(root: string, config: PiWebPackageConfig): 
   const revision = await computePiWebPluginPackageRevision(packageRoot);
   const plugins: Omit<PiWebPluginPackageEntry, "source" | "scope">[] = [];
   for (const entry of config.plugins) {
-    const browserModule = entry.module === undefined ? undefined : await discoverModule(packageRoot, entry.id, "browser", entry.module, revision);
-    const serverModule = entry.serverModule === undefined ? undefined : await discoverModule(packageRoot, entry.id, "server", entry.serverModule, revision);
+    const browserRoot = entry.browserRoot === undefined
+      ? undefined
+      : await discoverBrowserRoot(packageRoot, entry.id, entry.browserRoot);
+    const browserModule = entry.module === undefined
+      ? undefined
+      : await discoverModule(packageRoot, entry.id, "browser", entry.module, revision, browserRoot);
+    const serverModule = entry.serverModule === undefined
+      ? undefined
+      : await discoverModule(packageRoot, entry.id, "server", entry.serverModule, revision);
     plugins.push({
       id: entry.id,
       packageRoot,
+      ...(browserRoot === undefined ? {} : { browserRoot }),
       ...(browserModule === undefined ? {} : { browserModule }),
       ...(serverModule === undefined ? {} : { serverModule }),
       machineSpecific: entry.machineSpecific,
@@ -312,7 +329,25 @@ async function discoverPluginEntries(root: string, config: PiWebPackageConfig): 
   return plugins;
 }
 
-async function discoverModule(packageRoot: string, pluginId: string, kind: "browser" | "server", path: string, revision: string): Promise<PiWebPluginCatalogModule> {
+async function discoverBrowserRoot(packageRoot: string, pluginId: string, path: string): Promise<PiWebPluginCatalogBrowserRoot> {
+  const candidate = resolve(packageRoot, path);
+  const [entryStat, directoryPath] = await Promise.all([
+    stat(candidate).catch(() => undefined),
+    realpath(candidate).catch(() => undefined),
+  ]);
+  if (entryStat?.isDirectory() !== true || directoryPath === undefined) throw new Error(`PI WEB plugin browser root not found for ${pluginId}: ${path}`);
+  if (!isWithin(packageRoot, directoryPath)) throw new Error(`PI WEB plugin browser root escapes its package for ${pluginId}: ${path}`);
+  return { path, directoryPath };
+}
+
+async function discoverModule(
+  packageRoot: string,
+  pluginId: string,
+  kind: "browser" | "server",
+  path: string,
+  revision: string,
+  browserRoot?: PiWebPluginCatalogBrowserRoot,
+): Promise<PiWebPluginCatalogModule> {
   if (!isSafeRelativeModulePath(path)) throw new Error(`Unsafe PI WEB plugin ${kind} module path for ${pluginId}: ${path}`);
   const candidate = resolve(packageRoot, path);
   const [entryStat, filePath] = await Promise.all([
@@ -321,6 +356,9 @@ async function discoverModule(packageRoot: string, pluginId: string, kind: "brow
   ]);
   if (entryStat?.isFile() !== true || filePath === undefined) throw new Error(`PI WEB plugin ${kind} module not found for ${pluginId}: ${path}`);
   if (!isWithin(packageRoot, filePath)) throw new Error(`PI WEB plugin ${kind} module escapes its package for ${pluginId}: ${path}`);
+  if (browserRoot !== undefined && (!isLogicalPathWithin(browserRoot.path, path) || !isWithin(browserRoot.directoryPath, filePath))) {
+    throw new Error(`PI WEB plugin browser module is outside browser root for ${pluginId}: ${path}`);
+  }
   return { path, filePath, revision };
 }
 
@@ -328,29 +366,37 @@ export const PI_WEB_PLUGIN_ARTIFACT_MAX_ENTRIES = 4_096;
 export const PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES = 16 * 1024 * 1024;
 const EXCLUDED_ARTIFACT_DIRECTORIES = new Set([".git", "node_modules"]);
 
+interface PackageArtifactCapture {
+  browserRoot: PiWebPluginCatalogBrowserRoot;
+  files: Map<string, Buffer>;
+}
+
 interface PackageHashState {
   entries: number;
   byteLength: number;
-  files?: Map<string, Buffer>;
+  capture?: PackageArtifactCapture;
 }
 
 export async function computePiWebPluginPackageRevision(packageRoot: string): Promise<string> {
   return (await scanPiWebPluginPackage(packageRoot)).revision;
 }
 
-export async function readPiWebPluginPackageArtifact(packageRoot: string): Promise<PiWebPluginPackageArtifact> {
+export async function readPiWebPluginPackageArtifact(
+  packageRoot: string,
+  browserRoot: PiWebPluginCatalogBrowserRoot,
+): Promise<PiWebPluginPackageArtifact> {
   const files = new Map<string, Buffer>();
-  const result = await scanPiWebPluginPackage(packageRoot, files);
+  const result = await scanPiWebPluginPackage(packageRoot, { browserRoot, files });
   return { ...result, files };
 }
 
 async function scanPiWebPluginPackage(
   packageRoot: string,
-  files?: Map<string, Buffer>,
+  capture?: PackageArtifactCapture,
 ): Promise<{ revision: string; byteLength: number }> {
   const canonicalRoot = await realpath(packageRoot);
   const hash = createHash("sha256");
-  const state: PackageHashState = { entries: 0, byteLength: 0, ...(files === undefined ? {} : { files }) };
+  const state: PackageHashState = { entries: 0, byteLength: 0, ...(capture === undefined ? {} : { capture }) };
   await hashPackageDirectory(hash, canonicalRoot, canonicalRoot, "", new Set<string>(), state);
   return { revision: `sha256:${hash.digest("hex")}`, byteLength: state.byteLength };
 }
@@ -390,7 +436,11 @@ async function hashPackageDirectory(
       const remainingBytes = PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES - state.byteLength;
       const content = await readBoundedPackageFile(candidate, remainingBytes);
       state.byteLength += content.byteLength;
-      state.files?.set(logicalPath, content);
+      if (state.capture !== undefined
+        && isLogicalPathWithin(state.capture.browserRoot.path, logicalPath)
+        && isWithin(state.capture.browserRoot.directoryPath, canonicalPath)) {
+        state.capture.files.set(logicalPath, content);
+      }
       updatePackageHash(hash, "file", logicalPath, relative(packageRoot, canonicalPath), content);
       continue;
     }
@@ -460,7 +510,7 @@ async function readPiWebPackageConfig(root: string): Promise<PiWebPackageConfig 
 
 function parsePluginEntries(piWeb: Record<string, unknown>, packagePath: string): PiWebPluginMetadataEntry[] {
   if (piWeb["plugin"] !== undefined) {
-    throw new Error(`Unsupported PI WEB plugin metadata in ${packagePath}: use piWeb.plugins with { id, module?, serverModule?, machineSpecific? } entries`);
+    throw new Error(`Unsupported PI WEB plugin metadata in ${packagePath}: use piWeb.plugins with { id, module?, browserRoot?, serverModule?, machineSpecific? } entries`);
   }
   const plugins = piWeb["plugins"];
   if (plugins === undefined) return [];
@@ -474,6 +524,7 @@ function parsePluginEntries(piWeb: Record<string, unknown>, packagePath: string)
     const module = parseOptionalModule(entry["module"], "browser", packagePath, id);
     const serverModule = parseOptionalModule(entry["serverModule"], "server", packagePath, id);
     if (module === undefined && serverModule === undefined) throw new Error(`PI WEB plugin ${id} must declare module or serverModule in ${packagePath}`);
+    const browserRoot = parseBrowserRoot(entry["browserRoot"], packagePath, id, module !== undefined);
 
     const configuredMachineSpecific = parseMachineSpecific(entry["machineSpecific"], packagePath, id);
     if (module !== undefined && serverModule !== undefined && configuredMachineSpecific === false) {
@@ -482,6 +533,7 @@ function parsePluginEntries(piWeb: Record<string, unknown>, packagePath: string)
     const machineSpecific = configuredMachineSpecific ?? (module !== undefined && serverModule !== undefined);
     return {
       id,
+      ...(browserRoot === undefined ? {} : { browserRoot }),
       ...(module === undefined ? {} : { module }),
       ...(serverModule === undefined ? {} : { serverModule }),
       machineSpecific,
@@ -492,6 +544,17 @@ function parsePluginEntries(piWeb: Record<string, unknown>, packagePath: string)
 function parseOptionalModule(value: unknown, kind: "browser" | "server", packagePath: string, pluginId: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value === "") throw new Error(`Invalid PI WEB plugin ${kind} module for ${pluginId} in ${packagePath}`);
+  return value;
+}
+
+function parseBrowserRoot(value: unknown, packagePath: string, pluginId: string, hasBrowserModule: boolean): string | undefined {
+  if (value === undefined) {
+    if (hasBrowserModule) throw new Error(`PI WEB plugin ${pluginId} with a browser module must declare browserRoot in ${packagePath}`);
+    return undefined;
+  }
+  if (!hasBrowserModule) throw new Error(`PI WEB plugin ${pluginId} must not declare browserRoot without a browser module in ${packagePath}`);
+  if (typeof value !== "string" || value === "") throw new Error(`Invalid PI WEB plugin browserRoot for ${pluginId} in ${packagePath}`);
+  if (!isSafeRelativeBrowserRootPath(value)) throw new Error(`Unsafe PI WEB plugin browser root for ${pluginId}: ${value}`);
   return value;
 }
 
@@ -538,6 +601,15 @@ function addUnique(records: Map<string, PiWebPluginPackageEntry>, plugin: PiWebP
 function isSafeRelativeModulePath(path: string): boolean {
   if (path === "" || path.includes("\\") || hasControlCharacter(path) || isAbsolute(path) || win32.isAbsolute(path)) return false;
   return path.split("/").every((segment) => segment !== ".." && !EXCLUDED_ARTIFACT_DIRECTORIES.has(segment));
+}
+
+function isSafeRelativeBrowserRootPath(path: string): boolean {
+  if (path === ".") return true;
+  return isSafeRelativeModulePath(path) && path.split("/").every((segment) => segment !== "" && segment !== ".");
+}
+
+function isLogicalPathWithin(root: string, candidate: string): boolean {
+  return root === "." || candidate.startsWith(`${root}/`);
 }
 
 function hasControlCharacter(value: string): boolean {

@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
-import { createGitDiffRoute } from "./gitRoute.js";
+import { createGitDiffRoute } from "./browser/gitRoute.js";
 
 afterEach(() => {
   window.history.replaceState({}, "", "/");
