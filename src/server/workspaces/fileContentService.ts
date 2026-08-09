@@ -14,8 +14,9 @@ export async function readWorkspaceFile(rootPath: string, path: string | undefin
   const buffer = await readFilePrefix(target, bytesToRead);
   const classification = classifyWorkspaceFile(displayPath);
   const media = mediaForClassification(classification);
-  // HTML and Markdown retain capped literal UTF-8 source for Raw mode. Image
-  // and PDF bytes stay out of JSON and are served only by the preview stream.
+  // Text-source formats (HTML, Markdown, SVG) retain capped literal UTF-8
+  // source for Raw mode. Raster image and PDF bytes stay out of JSON and are
+  // served only by the preview response.
   const binary = classification?.source === "stream" || (classification === undefined && isProbablyBinary(buffer));
   return {
     path: displayPath,

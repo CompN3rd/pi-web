@@ -1,5 +1,6 @@
 import { css, html, LitElement, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { FileContentResponse } from "../api";
 import { workspaceFilePreviewUrl } from "../api/urls";
@@ -29,15 +30,23 @@ export class WorkspaceFileViewer extends LitElement {
   @property({ attribute: false }) previewUrlBuilder: typeof workspaceFilePreviewUrl = workspaceFilePreviewUrl;
 
   private mode: WorkspaceFileViewerMode = "preview";
-  private failedPreviewKey: string | undefined;
   private activeFileKey: string | undefined;
+  /**
+   * Increments on every selected-file identity change. Rendered handlers carry
+   * the token of the selection they belong to, so a delayed event from detached
+   * markup can never affect a later selection — including when the user returns
+   * to a file whose identity key is identical (A → B → A).
+   */
+  private selectionToken = 0;
+  private failedPreviewToken: number | undefined;
 
   protected override willUpdate(): void {
     const nextKey = this.currentFileKey();
     if (nextKey === this.activeFileKey) return;
     this.activeFileKey = nextKey;
+    this.selectionToken += 1;
     this.mode = "preview";
-    this.failedPreviewKey = undefined;
+    this.failedPreviewToken = undefined;
   }
 
   override render(): TemplateResult {
@@ -51,24 +60,24 @@ export class WorkspaceFileViewer extends LitElement {
       return this.renderStatus(`Unable to preview ${selectedPath}: loaded content belongs to ${file.path}.`, true);
     }
 
-    const key = this.currentFileKey();
+    const token = this.selectionToken;
     const kind = workspaceFilePreviewKind(file);
     const canOpen = isBrowserPreviewKind(kind) && file.size > 0 && file.size <= MAX_INLINE_PREVIEW_BYTES;
     return html`
       ${this.renderViewerHeader(file, metadataForFile(file, kind), canOpen)}
-      ${hasRenderedMode(kind) ? this.renderModeControls(file, key) : null}
-      ${this.renderLoadedFile(file, kind, key)}
+      ${hasRawAndPreviewModes(file, kind) ? this.renderModeControls(file, token) : null}
+      ${this.renderLoadedFile(file, kind, token)}
     `;
   }
 
-  private renderLoadedFile(file: FileContentResponse, kind: WorkspaceFilePreviewKind, key: string): TemplateResult {
-    if (hasRenderedMode(kind) && this.mode === "raw") return this.renderRawSource(file);
+  private renderLoadedFile(file: FileContentResponse, kind: WorkspaceFilePreviewKind, token: number): TemplateResult {
+    if (hasRawAndPreviewModes(file, kind) && this.mode === "raw") return this.renderRawSource(file);
     if (file.size === 0) return this.renderStatus("This file is empty.");
 
     switch (kind) {
-      case "image": return this.renderImagePreview(file, key);
-      case "html": return this.renderFramePreview(file, "html", key);
-      case "pdf": return this.renderFramePreview(file, "pdf", key);
+      case "image": return this.renderImagePreview(file, token);
+      case "html": return this.renderFramePreview(file, "html", token);
+      case "pdf": return this.renderFramePreview(file, "pdf", token);
       case "markdown": return this.renderMarkdownPreview(file);
       case "download": return this.renderUnsupportedFile(file);
       case "code": return this.renderRawSource(file);
@@ -101,18 +110,18 @@ export class WorkspaceFileViewer extends LitElement {
     `;
   }
 
-  private renderModeControls(file: FileContentResponse, key: string): TemplateResult {
+  private renderModeControls(file: FileContentResponse, token: number): TemplateResult {
     return html`
       <div class="viewer-mode" role="group" aria-label=${`View ${file.path}`}>
         <button
           type="button"
           aria-pressed=${this.mode === "preview" ? "true" : "false"}
-          @click=${() => { this.setMode("preview", key); }}
+          @click=${() => { this.setMode("preview", token); }}
         >Preview</button>
         <button
           type="button"
           aria-pressed=${this.mode === "raw" ? "true" : "false"}
-          @click=${() => { this.setMode("raw", key); }}
+          @click=${() => { this.setMode("raw", token); }}
         >Raw</button>
       </div>
     `;
@@ -140,9 +149,9 @@ export class WorkspaceFileViewer extends LitElement {
     }
   }
 
-  private renderImagePreview(file: FileContentResponse, key: string): TemplateResult {
+  private renderImagePreview(file: FileContentResponse, token: number): TemplateResult {
     if (file.size > MAX_INLINE_PREVIEW_BYTES) return this.renderPreviewTooLarge(file);
-    if (this.failedPreviewKey === key) return this.renderPreviewFailure(file, key);
+    if (this.failedPreviewToken === token) return this.renderPreviewFailure(file, token);
     const src = this.previewUrl(file);
     return html`
       <div class="image-preview">
@@ -151,49 +160,37 @@ export class WorkspaceFileViewer extends LitElement {
           alt=${`Preview of ${file.path}`}
           decoding="async"
           referrerpolicy="no-referrer"
-          @error=${() => { this.recordPreviewFailure(key); }}
+          @error=${() => { this.recordPreviewFailure(token); }}
         />
       </div>
     `;
   }
 
-  private renderFramePreview(file: FileContentResponse, kind: "html" | "pdf", key: string): TemplateResult {
+  private renderFramePreview(file: FileContentResponse, kind: "html" | "pdf", token: number): TemplateResult {
     if (file.size > MAX_INLINE_PREVIEW_BYTES) return this.renderPreviewTooLarge(file);
-    if (this.failedPreviewKey === key) return this.renderPreviewFailure(file, key);
+    if (this.failedPreviewToken === token) return this.renderPreviewFailure(file, token);
     const src = this.previewUrl(file);
 
-    // HTML receives no sandbox allowances. PDF gets only same-origin identity so
-    // native browser viewers can load; scripts, forms, popups, and navigation
-    // remain blocked. Response CSP applies the matching server-side policy.
-    return kind === "html" ? html`
+    return html`
+      ${kind === "pdf" ? html`<p class="preview-note" role="status">Inline PDF support varies by browser. Use Open ↗ or Download above if the document does not appear.</p>` : null}
       <iframe
         class="file-frame-preview"
         src=${src}
-        sandbox=""
+        sandbox=${ifDefined(framePreviewSandbox(kind))}
         allow=""
         referrerpolicy="no-referrer"
         title=${`Preview of ${file.path}`}
-        @error=${() => { this.recordPreviewFailure(key); }}
-      ></iframe>
-    ` : html`
-      <iframe
-        class="file-frame-preview"
-        src=${src}
-        sandbox="allow-same-origin"
-        allow=""
-        referrerpolicy="no-referrer"
-        title=${`Preview of ${file.path}`}
-        @error=${() => { this.recordPreviewFailure(key); }}
+        @error=${() => { this.recordPreviewFailure(token); }}
       ></iframe>
     `;
   }
 
-  private renderPreviewFailure(file: FileContentResponse, key: string): TemplateResult {
+  private renderPreviewFailure(file: FileContentResponse, token: number): TemplateResult {
     return html`
       <div class="preview-state" role="alert">
         <strong>Preview failed for ${file.path}.</strong>
         <span>Open it in a new window or use Download above.</span>
-        <button type="button" @click=${() => { this.retryPreview(key); }}>Retry preview</button>
+        <button type="button" @click=${() => { this.retryPreview(token); }}>Retry preview</button>
       </div>
     `;
   }
@@ -230,22 +227,22 @@ export class WorkspaceFileViewer extends LitElement {
     });
   }
 
-  private setMode(mode: WorkspaceFileViewerMode, key: string): void {
-    if (key !== this.currentFileKey()) return;
+  private setMode(mode: WorkspaceFileViewerMode, token: number): void {
+    if (token !== this.selectionToken) return;
     this.mode = mode;
-    this.failedPreviewKey = undefined;
+    this.failedPreviewToken = undefined;
     this.requestUpdate();
   }
 
-  private recordPreviewFailure(key: string): void {
-    if (key !== this.currentFileKey() || this.mode !== "preview") return;
-    this.failedPreviewKey = key;
+  private recordPreviewFailure(token: number): void {
+    if (token !== this.selectionToken || this.mode !== "preview") return;
+    this.failedPreviewToken = token;
     this.requestUpdate();
   }
 
-  private retryPreview(key: string): void {
-    if (key !== this.currentFileKey()) return;
-    this.failedPreviewKey = undefined;
+  private retryPreview(token: number): void {
+    if (token !== this.selectionToken) return;
+    this.failedPreviewToken = undefined;
     this.requestUpdate();
   }
 
@@ -310,8 +307,36 @@ export function workspaceFilePreviewKind(file: FileContentResponse): WorkspaceFi
   return "code";
 }
 
-function hasRenderedMode(kind: WorkspaceFilePreviewKind): kind is "html" | "markdown" {
-  return kind === "html" || kind === "markdown";
+/**
+ * Both modes exist when the file has a rendered preview and its JSON read
+ * carried literal source: HTML, Markdown, and text-based images such as SVG.
+ * Streamed formats (raster images, PDF) have no source to show, and plain code
+ * files have no rendered form.
+ */
+function hasRawAndPreviewModes(file: FileContentResponse, kind: WorkspaceFilePreviewKind): boolean {
+  return kind !== "code" && kind !== "download" && !file.binary;
+}
+
+/**
+ * HTML previews stay fully sandboxed: opaque origin, no scripts, no forms, no
+ * navigation, matching the server's `sandbox` CSP.
+ *
+ * PDF previews intentionally carry no sandbox attribute (`undefined` omits it).
+ * Sandboxed frames refuse native PDF handlers — Chromium renders nothing
+ * (crbug.com/41131921, whatwg/html#3958) and Firefox 134+ downloads the file
+ * instead of displaying it (bugzilla 1724924, 1941725) — so a sandboxed frame
+ * produces a blank pane or a surprise download rather than a preview. The
+ * isolation that matters for PDF is the response contract: the server sends
+ * `application/pdf` with `X-Content-Type-Options: nosniff` and a
+ * `default-src 'none'` CSP, so those bytes can only reach the browser's PDF
+ * handler, can never be interpreted as an active same-origin document, and
+ * cannot load subresources or run script in the PI WEB origin. `allow=""` and
+ * `referrerpolicy="no-referrer"` still deny delegated capabilities and referrer
+ * leakage, and a persistent Open/Download affordance covers browsers that
+ * decline to display PDFs inline at all.
+ */
+function framePreviewSandbox(kind: "html" | "pdf"): string | undefined {
+  return kind === "html" ? "" : undefined;
 }
 
 function isBrowserPreviewKind(kind: WorkspaceFilePreviewKind): kind is "image" | "html" | "pdf" {

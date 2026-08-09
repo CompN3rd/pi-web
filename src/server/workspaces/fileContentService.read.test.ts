@@ -77,18 +77,22 @@ describe("readWorkspaceFile", () => {
     expect(file.size).toBe(9);
   });
 
-  it("preserves literal HTML and Markdown source while keeping PDF bytes out of JSON", async () => {
+  it("preserves literal HTML, Markdown, and SVG source while keeping PDF bytes out of JSON", async () => {
     const root = await createTempWorkspace();
     const html = "<h1>hi</h1><script>window.top.location = '/stolen'</script>";
     const markdown = "# Notes\n\n<img src=x onerror=alert(1)>\n";
+    const svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"alert(1)\"></svg>";
     await writeFile(join(root, "report.html"), html);
     await writeFile(join(root, "README.MD"), markdown);
+    await writeFile(join(root, "diagram.SVG"), svg);
     await writeFile(join(root, "spec.PDF"), Buffer.from("%PDF-1.4\n"));
 
     const htmlFile = await readWorkspaceFile(root, "report.html");
     const markdownFile = await readWorkspaceFile(root, "README.MD");
+    const svgFile = await readWorkspaceFile(root, "diagram.SVG");
     const pdfFile = await readWorkspaceFile(root, "spec.PDF");
 
+    expect(svgFile).toMatchObject({ mediaType: "image", mimeType: "image/svg+xml", content: svg, binary: false });
     expect(htmlFile).toMatchObject({ mediaType: "html", mimeType: "text/html; charset=utf-8", content: html, binary: false });
     expect(markdownFile).toMatchObject({ mediaType: "markdown", language: "markdown", content: markdown, binary: false });
     expect(markdownFile.mimeType).toBeUndefined();

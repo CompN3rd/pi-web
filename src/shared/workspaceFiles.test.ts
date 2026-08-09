@@ -10,10 +10,13 @@ describe("classifyWorkspaceFile", () => {
     ["PHOTO.JPEG", "image/jpeg"],
     ["PHOTO.JPG", "image/jpeg"],
     ["PHOTO.PNG", "image/png"],
-    ["PHOTO.SVG", "image/svg+xml"],
     ["PHOTO.WEBP", "image/webp"],
   ])("classifies %s as streamed image bytes", (path, previewMimeType) => {
     expect(classifyWorkspaceFile(path)).toEqual({ mediaType: "image", source: "stream", previewMimeType });
+  });
+
+  it.each(["PHOTO.SVG", "diagram.svg"])("classifies %s as an image that keeps literal source for Raw mode", (path) => {
+    expect(classifyWorkspaceFile(path)).toEqual({ mediaType: "image", source: "text", previewMimeType: "image/svg+xml" });
   });
 
   it.each(["REPORT.HTM", "REPORT.HTML"])("classifies %s as literal HTML source", (path) => {

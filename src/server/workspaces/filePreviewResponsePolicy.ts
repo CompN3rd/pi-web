@@ -9,9 +9,13 @@ export interface WorkspaceFilePreviewResponsePolicy {
 
 const IMAGE_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'none'; connect-src 'none'; img-src data: blob:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; worker-src 'none'; frame-ancestors 'self'";
 const HTML_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'none'; connect-src 'none'; img-src data:; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; worker-src 'none'; frame-ancestors 'self'";
-// Native PDF viewers commonly require a non-opaque document origin. The
-// embedding iframe supplies the only sandbox allowance (`allow-same-origin`),
-// while this policy still denies scripts, navigation helpers, and subresources.
+// Native PDF viewers refuse to run in any sandboxed context, so this policy
+// deliberately omits the `sandbox` directive and the embedding frame omits the
+// sandbox attribute. Isolation comes from the response itself: `application/pdf`
+// plus `nosniff` means these bytes can only reach the browser's PDF handler and
+// can never become an active same-origin document, while `default-src 'none'`
+// denies scripts, navigation helpers, and every subresource except the
+// same-origin plugin document (`object-src 'self'`) that the viewer embeds.
 const PDF_CONTENT_SECURITY_POLICY = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'self'; script-src 'none'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'none'; worker-src 'none'; frame-ancestors 'self'";
 const DOWNLOAD_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'none'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'none'; worker-src 'none'; frame-ancestors 'none'";
 const ERROR_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'none'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'none'; worker-src 'none'; frame-ancestors 'self'";

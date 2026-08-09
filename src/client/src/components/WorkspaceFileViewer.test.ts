@@ -147,10 +147,15 @@ describe("workspace-file-viewer", () => {
     viewer.file = pdf;
     await viewer.updateComplete;
     const currentFrame = requiredElement(viewer.shadowRoot?.querySelector<HTMLIFrameElement>("iframe"), "current PDF frame");
-    expect(currentFrame.getAttribute("sandbox")).toBe("allow-same-origin");
-    expect(currentFrame.getAttribute("sandbox")).not.toContain("allow-scripts");
+    // Sandboxed frames refuse native PDF handlers, so the PDF frame carries no
+    // sandbox attribute and relies on the response contract plus the always
+    // available Open/Download affordances.
+    expect(currentFrame.hasAttribute("sandbox")).toBe(false);
     expect(currentFrame.getAttribute("allow")).toBe("");
     expect(currentFrame.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(requiredElement(viewer.shadowRoot?.querySelector(".preview-note"), "PDF fallback note").textContent)
+      .toContain("Use Open ↗ or Download above");
+    expect(anchorWithText(viewer, "Open ↗")).toBeDefined();
 
     detachedImage.dispatchEvent(new Event("error"));
     await viewer.updateComplete;
@@ -167,6 +172,62 @@ describe("workspace-file-viewer", () => {
     buttonWithText(viewer, "Retry preview").click();
     await viewer.updateComplete;
     expect(viewer.shadowRoot?.querySelector("iframe")).not.toBeNull();
+  });
+
+  it("gives SVG a rendered preview and literal escaped raw source", async () => {
+    const source = `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script></svg>`;
+    const file = textFile("assets/diagram.svg", source, { mediaType: "image", mimeType: "image/svg+xml" });
+    const viewer = await mountViewer(file);
+
+    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
+    const image = requiredElement(viewer.shadowRoot?.querySelector<HTMLImageElement>("img"), "SVG preview image");
+    expect(new URL(image.src).searchParams.get("path")).toBe(file.path);
+    expect(image.getAttribute("alt")).toBe("Preview of assets/diagram.svg");
+
+    modeButton(viewer, "Raw").click();
+    await viewer.updateComplete;
+
+    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
+    expect(viewer.shadowRoot?.querySelector("img")).toBeNull();
+    const raw = requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "raw SVG viewer");
+    expect(raw.content).toBe(source);
+    expect(viewer.shadowRoot?.querySelector("svg, script")).toBeNull();
+
+    const streamedImage = binaryFile("photo.png", { mediaType: "image", mimeType: "image/png" });
+    viewer.selectedPath = streamedImage.path;
+    viewer.file = streamedImage;
+    await viewer.updateComplete;
+    expect(viewer.shadowRoot?.querySelector("[role='group']")).toBeNull();
+  });
+
+  it("ignores delayed events from an earlier selection of an identically keyed file", async () => {
+    const report = textFile("report.html", "<p>first</p>", { mediaType: "html", language: "html" });
+    const viewer = await mountViewer(report);
+    const detachedFrame = requiredElement(viewer.shadowRoot?.querySelector<HTMLIFrameElement>("iframe"), "first HTML frame");
+    const detachedRawButton = modeButton(viewer, "Raw");
+
+    const photo = binaryFile("photo.png", { mediaType: "image", mimeType: "image/png" });
+    viewer.selectedPath = photo.path;
+    viewer.file = photo;
+    await viewer.updateComplete;
+
+    // Re-select the first file with identical metadata: its identity key is the
+    // same as before, so only a per-selection token can tell the renders apart.
+    viewer.selectedPath = report.path;
+    viewer.file = { ...report };
+    await viewer.updateComplete;
+    expect(detachedFrame.isConnected).toBe(false);
+    expect(detachedRawButton.isConnected).toBe(false);
+    expect(viewer.shadowRoot?.querySelector("iframe")).not.toBe(detachedFrame);
+
+    detachedFrame.dispatchEvent(new Event("error"));
+    detachedRawButton.click();
+    await viewer.updateComplete;
+
+    expect(viewer.shadowRoot?.textContent).not.toContain("Preview failed");
+    expect(viewer.shadowRoot?.querySelector("iframe")).not.toBeNull();
+    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
+    expect(viewer.shadowRoot?.querySelector("code-viewer")).toBeNull();
   });
 
   it("keeps empty, oversized, unsupported, and truncated states explicit", async () => {
