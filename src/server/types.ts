@@ -23,6 +23,8 @@ export type {
   SessionTreeSnapshot as ClientSessionTreeSnapshot,
   SessionTreeNavigateRequest as ClientSessionTreeNavigateRequest,
   SessionTreeNavigateResult as ClientSessionTreeNavigateResult,
+  SessionTreeForkRequest as ClientSessionTreeForkRequest,
+  SessionTreeForkResult as ClientSessionTreeForkResult,
   SessionActivity as ClientSessionActivity,
   SessionUiEvent,
   GlobalSessionEvent,

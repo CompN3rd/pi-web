@@ -244,6 +244,120 @@ describe("AuthController", () => {
     });
   });
 
+  it("submits an OAuth prompt response once when Enter is pressed again while it is in flight", async () => {
+    const prompt = { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } as const;
+    const flow = oauthFlow({ prompt });
+    const response = deferred<OAuthFlowState>();
+    const respondCalls: string[] = [];
+    const { controller } = createController(
+      { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback" } },
+      {
+        respondOAuthFlow: (_flowId, _requestId, value) => {
+          respondCalls.push(value);
+          return response.promise;
+        },
+      },
+    );
+
+    const firstResponse = controller.respondOAuth();
+    const secondResponse = controller.respondOAuth();
+    await flushMicrotasks();
+
+    expect(respondCalls).toEqual(["https://callback"]);
+
+    response.resolve(oauthFlow({ prompt, progress: ["Still waiting"] }));
+    await firstResponse;
+    await secondResponse;
+
+    expect(respondCalls).toEqual(["https://callback"]);
+  });
+
+  it("submits one OAuth selection when a second option is chosen while the response is in flight", async () => {
+    const flow = oauthFlow({
+      select: {
+        requestId: "request-1",
+        message: "Choose an account",
+        options: [{ value: "acct-1", label: "Account 1" }, { value: "acct-2", label: "Account 2" }],
+      },
+    });
+    const response = deferred<OAuthFlowState>();
+    const respondCalls: string[] = [];
+    const { controller } = createController(
+      { authDialog: { step: "oauth", flow, machineId: "local" } },
+      {
+        respondOAuthFlow: (_flowId, _requestId, value) => {
+          respondCalls.push(value);
+          return response.promise;
+        },
+      },
+    );
+
+    const firstResponse = controller.respondOAuth("acct-1");
+    const secondResponse = controller.respondOAuth("acct-2");
+    await flushMicrotasks();
+
+    expect(respondCalls).toEqual(["acct-1"]);
+
+    response.resolve(oauthFlow({ status: "complete" }));
+    await firstResponse;
+    await secondResponse;
+
+    expect(respondCalls).toEqual(["acct-1"]);
+  });
+
+  it("still cancels the flow while an OAuth response is in flight", async () => {
+    const prompt = { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } as const;
+    const flow = oauthFlow({ prompt });
+    const response = deferred<OAuthFlowState>();
+    const cancelCalls: { flowId: string; machineId: string | undefined }[] = [];
+    const { controller, getState } = createController(
+      { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback" } },
+      {
+        respondOAuthFlow: () => response.promise,
+        cancelOAuthFlow: (flowId, machineId) => {
+          cancelCalls.push({ flowId, machineId });
+          return Promise.resolve(oauthFlow({ status: "cancelled" }));
+        },
+      },
+    );
+
+    const responsePending = controller.respondOAuth();
+    await flushMicrotasks();
+    await controller.cancelOAuth();
+
+    expect(cancelCalls).toEqual([{ flowId: "flow-1", machineId: "local" }]);
+    expect(getState().authDialog).toBeUndefined();
+
+    response.resolve(oauthFlow({ prompt, progress: ["Stale response"] }));
+    await responsePending;
+
+    expect(getState().authDialog).toBeUndefined();
+  });
+
+  it("lets the user resubmit the same OAuth request after a failed response", async () => {
+    const prompt = { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } as const;
+    const flow = oauthFlow({ prompt });
+    const respondCalls: string[] = [];
+    const { controller, getState } = createController(
+      { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback" } },
+      {
+        respondOAuthFlow: (_flowId, _requestId, value) => {
+          respondCalls.push(value);
+          return respondCalls.length === 1 ? Promise.reject(new Error("Invalid callback")) : Promise.resolve(oauthFlow({ status: "complete" }));
+        },
+      },
+    );
+
+    await controller.respondOAuth();
+
+    expect(getState().authDialog).toMatchObject({ step: "oauth", responding: false, error: "Error: Invalid callback" });
+
+    await controller.respondOAuth();
+
+    expect(respondCalls).toEqual(["https://callback", "https://callback"]);
+    expect(getState().authDialog).toBeUndefined();
+  });
+
   it("does not recreate an OAuth dialog when a pending response settles during cancellation", async () => {
     const prompt = { requestId: "request-1", message: "Paste callback", promptType: "manual_code" } as const;
     const flow = oauthFlow({ prompt });
