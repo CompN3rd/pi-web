@@ -35,7 +35,6 @@ const pluginConsumerCompilerModes = [
 
 const browserPluginConsumerSource = `
 import type { JsonValue, PiWebPlugin, Workspace } from "@jmfederico/pi-web/plugin-api";
-import type { UnstablePluginRuntimeContext } from "@jmfederico/pi-web/plugin-api/unstable";
 
 const plugin: PiWebPlugin = {
   apiVersion: 2,
@@ -49,7 +48,7 @@ const plugin: PiWebPlugin = {
 
 const echoJson = (value: JsonValue): JsonValue => value;
 export { echoJson, plugin };
-export type BrowserTypes = Workspace & UnstablePluginRuntimeContext;
+export type BrowserWorkspace = Workspace;
 `;
 
 const serverPluginConsumerSource = `
@@ -100,21 +99,15 @@ describe("production build contents", () => {
     const fixtureRoot = await mkdtemp(join(tmpdir(), "pi-web-package-contents-"));
     try {
       const fixtureDist = join(fixtureRoot, "dist", "server");
-      await Promise.all([
-        mkdir(fixtureDist, { recursive: true }),
-        mkdir(join(fixtureRoot, "dist", "plugin-api"), { recursive: true }),
-        mkdir(join(fixtureRoot, "plugin-api"), { recursive: true }),
-      ]);
+      await mkdir(fixtureDist, { recursive: true });
       await Promise.all([
         // Lifecycle hooks do not affect which files are packed, and npm 10 runs
         // `prepare` during `npm pack` even with `--ignore-scripts`, so strip
         // them: the fixture has no scripts/ tree for a hook to resolve.
         writeFixtureManifest(fixtureRoot),
         copyFile(join(repoRoot, "plugin-api.d.ts"), join(fixtureRoot, "plugin-api.d.ts")),
-        copyFile(join(repoRoot, "plugin-api", "unstable.d.ts"), join(fixtureRoot, "plugin-api", "unstable.d.ts")),
         copyFile(join(repoRoot, "server-plugin-api.d.ts"), join(fixtureRoot, "server-plugin-api.d.ts")),
         writeFile(join(fixtureRoot, "dist", "plugin-api.d.ts"), "export {};\n", "utf8"),
-        writeFile(join(fixtureRoot, "dist", "plugin-api", "unstable.d.ts"), "export {};\n", "utf8"),
         writeFile(join(fixtureRoot, "dist", "server-plugin-api.d.ts"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.js"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.testSupport.js"), "export {};\n", "utf8"),
@@ -126,27 +119,32 @@ describe("production build contents", () => {
 
       expect(packagedFiles).toEqual(expect.arrayContaining([
         "dist/plugin-api.d.ts",
-        "dist/plugin-api/unstable.d.ts",
         "dist/server-plugin-api.d.ts",
         "dist/server/app.js",
         "plugin-api.d.ts",
-        "plugin-api/unstable.d.ts",
         "server-plugin-api.d.ts",
       ]));
+      expect(packagedFiles).not.toContain("dist/plugin-api/unstable.d.ts");
+      expect(packagedFiles).not.toContain("plugin-api/unstable.d.ts");
       expect(packagedFiles.filter(isTestSupportPath)).toEqual([]);
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 
-  it("exports only the supported type-only plugin API subpaths", async () => {
+  it("exports and maps only the supported type-only plugin API subpaths", async () => {
     const metadata: unknown = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
     if (!isRecord(metadata)) throw new Error("package.json was not an object");
 
     expect(metadata["exports"]).toEqual({
       "./plugin-api": { types: "./dist/plugin-api.d.ts" },
-      "./plugin-api/unstable": { types: "./dist/plugin-api/unstable.d.ts" },
       "./server-plugin-api": { types: "./dist/server-plugin-api.d.ts" },
+    });
+    expect(metadata["typesVersions"]).toEqual({
+      "*": {
+        "plugin-api": ["dist/plugin-api.d.ts"],
+        "server-plugin-api": ["dist/server-plugin-api.d.ts"],
+      },
     });
   });
 
@@ -179,7 +177,6 @@ describe("production build contents", () => {
         assertPluginApiResolution(fixtureRoot, browserPath, mode.options);
         assertStrictPluginConsumer(fixtureRoot, browserPath, mode.options, [
           "node_modules/@jmfederico/pi-web/dist/plugin-api.d.ts",
-          "node_modules/@jmfederico/pi-web/dist/plugin-api/unstable.d.ts",
           "node_modules/@jmfederico/pi-web/dist/shared/pluginApiTypes.d.ts",
         ]);
         assertStrictPluginConsumer(fixtureRoot, serverPath, mode.options, [
@@ -319,7 +316,6 @@ function emitPluginApiDeclarations(outDir: string): void {
 function assertPluginApiResolution(fixtureRoot: string, consumerPath: string, options: ts.CompilerOptions): void {
   const expectedDeclarations = new Map([
     ["@jmfederico/pi-web/plugin-api", "node_modules/@jmfederico/pi-web/dist/plugin-api.d.ts"],
-    ["@jmfederico/pi-web/plugin-api/unstable", "node_modules/@jmfederico/pi-web/dist/plugin-api/unstable.d.ts"],
     ["@jmfederico/pi-web/server-plugin-api", "node_modules/@jmfederico/pi-web/dist/server-plugin-api.d.ts"],
   ]);
   for (const [specifier, expected] of expectedDeclarations) {
@@ -328,6 +324,7 @@ function assertPluginApiResolution(fixtureRoot: string, consumerPath: string, op
   }
 
   for (const specifier of [
+    "@jmfederico/pi-web/plugin-api/unstable",
     "@jmfederico/pi-web/dist/plugin-api",
     "@jmfederico/pi-web/dist/shared/pluginApiTypes",
     "@jmfederico/pi-web/package.json",
