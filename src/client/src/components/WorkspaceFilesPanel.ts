@@ -516,14 +516,16 @@ export function workspaceUploadReviewDefaults(destinationFolder: string): { dest
 /**
  * The muted status message the file viewer shows instead of a viewer, or
  * `undefined` once a real viewer/download renders. Pure seam so tests can
- * assert the no-selection/loading messaging without scraping Lit markup. Files
- * with content always resolve to a viewer (see `workspaceFilePreviewKind`),
- * including binaries, which now offer a download instead of a dead-end message.
+ * assert the no-selection/loading/error messaging without scraping Lit markup.
+ * Files with content always resolve to a viewer (see
+ * `workspaceFilePreviewKind`), including binaries, which offer a download
+ * instead of a dead-end message.
  */
 export function workspaceFileViewerStatusLabel(
-  context: Pick<WorkspacePanelContext, "selectedFilePath" | "selectedFileContent">,
+  context: Pick<WorkspacePanelContext, "selectedFilePath" | "selectedFileContent" | "selectedFileLoadError">,
 ): string | undefined {
   if (context.selectedFilePath === undefined || context.selectedFilePath === "") return "Select a file.";
+  if (context.selectedFileLoadError !== undefined) return `Unable to load ${context.selectedFilePath}: ${context.selectedFileLoadError}`;
   if (context.selectedFileContent === undefined) return `Loading ${context.selectedFilePath}…`;
   return undefined;
 }

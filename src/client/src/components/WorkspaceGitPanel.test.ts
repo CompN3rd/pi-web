@@ -370,6 +370,7 @@ function workspacePanelContext(patch: Partial<WorkspacePanelContext> = {}): Work
     expandedDirs: patch.expandedDirs ?? {},
     selectedFilePath: patch.selectedFilePath,
     selectedFileContent: patch.selectedFileContent,
+    selectedFileLoadError: patch.selectedFileLoadError,
     fileTreeStale: patch.fileTreeStale ?? false,
     gitStatus: patch.gitStatus,
     selectedDiffPath: patch.selectedDiffPath,

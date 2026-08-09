@@ -103,6 +103,140 @@ describe("FileExplorerController file tree workflows", () => {
   });
 });
 
+describe("FileExplorerController file request lifecycle", () => {
+  it("does not let a deferred A response overwrite the loaded B selection", async () => {
+    const requests = deferredWorkspaceFiles();
+    const harness = createHarness({ api: createApi({ workspaceFile: requests.fn }) });
+
+    const loadA = harness.controller.restoreFile("a.txt");
+    const loadB = harness.controller.restoreFile("b.txt");
+    requests.request(1).resolve(fileResponse("b.txt", "current B"));
+    await loadB;
+
+    expect(harness.state.selectedFilePath).toBe("b.txt");
+    expect(harness.state.selectedFileContent?.content).toBe("current B");
+
+    requests.request(0).resolve(fileResponse("a.txt", "stale A"));
+    await loadA;
+
+    expect(harness.state.selectedFilePath).toBe("b.txt");
+    expect(harness.state.selectedFileContent?.content).toBe("current B");
+  });
+
+  it("uses request generation to reject stale A and B responses in an A to B to A sequence", async () => {
+    const requests = deferredWorkspaceFiles();
+    const harness = createHarness({ api: createApi({ workspaceFile: requests.fn }) });
+
+    const firstA = harness.controller.restoreFile("a.txt");
+    const loadB = harness.controller.restoreFile("b.txt");
+    const latestA = harness.controller.restoreFile("a.txt");
+
+    requests.request(0).resolve(fileResponse("a.txt", "first A"));
+    await firstA;
+    expect(harness.state.selectedFileContent).toBeUndefined();
+
+    requests.request(1).resolve(fileResponse("b.txt", "stale B"));
+    await loadB;
+    expect(harness.state.selectedFileContent).toBeUndefined();
+
+    requests.request(2).resolve(fileResponse("a.txt", "latest A"));
+    await latestA;
+    expect(harness.state.selectedFilePath).toBe("a.txt");
+    expect(harness.state.selectedFileContent?.content).toBe("latest A");
+  });
+
+  it("rejects a same-path response after the selected workspace changes", async () => {
+    const requests = deferredWorkspaceFiles();
+    const harness = createHarness({ api: createApi({ workspaceFile: requests.fn }) });
+
+    const staleLoad = harness.controller.restoreFile("same.txt");
+    harness.patchState({ selectedWorkspace: { ...workspace, id: "workspace-2" } });
+    requests.request(0).resolve(fileResponse("same.txt", "old workspace"));
+    await staleLoad;
+
+    expect(harness.state.selectedFilePath).toBe("same.txt");
+    expect(harness.state.selectedFileContent).toBeUndefined();
+
+    const currentLoad = harness.controller.restoreFile("same.txt");
+    expect(requests.request(1)).toMatchObject({ workspaceId: "workspace-2", path: "same.txt" });
+    requests.request(1).resolve(fileResponse("same.txt", "new workspace"));
+    await currentLoad;
+    expect(harness.state.selectedFileContent?.content).toBe("new workspace");
+  });
+
+  it("rejects a same-path response after the selected machine changes", async () => {
+    const requests = deferredWorkspaceFiles();
+    const harness = createHarness({ api: createApi({ workspaceFile: requests.fn }) });
+
+    const staleLoad = harness.controller.restoreFile("same.txt");
+    harness.patchState({ selectedMachine: { ...machine, id: "remote-2", name: "Other remote" } });
+    requests.request(0).resolve(fileResponse("same.txt", "old machine"));
+    await staleLoad;
+
+    expect(harness.state.selectedFilePath).toBe("same.txt");
+    expect(harness.state.selectedFileContent).toBeUndefined();
+
+    const currentLoad = harness.controller.restoreFile("same.txt");
+    expect(requests.request(1)).toMatchObject({ machineId: "remote-2", path: "same.txt" });
+    requests.request(1).resolve(fileResponse("same.txt", "new machine"));
+    await currentLoad;
+    expect(harness.state.selectedFileContent?.content).toBe("new machine");
+  });
+
+  it("ignores stale failures without changing the current selection or its load state", async () => {
+    const requests = deferredWorkspaceFiles();
+    const harness = createHarness({ api: createApi({ workspaceFile: requests.fn }) });
+
+    const staleLoad = harness.controller.restoreFile("a.txt");
+    const currentLoad = harness.controller.restoreFile("b.txt");
+    requests.request(0).reject(new Error("old request failed"));
+    await staleLoad;
+
+    expect(harness.state.selectedFilePath).toBe("b.txt");
+    expect(harness.state.selectedFileContent).toBeUndefined();
+    expect(harness.state.selectedFileLoadError).toBeUndefined();
+    expect(harness.state.error).toBe("");
+
+    requests.request(1).resolve(fileResponse("b.txt", "current B"));
+    await currentLoad;
+    expect(harness.state.selectedFileContent?.content).toBe("current B");
+  });
+
+  it("keeps a current unavailable file selected with an observable load error", async () => {
+    const requests = deferredWorkspaceFiles();
+    const harness = createHarness({ api: createApi({ workspaceFile: requests.fn }) });
+
+    const load = harness.controller.selectFile("missing.txt");
+    requests.request(0).reject(new Error("Path does not exist: missing.txt"));
+    await load;
+
+    expect(harness.state.selectedFilePath).toBe("missing.txt");
+    expect(harness.state.selectedFileContent).toBeUndefined();
+    expect(harness.state.selectedFileLoadError).toBe("Path does not exist: missing.txt");
+    expect(harness.state.error).toBe("");
+    expect(harness.updateUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the selected-file error for a fresh request and keeps it clear after success", async () => {
+    const requests = deferredWorkspaceFiles();
+    const harness = createHarness({ api: createApi({ workspaceFile: requests.fn }) });
+
+    const failedLoad = harness.controller.restoreFile("retry.txt");
+    requests.request(0).reject(new Error("temporarily unavailable"));
+    await failedLoad;
+    expect(harness.state.selectedFileLoadError).toBe("temporarily unavailable");
+
+    const retryLoad = harness.controller.restoreFile("retry.txt");
+    expect(harness.state.selectedFileContent).toBeUndefined();
+    expect(harness.state.selectedFileLoadError).toBeUndefined();
+
+    requests.request(1).resolve(fileResponse("retry.txt", "recovered"));
+    await retryLoad;
+    expect(harness.state.selectedFileContent?.content).toBe("recovered");
+    expect(harness.state.selectedFileLoadError).toBeUndefined();
+  });
+});
+
 describe("FileExplorerController workspace uploads", () => {
   it("tracks upload progress, completes from final responses, refreshes files, and selects the first uploaded file", async () => {
     const upload = controllableUpload();
@@ -311,6 +445,7 @@ function createHarness(deps: FileExplorerControllerDependencies = {}, statePatch
     controller,
     api,
     updateUrl,
+    patchState: (patch: Partial<AppState>) => { state = { ...state, ...patch }; },
     get state(): AppState { return state; },
   };
 }
@@ -369,6 +504,28 @@ function createApi(overrides: Partial<FileExplorerApi> = {}): FileExplorerApi {
   };
 }
 
+function deferredWorkspaceFiles() {
+  const requests: {
+    projectId: string;
+    workspaceId: string;
+    path: string;
+    machineId: string;
+    resolve: (response: FileContentResponse) => void;
+    reject: (error: unknown) => void;
+  }[] = [];
+  const fn = vi.fn<WorkspaceFile>((projectId, workspaceId, path, machineId) => new Promise<FileContentResponse>((resolve, reject) => {
+    requests.push({ projectId, workspaceId, path, machineId: machineId ?? "local", resolve, reject });
+  }));
+  return {
+    fn,
+    request: (index: number) => {
+      const request = requests[index];
+      if (request === undefined) throw new Error(`Missing deferred workspace file request ${String(index)}`);
+      return request;
+    },
+  };
+}
+
 function treeResponse(path: string, entries: FileTreeEntry[] = []): FileTreeResponse {
   return { path, entries, scannedAt: "2026-06-25T00:00:00.000Z", truncated: false };
 }
@@ -381,8 +538,8 @@ function fileEntry(path: string): FileTreeEntry {
   return { name: path.split("/").at(-1) ?? path, path, type: "file", size: 2 };
 }
 
-function fileResponse(path: string): FileContentResponse {
-  return { path, encoding: "utf8", size: 2, modifiedAt: "2026-06-25T00:00:00.000Z", content: "aa", truncated: false, binary: false };
+function fileResponse(path: string, content = "aa"): FileContentResponse {
+  return { path, encoding: "utf8", size: content.length, modifiedAt: "2026-06-25T00:00:00.000Z", content, truncated: false, binary: false };
 }
 
 function writeResponse(path: string, size: number): WriteWorkspaceFileResponse {

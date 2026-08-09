@@ -197,10 +197,15 @@ describe("workspace-files-panel file tree boundary", () => {
 });
 
 describe("workspaceFileViewerStatusLabel", () => {
-  it("messages only empty and loading states, deferring every loaded file to a real viewer", () => {
+  it("messages empty, loading, and load-error states while deferring loaded files to a viewer", () => {
     expect(workspaceFileViewerStatusLabel(workspacePanelContext({ selectedFilePath: undefined }))).toBe("Select a file.");
     expect(workspaceFileViewerStatusLabel(workspacePanelContext({ selectedFilePath: "" }))).toBe("Select a file.");
     expect(workspaceFileViewerStatusLabel(workspacePanelContext({ selectedFilePath: "notes.md", selectedFileContent: undefined }))).toBe("Loading notes.md…");
+    expect(workspaceFileViewerStatusLabel(workspacePanelContext({
+      selectedFilePath: "missing.md",
+      selectedFileContent: undefined,
+      selectedFileLoadError: "Path does not exist: missing.md",
+    }))).toBe("Unable to load missing.md: Path does not exist: missing.md");
     expect(workspaceFileViewerStatusLabel(workspacePanelContext({
       selectedFilePath: "logo.png",
       selectedFileContent: { ...binaryFileContent("logo.png", 10), mediaType: "image" },
@@ -426,6 +431,7 @@ function workspacePanelContext(patch: Partial<WorkspacePanelContext> = {}): Work
     expandedDirs: patch.expandedDirs ?? {},
     selectedFilePath: patch.selectedFilePath,
     selectedFileContent: patch.selectedFileContent,
+    selectedFileLoadError: patch.selectedFileLoadError,
     fileTreeStale: patch.fileTreeStale ?? false,
     gitStatus: patch.gitStatus,
     selectedDiffPath: patch.selectedDiffPath,
