@@ -7,6 +7,8 @@ The example imports only the supported package declarations:
 - `@jmfederico/pi-web/plugin-api`
 - `@jmfederico/pi-web/server-plugin-api`
 
+It requires PI WEB `1.202608.1` or newer, the first release that provides those entrypoints and browser API v2.
+
 ## Build and install
 
 Copy `examples/workspace-provider-plugin/` out of the PI WEB repository or installed `@jmfederico/pi-web` package, then run:

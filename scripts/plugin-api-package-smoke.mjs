@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 
@@ -7,6 +7,13 @@ const publicApiDeclarationPaths = [
   "server-plugin-api.d.ts",
   "shared/pluginApiTypes.d.ts",
 ];
+const expectedPackageDeclarationPaths = [
+  ...publicApiDeclarationPaths.map((path) => `dist/${path}`),
+  "plugin-api.d.ts",
+  "server-plugin-api.d.ts",
+].sort();
+const firstBrowserPluginApiV2Version = "1.202608.1";
+const workspaceProviderExamplePiWebRange = `^${firstBrowserPluginApiV2Version}`;
 const pluginConsumerCompilerModes = [
   {
     name: "NodeNext",
@@ -28,6 +35,8 @@ const pluginConsumerCompilerModes = [
 
 export async function smokeInstalledPluginApi({ packageRoot, fixtureRoot, repoRoot }) {
   await assertPublicApiBaseline(packageRoot, repoRoot);
+  await assertInstalledDeclarationArtifacts(packageRoot);
+  await assertExampleCompatibilityFloor(packageRoot);
 
   const consumerRoot = join(fixtureRoot, "plugin-api-consumers");
   await cp(join(repoRoot, "test-fixtures", "plugin-api-consumers"), consumerRoot, { recursive: true });
@@ -77,6 +86,45 @@ async function assertPublicApiBaseline(packageRoot, repoRoot) {
       throw new Error(`Installed public API declaration differs from its committed baseline; update it only for an intentional API change: ${declarationPath}`);
     }
   }
+}
+
+async function assertInstalledDeclarationArtifacts(packageRoot) {
+  const actualPaths = await packageDeclarationPaths(packageRoot);
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPackageDeclarationPaths)) {
+    throw new Error(`Installed package declaration artifacts differ from the explicit public API set; update the baseline only for an intentional API change.\nExpected: ${JSON.stringify(expectedPackageDeclarationPaths, null, 2)}\nReceived: ${JSON.stringify(actualPaths, null, 2)}`);
+  }
+}
+
+async function assertExampleCompatibilityFloor(packageRoot) {
+  const manifestPath = join(packageRoot, "examples", "workspace-provider-plugin", "package.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const actualRange = manifest?.devDependencies?.["@jmfederico/pi-web"];
+  if (actualRange !== workspaceProviderExamplePiWebRange) {
+    throw new Error(`Installed workspace-provider example must require @jmfederico/pi-web ${workspaceProviderExamplePiWebRange}; received ${JSON.stringify(actualRange)}`);
+  }
+}
+
+async function packageDeclarationPaths(packageRoot) {
+  const declarationPaths = [];
+
+  async function visit(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (directory === packageRoot && entry.name === "node_modules") continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(path);
+      } else if (entry.isFile() && isDeclarationPath(entry.name)) {
+        declarationPaths.push(normalizePath(relative(packageRoot, path)));
+      }
+    }
+  }
+
+  await visit(packageRoot);
+  return declarationPaths.sort();
+}
+
+function isDeclarationPath(path) {
+  return path.endsWith(".d.ts") || path.endsWith(".d.mts") || path.endsWith(".d.cts");
 }
 
 function assertPluginApiResolution(consumerPath, compilerOptions, packageRoot) {
