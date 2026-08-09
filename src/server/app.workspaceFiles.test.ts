@@ -9,14 +9,18 @@ import { workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResp
 registerAppTestHooks();
 
 describe("buildApp workspace file routes", () => {
-  it("serves supported workspace images as previews", async () => {
+  it("serves workspace SVG only with exact inline-image containment headers", async () => {
     const addResponse = await appTestContext.app.inject({
       method: "POST",
       url: "/api/projects",
       payload: { name: "Images", path: appTestContext.projectDir, create: true },
     });
     const project = addResponse.json<Project>();
-    const svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\" /></svg>";
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">
+      <script>window.top.location = "https://attacker.test"</script>
+      <image href="https://attacker.test/tracker.png" />
+      <foreignObject><button onclick="alert(2)">active</button></foreignObject>
+    </svg>`;
     await writeFile(join(appTestContext.projectDir, "diagram.svg"), svg);
     await writeFile(join(appTestContext.projectDir, "note.txt"), "hello");
     await writeFile(join(appTestContext.projectDir, "huge.png"), "");
@@ -65,22 +69,35 @@ describe("buildApp workspace file routes", () => {
     const workspace = workspacesResponse.json<Workspace[]>()[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
-    const htmlResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("report.html")}` });
+    const htmlPath = `/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("report.html")}`;
+    const htmlResponses = await Promise.all([
+      appTestContext.app.inject({ method: "GET", url: `/api${htmlPath}` }),
+      appTestContext.app.inject({ method: "GET", url: `/api/machines/local${htmlPath}` }),
+    ]);
     const htmlPolicy = workspaceFilePreviewResponsePolicy("report.html");
-    expect(htmlResponse.statusCode).toBe(200);
-    expect(htmlResponse.headers["content-type"]).toBe(htmlPolicy.contentType);
-    expect(htmlResponse.headers["content-disposition"]).toBe(htmlPolicy.contentDisposition);
-    expect(htmlResponse.headers["content-security-policy"]).toBe(htmlPolicy.contentSecurityPolicy);
-    expect(htmlResponse.headers["x-content-type-options"]).toBe(htmlPolicy.contentTypeOptions);
-    expect(htmlResponse.body).toBe(htmlBody);
+    for (const htmlResponse of htmlResponses) {
+      expect(htmlResponse.statusCode).toBe(200);
+      expect(htmlResponse.headers["content-type"]).toBe(htmlPolicy.contentType);
+      expect(htmlResponse.headers["content-disposition"]).toBe(htmlPolicy.contentDisposition);
+      expect(htmlResponse.headers["content-security-policy"]).toBe(htmlPolicy.contentSecurityPolicy);
+      expect(htmlResponse.headers["x-content-type-options"]).toBe(htmlPolicy.contentTypeOptions);
+      expect(htmlResponse.body).toBe(htmlBody);
+    }
 
-    const pdfResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("spec.pdf")}` });
+    const pdfPath = `/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("spec.pdf")}`;
+    const pdfResponses = await Promise.all([
+      appTestContext.app.inject({ method: "GET", url: `/api${pdfPath}` }),
+      appTestContext.app.inject({ method: "GET", url: `/api/machines/local${pdfPath}` }),
+    ]);
     const pdfPolicy = workspaceFilePreviewResponsePolicy("spec.pdf");
-    expect(pdfResponse.statusCode).toBe(200);
-    expect(pdfResponse.headers["content-type"]).toBe(pdfPolicy.contentType);
-    expect(pdfResponse.headers["content-disposition"]).toBe(pdfPolicy.contentDisposition);
-    expect(pdfResponse.headers["content-security-policy"]).toBe(pdfPolicy.contentSecurityPolicy);
-    expect(pdfResponse.headers["x-content-type-options"]).toBe(pdfPolicy.contentTypeOptions);
+    for (const pdfResponse of pdfResponses) {
+      expect(pdfResponse.statusCode).toBe(200);
+      expect(pdfResponse.headers["content-type"]).toBe(pdfPolicy.contentType);
+      expect(pdfResponse.headers["content-disposition"]).toBe(pdfPolicy.contentDisposition);
+      expect(pdfResponse.headers["content-security-policy"]).toBe(pdfPolicy.contentSecurityPolicy);
+      expect(pdfResponse.headers["x-content-type-options"]).toBe(pdfPolicy.contentTypeOptions);
+      expect(pdfResponse.body).toBe("%PDF-1.4\n%mock\n");
+    }
   });
 
   it("serves any file as an attachment download regardless of type", async () => {
@@ -97,14 +114,20 @@ describe("buildApp workspace file routes", () => {
     const workspace = workspacesResponse.json<Workspace[]>()[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
-    const downloadResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent(filename)}&download=1` });
+    const downloadPath = `/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent(filename)}&download=1`;
+    const downloadResponses = await Promise.all([
+      appTestContext.app.inject({ method: "GET", url: `/api${downloadPath}` }),
+      appTestContext.app.inject({ method: "GET", url: `/api/machines/local${downloadPath}` }),
+    ]);
     const policy = workspaceFilePreviewResponsePolicy(filename, { download: true });
-    expect(downloadResponse.statusCode).toBe(200);
-    expect(downloadResponse.headers["content-type"]).toBe(policy.contentType);
-    expect(downloadResponse.headers["content-disposition"]).toBe(policy.contentDisposition);
-    expect(downloadResponse.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
-    expect(downloadResponse.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
-    expect(downloadResponse.body).toBe("just text");
+    for (const downloadResponse of downloadResponses) {
+      expect(downloadResponse.statusCode).toBe(200);
+      expect(downloadResponse.headers["content-type"]).toBe(policy.contentType);
+      expect(downloadResponse.headers["content-disposition"]).toBe(policy.contentDisposition);
+      expect(downloadResponse.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+      expect(downloadResponse.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
+      expect(downloadResponse.body).toBe("just text");
+    }
   });
 
   it("keeps normal file suggestions workspace-local when path access config is invalid", async () => {

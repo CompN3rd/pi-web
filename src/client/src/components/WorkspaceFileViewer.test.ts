@@ -194,12 +194,16 @@ describe("workspace-file-viewer", () => {
     expect(viewer.shadowRoot?.querySelector("[role='status']")?.textContent).toContain("Raw source is truncated");
     expect(requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "oversized raw source").content).toBe("<p>first capped bytes</p>");
 
-    const archive = binaryFile("archive.zip");
+    const archive = binaryFile(String.raw`C:\reports\archive.zip`);
     viewer.selectedPath = archive.path;
     viewer.file = archive;
     await viewer.updateComplete;
     expect(viewer.shadowRoot?.textContent).toContain("Preview isn't available for this file type.");
-    expect(viewer.shadowRoot?.querySelector(".download-link")?.textContent).toContain("Download archive.zip");
+    const fallback = requiredElement(viewer.shadowRoot?.querySelector<HTMLAnchorElement>(".download-link"), "unsupported-file download fallback");
+    expect(fallback.textContent).toContain("Download archive.zip");
+    expect(fallback.getAttribute("download")).toBe("archive.zip");
+    expect(new URL(fallback.href).searchParams.get("path")).toBe(archive.path);
+    expect(new URL(fallback.href).searchParams.get("download")).toBe("1");
   });
 });
 

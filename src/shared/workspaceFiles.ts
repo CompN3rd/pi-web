@@ -37,3 +37,9 @@ export function classifyWorkspaceFile(path: string): WorkspaceFileClassification
   const extension = path.slice(dotIndex).toLowerCase();
   return WORKSPACE_FILE_CLASSIFICATIONS[extension];
 }
+
+/** Return the leaf filename for either POSIX or Windows-style workspace paths. */
+export function workspaceFileName(path: string): string {
+  const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return path.slice(separatorIndex + 1);
+}

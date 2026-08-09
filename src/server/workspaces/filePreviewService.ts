@@ -1,8 +1,7 @@
 import { createReadStream, type ReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { basename } from "node:path";
 import type { FileContentMediaType, PiWebPathAccessConfig } from "../../shared/apiTypes.js";
-import { classifyWorkspaceFile, MAX_INLINE_PREVIEW_BYTES, MAX_INLINE_PREVIEW_LABEL } from "../../shared/workspaceFiles.js";
+import { classifyWorkspaceFile, MAX_INLINE_PREVIEW_BYTES, MAX_INLINE_PREVIEW_LABEL, workspaceFileName } from "../../shared/workspaceFiles.js";
 import { resolveWorkspacePathAccessTarget } from "./pathAccessPolicy.js";
 
 export interface WorkspaceFilePreview {
@@ -28,7 +27,7 @@ export async function readWorkspaceFilePreview(
   const { target, displayPath } = await resolveWorkspacePathAccessTarget(rootPath, path, pathAccess);
   const s = await stat(target);
   if (!s.isFile()) throw new Error("Path is not a file");
-  const filename = basename(displayPath);
+  const filename = workspaceFileName(displayPath);
   const modifiedAt = s.mtime.toISOString();
 
   // Download mode serves any file as an opaque octet-stream attachment. No size

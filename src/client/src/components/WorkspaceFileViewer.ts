@@ -4,7 +4,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { FileContentResponse } from "../api";
 import { workspaceFilePreviewUrl } from "../api/urls";
 import { renderWorkspaceMarkdownHtml } from "../formatting/workspaceMarkdown";
-import { MAX_INLINE_PREVIEW_BYTES, MAX_INLINE_PREVIEW_LABEL } from "../../../shared/workspaceFiles";
+import { MAX_INLINE_PREVIEW_BYTES, MAX_INLINE_PREVIEW_LABEL, workspaceFileName } from "../../../shared/workspaceFiles";
 import { formattedTextStyles } from "./shared";
 
 export type WorkspaceFilePreviewKind = "image" | "html" | "pdf" | "markdown" | "download" | "code";
@@ -76,7 +76,7 @@ export class WorkspaceFileViewer extends LitElement {
   }
 
   private renderViewerHeader(file: FileContentResponse, metadata: string, canOpen: boolean): TemplateResult {
-    const name = fileBaseName(file.path);
+    const name = workspaceFileName(file.path);
     const previewOptions = { modifiedAt: file.modifiedAt, machineId: this.machineId };
     const openUrl = this.previewUrlBuilder(this.projectId, this.workspaceId, file.path, previewOptions);
     const downloadUrl = this.previewUrlBuilder(this.projectId, this.workspaceId, file.path, { ...previewOptions, download: true });
@@ -199,7 +199,7 @@ export class WorkspaceFileViewer extends LitElement {
   }
 
   private renderUnsupportedFile(file: FileContentResponse): TemplateResult {
-    const name = fileBaseName(file.path);
+    const name = workspaceFileName(file.path);
     const href = this.previewUrlBuilder(this.projectId, this.workspaceId, file.path, {
       modifiedAt: file.modifiedAt,
       machineId: this.machineId,
@@ -327,11 +327,6 @@ function metadataForFile(file: FileContentResponse, kind: WorkspaceFilePreviewKi
         ? "markdown"
         : file.mimeType ?? kind;
   return `${format} · ${formatFileSize(file.size)}${file.truncated ? " · truncated" : ""}`;
-}
-
-function fileBaseName(path: string): string {
-  const name = path.split("/").pop();
-  return name === undefined || name === "" ? path : name;
 }
 
 function loadCodeViewer(): void {

@@ -4,7 +4,7 @@ import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, type FederatedHttpRo
 import { mergeSelectedMachineConfig, parsePiWebConfigResponseBody, parseSelectedMachineConfigRequest, selectedMachineConfigResponse } from "../configRoutes.js";
 import { bridgeSockets } from "../webSocketBridge.js";
 import { RemoteMachineRequestError, type MachineClient, type MachineJsonResponse, type MachineRequestOptions } from "./machineClient.js";
-import { workspaceFilePreviewResponsePolicy, type WorkspaceFilePreviewResponsePolicy } from "../workspaces/filePreviewResponsePolicy.js";
+import { workspaceFilePreviewErrorResponsePolicy, workspaceFilePreviewResponsePolicy, type WorkspaceFilePreviewResponsePolicy } from "../workspaces/filePreviewResponsePolicy.js";
 import { MachineService } from "./machineService.js";
 
 export const REMOTE_HTTP_ROUTES = FEDERATED_HTTP_ROUTES;
@@ -64,7 +64,10 @@ async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRou
       : await client.request(method, remotePath, body, requestOptions);
     reply.code(upstream.statusCode);
     applySafeHeaders(reply, upstream.headers);
-    if (previewPolicy !== undefined && isSuccessfulStatus(upstream.statusCode)) applyWorkspaceFilePreviewResponsePolicy(reply, previewPolicy);
+    if (previewPolicy !== undefined) {
+      const enforcedPolicy = isSuccessfulStatus(upstream.statusCode) ? previewPolicy : workspaceFilePreviewErrorResponsePolicy();
+      applyWorkspaceFilePreviewResponsePolicy(reply, enforcedPolicy);
+    }
     if (upstream.body === undefined) return await reply.send();
     return await reply.send(upstream.body);
   } catch (error) {

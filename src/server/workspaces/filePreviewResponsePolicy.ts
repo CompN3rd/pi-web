@@ -1,5 +1,4 @@
-import { basename } from "node:path";
-import { classifyWorkspaceFile } from "../../shared/workspaceFiles.js";
+import { classifyWorkspaceFile, workspaceFileName } from "../../shared/workspaceFiles.js";
 
 export interface WorkspaceFilePreviewResponsePolicy {
   readonly contentType: string;
@@ -15,9 +14,11 @@ const HTML_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'; base-uri 'non
 // while this policy still denies scripts, navigation helpers, and subresources.
 const PDF_CONTENT_SECURITY_POLICY = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'self'; script-src 'none'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'none'; worker-src 'none'; frame-ancestors 'self'";
 const DOWNLOAD_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'none'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'none'; worker-src 'none'; frame-ancestors 'none'";
+const ERROR_CONTENT_SECURITY_POLICY = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'none'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'none'; worker-src 'none'; frame-ancestors 'self'";
 
 export function workspaceFilePreviewResponsePolicy(path: string, options: { download?: boolean } = {}): WorkspaceFilePreviewResponsePolicy {
   const filename = workspaceFileName(path);
+  if (filename === "") throw new Error("Workspace file path must include a filename");
   if (options.download === true) {
     return responsePolicy("application/octet-stream", "attachment", filename, DOWNLOAD_CONTENT_SECURITY_POLICY);
   }
@@ -44,10 +45,13 @@ function responsePolicy(contentType: string, disposition: "inline" | "attachment
   };
 }
 
-function workspaceFileName(path: string): string {
-  const filename = basename(path);
-  if (filename === "") throw new Error("Workspace file path must include a filename");
-  return filename;
+export function workspaceFilePreviewErrorResponsePolicy(): WorkspaceFilePreviewResponsePolicy {
+  return {
+    contentType: "application/json; charset=utf-8",
+    contentDisposition: "inline",
+    contentSecurityPolicy: ERROR_CONTENT_SECURITY_POLICY,
+    contentTypeOptions: "nosniff",
+  };
 }
 
 function contentDisposition(disposition: "inline" | "attachment", filename: string): string {

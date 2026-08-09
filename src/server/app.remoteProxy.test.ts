@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { RemoteMachineRequestError, type MachineClient } from "./machines/machineClient.js";
 import { PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS, SESSION_TREE_FORK_PROXY_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS } from "../shared/federatedRoutes.js";
 import { appTestContext, fakeRemoteClient, registerAppTestHooks } from "./app.testSupport.js";
-import { workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
+import { workspaceFilePreviewErrorResponsePolicy, workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
 
 registerAppTestHooks();
 
@@ -173,10 +173,69 @@ describe("buildApp remote machine proxy routes", () => {
     expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces/w1/file/preview?path=report.html", undefined);
   });
 
+  it("enforces exact remote SVG and PDF policies instead of upstream active-content headers", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><image href="https://attacker.test/pixel.png" /></svg>`;
+    const pdf = "%PDF-1.4\n%mock\n";
+    const request = vi.fn<MachineClient["request"]>((_method, path) => Promise.resolve({
+      statusCode: 200,
+      headers: {
+        "content-type": "text/html",
+        "content-disposition": "inline; filename=\"attacker.html\"",
+        "content-security-policy": "default-src * 'unsafe-inline' 'unsafe-eval'",
+      },
+      body: Readable.from([path.includes("spec.pdf") ? pdf : svg]),
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    for (const fixture of [{ path: "diagram.svg", body: svg }, { path: "spec.pdf", body: pdf }]) {
+      const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?path=${encodeURIComponent(fixture.path)}` });
+      const policy = workspaceFilePreviewResponsePolicy(fixture.path);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(policy.contentType);
+      expect(response.headers["content-disposition"]).toBe(policy.contentDisposition);
+      expect(response.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+      expect(response.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
+      expect(response.body).toBe(fixture.body);
+    }
+
+    expect(request).toHaveBeenNthCalledWith(1, "GET", "/api/projects/p1/workspaces/w1/file/preview?path=diagram.svg", undefined);
+    expect(request).toHaveBeenNthCalledWith(2, "GET", "/api/projects/p1/workspaces/w1/file/preview?path=spec.pdf", undefined);
+  });
+
+  it("keeps remote preview errors readable while neutralizing hostile response headers", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const body = JSON.stringify({ error: "Missing file <script>alert(1)</script>" });
+    const request = vi.fn<MachineClient["request"]>(() => Promise.resolve({
+      statusCode: 404,
+      headers: {
+        "content-type": "text/html",
+        "content-disposition": "attachment; filename=\"active.html\"",
+        "content-security-policy": "default-src * 'unsafe-inline'",
+        "x-content-type-options": "sniff",
+      },
+      body: Readable.from([body]),
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?path=report.html` });
+    const policy = workspaceFilePreviewErrorResponsePolicy();
+
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["content-type"]).toBe(policy.contentType);
+    expect(response.headers["content-disposition"]).toBe(policy.contentDisposition);
+    expect(response.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+    expect(response.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
+    expect(response.json()).toEqual({ error: "Missing file <script>alert(1)</script>" });
+    expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces/w1/file/preview?path=report.html", undefined);
+  });
+
   it("forces remote downloads to safe attachments with the requested filename", async () => {
     const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
     const remote = addResponse.json<{ id: string }>();
-    const path = "reports/résumé's.pdf";
+    const path = String.raw`C:\reports\résumé's.pdf`;
     const query = new URLSearchParams({ path, download: "1" }).toString();
     const body = "%PDF-1.4\n%mock\n";
     const request = vi.fn(() => Promise.resolve({
