@@ -214,6 +214,25 @@ export interface Workspace {
   effectiveConfig: WorkspaceEffectiveConfig;
 }
 
+/**
+ * Per-project Pi trust state for a workspace path, as stored in the agent
+ * directory's `trust.json` (shared with the Pi CLI).
+ */
+export interface WorkspaceTrustResponse {
+  /** The workspace path the decision is keyed on. */
+  path: string;
+  /** Raw stored decision: `true`/`false` for an explicit entry, `null` when unset. */
+  decision: boolean | null;
+  /** Effective trust the toggle reflects: the stored decision, else `defaultProjectTrust === "always"`. */
+  trusted: boolean;
+  /**
+   * Whether PI WEB honors this decision at session start. When `false`, the
+   * decision still applies to the Pi CLI but PI WEB loads project resources
+   * regardless. Lets the UI hint that the toggle has no PI WEB effect yet.
+   */
+  respectProjectTrust: boolean;
+}
+
 export interface SessionRef {
   id: string;
   cwd: string;

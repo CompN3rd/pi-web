@@ -14,6 +14,7 @@ import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import { registerSessionProxyRoutes, type SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
 import { registerWorkspaceExplorerRoutes } from "./workspaceExplorerRoutes.js";
 import { registerGitRoutes } from "./gitRoutes.js";
+import { registerProjectTrustRoutes } from "./projectTrustRoutes.js";
 import { registerTerminalProxyRoutes } from "./terminalProxyRoutes.js";
 import { registerWorkspaceDeletionRoutes } from "./workspaces/workspaceDeletionRoutes.js";
 import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
@@ -205,6 +206,12 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerWorkspaceExplorerRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
   registerGitRoutes(app, projects, workspaces);
   registerGitRoutes(app, projects, workspaces, "/api/machines/local");
+  const projectTrustDeps = {
+    agentDir: async () => (await requireActiveAgentProfile(agentProfileProvider)).dir,
+    respectProjectTrust: async () => (await readConfig()).respectProjectTrust ?? false,
+  };
+  registerProjectTrustRoutes(app, projects, workspaces, projectTrustDeps);
+  registerProjectTrustRoutes(app, projects, workspaces, projectTrustDeps, "/api/machines/local");
   registerTerminalProxyRoutes(app, projects, workspaces, sessionDaemon);
   registerTerminalProxyRoutes(app, projects, workspaces, sessionDaemon, "/api/machines/local");
   registerWorkspaceDeletionRoutes(app, projects, workspaces, sessionDaemon);

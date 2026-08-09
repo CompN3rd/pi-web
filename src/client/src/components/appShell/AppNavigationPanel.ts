@@ -148,6 +148,7 @@ export class AppNavigationPanel extends LitElement {
       <workspace-list
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
+        .machineId=${this.selectedMachine?.id ?? "local"}
         .activities=${this.workspaceActivities}
         .deletingWorkspaceIds=${this.deletingWorkspaceIds}
         .unreadWorkspaceIds=${this.unreadPresence.workspaces}

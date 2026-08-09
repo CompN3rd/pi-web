@@ -1,5 +1,6 @@
-import { LitElement, html, type PropertyValues, type TemplateResult } from "lit";
+import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import { trustApi } from "../api";
 import type { Workspace, WorkspaceActivity } from "../api";
 import { writeClipboardText } from "../clipboard";
 import type { WorkspaceLabelItem } from "../plugins/types";
@@ -11,10 +12,20 @@ import { activateSelectableRow, focusSelectedOrFirstSelectableRow, handleSelecta
 import { listStyles } from "./shared";
 import { renderWorkspaceLabelInlineItems } from "./workspaceLabel";
 
+interface WorkspaceTrustState {
+  loading?: boolean;
+  saving?: boolean;
+  trusted?: boolean;
+  respectProjectTrust?: boolean;
+  error?: string;
+}
+
 @customElement("workspace-list")
 export class WorkspaceList extends LitElement implements KeyboardNavigableSection {
   @property({ attribute: false }) workspaces: Workspace[] = [];
   @property({ attribute: false }) selected?: Workspace;
+  /** Machine the listed workspaces belong to; targets the trust API. */
+  @property({ attribute: false }) machineId = "local";
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ attribute: false }) workspaceLabelItems: (workspace: Workspace) => WorkspaceLabelItem[] = () => [];
@@ -30,6 +41,7 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
   @state() private openMenuWorkspaceId: string | undefined;
   @state() private menuStyle = "";
   @state() private copiedDetailKey: string | undefined;
+  @state() private trustByWorkspaceId: Record<string, WorkspaceTrustState> = {};
 
   private readonly onDocumentClick = (event: MouseEvent) => {
     if (event.composedPath().includes(this)) return;
@@ -150,14 +162,74 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     `;
   }
 
-  private renderWorkspaceActions(workspace: Workspace): TemplateResult | undefined {
-    if (!canDeleteWorkspace(workspace)) return undefined;
+  private renderWorkspaceActions(workspace: Workspace): TemplateResult {
     const deleting = this.isDeleting(workspace);
     return html`
       <div class="workspace-menu-actions">
-        <button class="danger" title=${deleting ? "Workspace deletion in progress" : "Delete workspace"} ?disabled=${deleting} @click=${() => { this.delete(workspace); }}>${deleting ? "Deleting…" : "Delete workspace"}</button>
+        ${this.renderTrustToggle(workspace)}
+        ${canDeleteWorkspace(workspace) ? html`
+          <button class="danger" title=${deleting ? "Workspace deletion in progress" : "Delete workspace"} ?disabled=${deleting} @click=${() => { this.delete(workspace); }}>${deleting ? "Deleting…" : "Delete workspace"}</button>
+        ` : null}
       </div>
     `;
+  }
+
+  private renderTrustToggle(workspace: Workspace): TemplateResult {
+    const trust = this.trustByWorkspaceId[workspace.id];
+    const busy = trust?.loading === true || trust?.saving === true;
+    const inputId = `${workspaceMenuId(workspace.id)}-trusted`;
+    return html`
+      <div class="workspace-menu-trust">
+        <label for=${inputId}>
+          <input
+            id=${inputId}
+            type="checkbox"
+            .checked=${trust?.trusted === true}
+            ?disabled=${busy || trust?.trusted === undefined}
+            @change=${(event: Event) => { if (event.target instanceof HTMLInputElement) void this.setTrust(workspace, event.target.checked); }}
+          />
+          <span>Trusted${busy ? "…" : ""}</span>
+        </label>
+        ${trust?.respectProjectTrust === false && trust.error === undefined ? html`<small class="workspace-trust-hint">Applies to the Pi CLI. PI WEB honors this only when respectProjectTrust is enabled.</small>` : null}
+        ${trust?.error === undefined ? null : html`<small class="workspace-trust-error">${trust.error}</small>`}
+      </div>
+    `;
+  }
+
+  /** Fields worth carrying across a loading/saving transition, minus any prior error. */
+  private trustBase(state: WorkspaceTrustState | undefined): WorkspaceTrustState {
+    return {
+      ...(state?.trusted === undefined ? {} : { trusted: state.trusted }),
+      ...(state?.respectProjectTrust === undefined ? {} : { respectProjectTrust: state.respectProjectTrust }),
+    };
+  }
+
+  private setTrustState(workspaceId: string, state: WorkspaceTrustState): void {
+    this.trustByWorkspaceId = { ...this.trustByWorkspaceId, [workspaceId]: state };
+  }
+
+  private async loadTrust(workspace: Workspace): Promise<void> {
+    const existing = this.trustByWorkspaceId[workspace.id];
+    if (existing?.loading === true || existing?.saving === true) return;
+    this.setTrustState(workspace.id, { ...this.trustBase(existing), loading: true });
+    try {
+      const result = await trustApi.workspaceTrust(workspace.projectId, workspace.id, this.machineId);
+      this.setTrustState(workspace.id, { trusted: result.trusted, respectProjectTrust: result.respectProjectTrust });
+    } catch (error) {
+      this.setTrustState(workspace.id, { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private async setTrust(workspace: Workspace, trusted: boolean): Promise<void> {
+    const existing = this.trustByWorkspaceId[workspace.id];
+    this.setTrustState(workspace.id, { ...this.trustBase(existing), saving: true });
+    try {
+      const result = await trustApi.setWorkspaceTrust(workspace.projectId, workspace.id, trusted, this.machineId);
+      this.setTrustState(workspace.id, { trusted: result.trusted, respectProjectTrust: result.respectProjectTrust });
+    } catch (error) {
+      // Keep the prior checkbox value (revert the optimistic flip) and surface why.
+      this.setTrustState(workspace.id, { ...this.trustBase(existing), error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   private renderWorkspaceDetails(label: string, items: WorkspaceLabelItem[], workspace: Workspace): TemplateResult {
@@ -218,6 +290,8 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     }
     this.menuStyle = actionMenuPanelStyle(target, { constrainTo: "viewport" });
     this.openMenuWorkspaceId = workspaceId;
+    const workspace = this.workspaces.find((candidate) => candidate.id === workspaceId);
+    if (workspace !== undefined) void this.loadTrust(workspace);
   }
 
   private handleWorkspaceKeydown(event: KeyboardEvent, workspace: Workspace): void {
@@ -239,7 +313,13 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     this.renderRoot.querySelector<HTMLElement>(".action-row.selected")?.scrollIntoView({ block: "nearest" });
   }
 
-  static override styles = listStyles;
+  static override styles = [listStyles, css`
+    .workspace-menu-trust { display: flex; flex-direction: column; gap: 3px; padding: 4px 2px; }
+    .workspace-menu-trust label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .workspace-menu-trust input { cursor: pointer; }
+    .workspace-trust-hint { color: var(--pi-text-muted, #6b7280); line-height: 1.3; }
+    .workspace-trust-error { color: var(--pi-danger, #c0392b); line-height: 1.3; }
+  `];
 }
 
 function workspacePrimaryLabel(workspace: Workspace): string {

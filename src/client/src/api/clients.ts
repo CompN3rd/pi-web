@@ -54,6 +54,7 @@ import {
   parseWriteWorkspaceFileResponse,
   parseWorkspace,
   parseWorkspaceActivityResponse,
+  parseWorkspaceTrustResponse,
 } from "./parsers";
 import { machineGitDiffPath, messagePath } from "./urls";
 
@@ -317,6 +318,14 @@ export const gitApi = {
   gitDiff: (projectId: string, workspaceId: string, options?: { path?: string; staged?: boolean }, machineId = "local") => request(machineGitDiffPath(machineId, projectId, workspaceId, options), parseGitDiffResponse),
 };
 
+const workspaceTrustPath = (machineId: string, projectId: string, workspaceId: string) =>
+  `${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/trust`;
+
+export const trustApi = {
+  workspaceTrust: (projectId: string, workspaceId: string, machineId = "local") => request(workspaceTrustPath(machineId, projectId, workspaceId), parseWorkspaceTrustResponse),
+  setWorkspaceTrust: (projectId: string, workspaceId: string, trusted: boolean, machineId = "local") => request(workspaceTrustPath(machineId, projectId, workspaceId), parseWorkspaceTrustResponse, { method: "PUT", body: JSON.stringify({ trusted }) }),
+};
+
 export const api = {
   ...piWebApi,
   ...machinesApi,
@@ -330,4 +339,5 @@ export const api = {
   ...terminalsApi,
   ...filesApi,
   ...gitApi,
+  ...trustApi,
 };
