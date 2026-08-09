@@ -280,8 +280,6 @@ function workspace(): Workspace {
     path: "/repo",
     label: "main",
     isMain: true,
-    isGitRepo: true,
-    isGitWorktree: false,
     effectiveConfig: {},
   };
 }
