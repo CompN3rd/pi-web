@@ -461,8 +461,8 @@ Rules:
 - `piWeb.plugins` must be an array of objects.
 - Each entry must have an explicit `id` and at least one of `module` or `serverModule`.
 - `id` must match `^[a-z][a-z0-9.-]*$`. Externally declared ids `core`, `themes`, and every `machine.*` id are reserved for the host and rejected with an attributed package diagnostic.
-- Both module paths must be safe relative paths to existing files inside the package root; backslashes, absolute paths, `..`, `.git`, and `node_modules` segments are rejected.
-- Every browser entry must declare `browserRoot`; a server-only entry must not. The root is `.` or a safe package-relative directory with no empty, `.`, `..`, `.git`, or `node_modules` segment. It must resolve inside the package, and the browser module must remain inside it both logically and after symlink resolution.
+- Both module paths must be safe canonical relative paths to existing files inside the package root. Backslashes, absolute or Windows drive-qualified paths, and empty, `.`, `..`, `.git`, or `node_modules` segments are rejected.
+- Every browser entry must declare `browserRoot`; a server-only entry must not. The root is `.` or a safe canonical package-relative directory with no empty, `.`, `..`, `.git`, or `node_modules` segment; Windows drive-qualified roots are rejected. It must resolve inside the package, and the browser module must remain inside it both logically and after symlink resolution.
 - Server entries are imported as Node ES modules. When a `serverModule` uses a `.js` path, declare `"type": "module"` in that plugin package; `.mjs` is the explicit-extension alternative.
 - `machineSpecific` is optional and must be boolean. Browser-only and server-only entries default to `false`. Dual browser/server entries default to `true` and cannot explicitly set it to `false`.
 - `plugins.<id>.settings` must be JSON-compatible for server entries; sessiond captures a private copy at startup and diagnostics expose only a fingerprint.

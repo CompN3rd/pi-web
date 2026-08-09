@@ -598,9 +598,11 @@ function addUnique(records: Map<string, PiWebPluginPackageEntry>, plugin: PiWebP
   records.set(plugin.id, plugin);
 }
 
+const WINDOWS_DRIVE_QUALIFIER = /^[A-Za-z]:/u;
+
 function isSafeRelativeModulePath(path: string): boolean {
-  if (path === "" || path.includes("\\") || hasControlCharacter(path) || isAbsolute(path) || win32.isAbsolute(path)) return false;
-  return path.split("/").every((segment) => segment !== ".." && !EXCLUDED_ARTIFACT_DIRECTORIES.has(segment));
+  if (path === "" || path.includes("\\") || hasControlCharacter(path) || isAbsolute(path) || win32.isAbsolute(path) || WINDOWS_DRIVE_QUALIFIER.test(path)) return false;
+  return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".." && !EXCLUDED_ARTIFACT_DIRECTORIES.has(segment));
 }
 
 function isSafeRelativeBrowserRootPath(path: string): boolean {
@@ -630,9 +632,14 @@ function formatUnknownValue(value: unknown): string {
   }
 }
 
-function isWithin(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(sep));
+type PathPlatform = Pick<typeof win32, "isAbsolute" | "relative" | "sep">;
+
+const nativePathPlatform: PathPlatform = { isAbsolute, relative, sep };
+
+export function isWithin(root: string, candidate: string, pathPlatform: PathPlatform = nativePathPlatform): boolean {
+  const rel = pathPlatform.relative(root, candidate);
+  // Windows returns an absolute relative() result when the paths are on different volumes.
+  return rel === "" || (!pathPlatform.isAbsolute(rel) && !rel.startsWith("..") && !rel.startsWith(pathPlatform.sep));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

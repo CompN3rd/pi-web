@@ -1,7 +1,11 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { machineScopedPluginId } from "../shared/machinePluginIds.js";
+import { buildApp } from "./app.js";
 import { appTestContext, fakeRemoteClient, registerAppTestHooks } from "./app.testSupport.js";
+import { PiWebPluginService } from "./piWebPluginService.js";
 
 registerAppTestHooks();
 
@@ -36,6 +40,52 @@ describe("buildApp PI WEB plugin routes", () => {
 
     const missingResponse = await appTestContext.app.inject({ method: "GET", url: "/pi-web-plugins/fake/missing.js" });
     expect(missingResponse.statusCode).toBe(404);
+  });
+
+  it("does not serve newer entry bytes through stale noncanonical asset URLs", async () => {
+    const pluginsRoot = join(appTestContext.tempDir, "route-plugins");
+    const pluginRoot = join(pluginsRoot, "route-revision");
+    const browserPath = join(pluginRoot, "public", "browser.js");
+    await mkdir(join(pluginRoot, "public"), { recursive: true });
+    await writeFile(join(pluginRoot, "package.json"), `${JSON.stringify({
+      piWeb: { plugins: [{ id: "route-revision", browserRoot: "public", module: "public/browser.js" }] },
+    }, null, 2)}\n`);
+    await writeFile(browserPath, "export const version = 'old';\n");
+    const service = new PiWebPluginService({
+      roots: [{ path: pluginsRoot, source: "test", scope: "local" }],
+      packageProvider: false,
+    });
+    const routeApp = await buildApp({ piWebPlugins: service, clientDist: false, logger: false });
+
+    try {
+      const firstManifest = await routeApp.inject({ method: "GET", url: "/pi-web-plugins/manifest.json" });
+      const firstModule = firstManifest.json<{ plugins: { module: string }[] }>().plugins[0]?.module;
+      if (firstModule === undefined) throw new Error("Expected initial plugin module URL");
+      const firstUrl = new URL(firstModule, "http://pi-web.test");
+      const dottedOldUrl = `${firstUrl.pathname.replace("/public/browser.js", "/public/./browser.js")}${firstUrl.search}`;
+
+      const initialAsset = await routeApp.inject({ method: "GET", url: dottedOldUrl });
+      expect(initialAsset.statusCode).toBe(200);
+      expect(initialAsset.body).toContain("'old'");
+
+      await writeFile(browserPath, "export const version = 'new';\n");
+      const secondManifest = await routeApp.inject({ method: "GET", url: "/pi-web-plugins/manifest.json" });
+      const secondModule = secondManifest.json<{ plugins: { module: string }[] }>().plugins[0]?.module;
+      if (secondModule === undefined) throw new Error("Expected updated plugin module URL");
+      expect(secondModule).not.toBe(firstModule);
+
+      const freshAsset = await routeApp.inject({ method: "GET", url: secondModule });
+      expect(freshAsset.statusCode).toBe(200);
+      expect(freshAsset.body).toContain("'new'");
+
+      const staleDottedAsset = await routeApp.inject({ method: "GET", url: dottedOldUrl });
+      expect(staleDottedAsset.statusCode).toBe(404);
+      const repeatedSeparatorOldUrl = `${firstUrl.pathname.replace("/public/browser.js", "/public//browser.js")}${firstUrl.search}`;
+      const staleRepeatedSeparatorAsset = await routeApp.inject({ method: "GET", url: repeatedSeparatorOldUrl });
+      expect(staleRepeatedSeparatorAsset.statusCode).toBe(404);
+    } finally {
+      await routeApp.close();
+    }
   });
 
   it("proxies remote machine plugin lists for settings", async () => {

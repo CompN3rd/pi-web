@@ -142,7 +142,7 @@ export class PiWebPluginService {
       }
     }
     const packageArtifact = await readPiWebPluginPackageArtifact(plugin.packageRoot, browserRoot).catch(() => undefined);
-    if (packageArtifact?.revision !== module.revision) return undefined;
+    if (packageArtifact?.revision !== module.revision || !packageArtifact.files.has(module.path)) return undefined;
     const artifact: CachedBrowserArtifact = {
       pluginId: plugin.id,
       revision: module.revision,

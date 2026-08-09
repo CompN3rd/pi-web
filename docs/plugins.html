@@ -307,7 +307,9 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
                 <code>plugin-api/unstable</code> path and private <code>dist/**</code> deep imports are not contracts.
               </p>
               <p>
-                Each browser entry must declare a safe package-relative <code>browserRoot</code> containing its module;
+                Browser and server module paths must use canonical package-relative form; empty or <code>.</code>
+                segments, traversal, backslashes, and absolute or Windows drive-qualified paths are rejected. Each
+                browser entry must declare a safe package-relative <code>browserRoot</code> containing its module;
                 server-only entries must not declare one. Invalid, missing, package-escaping, symlink-escaping, or
                 module-excluding roots fail discovery. Externally declared ids <code>core</code>, <code>themes</code>,
                 and the <code>machine.*</code> namespace are reserved and rejected.

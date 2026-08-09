@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, realpath, rm, stat, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES, PiWebPluginCatalog, type PiPackageProvider } from "./piWebPluginCatalog.js";
+import { isWithin, PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES, PiWebPluginCatalog, type PiPackageProvider } from "./piWebPluginCatalog.js";
 
 let tempDir: string;
 
@@ -116,6 +116,60 @@ describe("PiWebPluginCatalog", () => {
       expect.stringContaining("browser module is outside browser root for symlinked-module"),
       expect.stringContaining("browser root escapes its package for escaped-root"),
     ]));
+  });
+
+  it("rejects absolute containment results across Windows volumes", () => {
+    const packageRoot = "C:\\plugins\\example";
+
+    expect(isWithin(packageRoot, "C:\\plugins\\example\\public", win32)).toBe(true);
+    expect(win32.isAbsolute(win32.relative(packageRoot, "D:\\external\\public"))).toBe(true);
+    expect(isWithin(packageRoot, "D:\\external\\public", win32)).toBe(false);
+  });
+
+  it("rejects noncanonical and Windows drive-relative plugin metadata paths", async () => {
+    const pluginsRoot = join(tempDir, "plugins");
+    await writePlugin(join(pluginsRoot, "double-separator"), {
+      packageJson: { piWeb: { plugins: [{ id: "double-separator", browserRoot: ".", module: "public//browser.js" }] } },
+      files: { "public/browser.js": "export default {};" },
+    });
+    await writePlugin(join(pluginsRoot, "leading-dot"), {
+      packageJson: { piWeb: { plugins: [{ id: "leading-dot", browserRoot: ".", module: "./browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    await writePlugin(join(pluginsRoot, "dot-segment"), {
+      packageJson: { piWeb: { plugins: [{ id: "dot-segment", browserRoot: ".", module: "public/./browser.js" }] } },
+      files: { "public/browser.js": "export default {};" },
+    });
+    await writePlugin(join(pluginsRoot, "drive-browser"), {
+      packageJson: { piWeb: { plugins: [{ id: "drive-browser", browserRoot: ".", module: "D:browser.js" }] } },
+      files: {},
+    });
+    await writePlugin(join(pluginsRoot, "drive-server"), {
+      packageJson: { piWeb: { plugins: [{ id: "drive-server", serverModule: "D:server.js" }] } },
+      files: {},
+    });
+    await writePlugin(join(pluginsRoot, "drive-root"), {
+      packageJson: { piWeb: { plugins: [{ id: "drive-root", browserRoot: "D:assets", module: "browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: pluginsRoot, source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.diagnostics.map(({ message }) => message)).toEqual(expect.arrayContaining([
+      "Unsafe PI WEB plugin browser module path for double-separator: public//browser.js",
+      "Unsafe PI WEB plugin browser module path for leading-dot: ./browser.js",
+      "Unsafe PI WEB plugin browser module path for dot-segment: public/./browser.js",
+      "Unsafe PI WEB plugin browser module path for drive-browser: D:browser.js",
+      "Unsafe PI WEB plugin server module path for drive-server: D:server.js",
+      "Unsafe PI WEB plugin browser root for drive-root: D:assets",
+    ]));
+    expect(snapshot.diagnostics).toHaveLength(6);
   });
 
   it("uses package content revisions even when browser asset timestamps are preserved", async () => {
