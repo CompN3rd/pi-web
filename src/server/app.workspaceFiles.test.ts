@@ -146,7 +146,11 @@ describe("buildApp workspace file routes", () => {
       payload: { name: "Downloads", path: appTestContext.projectDir, create: true },
     });
     const project = addResponse.json<Project>();
-    const filename = "résumé's \"notes\".txt";
+    // Non-ASCII, an apostrophe, and a space all survive a real round trip on
+    // every supported host. Windows forbids `"` in filenames, so quote and CRLF
+    // escaping is proven at the pure policy seam instead
+    // (`filePreviewResponsePolicy.test.ts`) rather than through a real file.
+    const filename = "résumé's notes.txt";
     await writeFile(join(appTestContext.projectDir, filename), "just text");
 
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
