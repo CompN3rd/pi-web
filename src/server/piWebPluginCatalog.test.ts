@@ -200,6 +200,41 @@ describe("PiWebPluginCatalog", () => {
     expect(warnings).toEqual(snapshot.diagnostics.map((diagnostic) => `Skipping PI WEB plugin from ${diagnostic.source}: ${diagnostic.message}`));
   });
 
+  it("rejects reserved external plugin ids with package-attributed diagnostics", async () => {
+    const pluginsRoot = join(tempDir, "plugins");
+    const reservedPlugins = [
+      { directory: "reserved-core", id: "core" },
+      { directory: "reserved-themes", id: "themes" },
+      { directory: "reserved-machine", id: "machine.remote.tools" },
+    ];
+    for (const { directory, id } of reservedPlugins) {
+      await writePlugin(join(pluginsRoot, directory), {
+        packageJson: { piWeb: { plugins: [{ id, module: "browser.js" }] } },
+        files: { "browser.js": "export default {};" },
+      });
+    }
+    await writePlugin(join(pluginsRoot, "valid"), {
+      packageJson: { piWeb: { plugins: [{ id: "valid", module: "browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: pluginsRoot, source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["valid"]);
+    expect(snapshot.diagnostics).toHaveLength(3);
+    for (const { directory, id } of reservedPlugins) {
+      const source = join(pluginsRoot, directory);
+      const diagnostic = snapshot.diagnostics.find((candidate) => candidate.source === source);
+      expect(diagnostic?.code).toBe("invalid-package");
+      expect(diagnostic?.message).toContain(`Reserved PI WEB plugin id in ${join(source, "package.json")}: ${id}`);
+    }
+  });
+
   it("uses one duplicate-id winner across browser and server capabilities", async () => {
     const firstRoot = join(tempDir, "first");
     const secondRoot = join(tempDir, "second");

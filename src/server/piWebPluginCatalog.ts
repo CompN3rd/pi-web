@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { loadPiWebConfig, piWebDataDir, type PiWebConfig } from "../config.js";
 import type { PiWebPluginScope, PiWebPluginSettings } from "../shared/apiTypes.js";
-import { isPiWebPluginId } from "../shared/pluginIds.js";
+import { isPiWebPluginId, isReservedPiWebPluginId } from "../shared/pluginIds.js";
 
 export interface ConfiguredPiPackage {
   source: string;
@@ -167,7 +167,7 @@ export class PiWebPluginCatalog {
    * remains readable even when active Pi-package discovery is unavailable.
    */
   async browserPlugin(pluginId: string): Promise<PiWebPluginPackageEntry | undefined> {
-    if (!isPiWebPluginId(pluginId)) return undefined;
+    if (!isPiWebPluginId(pluginId) || isReservedPiWebPluginId(pluginId)) return undefined;
     const report = this.reporter([]);
     const localRecords = new Map<string, PiWebPluginPackageEntry>();
     for (const plugin of await this.discoverLocalPlugins(report)) addUnique(localRecords, plugin, report);
@@ -470,6 +470,7 @@ function parsePluginEntries(piWeb: Record<string, unknown>, packagePath: string)
     if (!isRecord(entry)) throw new Error(`PI WEB plugin entry ${String(index + 1)} must be an object in ${packagePath}`);
     const id = entry["id"];
     if (typeof id !== "string" || !isPiWebPluginId(id)) throw new Error(`Invalid PI WEB plugin id in ${packagePath}: ${String(id)}`);
+    if (isReservedPiWebPluginId(id)) throw new Error(`Reserved PI WEB plugin id in ${packagePath}: ${id}`);
     const module = parseOptionalModule(entry["module"], "browser", packagePath, id);
     const serverModule = parseOptionalModule(entry["serverModule"], "server", packagePath, id);
     if (module === undefined && serverModule === undefined) throw new Error(`PI WEB plugin ${id} must declare module or serverModule in ${packagePath}`);

@@ -82,7 +82,7 @@ describe("production build contents", () => {
         copyFile(join(repoRoot, "package.json"), join(packageRoot, "package.json")),
         copyFile(join(repoRoot, "server-plugin-api.d.ts"), join(packageRoot, "server-plugin-api.d.ts")),
         copyFile(join(repoRoot, "src", "server-plugin-api.ts"), join(packageRoot, "dist", "server-plugin-api.d.ts")),
-        writeFile(join(packageRoot, "dist", "plugin-api.d.ts"), "export interface PiWebPlugin { apiVersion: 1; }\n", "utf8"),
+        writeFile(join(packageRoot, "dist", "plugin-api.d.ts"), "export interface PiWebPlugin { apiVersion: 2; }\n", "utf8"),
         writeFile(join(packageRoot, "dist", "plugin-api", "unstable.d.ts"), "export interface UnstablePluginRuntimeContext {}\n", "utf8"),
         writeFile(join(fixtureRoot, "package.json"), '{"private":true,"type":"module"}\n', "utf8"),
         writeFile(consumerPath, `

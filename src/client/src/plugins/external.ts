@@ -1,5 +1,6 @@
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { requirePluginBackendRevision } from "../../../shared/pluginBackendProtocol";
+import { isPiWebPluginId, isReservedPiWebPluginId } from "../../../shared/pluginIds";
 import { resolveAppUrl, type AppUrlContext } from "../appUrl";
 import type { PiWebPlugin, PiWebPluginRegistration } from "./types";
 
@@ -76,9 +77,12 @@ async function fetchPluginManifest(manifestUrl: string): Promise<PluginManifest 
 function parseManifest(value: unknown): PluginManifest {
   if (!isRecord(value) || !Array.isArray(value["plugins"])) throw new Error("Invalid plugin manifest");
   const plugins = value["plugins"].map((entry) => {
-    if (!isRecord(entry) || typeof entry["id"] !== "string" || entry["id"] === "" || typeof entry["module"] !== "string" || entry["module"] === "") throw new Error("Invalid plugin manifest entry");
+    if (!isRecord(entry) || typeof entry["id"] !== "string" || typeof entry["module"] !== "string" || entry["module"] === "") throw new Error("Invalid plugin manifest entry");
+    const id = entry["id"];
+    if (!isPiWebPluginId(id)) throw new Error(`Invalid plugin manifest id: ${id}`);
+    if (isReservedPiWebPluginId(id)) throw new Error(`Reserved plugin manifest id: ${id}`);
     return {
-      id: entry["id"],
+      id,
       module: entry["module"],
       ...(parseBackendRevision(entry["backendRevision"])),
       machineSpecific: parseMachineSpecific(entry["machineSpecific"]),
@@ -128,12 +132,15 @@ function parseMachineSpecific(value: unknown): boolean {
 function parsePluginModule(module: unknown, moduleUrl: string): PiWebPlugin {
   if (!isRecord(module)) throw new Error(`Plugin module ${moduleUrl} did not export an object`);
   const plugin = module["default"];
+  if (isRecord(plugin) && plugin["apiVersion"] !== 2) {
+    throw new Error(`Unsupported browser plugin API version for ${moduleUrl}: ${String(plugin["apiVersion"])} (expected 2)`);
+  }
   if (!isPiWebPlugin(plugin)) throw new Error(`Plugin module ${moduleUrl} default export is not a PiWebPlugin`);
   return plugin;
 }
 
 function isPiWebPlugin(value: unknown): value is PiWebPlugin {
-  return isRecord(value) && value["apiVersion"] === 1 && typeof value["name"] === "string" && typeof value["activate"] === "function";
+  return isRecord(value) && value["apiVersion"] === 2 && typeof value["name"] === "string" && typeof value["activate"] === "function";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

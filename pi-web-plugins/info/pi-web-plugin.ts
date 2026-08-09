@@ -9,7 +9,7 @@ import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
 import { copyDiagnostics, renderInfoPanel } from "./infoInternals.js";
 
 const plugin: PiWebPlugin = {
-  apiVersion: 1,
+  apiVersion: 2,
   name: "Info Plugin",
   activate: ({ html, svg }) => ({
     contributions: {

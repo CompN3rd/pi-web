@@ -28,7 +28,7 @@ describe("external plugin manifests", () => {
       plugins: [{ id: "info", module: "./info/pi-web-plugin.js?v=1", backendRevision: "server-r1", machineSpecific: false }],
     }))));
     const moduleLoader = vi.fn(() => Promise.resolve({
-      default: { apiVersion: 1, name: "Info", activate: () => ({ contributions: {} }) },
+      default: { apiVersion: 2, name: "Info", activate: () => ({ contributions: {} }) },
     }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -37,7 +37,25 @@ describe("external plugin manifests", () => {
     expect(fetchMock).toHaveBeenCalledWith(manifestUrl, { cache: "no-store" });
     expect(moduleLoader).toHaveBeenCalledWith("https://pi.example.test/test/ai/pi-web-plugins/info/pi-web-plugin.js?v=1");
     expect(result.failures).toEqual([]);
-    expect(result.registrations).toMatchObject([{ id: "info", backendRevision: "server-r1", machineSpecific: false, plugin: { apiVersion: 1, name: "Info" } }]);
+    expect(result.registrations).toMatchObject([{ id: "info", backendRevision: "server-r1", machineSpecific: false, plugin: { apiVersion: 2, name: "Info" } }]);
+  });
+
+  it("attributes unsupported browser API versions to the plugin module", async () => {
+    const manifestUrl = "https://pi.example.test/pi-web-plugins/manifest.json";
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      plugins: [{ id: "legacy", module: "./legacy/plugin.js" }],
+    })))));
+
+    const result = await loadExternalPlugins(manifestUrl, {
+      moduleLoader: () => Promise.resolve({ default: { apiVersion: 1, name: "Legacy", activate: () => ({ contributions: {} }) } }),
+    });
+
+    expect(result.registrations).toEqual([]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.entry.id).toBe("legacy");
+    expect(result.failures[0]?.error).toEqual(expect.objectContaining({
+      message: "Unsupported browser plugin API version for https://pi.example.test/pi-web-plugins/legacy/plugin.js: 1 (expected 2)",
+    }));
   });
 
   it("loads the bundled Git browser entry through the same remote manifest and registry path", async () => {
@@ -77,7 +95,7 @@ describe("external plugin manifests", () => {
       const id = moduleUrl.includes("/retry/") ? "retry" : "stable";
       if (id === "retry" && retryAttempts++ === 0) return Promise.reject(new Error("temporary module failure"));
       return Promise.resolve({
-        default: { apiVersion: 1, name: id, activate: () => ({ contributions: {} }) },
+        default: { apiVersion: 2, name: id, activate: () => ({ contributions: {} }) },
       });
     });
     const registry = new PluginRegistry();
@@ -107,9 +125,19 @@ describe("external plugin manifests", () => {
         { id: "duplicate", module: "./duplicate/two.js" },
       ],
     })))));
-    const moduleLoader = vi.fn(() => Promise.resolve({ default: { apiVersion: 1, name: "Duplicate", activate: () => ({ contributions: {} }) } }));
+    const moduleLoader = vi.fn(() => Promise.resolve({ default: { apiVersion: 2, name: "Duplicate", activate: () => ({ contributions: {} }) } }));
 
     await expect(loadExternalPlugins(undefined, { moduleLoader })).rejects.toThrow("Duplicate plugin manifest id: duplicate");
+    expect(moduleLoader).not.toHaveBeenCalled();
+  });
+
+  it.each(["core", "themes", "machine.remote.plugin"])('rejects reserved manifest id "%s" before importing modules', async (id) => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      plugins: [{ id, module: `./${id}/plugin.js` }],
+    })))));
+    const moduleLoader = vi.fn(() => Promise.resolve({ default: { apiVersion: 2, name: id, activate: () => ({ contributions: {} }) } }));
+
+    await expect(loadExternalPlugins(undefined, { moduleLoader })).rejects.toThrow(`Reserved plugin manifest id: ${id}`);
     expect(moduleLoader).not.toHaveBeenCalled();
   });
 
