@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileContentResponse } from "../api";
 import { MAX_INLINE_PREVIEW_BYTES } from "../../../shared/workspaceFiles";
+import type { WorkspaceFileViewMode, WorkspaceFileViewModeStore } from "../workspaceFileViewMode";
 import { WorkspaceFileViewer, workspaceFilePreviewKind, workspaceFileViewerIdentityKey, type WorkspaceFileViewerIdentity } from "./WorkspaceFileViewer";
 
 afterEach(() => {
@@ -34,7 +35,7 @@ describe("workspace-file-viewer", () => {
     expect(viewer.shadowRoot?.querySelector("a, iframe, code-viewer")).toBeNull();
   });
 
-  it("defaults HTML to an exactly sandboxed preview and renders Raw as literal source", async () => {
+  it("opens HTML as literal raw source and previews it in an exactly sandboxed frame on request", async () => {
     const source = `<h1 onclick="alert(1)">Literal heading</h1><script>alert("no")</script>`;
     const file = textFile("pages/report.html", source, {
       mediaType: "html",
@@ -45,14 +46,11 @@ describe("workspace-file-viewer", () => {
 
     const group = requiredElement(viewer.shadowRoot?.querySelector("[role='group']"), "mode group");
     expect(group.getAttribute("aria-label")).toBe("View pages/report.html");
-    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
-    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("false");
-
-    const frame = requiredElement(viewer.shadowRoot?.querySelector<HTMLIFrameElement>("iframe"), "HTML preview frame");
-    expect(frame.getAttribute("sandbox")).toBe("");
-    expect(frame.getAttribute("allow")).toBe("");
-    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(frame.getAttribute("title")).toBe("Preview of pages/report.html");
+    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
+    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("false");
+    expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
+    expect(requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "raw code viewer").content).toBe(source);
+    expect(viewer.shadowRoot?.querySelector("h1, script")).toBeNull();
 
     const open = anchorWithText(viewer, "Open ↗");
     expect(open.getAttribute("target")).toBe("_blank");
@@ -63,24 +61,35 @@ describe("workspace-file-viewer", () => {
     expect(download.getAttribute("download")).toBe("report.html");
     expect(new URL(download.href).searchParams.get("download")).toBe("1");
 
-    modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
-
-    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
-    expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
-    const raw = requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "raw code viewer");
-    expect(raw.content).toBe(source);
-    expect(viewer.shadowRoot?.querySelector("h1, script")).toBeNull();
-
     modeButton(viewer, "Preview").click();
     await viewer.updateComplete;
-    expect(viewer.shadowRoot?.querySelector("iframe")).not.toBeNull();
+
+    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
+    expect(viewer.shadowRoot?.querySelector("code-viewer")).toBeNull();
+    const frame = requiredElement(viewer.shadowRoot?.querySelector<HTMLIFrameElement>("iframe"), "HTML preview frame");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("allow")).toBe("");
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(frame.getAttribute("title")).toBe("Preview of pages/report.html");
+
+    modeButton(viewer, "Raw").click();
+    await viewer.updateComplete;
+    expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
+    expect(viewer.shadowRoot?.querySelector("code-viewer")).not.toBeNull();
   });
 
-  it("defaults Markdown to the dedicated safe renderer and keeps literal Raw available", async () => {
+  it("opens Markdown as literal raw source and renders it through the safe renderer on request", async () => {
     const source = `# Rendered\n\n<script>alert(1)</script>\n\n![remote](https://attacker.test/pixel.png)\n\n[Docs](https://example.test/docs)`;
     const file = textFile("README.md", source, { mediaType: "markdown", language: "markdown" });
     const viewer = await mountViewer(file);
+
+    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
+    const raw = requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "raw Markdown viewer");
+    expect(raw.content).toBe(source);
+    expect(viewer.shadowRoot?.querySelector(".markdown-preview")).toBeNull();
+
+    modeButton(viewer, "Preview").click();
+    await viewer.updateComplete;
 
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
     const preview = requiredElement(viewer.shadowRoot?.querySelector(".markdown-preview"), "Markdown preview");
@@ -92,49 +101,73 @@ describe("workspace-file-viewer", () => {
     expect(renderedLink.getAttribute("target")).toBe("_blank");
     expect(renderedLink.getAttribute("rel")).toBe("noopener noreferrer");
     expect(viewer.shadowRoot?.textContent).not.toContain("Open ↗");
-
-    modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
-    const raw = requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "raw Markdown viewer");
-    expect(raw.content).toBe(source);
-    expect(viewer.shadowRoot?.querySelector(".markdown-preview")).toBeNull();
   });
 
-  it("resets mode to Preview whenever the full selected-file identity changes", async () => {
+  it("adopts the remembered mode, keeps it across files, and publishes what is displayed", async () => {
+    const store = fakeModeStore("preview");
     const original = textFile("report.html", "<p>first</p>", { mediaType: "html", language: "html" });
-    const viewer = await mountViewer(original);
+    const viewer = await mountViewer(original, { modeStore: store });
 
-    modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
-    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
+    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
+    expect(store.published).toEqual(["preview"]);
 
+    // A new revision of the same file, a different machine, and a different
+    // file all keep the mode the user last chose.
     viewer.file = { ...original, content: "<p>updated</p>", modifiedAt: "2026-06-25T00:01:00.000Z" };
     await viewer.updateComplete;
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
-    expect(viewer.shadowRoot?.querySelector("iframe")).not.toBeNull();
 
-    modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
     viewer.machineId = "remote-1";
     await viewer.updateComplete;
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
+
+    modeButton(viewer, "Raw").click();
+    await viewer.updateComplete;
+    expect(store.published).toEqual(["preview", "raw"]);
+
+    const readme = textFile("README.md", "# Docs", { mediaType: "markdown", language: "markdown" });
+    viewer.selectedPath = readme.path;
+    viewer.file = readme;
+    await viewer.updateComplete;
+    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
+    expect(viewer.shadowRoot?.querySelector(".markdown-preview")).toBeNull();
+
+    // Files without a rendered form never publish a mode, so a link to a PNG
+    // cannot rewrite the remembered choice.
+    const image = binaryFile("photo.png", { mediaType: "image", mimeType: "image/png" });
+    viewer.selectedPath = image.path;
+    viewer.file = image;
+    await viewer.updateComplete;
+    expect(store.published).toEqual(["preview", "raw"]);
   });
 
   it("ignores stale mode controls after a different file is selected", async () => {
-    const html = textFile("first.html", "<p>first</p>", { mediaType: "html", language: "html" });
-    const viewer = await mountViewer(html);
-    const detachedRawButton = modeButton(viewer, "Raw");
+    const first = textFile("first.html", "<p>first</p>", { mediaType: "html", language: "html" });
+    const viewer = await mountViewer(first);
+    const detachedPreviewButton = modeButton(viewer, "Preview");
 
+    // A streamed image has no mode controls, so the earlier buttons leave the
+    // DOM entirely and any later click on one is genuinely stale.
     const image = binaryFile("second.png", { mediaType: "image", mimeType: "image/png" });
     viewer.selectedPath = image.path;
     viewer.file = image;
     await viewer.updateComplete;
     expect(viewer.shadowRoot?.querySelector("img")).not.toBeNull();
+    expect(detachedPreviewButton.isConnected).toBe(false);
 
-    detachedRawButton.click();
+    detachedPreviewButton.click();
     await viewer.updateComplete;
     expect(viewer.shadowRoot?.querySelector("img")).not.toBeNull();
     expect(viewer.shadowRoot?.querySelector("code-viewer")).toBeNull();
+
+    // The stale click must not have changed the remembered mode either.
+    const notes = textFile("notes.md", "# notes", { mediaType: "markdown", language: "markdown" });
+    viewer.selectedPath = notes.path;
+    viewer.file = notes;
+    await viewer.updateComplete;
+    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
+    expect(viewer.shadowRoot?.querySelector(".markdown-preview")).toBeNull();
+    expect(viewer.shadowRoot?.querySelector("code-viewer")).not.toBeNull();
   });
 
   it("ignores stale embedded-preview failures and exposes recovery for the current file", async () => {
@@ -179,19 +212,20 @@ describe("workspace-file-viewer", () => {
     const file = textFile("assets/diagram.svg", source, { mediaType: "image", mimeType: "image/svg+xml" });
     const viewer = await mountViewer(file);
 
-    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
-    const image = requiredElement(viewer.shadowRoot?.querySelector<HTMLImageElement>("img"), "SVG preview image");
-    expect(new URL(image.src).searchParams.get("path")).toBe(file.path);
-    expect(image.getAttribute("alt")).toBe("Preview of assets/diagram.svg");
-
-    modeButton(viewer, "Raw").click();
-    await viewer.updateComplete;
-
     expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
     expect(viewer.shadowRoot?.querySelector("img")).toBeNull();
     const raw = requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "raw SVG viewer");
     expect(raw.content).toBe(source);
     expect(viewer.shadowRoot?.querySelector("svg, script")).toBeNull();
+
+    modeButton(viewer, "Preview").click();
+    await viewer.updateComplete;
+
+    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
+    expect(viewer.shadowRoot?.querySelector("code-viewer")).toBeNull();
+    const image = requiredElement(viewer.shadowRoot?.querySelector<HTMLImageElement>("img"), "SVG preview image");
+    expect(new URL(image.src).searchParams.get("path")).toBe(file.path);
+    expect(image.getAttribute("alt")).toBe("Preview of assets/diagram.svg");
 
     const streamedImage = binaryFile("photo.png", { mediaType: "image", mimeType: "image/png" });
     viewer.selectedPath = streamedImage.path;
@@ -202,7 +236,7 @@ describe("workspace-file-viewer", () => {
 
   it("ignores delayed events from an earlier selection of an identically keyed file", async () => {
     const report = textFile("report.html", "<p>first</p>", { mediaType: "html", language: "html" });
-    const viewer = await mountViewer(report);
+    const viewer = await mountViewer(report, { modeStore: fakeModeStore("preview") });
     const detachedFrame = requiredElement(viewer.shadowRoot?.querySelector<HTMLIFrameElement>("iframe"), "first HTML frame");
     const detachedRawButton = modeButton(viewer, "Raw");
 
@@ -246,14 +280,18 @@ describe("workspace-file-viewer", () => {
     viewer.selectedPath = oversizedHtml.path;
     viewer.file = oversizedHtml;
     await viewer.updateComplete;
-    expect(statusMessage(viewer)).toContain("File too large to preview");
+    expect(viewer.shadowRoot?.querySelector("[role='status']")?.textContent).toContain("Raw source is truncated");
+    expect(requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "oversized raw source").content).toBe("<p>first capped bytes</p>");
     expect(viewer.shadowRoot?.textContent).not.toContain("Open ↗");
     expect(viewer.shadowRoot?.querySelector("a[download]")).not.toBeNull();
 
+    modeButton(viewer, "Preview").click();
+    await viewer.updateComplete;
+    expect(statusMessage(viewer)).toContain("File too large to preview");
+    expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
+
     modeButton(viewer, "Raw").click();
     await viewer.updateComplete;
-    expect(viewer.shadowRoot?.querySelector("[role='status']")?.textContent).toContain("Raw source is truncated");
-    expect(requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("code-viewer"), "oversized raw source").content).toBe("<p>first capped bytes</p>");
 
     const archive = binaryFile(String.raw`C:\reports\archive.zip`);
     viewer.selectedPath = archive.path;
@@ -310,6 +348,20 @@ interface ViewerPatch {
   file?: FileContentResponse | undefined;
   loadError?: string | undefined;
   previewUrlBuilder?: WorkspaceFileViewer["previewUrlBuilder"];
+  modeStore?: WorkspaceFileViewModeStore;
+}
+
+interface FakeModeStore extends WorkspaceFileViewModeStore {
+  published: WorkspaceFileViewMode[];
+}
+
+function fakeModeStore(adopted: WorkspaceFileViewMode = "raw"): FakeModeStore {
+  const published: WorkspaceFileViewMode[] = [];
+  return {
+    published,
+    adopt: () => adopted,
+    publish: (mode) => { published.push(mode); },
+  };
 }
 
 async function mountViewer(file: FileContentResponse | undefined, patch: ViewerPatch = {}): Promise<WorkspaceFileViewer> {
@@ -322,6 +374,7 @@ async function mountViewer(file: FileContentResponse | undefined, patch: ViewerP
     file,
     loadError: undefined,
     previewUrlBuilder: inertPreviewUrl,
+    modeStore: fakeModeStore(),
   }, patch);
   document.body.append(viewer);
   await viewer.updateComplete;

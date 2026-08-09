@@ -7,10 +7,10 @@ import { workspaceFilePreviewUrl } from "../api/urls";
 import { renderWorkspaceMarkdownHtml } from "../formatting/workspaceMarkdown";
 import { MAX_INLINE_PREVIEW_BYTES, MAX_INLINE_PREVIEW_LABEL, workspaceFileName } from "../../../shared/workspaceFiles";
 import { formatFileSize } from "../utils/format";
+import { workspaceFileViewModeStore, type WorkspaceFileViewMode, type WorkspaceFileViewModeStore } from "../workspaceFileViewMode";
 import { formattedTextStyles } from "./shared";
 
 export type WorkspaceFilePreviewKind = "image" | "html" | "pdf" | "markdown" | "download" | "code";
-export type WorkspaceFileViewerMode = "preview" | "raw";
 
 export interface WorkspaceFileViewerIdentity {
   machineId: string;
@@ -29,8 +29,11 @@ export class WorkspaceFileViewer extends LitElement {
   @property({ attribute: false }) file: FileContentResponse | undefined;
   @property({ attribute: false }) loadError: string | undefined;
   @property({ attribute: false }) previewUrlBuilder: typeof workspaceFilePreviewUrl = workspaceFilePreviewUrl;
+  @property({ attribute: false }) modeStore: WorkspaceFileViewModeStore = workspaceFileViewModeStore;
 
-  private mode: WorkspaceFileViewerMode = "preview";
+  /** Undefined until the first render adopts the deep-linked or stored mode. */
+  private mode: WorkspaceFileViewMode | undefined;
+  private publishedMode: WorkspaceFileViewMode | undefined;
   private activeFileKey: string | undefined;
   /**
    * Increments on every selected-file identity change. Rendered handlers carry
@@ -42,12 +45,27 @@ export class WorkspaceFileViewer extends LitElement {
   private failedPreviewToken: number | undefined;
 
   protected override willUpdate(): void {
+    this.mode ??= this.modeStore.adopt();
     const nextKey = this.currentFileKey();
     if (nextKey === this.activeFileKey) return;
     this.activeFileKey = nextKey;
     this.selectionToken += 1;
-    this.mode = "preview";
+    // The mode deliberately survives a new selection; only failure state, which
+    // belongs to the bytes that failed, is per selection.
     this.failedPreviewToken = undefined;
+  }
+
+  /**
+   * Keep the address bar reproducible: whenever a file that actually has both
+   * modes is on screen, the URL and the device preference name the mode being
+   * shown, so copying the link reproduces this view for anyone who opens it.
+   */
+  protected override updated(): void {
+    const mode = this.mode;
+    if (mode === undefined || mode === this.publishedMode) return;
+    if (!this.selectionHasRawAndPreviewModes()) return;
+    this.publishedMode = mode;
+    this.modeStore.publish(mode);
   }
 
   override render(): TemplateResult {
@@ -228,7 +246,7 @@ export class WorkspaceFileViewer extends LitElement {
     });
   }
 
-  private setMode(mode: WorkspaceFileViewerMode, token: number): void {
+  private setMode(mode: WorkspaceFileViewMode, token: number): void {
     if (token !== this.selectionToken) return;
     this.mode = mode;
     this.failedPreviewToken = undefined;
@@ -236,7 +254,10 @@ export class WorkspaceFileViewer extends LitElement {
   }
 
   private recordPreviewFailure(token: number): void {
-    if (token !== this.selectionToken || this.mode !== "preview") return;
+    // Streamed kinds (raster images, PDF) have no raw form and always show an
+    // embedded preview, so the guard asks what is on screen rather than what
+    // the remembered mode says.
+    if (token !== this.selectionToken || this.showsRawSource()) return;
     this.failedPreviewToken = token;
     this.requestUpdate();
   }
@@ -249,6 +270,17 @@ export class WorkspaceFileViewer extends LitElement {
 
   private currentFileKey(): string {
     return workspaceFileViewerIdentityKey(this);
+  }
+
+  private showsRawSource(): boolean {
+    return this.mode === "raw" && this.selectionHasRawAndPreviewModes();
+  }
+
+  private selectionHasRawAndPreviewModes(): boolean {
+    const file = this.file;
+    if (file === undefined || this.loadError !== undefined) return false;
+    if (this.selectedPath === undefined || file.path !== this.selectedPath) return false;
+    return hasRawAndPreviewModes(file, workspaceFilePreviewKind(file));
   }
 
   static override styles = [
