@@ -1,9 +1,6 @@
-/** JSON values accepted across the PI WEB server-plugin boundary. */
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
-export interface JsonObject {
-  readonly [key: string]: JsonValue;
-}
+import type { JsonObject, JsonPrimitive, JsonValue, WorkspaceRemovalPresentation } from "./shared/pluginApiTypes.js";
+
+export type { JsonObject, JsonPrimitive, JsonValue, WorkspaceRemovalPresentation };
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -139,12 +136,6 @@ export interface ProviderRemoveContext {
   /** Host-validated, frozen projection of one listed provider workspace. */
   readonly workspace: Readonly<ProviderWorkspace>;
   readonly signal: AbortSignal;
-}
-
-/** Serializable provider wording advertised with a removable workspace. */
-export interface WorkspaceRemovalPresentation {
-  readonly actionLabel: string;
-  readonly confirmation: string;
 }
 
 /**

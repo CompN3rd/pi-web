@@ -133,7 +133,8 @@ describe("public server plugin API", () => {
     const source = await readFile("src/server-plugin-api.ts", "utf8");
     expect(source).not.toMatch(/\b(?:Fastify|WorkspaceService|ProjectService|TerminalService|SessionDaemonClient)\b/u);
     expect(source).not.toMatch(/event\s*bus|service\s*locator|registerRoute/iu);
-    expect(source).not.toMatch(/^import\s/mu);
+    expect(source).toContain('from "./shared/pluginApiTypes.js";');
+    expect(source).not.toContain("./shared/apiTypes.js");
   });
 });
 

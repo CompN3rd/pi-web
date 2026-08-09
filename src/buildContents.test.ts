@@ -8,6 +8,67 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+const pluginConsumerCompilerModes = [
+  {
+    name: "nodenext",
+    extension: "mts",
+    options: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    },
+  },
+  {
+    name: "bundler",
+    extension: "ts",
+    options: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+    },
+  },
+] as const satisfies readonly {
+  name: string;
+  extension: string;
+  options: ts.CompilerOptions;
+}[];
+
+const browserPluginConsumerSource = `
+import type { JsonValue, PiWebPlugin, Workspace } from "@jmfederico/pi-web/plugin-api";
+import type { UnstablePluginRuntimeContext } from "@jmfederico/pi-web/plugin-api/unstable";
+
+const plugin: PiWebPlugin = {
+  apiVersion: 2,
+  name: "Browser declaration fixture",
+  activate: (context) => ({
+    contributions: {
+      actions: [{ id: "identity", title: context.pluginId, run: () => undefined }],
+    },
+  }),
+};
+
+const echoJson = (value: JsonValue): JsonValue => value;
+export { echoJson, plugin };
+export type BrowserTypes = Workspace & UnstablePluginRuntimeContext;
+`;
+
+const serverPluginConsumerSource = `
+import type { PiWebServerPlugin } from "@jmfederico/pi-web/server-plugin-api";
+
+const plugin: PiWebServerPlugin = {
+  apiVersion: 1,
+  name: "Server declaration fixture",
+  activate: () => ({
+    workspaceProvider: {
+      probe: async () => "claim",
+      list: async (project) => [{ key: "main", path: project.path, label: project.name, isMain: true }],
+    },
+  }),
+};
+
+export default plugin;
+`;
+
 describe("production build contents", () => {
   it("builds bundled plugins before every development sessiond entrypoint", async () => {
     const metadata: unknown = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
@@ -39,15 +100,21 @@ describe("production build contents", () => {
     const fixtureRoot = await mkdtemp(join(tmpdir(), "pi-web-package-contents-"));
     try {
       const fixtureDist = join(fixtureRoot, "dist", "server");
-      await mkdir(fixtureDist, { recursive: true });
+      await Promise.all([
+        mkdir(fixtureDist, { recursive: true }),
+        mkdir(join(fixtureRoot, "dist", "plugin-api"), { recursive: true }),
+        mkdir(join(fixtureRoot, "plugin-api"), { recursive: true }),
+      ]);
       await Promise.all([
         // Lifecycle hooks do not affect which files are packed, and npm 10 runs
         // `prepare` during `npm pack` even with `--ignore-scripts`, so strip
         // them: the fixture has no scripts/ tree for a hook to resolve.
         writeFixtureManifest(fixtureRoot),
         copyFile(join(repoRoot, "plugin-api.d.ts"), join(fixtureRoot, "plugin-api.d.ts")),
+        copyFile(join(repoRoot, "plugin-api", "unstable.d.ts"), join(fixtureRoot, "plugin-api", "unstable.d.ts")),
         copyFile(join(repoRoot, "server-plugin-api.d.ts"), join(fixtureRoot, "server-plugin-api.d.ts")),
         writeFile(join(fixtureRoot, "dist", "plugin-api.d.ts"), "export {};\n", "utf8"),
+        writeFile(join(fixtureRoot, "dist", "plugin-api", "unstable.d.ts"), "export {};\n", "utf8"),
         writeFile(join(fixtureRoot, "dist", "server-plugin-api.d.ts"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.js"), "export {};\n", "utf8"),
         writeFile(join(fixtureDist, "app.testSupport.js"), "export {};\n", "utf8"),
@@ -59,9 +126,11 @@ describe("production build contents", () => {
 
       expect(packagedFiles).toEqual(expect.arrayContaining([
         "dist/plugin-api.d.ts",
+        "dist/plugin-api/unstable.d.ts",
         "dist/server-plugin-api.d.ts",
         "dist/server/app.js",
         "plugin-api.d.ts",
+        "plugin-api/unstable.d.ts",
         "server-plugin-api.d.ts",
       ]));
       expect(packagedFiles.filter(isTestSupportPath)).toEqual([]);
@@ -70,73 +139,54 @@ describe("production build contents", () => {
     }
   });
 
-  it("resolves packaged plugin declaration subpaths for NodeNext consumers", async () => {
+  it("exports only the supported type-only plugin API subpaths", async () => {
+    const metadata: unknown = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
+    if (!isRecord(metadata)) throw new Error("package.json was not an object");
+
+    expect(metadata["exports"]).toEqual({
+      "./plugin-api": { types: "./dist/plugin-api.d.ts" },
+      "./plugin-api/unstable": { types: "./dist/plugin-api/unstable.d.ts" },
+      "./server-plugin-api": { types: "./dist/server-plugin-api.d.ts" },
+    });
+  });
+
+  it("compiles self-contained browser-only and server-only consumers under NodeNext and Bundler", { timeout: 30_000 }, async () => {
     // TypeScript resolves declaration paths through the real path; on Windows
     // the temp dir may use an 8.3 short name, so anchor at the real path.
     const fixtureRoot = await realpath(await mkdtemp(join(tmpdir(), "pi-web-plugin-types-")));
     try {
       const packageRoot = join(fixtureRoot, "node_modules", "@jmfederico", "pi-web");
-      await mkdir(join(packageRoot, "dist", "plugin-api"), { recursive: true });
-      const consumerPath = join(fixtureRoot, "provider.mts");
+      await mkdir(packageRoot, { recursive: true });
       await Promise.all([
         copyFile(join(repoRoot, "package.json"), join(packageRoot, "package.json")),
-        copyFile(join(repoRoot, "server-plugin-api.d.ts"), join(packageRoot, "server-plugin-api.d.ts")),
-        copyFile(join(repoRoot, "src", "server-plugin-api.ts"), join(packageRoot, "dist", "server-plugin-api.d.ts")),
-        writeFile(join(packageRoot, "dist", "plugin-api.d.ts"), "export interface PiWebPlugin { apiVersion: 2; }\n", "utf8"),
-        writeFile(join(packageRoot, "dist", "plugin-api", "unstable.d.ts"), "export interface UnstablePluginRuntimeContext {}\n", "utf8"),
+        symlink(
+          join(repoRoot, "node_modules", "lit"),
+          join(fixtureRoot, "node_modules", "lit"),
+          process.platform === "win32" ? "junction" : "dir",
+        ),
         writeFile(join(fixtureRoot, "package.json"), '{"private":true,"type":"module"}\n', "utf8"),
-        writeFile(consumerPath, `
-import type { PiWebServerPlugin } from "@jmfederico/pi-web/server-plugin-api";
-
-const plugin: PiWebServerPlugin = {
-  apiVersion: 1,
-  name: "External declaration fixture",
-  activate: () => ({
-    workspaceProvider: {
-      probe: async () => "claim",
-      list: async (project) => [{ key: "main", path: project.path, label: project.name, isMain: true }],
-    },
-  }),
-};
-
-export default plugin;
-`, "utf8"),
       ]);
+      emitPluginApiDeclarations(join(packageRoot, "dist"));
 
-      const nodeNextOptions: ts.CompilerOptions = {
-        target: ts.ScriptTarget.ES2022,
-        module: ts.ModuleKind.NodeNext,
-        moduleResolution: ts.ModuleResolutionKind.NodeNext,
-      };
-      const expectedDeclarations = new Map([
-        ["@jmfederico/pi-web/plugin-api", "node_modules/@jmfederico/pi-web/dist/plugin-api.d.ts"],
-        ["@jmfederico/pi-web/plugin-api/unstable", "node_modules/@jmfederico/pi-web/dist/plugin-api/unstable.d.ts"],
-        ["@jmfederico/pi-web/server-plugin-api", "node_modules/@jmfederico/pi-web/dist/server-plugin-api.d.ts"],
-      ]);
-      for (const [specifier, expected] of expectedDeclarations) {
-        const resolved = ts.resolveModuleName(specifier, consumerPath, nodeNextOptions, ts.sys).resolvedModule;
-        expect(resolved === undefined ? undefined : normalizePath(relative(fixtureRoot, resolved.resolvedFileName))).toBe(expected);
+      for (const mode of pluginConsumerCompilerModes) {
+        const browserPath = join(fixtureRoot, `browser-${mode.name}.${mode.extension}`);
+        const serverPath = join(fixtureRoot, `server-${mode.name}.${mode.extension}`);
+        await Promise.all([
+          writeFile(browserPath, browserPluginConsumerSource, "utf8"),
+          writeFile(serverPath, serverPluginConsumerSource, "utf8"),
+        ]);
+
+        assertPluginApiResolution(fixtureRoot, browserPath, mode.options);
+        assertStrictPluginConsumer(fixtureRoot, browserPath, mode.options, [
+          "node_modules/@jmfederico/pi-web/dist/plugin-api.d.ts",
+          "node_modules/@jmfederico/pi-web/dist/plugin-api/unstable.d.ts",
+          "node_modules/@jmfederico/pi-web/dist/shared/pluginApiTypes.d.ts",
+        ]);
+        assertStrictPluginConsumer(fixtureRoot, serverPath, mode.options, [
+          "node_modules/@jmfederico/pi-web/dist/server-plugin-api.d.ts",
+          "node_modules/@jmfederico/pi-web/dist/shared/pluginApiTypes.d.ts",
+        ]);
       }
-
-      const program = ts.createProgram({
-        rootNames: [consumerPath],
-        options: {
-          target: ts.ScriptTarget.ES2022,
-          module: ts.ModuleKind.NodeNext,
-          moduleResolution: ts.ModuleResolutionKind.NodeNext,
-          strict: true,
-          exactOptionalPropertyTypes: true,
-          noUncheckedIndexedAccess: true,
-          noEmit: true,
-          skipLibCheck: false,
-          types: [],
-        },
-      });
-      const diagnostics = ts.getPreEmitDiagnostics(program);
-      if (diagnostics.length > 0) throw new Error(formatDiagnostics(diagnostics));
-
-      const projectSources = program.getSourceFiles().map((sourceFile) => normalizePath(relative(fixtureRoot, sourceFile.fileName)));
-      expect(projectSources).toContain("node_modules/@jmfederico/pi-web/dist/server-plugin-api.d.ts");
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });
     }
@@ -243,6 +293,87 @@ async function recursiveFiles(root: string): Promise<string[]> {
     else if (entry.isFile()) files.push(path);
   }
   return files;
+}
+
+function emitPluginApiDeclarations(outDir: string): void {
+  const configPath = join(repoRoot, "tsconfig.plugin-api.json");
+  const config = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic(diagnostic) {
+      throw new Error(formatDiagnostics([diagnostic]));
+    },
+  });
+  if (config === undefined) throw new Error(`Unable to parse ${configPath}`);
+  if (config.errors.length > 0) throw new Error(formatDiagnostics(config.errors));
+
+  const program = ts.createProgram({
+    rootNames: config.fileNames,
+    options: { ...config.options, outDir },
+  });
+  const emitResult = program.emit();
+  const diagnostics = [...ts.getPreEmitDiagnostics(program), ...emitResult.diagnostics];
+  if (diagnostics.length > 0) throw new Error(formatDiagnostics(diagnostics));
+  if (emitResult.emitSkipped) throw new Error("Plugin API declaration emit was skipped");
+}
+
+function assertPluginApiResolution(fixtureRoot: string, consumerPath: string, options: ts.CompilerOptions): void {
+  const expectedDeclarations = new Map([
+    ["@jmfederico/pi-web/plugin-api", "node_modules/@jmfederico/pi-web/dist/plugin-api.d.ts"],
+    ["@jmfederico/pi-web/plugin-api/unstable", "node_modules/@jmfederico/pi-web/dist/plugin-api/unstable.d.ts"],
+    ["@jmfederico/pi-web/server-plugin-api", "node_modules/@jmfederico/pi-web/dist/server-plugin-api.d.ts"],
+  ]);
+  for (const [specifier, expected] of expectedDeclarations) {
+    const resolved = ts.resolveModuleName(specifier, consumerPath, options, ts.sys).resolvedModule;
+    expect(resolved === undefined ? undefined : normalizePath(relative(fixtureRoot, resolved.resolvedFileName))).toBe(expected);
+  }
+
+  for (const specifier of [
+    "@jmfederico/pi-web/dist/plugin-api",
+    "@jmfederico/pi-web/dist/shared/pluginApiTypes",
+    "@jmfederico/pi-web/package.json",
+  ]) {
+    expect(ts.resolveModuleName(specifier, consumerPath, options, ts.sys).resolvedModule, specifier).toBeUndefined();
+  }
+}
+
+function assertStrictPluginConsumer(
+  fixtureRoot: string,
+  consumerPath: string,
+  compilerOptions: ts.CompilerOptions,
+  expectedPackageDeclarations: readonly string[],
+): void {
+  const program = ts.createProgram({
+    rootNames: [consumerPath],
+    options: {
+      ...compilerOptions,
+      strict: true,
+      exactOptionalPropertyTypes: true,
+      noUncheckedIndexedAccess: true,
+      noEmit: true,
+      skipLibCheck: false,
+      types: [],
+      verbatimModuleSyntax: true,
+    },
+  });
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  if (diagnostics.length > 0) throw new Error(formatDiagnostics(diagnostics));
+
+  const sourcePaths = program.getSourceFiles()
+    .map((sourceFile) => normalizePath(relative(fixtureRoot, sourceFile.fileName)));
+  const packageDeclarations = sourcePaths
+    .filter((path) => path.startsWith("node_modules/@jmfederico/pi-web/") && path.endsWith(".d.ts"))
+    .sort();
+  expect(packageDeclarations).toEqual([...expectedPackageDeclarations].sort());
+
+  const unrelatedDependencyMarkers = [
+    "/node_modules/@earendil-works/pi-",
+    "/node_modules/@anthropic-ai/",
+    "/node_modules/@google/",
+    "/node_modules/google-auth-library/",
+    "/node_modules/google-logging-utils/",
+    "/node_modules/@modelcontextprotocol/",
+  ];
+  expect(sourcePaths.filter((path) => unrelatedDependencyMarkers.some((marker) => path.includes(marker)))).toEqual([]);
 }
 
 function readBuildConfig(): ts.ParsedCommandLine {

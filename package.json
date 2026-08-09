@@ -5,6 +5,17 @@
   "license": "MIT",
   "author": "Federico Jaramillo Martinez",
   "type": "module",
+  "exports": {
+    "./plugin-api": {
+      "types": "./dist/plugin-api.d.ts"
+    },
+    "./plugin-api/unstable": {
+      "types": "./dist/plugin-api/unstable.d.ts"
+    },
+    "./server-plugin-api": {
+      "types": "./dist/server-plugin-api.d.ts"
+    }
+  },
   "typesVersions": {
     "*": {
       "plugin-api": [
