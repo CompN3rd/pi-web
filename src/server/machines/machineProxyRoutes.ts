@@ -4,6 +4,7 @@ import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, type FederatedHttpRo
 import { mergeSelectedMachineConfig, parsePiWebConfigResponseBody, parseSelectedMachineConfigRequest, selectedMachineConfigResponse } from "../configRoutes.js";
 import { bridgeSockets } from "../webSocketBridge.js";
 import { RemoteMachineRequestError, type MachineClient, type MachineJsonResponse, type MachineRequestOptions } from "./machineClient.js";
+import { workspaceFilePreviewResponsePolicy, type WorkspaceFilePreviewResponsePolicy } from "../workspaces/filePreviewResponsePolicy.js";
 import { MachineService } from "./machineService.js";
 
 export const REMOTE_HTTP_ROUTES = FEDERATED_HTTP_ROUTES;
@@ -50,12 +51,20 @@ async function proxyHttpRequest(machines: MachineService, spec: FederatedHttpRou
     const remotePath = remoteApiPath(machineId, requestUrl);
     if (spec.path === "/config") return await proxySelectedMachineConfigRequest(client, machineId, method, remotePath, body, reply);
 
+    let previewPolicy: WorkspaceFilePreviewResponsePolicy | undefined;
+    try {
+      previewPolicy = remoteFilePreviewResponsePolicy(spec, remotePath);
+    } catch (error) {
+      return await reply.code(400).send({ error: errorMessage(error) });
+    }
+
     const requestOptions = proxyRequestOptions(spec, body, contentType);
     const upstream = requestOptions === undefined
       ? await client.request(method, remotePath, body)
       : await client.request(method, remotePath, body, requestOptions);
     reply.code(upstream.statusCode);
     applySafeHeaders(reply, upstream.headers);
+    if (previewPolicy !== undefined && isSuccessfulStatus(upstream.statusCode)) applyWorkspaceFilePreviewResponsePolicy(reply, previewPolicy);
     if (upstream.body === undefined) return await reply.send();
     return await reply.send(upstream.body);
   } catch (error) {
@@ -128,6 +137,24 @@ function remoteApiPath(machineId: string, requestUrl: string): string {
   const stripped = requestUrl.startsWith(machinePrefix) ? requestUrl.slice(machinePrefix.length) : requestUrl;
   const compatPath = stripped.startsWith("/") ? stripped : `/${stripped}`;
   return `/api${compatPath}`;
+}
+
+function remoteFilePreviewResponsePolicy(spec: FederatedHttpRouteSpec, remotePath: string): WorkspaceFilePreviewResponsePolicy | undefined {
+  if (spec.path !== "/projects/:projectId/workspaces/:workspaceId/file/preview") return undefined;
+  const url = new URL(remotePath, "http://pi-web.local");
+  const path = url.searchParams.get("path");
+  if (path === null || path === "") throw new Error("path query parameter is required");
+  const downloadValue = url.searchParams.get("download");
+  const download = downloadValue === "1" || downloadValue === "true";
+  return workspaceFilePreviewResponsePolicy(path, { download });
+}
+
+function applyWorkspaceFilePreviewResponsePolicy(reply: FastifyReply, policy: WorkspaceFilePreviewResponsePolicy): void {
+  reply
+    .header("Content-Type", policy.contentType)
+    .header("Content-Disposition", policy.contentDisposition)
+    .header("Content-Security-Policy", policy.contentSecurityPolicy)
+    .header("X-Content-Type-Options", policy.contentTypeOptions);
 }
 
 function proxyRequestOptions(spec: Pick<FederatedHttpRouteSpec, "timeoutMs">, body: unknown, contentType: string | string[] | undefined): MachineRequestOptions | undefined {

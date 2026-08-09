@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_INLINE_PREVIEW_BYTES } from "../shared/workspaceFiles.js";
 import type { Project, Workspace } from "./types.js";
 import { appTestContext, registerAppTestHooks } from "./app.testSupport.js";
+import { workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
 
 registerAppTestHooks();
 
@@ -25,17 +26,20 @@ describe("buildApp workspace file routes", () => {
     const workspace = workspacesResponse.json<Workspace[]>()[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
-    const previewResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("diagram.svg")}` });
+    const previewPath = `/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("diagram.svg")}`;
+    const previewResponse = await appTestContext.app.inject({ method: "GET", url: `/api${previewPath}` });
+    const localAliasResponse = await appTestContext.app.inject({ method: "GET", url: `/api/machines/local${previewPath}` });
+    const policy = workspaceFilePreviewResponsePolicy("diagram.svg");
 
-    expect(previewResponse.statusCode).toBe(200);
-    expect(previewResponse.headers["content-type"]).toContain("image/svg+xml");
-    expect(previewResponse.headers["cache-control"]).toBe("private, max-age=3600");
-    expect(previewResponse.headers["content-security-policy"]).toContain("sandbox");
-    // Inline, but still carries the real filename so saving from the viewer names it correctly.
-    expect(previewResponse.headers["content-disposition"]).toContain("inline");
-    expect(previewResponse.headers["content-disposition"]).toContain(`filename="diagram.svg"`);
-    expect(previewResponse.headers["x-content-type-options"]).toBe("nosniff");
-    expect(previewResponse.body).toBe(svg);
+    for (const response of [previewResponse, localAliasResponse]) {
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(policy.contentType);
+      expect(response.headers["cache-control"]).toBe("private, max-age=3600");
+      expect(response.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+      expect(response.headers["content-disposition"]).toBe(policy.contentDisposition);
+      expect(response.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
+      expect(response.body).toBe(svg);
+    }
 
     const rejectedResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("note.txt")}` });
     expect(rejectedResponse.statusCode).toBe(400);
@@ -62,23 +66,21 @@ describe("buildApp workspace file routes", () => {
     if (workspace === undefined) throw new Error("Expected workspace");
 
     const htmlResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("report.html")}` });
+    const htmlPolicy = workspaceFilePreviewResponsePolicy("report.html");
     expect(htmlResponse.statusCode).toBe(200);
-    expect(htmlResponse.headers["content-type"]).toContain("text/html");
-    expect(htmlResponse.headers["content-disposition"]).toContain("inline");
-    expect(htmlResponse.headers["content-disposition"]).toContain(`filename="report.html"`);
-    // HTML must be fully sandboxed: opaque origin + no script execution.
-    expect(htmlResponse.headers["content-security-policy"]).toContain("sandbox");
-    expect(htmlResponse.headers["content-security-policy"]).toContain("default-src 'none'");
+    expect(htmlResponse.headers["content-type"]).toBe(htmlPolicy.contentType);
+    expect(htmlResponse.headers["content-disposition"]).toBe(htmlPolicy.contentDisposition);
+    expect(htmlResponse.headers["content-security-policy"]).toBe(htmlPolicy.contentSecurityPolicy);
+    expect(htmlResponse.headers["x-content-type-options"]).toBe(htmlPolicy.contentTypeOptions);
     expect(htmlResponse.body).toBe(htmlBody);
 
     const pdfResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("spec.pdf")}` });
+    const pdfPolicy = workspaceFilePreviewResponsePolicy("spec.pdf");
     expect(pdfResponse.statusCode).toBe(200);
-    expect(pdfResponse.headers["content-type"]).toContain("application/pdf");
-    expect(pdfResponse.headers["content-disposition"]).toContain("inline");
-    expect(pdfResponse.headers["content-disposition"]).toContain(`filename="spec.pdf"`);
-    // PDF must NOT use the sandbox directive (it breaks the native viewer).
-    expect(pdfResponse.headers["content-security-policy"]).not.toContain("sandbox");
-    expect(pdfResponse.headers["content-security-policy"]).toContain("object-src 'self'");
+    expect(pdfResponse.headers["content-type"]).toBe(pdfPolicy.contentType);
+    expect(pdfResponse.headers["content-disposition"]).toBe(pdfPolicy.contentDisposition);
+    expect(pdfResponse.headers["content-security-policy"]).toBe(pdfPolicy.contentSecurityPolicy);
+    expect(pdfResponse.headers["x-content-type-options"]).toBe(pdfPolicy.contentTypeOptions);
   });
 
   it("serves any file as an attachment download regardless of type", async () => {
@@ -88,17 +90,20 @@ describe("buildApp workspace file routes", () => {
       payload: { name: "Downloads", path: appTestContext.projectDir, create: true },
     });
     const project = addResponse.json<Project>();
-    await writeFile(join(appTestContext.projectDir, "notes.txt"), "just text");
+    const filename = "résumé's \"notes\".txt";
+    await writeFile(join(appTestContext.projectDir, filename), "just text");
 
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
     const workspace = workspacesResponse.json<Workspace[]>()[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
-    const downloadResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("notes.txt")}&download=1` });
+    const downloadResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent(filename)}&download=1` });
+    const policy = workspaceFilePreviewResponsePolicy(filename, { download: true });
     expect(downloadResponse.statusCode).toBe(200);
-    expect(downloadResponse.headers["content-type"]).toContain("application/octet-stream");
-    expect(downloadResponse.headers["content-disposition"]).toContain("attachment");
-    expect(downloadResponse.headers["content-disposition"]).toContain(`filename="notes.txt"`);
+    expect(downloadResponse.headers["content-type"]).toBe(policy.contentType);
+    expect(downloadResponse.headers["content-disposition"]).toBe(policy.contentDisposition);
+    expect(downloadResponse.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+    expect(downloadResponse.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
     expect(downloadResponse.body).toBe("just text");
   });
 

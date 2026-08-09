@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { RemoteMachineRequestError, type MachineClient } from "./machines/machineClient.js";
 import { PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS, SESSION_TREE_FORK_PROXY_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS } from "../shared/federatedRoutes.js";
 import { appTestContext, fakeRemoteClient, registerAppTestHooks } from "./app.testSupport.js";
+import { workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
 
 registerAppTestHooks();
 
@@ -135,30 +136,70 @@ describe("buildApp remote machine proxy routes", () => {
     expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces", undefined);
   });
 
-  it("preserves remote file preview security headers while proxying safe response metadata", async () => {
+  it("overrides missing or weaker remote HTML preview security headers while preserving safe metadata", async () => {
     const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
     const remote = addResponse.json<{ id: string }>();
+    const body = "<script>window.opener.location = '/stolen'</script>";
     const request = vi.fn(() => Promise.resolve({
       statusCode: 200,
       headers: {
-        "content-type": "image/svg+xml",
-        "content-security-policy": "sandbox; default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'",
-        "x-content-type-options": "nosniff",
+        "content-type": "application/octet-stream",
+        "content-length": String(Buffer.byteLength(body)),
+        "content-disposition": "inline; filename=\"attacker.html\"",
+        "content-security-policy": "default-src * 'unsafe-inline' 'unsafe-eval'",
+        "cache-control": "private, max-age=42",
+        "last-modified": "Wed, 05 Aug 2026 10:00:00 GMT",
+        etag: "\"remote-etag\"",
         "set-cookie": "session=secret",
       },
-      body: Readable.from(["<svg xmlns=\"http://www.w3.org/2000/svg\" />"]),
+      body: Readable.from([body]),
     }));
     appTestContext.remoteClient = fakeRemoteClient({ request });
 
-    const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?path=${encodeURIComponent("diagram.svg")}` });
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?path=${encodeURIComponent("report.html")}` });
+    const policy = workspaceFilePreviewResponsePolicy("report.html");
 
     expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toContain("image/svg+xml");
-    expect(response.headers["content-security-policy"]).toContain("sandbox");
-    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["content-type"]).toBe(policy.contentType);
+    expect(response.headers["content-disposition"]).toBe(policy.contentDisposition);
+    expect(response.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+    expect(response.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
+    expect(response.headers["cache-control"]).toBe("private, max-age=42");
+    expect(response.headers["last-modified"]).toBe("Wed, 05 Aug 2026 10:00:00 GMT");
+    expect(response.headers.etag).toBe("\"remote-etag\"");
+    expect(response.headers["content-length"]).toBe(String(Buffer.byteLength(body)));
     expect(response.headers["set-cookie"]).toBeUndefined();
-    expect(response.body).toBe("<svg xmlns=\"http://www.w3.org/2000/svg\" />");
-    expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces/w1/file/preview?path=diagram.svg", undefined);
+    expect(response.body).toBe(body);
+    expect(request).toHaveBeenCalledWith("GET", "/api/projects/p1/workspaces/w1/file/preview?path=report.html", undefined);
+  });
+
+  it("forces remote downloads to safe attachments with the requested filename", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const path = "reports/résumé's.pdf";
+    const query = new URLSearchParams({ path, download: "1" }).toString();
+    const body = "%PDF-1.4\n%mock\n";
+    const request = vi.fn(() => Promise.resolve({
+      statusCode: 200,
+      headers: {
+        "content-type": "application/pdf",
+        "content-disposition": "inline; filename=\"wrong.pdf\"",
+        "content-security-policy": "default-src *",
+      },
+      body: Readable.from([body]),
+    }));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview?${query}` });
+    const policy = workspaceFilePreviewResponsePolicy(path, { download: true });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe(policy.contentType);
+    expect(response.headers["content-disposition"]).toBe(policy.contentDisposition);
+    expect(response.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+    expect(response.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
+    expect(response.body).toBe(body);
+    expect(request).toHaveBeenCalledWith("GET", `/api/projects/p1/workspaces/w1/file/preview?${query}`, undefined);
   });
 
   it("proxies remote workspace file writes as raw request bodies", async () => {
