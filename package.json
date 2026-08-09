@@ -35,6 +35,7 @@
     "README.md",
     "LICENSE",
     "extensions",
+    "examples/workspace-provider-plugin",
     "docs/plugins.md",
     "docs/config.md",
     "docs/assets",
