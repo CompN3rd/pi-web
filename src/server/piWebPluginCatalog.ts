@@ -337,6 +337,10 @@ async function discoverBrowserRoot(packageRoot: string, pluginId: string, path: 
   ]);
   if (entryStat?.isDirectory() !== true || directoryPath === undefined) throw new Error(`PI WEB plugin browser root not found for ${pluginId}: ${path}`);
   if (!isWithin(packageRoot, directoryPath)) throw new Error(`PI WEB plugin browser root escapes its package for ${pluginId}: ${path}`);
+  const excludedDirectory = excludedArtifactDirectory(packageRoot, directoryPath);
+  if (excludedDirectory !== undefined) {
+    throw new Error(`PI WEB plugin browser root resolves inside excluded ${excludedDirectory} directory for ${pluginId}: ${path}`);
+  }
   return { path, directoryPath };
 }
 
@@ -356,6 +360,10 @@ async function discoverModule(
   ]);
   if (entryStat?.isFile() !== true || filePath === undefined) throw new Error(`PI WEB plugin ${kind} module not found for ${pluginId}: ${path}`);
   if (!isWithin(packageRoot, filePath)) throw new Error(`PI WEB plugin ${kind} module escapes its package for ${pluginId}: ${path}`);
+  const excludedDirectory = excludedArtifactDirectory(packageRoot, dirname(filePath));
+  if (excludedDirectory !== undefined) {
+    throw new Error(`PI WEB plugin ${kind} module resolves inside excluded ${excludedDirectory} directory for ${pluginId}: ${path}`);
+  }
   if (browserRoot !== undefined && (!isLogicalPathWithin(browserRoot.path, path) || !isWithin(browserRoot.directoryPath, filePath))) {
     throw new Error(`PI WEB plugin browser module is outside browser root for ${pluginId}: ${path}`);
   }
@@ -410,7 +418,9 @@ async function hashPackageDirectory(
   state: PackageHashState,
 ): Promise<void> {
   const canonicalDirectory = await realpath(directory);
-  if (!isWithin(packageRoot, canonicalDirectory) || ancestors.has(canonicalDirectory)) return;
+  if (!isWithin(packageRoot, canonicalDirectory)
+    || excludedArtifactDirectory(packageRoot, canonicalDirectory) !== undefined
+    || ancestors.has(canonicalDirectory)) return;
   const nextAncestors = new Set(ancestors).add(canonicalDirectory);
   const entries = await boundedDirectoryEntries(directory, state);
 
@@ -424,7 +434,8 @@ async function hashPackageDirectory(
     }
     const candidateStat = await stat(candidate).catch(() => undefined);
     if (candidateStat?.isDirectory() === true) {
-      if (EXCLUDED_ARTIFACT_DIRECTORIES.has(entry.name)) {
+      if (EXCLUDED_ARTIFACT_DIRECTORIES.has(entry.name)
+        || excludedArtifactDirectory(packageRoot, canonicalPath) !== undefined) {
         updatePackageHash(hash, "excluded-directory", logicalPath);
         continue;
       }
@@ -433,6 +444,10 @@ async function hashPackageDirectory(
       continue;
     }
     if (candidateStat?.isFile() === true) {
+      if (excludedArtifactDirectory(packageRoot, dirname(canonicalPath)) !== undefined) {
+        updatePackageHash(hash, "excluded-directory", logicalPath);
+        continue;
+      }
       const remainingBytes = PI_WEB_PLUGIN_ARTIFACT_MAX_BYTES - state.byteLength;
       const content = await readBoundedPackageFile(candidate, remainingBytes);
       state.byteLength += content.byteLength;
@@ -496,7 +511,13 @@ function updatePackageHash(hash: Hash, ...values: (string | Buffer)[]): void {
 
 async function readPiWebPackageConfig(root: string): Promise<PiWebPackageConfig | undefined> {
   const packagePath = join(root, "package.json");
-  const content = await readFile(packagePath, "utf8").catch(() => undefined);
+  const canonicalPackagePath = await realpath(packagePath).catch(() => undefined);
+  if (canonicalPackagePath === undefined) return undefined;
+  const packageRoot = await realpath(root);
+  if (!isWithin(packageRoot, canonicalPackagePath)) {
+    throw new Error(`PI WEB plugin package metadata escapes its package: ${packagePath}`);
+  }
+  const content = await readFile(canonicalPackagePath, "utf8").catch(() => undefined);
   if (content === undefined) return undefined;
   const parsed: unknown = JSON.parse(content);
   if (!isRecord(parsed)) return undefined;
@@ -612,6 +633,12 @@ function isSafeRelativeBrowserRootPath(path: string): boolean {
 
 function isLogicalPathWithin(root: string, candidate: string): boolean {
   return root === "." || candidate.startsWith(`${root}/`);
+}
+
+function excludedArtifactDirectory(packageRoot: string, directoryPath: string): string | undefined {
+  const relativeDirectory = relative(packageRoot, directoryPath);
+  if (relativeDirectory === "") return undefined;
+  return relativeDirectory.split(sep).find((segment) => EXCLUDED_ARTIFACT_DIRECTORIES.has(segment));
 }
 
 function hasControlCharacter(value: string): boolean {

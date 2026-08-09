@@ -1,7 +1,7 @@
-import { mkdtemp, rm, writeFile, mkdir, symlink } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveAgentProfileAccessError } from "./activeAgentProfileProvider.js";
 import { PiWebPluginCatalog, PiWebPluginService, type PiPackageProvider } from "./piWebPluginService.js";
 import { WorkspaceCatalogProtocolError, type WorkspaceProviderRuntimeReader } from "./workspaces/workspaceCatalog.js";
@@ -94,6 +94,36 @@ describe("PiWebPluginService", () => {
     await expect(service.readAsset("icons", "private/secret.js")).resolves.toBeUndefined();
     await expect(service.readAsset("icons", "public/../private/secret.js")).resolves.toBeUndefined();
     await expect(service.readAsset("icons", "public/assets/leak.js")).resolves.toBeUndefined();
+  });
+
+  it("omits broad-root asset aliases into canonical excluded directories", async () => {
+    const pluginDir = join(tempDir, "plugins", "broad-aliases");
+    await writePlugin(pluginDir, {
+      packageJson: { piWeb: { plugins: [{ id: "broad-aliases", browserRoot: ".", module: "browser.js" }] } },
+      files: {
+        "browser.js": "export default {};",
+        ".git/private.txt": "git private",
+        "node_modules/dependency/private.txt": "dependency private",
+      },
+    });
+    await mkdir(join(pluginDir, "assets"), { recursive: true });
+    await symlink(join(pluginDir, ".git"), join(pluginDir, "assets", "git"), process.platform === "win32" ? "junction" : "dir");
+    await symlink(join(pluginDir, "node_modules"), join(pluginDir, "assets", "dependencies"), process.platform === "win32" ? "junction" : "dir");
+    await symlink(join(pluginDir, ".git", "private.txt"), join(pluginDir, "assets", "git-private.txt"));
+    await symlink(join(pluginDir, "node_modules", "dependency", "private.txt"), join(pluginDir, "assets", "dependency-private.txt"));
+    const service = new PiWebPluginService({
+      roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }],
+      packageProvider: false,
+    });
+
+    await expect(service.manifest()).resolves.toMatchObject({ plugins: [{ id: "broad-aliases" }] });
+    await expect(service.readAsset("broad-aliases", "browser.js")).resolves.toBeDefined();
+    await expect(service.readAsset("broad-aliases", "assets/git/private.txt")).resolves.toBeUndefined();
+    await expect(service.readAsset("broad-aliases", "assets/dependencies/dependency/private.txt")).resolves.toBeUndefined();
+    await expect(service.readAsset("broad-aliases", "assets/git-private.txt")).resolves.toBeUndefined();
+    await expect(service.readAsset("broad-aliases", "assets/dependency-private.txt")).resolves.toBeUndefined();
+    await expect(service.readAsset("broad-aliases", ".git/private.txt")).resolves.toBeUndefined();
+    await expect(service.readAsset("broad-aliases", "node_modules/dependency/private.txt")).resolves.toBeUndefined();
   });
 
   it("includes machine-specific preferences in plugin manifests", async () => {
@@ -241,6 +271,57 @@ describe("PiWebPluginService", () => {
     expect(pinned?.content.toString("utf8")).toBe("export default {};");
     await expect(service.manifest()).resolves.toMatchObject({ plugins: [{ id: "changing" }] });
     await expect(service.readAsset("changing", "browser.js", revision)).resolves.toBeUndefined();
+  });
+
+  it("binds equal-revision artifact reuse to browser-root and module identity", async () => {
+    const pluginDir = join(tempDir, "plugins", "cache-identity");
+    await writePlugin(pluginDir, {
+      packageJson: { piWeb: { plugins: [{ id: "cache-identity", browserRoot: ".", module: "public/browser.js" }] } },
+      files: {
+        "private.txt": "not browser public after narrowing",
+        "public/browser.js": "export default {};",
+        "public/alternate.js": "export default { alternate: true };",
+      },
+    });
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }],
+      packageProvider: false,
+    });
+    const broadSnapshot = await catalog.snapshot();
+    const broadPlugin = broadSnapshot.plugins[0];
+    if (broadPlugin?.browserModule === undefined) throw new Error("Expected broad browser plugin fixture");
+    const narrowPlugin = {
+      ...broadPlugin,
+      browserRoot: { path: "public", directoryPath: await realpath(join(pluginDir, "public")) },
+    };
+    const narrowSnapshot = { ...broadSnapshot, plugins: [narrowPlugin] };
+    const alternatePlugin = {
+      ...narrowPlugin,
+      browserModule: {
+        ...broadPlugin.browserModule,
+        path: "public/alternate.js",
+        filePath: await realpath(join(pluginDir, "public", "alternate.js")),
+      },
+    };
+    const alternateSnapshot = { ...narrowSnapshot, plugins: [alternatePlugin] };
+    let currentSnapshot = broadSnapshot;
+    vi.spyOn(catalog, "snapshot").mockImplementation(() => Promise.resolve(currentSnapshot));
+    const service = new PiWebPluginService({ catalog });
+
+    await expect(service.manifest()).resolves.toMatchObject({ plugins: [{ id: "cache-identity" }] });
+    await expect(service.readAsset("cache-identity", "private.txt")).resolves.toBeDefined();
+
+    // Model a fresh metadata snapshot with the same package revision to isolate cache identity from hashing.
+    currentSnapshot = narrowSnapshot;
+    const narrowManifest = await service.manifest();
+    expect(narrowManifest.plugins[0]?.module).toContain("/cache-identity/public/browser.js?");
+    await expect(service.readAsset("cache-identity", "private.txt")).resolves.toBeUndefined();
+    await expect(service.readAsset("cache-identity", "public/browser.js")).resolves.toBeDefined();
+
+    currentSnapshot = alternateSnapshot;
+    const alternateManifest = await service.manifest();
+    expect(alternateManifest.plugins[0]?.module).toContain("/cache-identity/public/alternate.js?");
+    await expect(service.readAsset("cache-identity", "public/alternate.js", "sha256:stale")).resolves.toBeUndefined();
   });
 
   it("adds Docker runtime hints to the Updates plugin module URL", async () => {

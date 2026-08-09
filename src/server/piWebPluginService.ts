@@ -46,6 +46,9 @@ interface CachedBrowserArtifact {
   pluginId: string;
   revision: string;
   entryPath: string;
+  entryFilePath: string;
+  browserRootPath: string;
+  browserRootDirectoryPath: string;
   packageRoot: string;
   backendRevision?: string;
   files: ReadonlyMap<string, Buffer>;
@@ -134,6 +137,10 @@ export class PiWebPluginService {
     const cached = this.browserArtifacts.get(plugin.id);
     if (cached !== undefined) {
       const matches = cached.revision === module.revision
+        && cached.entryPath === module.path
+        && cached.entryFilePath === module.filePath
+        && cached.browserRootPath === browserRoot.path
+        && cached.browserRootDirectoryPath === browserRoot.directoryPath
         && cached.packageRoot === plugin.packageRoot
         && cached.backendRevision === backendRevision;
       if (matches) {
@@ -147,6 +154,9 @@ export class PiWebPluginService {
       pluginId: plugin.id,
       revision: module.revision,
       entryPath: module.path,
+      entryFilePath: module.filePath,
+      browserRootPath: browserRoot.path,
+      browserRootDirectoryPath: browserRoot.directoryPath,
       packageRoot: plugin.packageRoot,
       ...(backendRevision === undefined ? {} : { backendRevision }),
       files: packageArtifact.files,

@@ -118,6 +118,50 @@ describe("PiWebPluginCatalog", () => {
     ]));
   });
 
+  it.each([".git", "node_modules"])("rejects browser roots canonically aliased into %s with an attributed diagnostic", async (excludedDirectory) => {
+    const idSuffix = excludedDirectory === ".git" ? "git" : "node-modules";
+    const pluginRoot = join(tempDir, "plugins", `root-alias-${idSuffix}`);
+    await writePlugin(pluginRoot, {
+      packageJson: { piWeb: { plugins: [{ id: `root-alias-${idSuffix}`, browserRoot: "public", module: "public/browser.js" }] } },
+      files: { [`${excludedDirectory}/browser.js`]: "export default {};" },
+    });
+    await symlink(join(pluginRoot, excludedDirectory), join(pluginRoot, "public"), process.platform === "win32" ? "junction" : "dir");
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.diagnostics).toHaveLength(1);
+    expect(snapshot.diagnostics[0]?.source).toBe(pluginRoot);
+    expect(snapshot.diagnostics[0]?.message).toContain(`browser root resolves inside excluded ${excludedDirectory} directory`);
+  });
+
+  it.each([".git", "node_modules"])("rejects browser modules canonically aliased into %s with an attributed diagnostic", async (excludedDirectory) => {
+    const idSuffix = excludedDirectory === ".git" ? "git" : "node-modules";
+    const pluginRoot = join(tempDir, "plugins", `module-alias-${idSuffix}`);
+    await writePlugin(pluginRoot, {
+      packageJson: { piWeb: { plugins: [{ id: `module-alias-${idSuffix}`, browserRoot: ".", module: "browser.js" }] } },
+      files: { [`${excludedDirectory}/browser.js`]: "export default {};" },
+    });
+    await symlink(join(pluginRoot, excludedDirectory, "browser.js"), join(pluginRoot, "browser.js"));
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.diagnostics).toHaveLength(1);
+    expect(snapshot.diagnostics[0]?.source).toBe(pluginRoot);
+    expect(snapshot.diagnostics[0]?.message).toContain(`browser module resolves inside excluded ${excludedDirectory} directory`);
+  });
+
   it("rejects absolute containment results across Windows volumes", () => {
     const packageRoot = "C:\\plugins\\example";
 
@@ -438,6 +482,29 @@ describe("PiWebPluginCatalog", () => {
       plugins: [{ id: "package-provider", source: "npm:@acme/provider", scope: "user", enabled: true }],
       diagnostics: [],
     });
+  });
+
+  it("rejects package metadata symlinks that escape the canonical package root", async () => {
+    const pluginRoot = join(tempDir, "plugins", "escaped-metadata");
+    const externalMetadata = join(tempDir, "external-package.json");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeFile(externalMetadata, `${JSON.stringify({
+      piWeb: { plugins: [{ id: "escaped-metadata", browserRoot: ".", module: "browser.js" }] },
+    }, null, 2)}\n`);
+    await writeFile(join(pluginRoot, "browser.js"), "export default {};\n");
+    await symlink(externalMetadata, join(pluginRoot, "package.json"));
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.diagnostics).toHaveLength(1);
+    expect(snapshot.diagnostics[0]).toMatchObject({ code: "invalid-package", source: pluginRoot });
+    expect(snapshot.diagnostics[0]?.message).toContain("package metadata escapes its package");
   });
 
   it("rejects module symlinks that escape the plugin package", async () => {
