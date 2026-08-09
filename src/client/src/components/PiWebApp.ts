@@ -1495,6 +1495,7 @@ export class PiWebApp extends LitElement {
         expandedDirs: this.state.expandedDirs,
         selectedFilePath: this.state.selectedFilePath,
         selectedFileContent: this.state.selectedFileContent,
+        selectedFileLoadError: this.state.selectedFileLoadError,
         fileTreeStale: this.state.fileTreeStale,
         activeTerminalCount: this.state.activeTerminalCount,
         selectedTerminalId: this.state.selectedTerminalId,

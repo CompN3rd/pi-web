@@ -894,6 +894,7 @@ function createWorkspacePanelContext(machineId: string, prompt: WorkspacePanelCo
     expandedDirs: {},
     selectedFilePath: undefined,
     selectedFileContent: undefined,
+    selectedFileLoadError: undefined,
     fileTreeStale: false,
     activeTerminalCount: 0,
     selectedTerminalId: undefined,

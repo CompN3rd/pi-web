@@ -29,10 +29,21 @@ export function workspaceFileWriteUrl(projectId: string, workspaceId: string, pa
   return resolveAppUrl(`${prefix}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/file?${params.toString()}`);
 }
 
-export function workspaceImagePreviewUrl(projectId: string, workspaceId: string, path: string, options?: { modifiedAt?: string; machineId?: string }): string {
+export interface WorkspaceFilePreviewUrlOptions {
+  modifiedAt?: string;
+  machineId?: string;
+  download?: boolean;
+}
+
+export function workspaceFilePreviewPath(projectId: string, workspaceId: string, path: string, options?: WorkspaceFilePreviewUrlOptions): string {
   const params = new URLSearchParams();
   params.set("path", path);
   if (options?.modifiedAt !== undefined) params.set("v", options.modifiedAt);
+  if (options?.download === true) params.set("download", "1");
   const prefix = `api/machines/${encodeURIComponent(options?.machineId ?? "local")}`;
-  return resolveAppUrl(`${prefix}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/file/preview?${params.toString()}`);
+  return `${prefix}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/file/preview?${params.toString()}`;
+}
+
+export function workspaceFilePreviewUrl(projectId: string, workspaceId: string, path: string, options?: WorkspaceFilePreviewUrlOptions): string {
+  return resolveAppUrl(workspaceFilePreviewPath(projectId, workspaceId, path, options));
 }
