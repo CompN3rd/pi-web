@@ -8,12 +8,12 @@ import type { WorkspaceUploadBatchState } from "../workspaceUploadState";
 // Genuine Lit event-wiring extraction (upload input/form submit and file-tree
 // row clicks) routes through the shared, type-guarded template-inspection escape
 // hatch; see ../templateInspection.testSupport for the proportionality
-// rationale. Viewer content messaging is asserted via the public
-// workspaceFileViewerStatusLabel seam instead of scraping Lit markup.
+// rationale. The extracted stateful viewer has its own happy-dom coverage.
 import { findOptionalTemplateEventHandlerAfterMarker, templateClickHandlerForText, templateEventHandlerAfterMarker } from "../templateInspection.testSupport";
 import { ModalSurface } from "./ModalSurface";
 import { deepActiveElement } from "./modalLayerRegistry";
-import { WorkspaceFilesPanel, startDirectWorkspaceUpload, uploadBatchProgressValue, uploadBatchStatusLabel, workspaceFilePreviewKind, workspaceFileViewerStatusLabel, workspaceUploadBatchesForScope, workspaceUploadReviewDefaults, workspaceUploadReviewError } from "./WorkspaceFilesPanel";
+import { WorkspaceFilesPanel, startDirectWorkspaceUpload, uploadBatchProgressValue, uploadBatchStatusLabel, workspaceUploadBatchesForScope, workspaceUploadReviewDefaults, workspaceUploadReviewError } from "./WorkspaceFilesPanel";
+import type { WorkspaceFileViewer } from "./WorkspaceFileViewer";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -186,44 +186,22 @@ describe("workspace-files-panel file tree boundary", () => {
     expect(onExpandDir).toHaveBeenCalledWith("src");
     expect(onSelectFile).toHaveBeenCalledWith("src/main.ts");
     expect(onSelectFile).toHaveBeenCalledWith("README.md");
-
-    // A loaded binary file now defers to a real viewer (a download link), so
-    // the status seam returns no message; assert it through the public seam.
-    expect(workspaceFileViewerStatusLabel(workspacePanelContext({
-      selectedFilePath: "README.md",
-      selectedFileContent: binaryFileContent("README.md", 4096),
-    }))).toBeUndefined();
   });
-});
 
-describe("workspaceFileViewerStatusLabel", () => {
-  it("messages empty, loading, and load-error states while deferring loaded files to a viewer", () => {
-    expect(workspaceFileViewerStatusLabel(workspacePanelContext({ selectedFilePath: undefined }))).toBe("Select a file.");
-    expect(workspaceFileViewerStatusLabel(workspacePanelContext({ selectedFilePath: "" }))).toBe("Select a file.");
-    expect(workspaceFileViewerStatusLabel(workspacePanelContext({ selectedFilePath: "notes.md", selectedFileContent: undefined }))).toBe("Loading notes.md…");
-    expect(workspaceFileViewerStatusLabel(workspacePanelContext({
-      selectedFilePath: "missing.md",
-      selectedFileContent: undefined,
-      selectedFileLoadError: "Path does not exist: missing.md",
-    }))).toBe("Unable to load missing.md: Path does not exist: missing.md");
-    expect(workspaceFileViewerStatusLabel(workspacePanelContext({
-      selectedFilePath: "logo.png",
-      selectedFileContent: { ...binaryFileContent("logo.png", 10), mediaType: "image" },
-    }))).toBeUndefined();
-    expect(workspaceFileViewerStatusLabel(workspacePanelContext({
-      selectedFilePath: "archive.zip",
-      selectedFileContent: binaryFileContent("archive.zip", 10),
-    }))).toBeUndefined();
-  });
-});
+  it("passes the selected workspace file scope into the contained viewer", async () => {
+    const file = textFileContent("README.md");
+    const panel = new WorkspaceFilesPanel();
+    panel.context = workspacePanelContext({ selectedFilePath: file.path, selectedFileContent: file });
+    document.body.append(panel);
+    await panel.updateComplete;
 
-describe("workspaceFilePreviewKind", () => {
-  it("routes inline media types to their viewers, other binaries to download, and text to code", () => {
-    expect(workspaceFilePreviewKind({ ...binaryFileContent("logo.png", 10), mediaType: "image" })).toBe("image");
-    expect(workspaceFilePreviewKind({ ...binaryFileContent("report.html", 10), mediaType: "html" })).toBe("html");
-    expect(workspaceFilePreviewKind({ ...binaryFileContent("spec.pdf", 10), mediaType: "pdf" })).toBe("pdf");
-    expect(workspaceFilePreviewKind(binaryFileContent("archive.zip", 10))).toBe("download");
-    expect(workspaceFilePreviewKind(textFileContent("main.ts"))).toBe("code");
+    const viewer = requiredElement(panel.shadowRoot?.querySelector<WorkspaceFileViewer>("workspace-file-viewer"), "workspace file viewer");
+    expect(viewer.machineId).toBe("local");
+    expect(viewer.projectId).toBe("project-1");
+    expect(viewer.workspaceId).toBe("workspace-1");
+    expect(viewer.selectedPath).toBe("README.md");
+    expect(viewer.file).toBe(file);
+    expect(viewer.loadError).toBeUndefined();
   });
 });
 
