@@ -130,6 +130,37 @@ describe("buildApp workspace file routes", () => {
     }
   });
 
+  it("advertises a content length that matches the bytes it serves", async () => {
+    const addResponse = await appTestContext.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "Framing", path: appTestContext.projectDir, create: true },
+    });
+    const project = addResponse.json<Project>();
+    await writeFile(join(appTestContext.projectDir, "report.html"), "<h1>Report</h1>");
+    await writeFile(join(appTestContext.projectDir, "empty.html"), "");
+    await writeFile(join(appTestContext.projectDir, "archive.zip"), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]));
+
+    const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
+    if (workspace === undefined) throw new Error("Expected workspace");
+
+    const requests = [
+      { path: "report.html", query: "", bytes: 15 },
+      { path: "empty.html", query: "", bytes: 0 },
+      { path: "archive.zip", query: "&download=1", bytes: 5 },
+    ];
+    for (const request of requests) {
+      const response = await appTestContext.app.inject({
+        method: "GET",
+        url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent(request.path)}${request.query}`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.rawPayload.byteLength).toBe(request.bytes);
+      expect(response.headers["content-length"]).toBe(String(request.bytes));
+    }
+  });
+
   it("keeps normal file suggestions workspace-local when path access config is invalid", async () => {
     const addResponse = await appTestContext.app.inject({
       method: "POST",

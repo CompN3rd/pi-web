@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { WebSocket } from "ws";
-import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, type FederatedHttpRouteSpec } from "../../shared/federatedRoutes.js";
+import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, WORKSPACE_FILE_PREVIEW_ROUTE_PATH, type FederatedHttpRouteSpec } from "../../shared/federatedRoutes.js";
 import { mergeSelectedMachineConfig, parsePiWebConfigResponseBody, parseSelectedMachineConfigRequest, selectedMachineConfigResponse } from "../configRoutes.js";
 import { requestCancellation } from "../requestCancellation.js";
 import { bridgeSockets } from "../webSocketBridge.js";
@@ -82,24 +82,27 @@ async function proxyHttpRequest(
     const remotePath = remoteApiPath(machineId, requestUrl);
     if (spec.path === "/config") return await proxySelectedMachineConfigRequest(client, machineId, method, remotePath, body, reply);
 
-    let previewPolicy: WorkspaceFilePreviewResponsePolicy | undefined;
+    let preview: RemoteFilePreviewRequest | undefined;
     try {
-      previewPolicy = remoteFilePreviewResponsePolicy(spec, remotePath);
+      preview = remoteFilePreviewRequest(spec, remotePath);
     } catch (error) {
       return await reply.code(400).send({ error: errorMessage(error) });
     }
+    const previewPolicy = preview?.policy;
+    const responseBodyLimit = preview === undefined ? spec.responseBodyLimit : preview.responseBodyLimit;
 
     const startedAt = Date.now();
     const requestOptions = proxyRequestOptions(spec, body, contentType, signal);
     const upstream = requestOptions === undefined
       ? await client.request(method, remotePath, body)
       : await client.request(method, remotePath, body, requestOptions);
-    const responseBody = upstream.body === undefined || spec.responseBodyLimit === undefined
+    const responseBody = upstream.body === undefined || responseBodyLimit === undefined
       ? upstream.body
       : await readBoundedRemoteBody(
           upstream.body,
-          spec.responseBodyLimit,
+          responseBodyLimit,
           remainingResponseTimeout(startedAt, spec.timeoutMs),
+          signal,
         );
     if (isUnknownRemotePluginBackendRoute(spec, method, remotePath, upstream.statusCode, responseBody)) {
       return await reply.code(409).send({
@@ -116,6 +119,8 @@ async function proxyHttpRequest(
       applyWorkspaceFilePreviewResponsePolicy(reply, enforcedPolicy);
     }
     if (responseBody === undefined) return await reply.send();
+    // A bounded body is authoritative over whatever length the remote claimed.
+    if (Buffer.isBuffer(responseBody)) reply.header("Content-Length", String(responseBody.byteLength));
     return await reply.send(responseBody);
   } catch (error) {
     if (isSelectedMachineConfigRequestError(error)) return reply.code(400).send({ error: errorMessage(error) });
@@ -189,14 +194,24 @@ function remoteApiPath(machineId: string, requestUrl: string): string {
   return `/api${compatPath}`;
 }
 
-function remoteFilePreviewResponsePolicy(spec: FederatedHttpRouteSpec, remotePath: string): WorkspaceFilePreviewResponsePolicy | undefined {
-  if (spec.path !== "/projects/:projectId/workspaces/:workspaceId/file/preview") return undefined;
+interface RemoteFilePreviewRequest {
+  policy: WorkspaceFilePreviewResponsePolicy;
+  responseBodyLimit: number | undefined;
+}
+
+function remoteFilePreviewRequest(spec: FederatedHttpRouteSpec, remotePath: string): RemoteFilePreviewRequest | undefined {
+  if (spec.path !== WORKSPACE_FILE_PREVIEW_ROUTE_PATH) return undefined;
   const url = new URL(remotePath, "http://pi-web.local");
   const path = url.searchParams.get("path");
   if (path === null || path === "") throw new Error("path query parameter is required");
   const downloadValue = url.searchParams.get("download");
   const download = downloadValue === "1" || downloadValue === "true";
-  return workspaceFilePreviewResponsePolicy(path, { download });
+  return {
+    policy: workspaceFilePreviewResponsePolicy(path, { download }),
+    // Inline previews keep the local inline contract even when the remote is
+    // hostile or racy; attachment downloads stay deliberately uncapped.
+    responseBodyLimit: download ? undefined : spec.responseBodyLimit,
+  };
 }
 
 function applyWorkspaceFilePreviewResponsePolicy(reply: FastifyReply, policy: WorkspaceFilePreviewResponsePolicy): void {
@@ -265,7 +280,7 @@ function remainingResponseTimeout(startedAt: number, timeoutMs: number | undefin
   return Math.max(1, (timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS) - (Date.now() - startedAt));
 }
 
-function readBoundedRemoteBody(body: NodeJS.ReadableStream, maxBytes: number, timeoutMs: number): Promise<Buffer> {
+function readBoundedRemoteBody(body: NodeJS.ReadableStream, maxBytes: number, timeoutMs: number, signal?: AbortSignal): Promise<Buffer> {
   return new Promise((resolve, rejectPromise) => {
     const chunks: Buffer[] = [];
     let byteLength = 0;
@@ -274,9 +289,15 @@ function readBoundedRemoteBody(body: NodeJS.ReadableStream, maxBytes: number, ti
       fail(new RemoteMachineRequestError("Remote machine response body timed out", 504));
     }, timeoutMs);
     timeout.unref();
+    // An inbound disconnect must release the upstream connection instead of
+    // draining a remote body nobody is waiting for any more.
+    const onAbort = (): void => {
+      fail(new RemoteMachineRequestError("Remote machine request cancelled", 502));
+    };
 
     const cleanup = (): void => {
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
       body.removeListener("data", onData);
       body.removeListener("end", onEnd);
       body.removeListener("error", onError);
@@ -320,6 +341,8 @@ function readBoundedRemoteBody(body: NodeJS.ReadableStream, maxBytes: number, ti
     body.on("data", onData);
     body.once("end", onEnd);
     body.once("error", onError);
+    if (signal?.aborted === true) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 

@@ -85,7 +85,7 @@ export function registerWorkspaceExplorerRoutes(app: FastifyInstance, projects: 
         .header("Content-Security-Policy", policy.contentSecurityPolicy)
         .header("Last-Modified", new Date(preview.modifiedAt).toUTCString())
         .header("X-Content-Type-Options", policy.contentTypeOptions)
-        .send(preview.stream);
+        .send(preview.body);
     } catch (error) {
       return sendWorkspaceRequestError(reply, error, 400);
     }

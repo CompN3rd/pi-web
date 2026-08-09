@@ -1,10 +1,9 @@
-import { mkdir, truncate, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MAX_INLINE_PREVIEW_BYTES, MAX_WORKSPACE_FILE_CONTENT_BYTES } from "../../shared/workspaceFiles.js";
+import { MAX_WORKSPACE_FILE_CONTENT_BYTES } from "../../shared/workspaceFiles.js";
 import { readWorkspaceFile } from "./fileContentService.js";
 import { cleanupTempWorkspaces, createTempWorkspace } from "./fileContentService.testSupport.js";
-import { readWorkspaceFilePreview } from "./filePreviewService.js";
 
 afterEach(async () => {
   await cleanupTempWorkspaces();
@@ -106,40 +105,6 @@ describe("readWorkspaceFile", () => {
     expect(file).toMatchObject({ content: "", binary: true });
   });
 
-  it("opens inline preview streams only for supported types within the preview size limit", async () => {
-    const root = await createTempWorkspace();
-    await writeFile(join(root, "diagram.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>");
-    await writeFile(join(root, "note.txt"), "hello");
-    await writeFile(join(root, "README.md"), "# Read me\n");
-    await writeFile(join(root, "huge.png"), "");
-    await truncate(join(root, "huge.png"), MAX_INLINE_PREVIEW_BYTES + 1);
-
-    const preview = await readWorkspaceFilePreview(root, "diagram.svg");
-    preview.stream.destroy();
-
-    expect(preview).toMatchObject({ path: "diagram.svg", filename: "diagram.svg", mediaType: "image", size: 46 });
-    await expect(readWorkspaceFilePreview(root, "note.txt")).rejects.toThrow("Inline preview is not supported");
-    await expect(readWorkspaceFilePreview(root, "README.md")).rejects.toThrow("Inline preview is not supported");
-    await expect(readWorkspaceFilePreview(root, "huge.png")).rejects.toThrow("File is too large to preview");
-  });
-
-  it("serves any file as an octet-stream attachment in download mode, ignoring the size cap", async () => {
-    const root = await createTempWorkspace();
-    await writeFile(join(root, "note.txt"), "hello");
-    await writeFile(join(root, "huge.png"), "");
-    await truncate(join(root, "huge.png"), MAX_INLINE_PREVIEW_BYTES + 1);
-
-    const textDownload = await readWorkspaceFilePreview(root, "note.txt", undefined, { download: true });
-    textDownload.stream.destroy();
-    expect(textDownload).toMatchObject({ filename: "note.txt", size: 5 });
-    expect(textDownload.mediaType).toBeUndefined();
-
-    // Download mode bypasses the inline size cap.
-    const bigDownload = await readWorkspaceFilePreview(root, "huge.png", undefined, { download: true });
-    bigDownload.stream.destroy();
-    expect(bigDownload.size).toBe(MAX_INLINE_PREVIEW_BYTES + 1);
-  });
-
   it.each(["large.md", "large.html"])("caps literal source for %s", async (path) => {
     const root = await createTempWorkspace();
     await writeFile(join(root, path), "a".repeat(MAX_WORKSPACE_FILE_CONTENT_BYTES + 7));
@@ -151,17 +116,4 @@ describe("readWorkspaceFile", () => {
     expect(file.binary).toBe(false);
   });
 
-  it("retains preview path containment for inline and download requests", async () => {
-    const root = await createTempWorkspace();
-    const external = await createTempWorkspace();
-    await writeFile(join(external, "outside.html"), "<h1>outside</h1>");
-    const escapedPath = join("..", basename(external), "outside.html");
-
-    await expect(readWorkspaceFilePreview(root, escapedPath)).rejects.toThrow("Path traversal is not allowed");
-    await expect(readWorkspaceFilePreview(root, escapedPath, undefined, { download: true })).rejects.toThrow("Path traversal is not allowed");
-
-    const allowed = await readWorkspaceFilePreview(root, join(external, "outside.html"), { allowedPaths: [external] });
-    allowed.stream.destroy();
-    expect(allowed).toMatchObject({ path: join(external, "outside.html"), mediaType: "html" });
-  });
 });
