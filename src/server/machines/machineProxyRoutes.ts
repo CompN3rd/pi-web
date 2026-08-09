@@ -4,6 +4,7 @@ import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, WORKSPACE_FILE_PREVI
 import { mergeSelectedMachineConfig, parsePiWebConfigResponseBody, parseSelectedMachineConfigRequest, selectedMachineConfigResponse } from "../configRoutes.js";
 import { requestCancellation } from "../requestCancellation.js";
 import { bridgeSockets } from "../webSocketBridge.js";
+import { applyWorkspaceFilePreviewErrorResponsePolicy, applyWorkspaceFilePreviewResponsePolicy } from "../workspaces/filePreviewResponseHeaders.js";
 import { workspaceFilePreviewErrorResponsePolicy, workspaceFilePreviewResponsePolicy, type WorkspaceFilePreviewResponsePolicy } from "../workspaces/filePreviewResponsePolicy.js";
 import { DEFAULT_REMOTE_REQUEST_TIMEOUT_MS, RemoteMachineRequestError, type MachineClient, type MachineJsonResponse, type MachineRequestOptions } from "./machineClient.js";
 import { MachineService } from "./machineService.js";
@@ -86,6 +87,7 @@ async function proxyHttpRequest(
     try {
       preview = remoteFilePreviewRequest(spec, remotePath);
     } catch (error) {
+      applyWorkspaceFilePreviewErrorResponsePolicy(reply);
       return await reply.code(400).send({ error: errorMessage(error) });
     }
     const previewPolicy = preview?.policy;
@@ -212,14 +214,6 @@ function remoteFilePreviewRequest(spec: FederatedHttpRouteSpec, remotePath: stri
     // hostile or racy; attachment downloads stay deliberately uncapped.
     responseBodyLimit: download ? undefined : spec.responseBodyLimit,
   };
-}
-
-function applyWorkspaceFilePreviewResponsePolicy(reply: FastifyReply, policy: WorkspaceFilePreviewResponsePolicy): void {
-  reply
-    .header("Content-Type", policy.contentType)
-    .header("Content-Disposition", policy.contentDisposition)
-    .header("Content-Security-Policy", policy.contentSecurityPolicy)
-    .header("X-Content-Type-Options", policy.contentTypeOptions);
 }
 
 function proxyRequestOptions(

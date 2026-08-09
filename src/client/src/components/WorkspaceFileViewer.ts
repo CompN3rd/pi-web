@@ -6,6 +6,7 @@ import type { FileContentResponse } from "../api";
 import { workspaceFilePreviewUrl } from "../api/urls";
 import { renderWorkspaceMarkdownHtml } from "../formatting/workspaceMarkdown";
 import { MAX_INLINE_PREVIEW_BYTES, MAX_INLINE_PREVIEW_LABEL, workspaceFileName } from "../../../shared/workspaceFiles";
+import { formatFileSize } from "../utils/format";
 import { formattedTextStyles } from "./shared";
 
 export type WorkspaceFilePreviewKind = "image" | "html" | "pdf" | "markdown" | "download" | "code";
@@ -356,18 +357,4 @@ function metadataForFile(file: FileContentResponse, kind: WorkspaceFilePreviewKi
 
 function loadCodeViewer(): void {
   void import("./CodeViewer");
-}
-
-function formatFileSize(size: number): string {
-  if (!Number.isFinite(size) || size < 0) return "0 B";
-  if (size < 1024) return `${String(size)} B`;
-  const kib = size / 1024;
-  if (kib < 1024) return `${formatScaledFileSize(kib)} KB`;
-  const mib = kib / 1024;
-  if (mib < 1024) return `${formatScaledFileSize(mib)} MB`;
-  return `${formatScaledFileSize(mib / 1024)} GB`;
-}
-
-function formatScaledFileSize(value: number): string {
-  return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
 }

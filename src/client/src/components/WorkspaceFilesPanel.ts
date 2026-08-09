@@ -4,6 +4,7 @@ import type { FileTreeEntry } from "../api";
 import { workspaceUploadPath } from "../api/workspaceUploads";
 import type { WorkspaceUploadBatchState, WorkspaceUploadFileState } from "../workspaceUploadState";
 import type { WorkspacePanelContext } from "../plugins/types";
+import { formatFileSize } from "../utils/format";
 import { registerRenderedModal, type RenderedModalRegistration } from "./modalLayerRegistry";
 import { workspacePanelStyles } from "./shared";
 import "./WorkspaceFileViewer";
@@ -507,16 +508,3 @@ function formatPercent(value: number): string {
   return `${String(Math.round(Math.max(0, Math.min(1, value)) * 100))}%`;
 }
 
-function formatFileSize(size: number): string {
-  if (!Number.isFinite(size) || size < 0) return "0 B";
-  if (size < 1024) return `${String(size)} B`;
-  const kib = size / 1024;
-  if (kib < 1024) return `${formatScaledFileSize(kib)} KB`;
-  const mib = kib / 1024;
-  if (mib < 1024) return `${formatScaledFileSize(mib)} MB`;
-  return `${formatScaledFileSize(mib / 1024)} GB`;
-}
-
-function formatScaledFileSize(value: number): string {
-  return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
-}

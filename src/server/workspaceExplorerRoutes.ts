@@ -7,6 +7,7 @@ import { isAbsoluteishFileSuggestionQuery, listFileSuggestions, listPathSuggesti
 import { listWorkspaceTree } from "./workspaces/fileTreeService.js";
 import { readWorkspaceFilePreview } from "./workspaces/filePreviewService.js";
 import { workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
+import { applyWorkspaceFilePreviewErrorResponsePolicy } from "./workspaces/filePreviewResponseHeaders.js";
 import { resolveWorkspaceContext } from "./workspaces/workspaceContext.js";
 import { pathAccessForWorkspaceContext } from "./workspaces/effectivePathAccess.js";
 import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
@@ -87,6 +88,7 @@ export function registerWorkspaceExplorerRoutes(app: FastifyInstance, projects: 
         .header("X-Content-Type-Options", policy.contentTypeOptions)
         .send(preview.body);
     } catch (error) {
+      applyWorkspaceFilePreviewErrorResponsePolicy(reply);
       return sendWorkspaceRequestError(reply, error, 400);
     }
   });

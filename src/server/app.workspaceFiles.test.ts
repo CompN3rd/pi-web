@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_INLINE_PREVIEW_BYTES } from "../shared/workspaceFiles.js";
 import type { Project, WorkspaceProviderResolution } from "./types.js";
 import { appTestContext, registerAppTestHooks } from "./app.testSupport.js";
-import { workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
+import { workspaceFilePreviewErrorResponsePolicy, workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
 
 registerAppTestHooks();
 
@@ -52,6 +52,45 @@ describe("buildApp workspace file routes", () => {
     const tooLargeResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("huge.png")}` });
     expect(tooLargeResponse.statusCode).toBe(400);
     expect(tooLargeResponse.json()).toEqual({ error: "File is too large to preview (limit 10 MB)" });
+  });
+
+  it("hardens failed local previews with the same error policy the remote proxy enforces", async () => {
+    const addResponse = await appTestContext.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "Errors", path: appTestContext.projectDir, create: true },
+    });
+    const project = addResponse.json<Project>();
+    await writeFile(join(appTestContext.projectDir, "note.txt"), "hello");
+    await writeFile(join(appTestContext.projectDir, "huge.png"), "");
+    await truncate(join(appTestContext.projectDir, "huge.png"), MAX_INLINE_PREVIEW_BYTES + 1);
+
+    const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
+    if (workspace === undefined) throw new Error("Expected workspace");
+
+    const previewPath = (path: string): string => `/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent(path)}`;
+    const failures: { path: string; error: string }[] = [
+      { path: "note.txt", error: "Inline preview is not supported for this file type" },
+      { path: "huge.png", error: "File is too large to preview (limit 10 MB)" },
+      { path: "../escape<script>.png", error: "Path traversal is not allowed" },
+    ];
+    const policy = workspaceFilePreviewErrorResponsePolicy();
+
+    for (const failure of failures) {
+      const responses = await Promise.all([
+        appTestContext.app.inject({ method: "GET", url: `/api${previewPath(failure.path)}` }),
+        appTestContext.app.inject({ method: "GET", url: `/api/machines/local${previewPath(failure.path)}` }),
+      ]);
+      for (const response of responses) {
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toEqual({ error: failure.error });
+        expect(response.headers["content-type"]).toBe(policy.contentType);
+        expect(response.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+        expect(response.headers["content-disposition"]).toBe(policy.contentDisposition);
+        expect(response.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
+      }
+    }
   });
 
   it("serves HTML and PDF inline with type-appropriate sandbox policies", async () => {

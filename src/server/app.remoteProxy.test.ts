@@ -353,6 +353,24 @@ describe("buildApp remote machine proxy routes", () => {
     expect(proxiedCall(request, 0).arguments).toEqual(["GET", "/api/projects/p1/workspaces/w1/file/preview?path=report.html", undefined]);
   });
 
+  it("hardens preview requests the gateway rejects before contacting the remote", async () => {
+    const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const request = vi.fn<MachineClient["request"]>(() => Promise.reject(new Error("remote must not be contacted")));
+    appTestContext.remoteClient = fakeRemoteClient({ request });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/machines/${remote.id}/projects/p1/workspaces/w1/file/preview` });
+    const policy = workspaceFilePreviewErrorResponsePolicy();
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "path query parameter is required" });
+    expect(response.headers["content-type"]).toBe(policy.contentType);
+    expect(response.headers["content-disposition"]).toBe(policy.contentDisposition);
+    expect(response.headers["content-security-policy"]).toBe(policy.contentSecurityPolicy);
+    expect(response.headers["x-content-type-options"]).toBe(policy.contentTypeOptions);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("forces remote downloads to safe attachments with the requested filename", async () => {
     const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
     const remote = addResponse.json<{ id: string }>();
