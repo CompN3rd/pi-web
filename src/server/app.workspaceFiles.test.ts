@@ -2,7 +2,7 @@ import { mkdir, truncate, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_INLINE_PREVIEW_BYTES } from "../shared/workspaceFiles.js";
-import type { Project, Workspace } from "./types.js";
+import type { Project, WorkspaceProviderResolution } from "./types.js";
 import { appTestContext, registerAppTestHooks } from "./app.testSupport.js";
 import { workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
 
@@ -27,7 +27,7 @@ describe("buildApp workspace file routes", () => {
     await truncate(join(appTestContext.projectDir, "huge.png"), MAX_INLINE_PREVIEW_BYTES + 1);
 
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     const previewPath = `/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("diagram.svg")}`;
@@ -66,7 +66,7 @@ describe("buildApp workspace file routes", () => {
     await writeFile(join(appTestContext.projectDir, "spec.pdf"), "%PDF-1.4\n%mock\n");
 
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     const htmlPath = `/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent("report.html")}`;
@@ -111,7 +111,7 @@ describe("buildApp workspace file routes", () => {
     await writeFile(join(appTestContext.projectDir, filename), "just text");
 
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     const downloadPath = `/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent(filename)}&download=1`;
@@ -141,7 +141,7 @@ describe("buildApp workspace file routes", () => {
     await writeFile(join(appTestContext.projectDir, "sdk.md"), "local sdk\n");
 
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     await mkdir(join(appTestContext.projectDir, ".pi-web"), { recursive: true });
@@ -151,6 +151,39 @@ describe("buildApp workspace file routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([{ path: "sdk.md", kind: "other" }]);
+  });
+
+  it("uses the owning project config for suggestions from an authoritative linked workspace", async () => {
+    const addResponse = await appTestContext.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "Linked", path: appTestContext.projectDir, create: true },
+    });
+    const project = addResponse.json<Project>();
+    const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
+    const mainWorkspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
+    if (mainWorkspace === undefined) throw new Error("Expected workspace");
+    const linkedDir = join(appTestContext.tempDir, "linked-workspace");
+    const externalDir = join(appTestContext.tempDir, "linked-external-docs");
+    await mkdir(linkedDir);
+    await mkdir(externalDir);
+    await writeFile(join(externalDir, "sdk.md"), "external sdk\n");
+    await mkdir(join(appTestContext.projectDir, ".pi-web"), { recursive: true });
+    await writeFile(join(appTestContext.projectDir, ".pi-web", "config.json"), `${JSON.stringify({ version: 1, pathAccess: { allowedPaths: [externalDir] } }, null, 2)}\n`);
+    appTestContext.workspaceCatalog.set(project.id, [{
+      ...mainWorkspace,
+      id: "linked",
+      path: linkedDir,
+      label: "linked",
+    }]);
+
+    const response = await appTestContext.app.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/workspaces/linked/files?q=${encodeURIComponent(join(externalDir, "s"))}&scope=all`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([{ path: join(externalDir, "sdk.md"), kind: "other" }]);
   });
 
   it("serves project-configured allowed external files through the workspace explorer", async () => {
@@ -169,7 +202,7 @@ describe("buildApp workspace file routes", () => {
     await writeFile(join(appTestContext.projectDir, ".pi-web", "config.json"), `${JSON.stringify({ version: 1, pathAccess: { allowedPaths: [externalDir] } }, null, 2)}\n`);
 
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     const fileResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces/${workspace.id}/file?path=${encodeURIComponent(join(externalDir, "sdk.md"))}` });
@@ -202,7 +235,7 @@ describe("buildApp workspace file routes", () => {
     });
     const project = addResponse.json<Project>();
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     const writeTextResponse = await appTestContext.app.inject({
@@ -299,7 +332,7 @@ describe("buildApp workspace file routes", () => {
     });
     const project = addResponse.json<Project>();
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     await appTestContext.app.inject({
@@ -346,7 +379,7 @@ describe("buildApp workspace file routes", () => {
     });
     const project = addResponse.json<Project>();
     const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
-    const workspace = workspacesResponse.json<Workspace[]>()[0];
+    const workspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
     if (workspace === undefined) throw new Error("Expected workspace");
 
     await appTestContext.app.inject({
@@ -421,5 +454,33 @@ describe("buildApp workspace file routes", () => {
     });
     expect(noParamsResponse.statusCode).toBe(400);
     expect(noParamsResponse.json<{ error: string }>().error).toContain("fromPath query parameter is required");
+  });
+
+  it("rejects stale workspace ids absent from the authoritative catalog", async () => {
+    const addResponse = await appTestContext.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "Authority", path: appTestContext.projectDir, create: true },
+    });
+    const project = addResponse.json<Project>();
+    const workspacesResponse = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
+    const staleWorkspace = workspacesResponse.json<WorkspaceProviderResolution>().workspaces[0];
+    if (staleWorkspace === undefined) throw new Error("Expected workspace");
+    const replacementPath = join(appTestContext.tempDir, "replacement");
+    await mkdir(replacementPath);
+    appTestContext.workspaceCatalog.set(project.id, [{
+      ...staleWorkspace,
+      id: "replacement",
+      path: replacementPath,
+      label: "replacement",
+    }]);
+
+    const fileResponse = await appTestContext.app.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/workspaces/${staleWorkspace.id}/file?path=${encodeURIComponent("missing.txt")}`,
+    });
+
+    expect(fileResponse.statusCode).toBe(400);
+    expect(fileResponse.json()).toEqual({ error: "Workspace not found" });
   });
 });

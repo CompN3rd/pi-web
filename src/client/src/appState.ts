@@ -1,4 +1,4 @@
-import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogAnswer, ExtensionDialogCloseReason, FileContentResponse, FileTreeEntry, GitDiffResponse, GitStatusResponse, Machine, MachineHealth, MachineRuntime, OAuthFlowState, PendingAskUser, PendingExtensionDialog, PiWebStatusResponse, Project, QueuedSessionMessage, SessionActivity, SessionInfo, SessionStatus, SessionTreeSnapshot, TerminalCommandRun, Workspace, WorkspaceActivity } from "./api";
+import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogAnswer, ExtensionDialogCloseReason, FileContentResponse, FileTreeEntry, Machine, MachineHealth, MachineRuntime, OAuthFlowState, PendingAskUser, PendingExtensionDialog, PiWebStatusResponse, Project, QueuedSessionMessage, SessionActivity, SessionInfo, SessionStatus, SessionTreeSnapshot, TerminalCommandRun, Workspace, WorkspaceActivity } from "./api";
 import type { ChatLine } from "./components/shared";
 import type { QualifiedContributionId } from "./plugins/ids";
 import type { SelectedSessionNotificationInbox } from "./sessionNotifications";
@@ -80,11 +80,6 @@ export interface AppState {
   fileTreeStale: boolean;
   /** Manual workspace file upload batches, keyed by client-owned batch id. */
   workspaceUploadBatches: Record<string, WorkspaceUploadBatchState>;
-  gitStatus: GitStatusResponse | undefined;
-  selectedDiffPath: string | undefined;
-  selectedDiff: GitDiffResponse | undefined;
-  selectedStagedDiff: GitDiffResponse | undefined;
-  gitStale: boolean;
   activeTerminalCount: number;
   selectedTerminalId: string | undefined;
   piWebStatus: PiWebStatusResponse | undefined;
@@ -117,11 +112,6 @@ export type WorkspaceScopedStateReset = Pick<AppState,
   | "selectedFileContent"
   | "selectedFileLoadError"
   | "fileTreeStale"
-  | "gitStatus"
-  | "selectedDiffPath"
-  | "selectedDiff"
-  | "selectedStagedDiff"
-  | "gitStale"
   | "selectedTerminalId"
   | "error"
 >;
@@ -139,11 +129,6 @@ export function resetWorkspaceScopedState(): WorkspaceScopedStateReset {
     selectedFileContent: undefined,
     selectedFileLoadError: undefined,
     fileTreeStale: false,
-    gitStatus: undefined,
-    selectedDiffPath: undefined,
-    selectedDiff: undefined,
-    selectedStagedDiff: undefined,
-    gitStale: false,
     selectedTerminalId: undefined,
     error: "",
   };
@@ -203,11 +188,6 @@ export function initialAppState(): AppState {
     selectedFileLoadError: undefined,
     fileTreeStale: false,
     workspaceUploadBatches: {},
-    gitStatus: undefined,
-    selectedDiffPath: undefined,
-    selectedDiff: undefined,
-    selectedStagedDiff: undefined,
-    gitStale: false,
     activeTerminalCount: 0,
     selectedTerminalId: undefined,
     piWebStatus: undefined,
