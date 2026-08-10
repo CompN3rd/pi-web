@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, stat, symlink, truncate, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -116,6 +116,65 @@ describe("PiWebPluginCatalog", () => {
       expect.stringContaining("browser module is outside browser root for symlinked-module"),
       expect.stringContaining("browser root escapes its package for escaped-root"),
     ]));
+  });
+
+  it("rejects browser paths whose spelling differs from enumerated package entries", async () => {
+    const pluginsRoot = join(tempDir, "plugins");
+    const rootSpellingRoot = join(pluginsRoot, "root-spelling");
+    await writePlugin(rootSpellingRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "root-spelling", browserRoot: "public", module: "public/browser.js" }] } },
+      files: { "public/browser.js": "export default {};" },
+    });
+
+    const moduleSpellingRoot = join(pluginsRoot, "module-spelling");
+    const composedModuleName = "caf\u00e9.js";
+    const decomposedModuleName = "cafe\u0301.js";
+    await writePlugin(moduleSpellingRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "module-spelling", browserRoot: "public", module: `public/${composedModuleName}` }] } },
+      files: { [`public/${composedModuleName}`]: "export default {};" },
+    });
+
+    const exactAliasRoot = join(pluginsRoot, "exact-alias");
+    await writePlugin(exactAliasRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "exact-alias", browserRoot: "public", module: "public/browser.js" }] } },
+      files: { "assets/browser.js": "export default {};" },
+    });
+    await symlink(join(exactAliasRoot, "assets"), join(exactAliasRoot, "public"), process.platform === "win32" ? "junction" : "dir");
+
+    const canonicalRootSpellingRoot = await realpath(rootSpellingRoot);
+    const canonicalModuleSpellingRoot = await realpath(moduleSpellingRoot);
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: pluginsRoot, source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+      // Simulate lookup aliases on case-insensitive/normalizing filesystems while
+      // retaining real stat, realpath, scanning, and symlink behavior.
+      directoryEntryNamesProvider: async (directoryPath) => {
+        const entryNames = await readdir(directoryPath);
+        if (directoryPath === canonicalRootSpellingRoot) {
+          return entryNames.map((entryName) => entryName === "public" ? "Public" : entryName);
+        }
+        if (directoryPath === join(canonicalModuleSpellingRoot, "public")) {
+          return entryNames.map((entryName) => entryName === composedModuleName ? decomposedModuleName : entryName);
+        }
+        return entryNames;
+      },
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins.map(({ id }) => id)).toEqual(["exact-alias"]);
+    expect(snapshot.diagnostics).toHaveLength(2);
+    expect(snapshot.diagnostics.find(({ source }) => source === rootSpellingRoot)).toEqual({
+      code: "invalid-package",
+      source: rootSpellingRoot,
+      message: "PI WEB plugin browser root path does not exactly match package directory entries for root-spelling: public",
+    });
+    expect(snapshot.diagnostics.find(({ source }) => source === moduleSpellingRoot)).toEqual({
+      code: "invalid-package",
+      source: moduleSpellingRoot,
+      message: `PI WEB plugin browser module path does not exactly match package directory entries for module-spelling: public/${composedModuleName}`,
+    });
   });
 
   it("rejects browser-root directory paths that revisit canonical ancestors with attributed diagnostics", async () => {

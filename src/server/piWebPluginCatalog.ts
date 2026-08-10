@@ -90,7 +90,15 @@ export interface PiWebPluginCatalogOptions {
   agentDirProvider?: () => string | Promise<string>;
   packageProvider?: PiPackageProvider | false;
   configProvider?: () => PiWebConfig | Promise<PiWebConfig>;
+  /** Directory enumeration seam used to enforce exact browser metadata spelling. */
+  directoryEntryNamesProvider?: (directoryPath: string) => Promise<readonly string[]>;
   warningSink?: (message: string) => void;
+}
+
+type DirectoryEntryNamesProvider = NonNullable<PiWebPluginCatalogOptions["directoryEntryNamesProvider"]>;
+
+function defaultDirectoryEntryNamesProvider(directoryPath: string): Promise<string[]> {
+  return readdir(directoryPath);
 }
 
 interface PiWebPackageConfig {
@@ -145,6 +153,7 @@ export class PiWebPluginCatalog {
   private readonly staticPackageProvider: PiPackageProvider | undefined;
   private readonly packageProviderForAgentDir: ((agentDir: string) => PiPackageProvider) | undefined;
   private readonly configProvider: () => PiWebConfig | Promise<PiWebConfig>;
+  private readonly directoryEntryNamesProvider: DirectoryEntryNamesProvider;
   private readonly warningSink: (message: string) => void;
 
   constructor(options: PiWebPluginCatalogOptions = {}) {
@@ -158,6 +167,7 @@ export class PiWebPluginCatalog {
       ? undefined
       : (agentDir) => new DefaultPiPackageProvider(cwd, agentDir);
     this.configProvider = options.configProvider ?? (() => loadPiWebConfig({ cwd }).config);
+    this.directoryEntryNamesProvider = options.directoryEntryNamesProvider ?? defaultDirectoryEntryNamesProvider;
     this.warningSink = options.warningSink ?? ((message) => { console.warn(message); });
   }
 
@@ -231,7 +241,9 @@ export class PiWebPluginCatalog {
   private async discoverLocalPlugins(report: ReportDiagnostic, scope?: PiWebPluginScope): Promise<PiWebPluginPackageEntry[]> {
     const plugins: PiWebPluginPackageEntry[] = [];
     for (const root of this.roots) {
-      if (scope === undefined || root.scope === scope) plugins.push(...await discoverLocalRoot(root, report));
+      if (scope === undefined || root.scope === scope) {
+        plugins.push(...await discoverLocalRoot(root, report, this.directoryEntryNamesProvider));
+      }
     }
     return plugins;
   }
@@ -242,7 +254,7 @@ export class PiWebPluginCatalog {
       const root = configuredPackage.installedPath ?? packageProvider.getInstalledPath(configuredPackage.source, configuredPackage.scope);
       if (root === undefined) continue;
       try {
-        plugins.push(...await discoverPackageRoot(root, configuredPackage));
+        plugins.push(...await discoverPackageRoot(root, configuredPackage, this.directoryEntryNamesProvider));
       } catch (error) {
         report(configuredPackage.source, error);
       }
@@ -271,7 +283,11 @@ function sourceCheckoutPluginRoots(cwd: string): LocalPluginRoot[] {
   return [{ path: pluginsRoot, source: "dev", scope: "local" }];
 }
 
-async function discoverLocalRoot(root: LocalPluginRoot, report: ReportDiagnostic): Promise<PiWebPluginPackageEntry[]> {
+async function discoverLocalRoot(
+  root: LocalPluginRoot,
+  report: ReportDiagnostic,
+  directoryEntryNamesProvider: DirectoryEntryNamesProvider,
+): Promise<PiWebPluginPackageEntry[]> {
   if (!existsSync(root.path)) return [];
   const entries = await readdir(root.path, { withFileTypes: true }).catch(() => []);
   const plugins: PiWebPluginPackageEntry[] = [];
@@ -281,7 +297,7 @@ async function discoverLocalRoot(root: LocalPluginRoot, report: ReportDiagnostic
     const pluginStat = entry.isDirectory() ? undefined : entry.isSymbolicLink() ? await stat(pluginRoot).catch(() => undefined) : undefined;
     if (!entry.isDirectory() && pluginStat?.isDirectory() !== true) continue;
     try {
-      plugins.push(...await discoverLocalPlugin(pluginRoot, root));
+      plugins.push(...await discoverLocalPlugin(pluginRoot, root, directoryEntryNamesProvider));
     } catch (error) {
       report(pluginRoot, error);
     }
@@ -289,34 +305,46 @@ async function discoverLocalRoot(root: LocalPluginRoot, report: ReportDiagnostic
   return plugins;
 }
 
-async function discoverLocalPlugin(root: string, localRoot: LocalPluginRoot): Promise<PiWebPluginPackageEntry[]> {
+async function discoverLocalPlugin(
+  root: string,
+  localRoot: LocalPluginRoot,
+  directoryEntryNamesProvider: DirectoryEntryNamesProvider,
+): Promise<PiWebPluginPackageEntry[]> {
   const config = await readPiWebPackageConfig(root);
   if (config === undefined) return [];
-  const plugins = await discoverPluginEntries(root, config);
+  const plugins = await discoverPluginEntries(root, config, directoryEntryNamesProvider);
   return plugins.map((plugin) => ({ ...plugin, source: localRoot.source, scope: localRoot.scope }));
 }
 
-async function discoverPackageRoot(root: string, configuredPackage: ConfiguredPiPackage): Promise<PiWebPluginPackageEntry[]> {
+async function discoverPackageRoot(
+  root: string,
+  configuredPackage: ConfiguredPiPackage,
+  directoryEntryNamesProvider: DirectoryEntryNamesProvider,
+): Promise<PiWebPluginPackageEntry[]> {
   const config = await readPiWebPackageConfig(root);
   if (config === undefined) return [];
-  const plugins = await discoverPluginEntries(root, config);
+  const plugins = await discoverPluginEntries(root, config, directoryEntryNamesProvider);
   return plugins.map((plugin) => ({ ...plugin, source: configuredPackage.source, scope: configuredPackage.scope }));
 }
 
-async function discoverPluginEntries(root: string, config: PiWebPackageConfig): Promise<Omit<PiWebPluginPackageEntry, "source" | "scope">[]> {
+async function discoverPluginEntries(
+  root: string,
+  config: PiWebPackageConfig,
+  directoryEntryNamesProvider: DirectoryEntryNamesProvider,
+): Promise<Omit<PiWebPluginPackageEntry, "source" | "scope">[]> {
   const packageRoot = await realpath(root);
   const revision = await computePiWebPluginPackageRevision(packageRoot);
   const plugins: Omit<PiWebPluginPackageEntry, "source" | "scope">[] = [];
   for (const entry of config.plugins) {
     const browserRoot = entry.browserRoot === undefined
       ? undefined
-      : await discoverBrowserRoot(packageRoot, entry.id, entry.browserRoot);
+      : await discoverBrowserRoot(packageRoot, entry.id, entry.browserRoot, directoryEntryNamesProvider);
     const browserModule = entry.module === undefined
       ? undefined
-      : await discoverModule(packageRoot, entry.id, "browser", entry.module, revision, browserRoot);
+      : await discoverModule(packageRoot, entry.id, "browser", entry.module, revision, directoryEntryNamesProvider, browserRoot);
     const serverModule = entry.serverModule === undefined
       ? undefined
-      : await discoverModule(packageRoot, entry.id, "server", entry.serverModule, revision);
+      : await discoverModule(packageRoot, entry.id, "server", entry.serverModule, revision, directoryEntryNamesProvider);
     plugins.push({
       id: entry.id,
       packageRoot,
@@ -329,7 +357,12 @@ async function discoverPluginEntries(root: string, config: PiWebPackageConfig): 
   return plugins;
 }
 
-async function discoverBrowserRoot(packageRoot: string, pluginId: string, path: string): Promise<PiWebPluginCatalogBrowserRoot> {
+async function discoverBrowserRoot(
+  packageRoot: string,
+  pluginId: string,
+  path: string,
+  directoryEntryNamesProvider: DirectoryEntryNamesProvider,
+): Promise<PiWebPluginCatalogBrowserRoot> {
   const candidate = resolve(packageRoot, path);
   const [entryStat, directoryPath] = await Promise.all([
     stat(candidate).catch(() => undefined),
@@ -341,13 +374,9 @@ async function discoverBrowserRoot(packageRoot: string, pluginId: string, path: 
   if (excludedDirectory !== undefined) {
     throw new Error(`PI WEB plugin browser root resolves inside excluded ${excludedDirectory} directory for ${pluginId}: ${path}`);
   }
-  await validateBrowserDirectoryPrefixes(
-    packageRoot,
-    pluginId,
-    "browser root",
-    path,
-    path === "." ? [] : path.split("/"),
-  );
+  const pathSegments = path === "." ? [] : path.split("/");
+  await validateBrowserDirectoryPrefixes(packageRoot, pluginId, "browser root", path, pathSegments);
+  await validateBrowserPathSpelling(packageRoot, pluginId, "browser root", path, pathSegments, directoryEntryNamesProvider);
   return { path, directoryPath };
 }
 
@@ -357,6 +386,7 @@ async function discoverModule(
   kind: "browser" | "server",
   path: string,
   revision: string,
+  directoryEntryNamesProvider: DirectoryEntryNamesProvider,
   browserRoot?: PiWebPluginCatalogBrowserRoot,
 ): Promise<PiWebPluginCatalogModule> {
   if (!isSafeRelativeModulePath(path)) throw new Error(`Unsafe PI WEB plugin ${kind} module path for ${pluginId}: ${path}`);
@@ -375,9 +405,29 @@ async function discoverModule(
     throw new Error(`PI WEB plugin browser module is outside browser root for ${pluginId}: ${path}`);
   }
   if (kind === "browser") {
-    await validateBrowserDirectoryPrefixes(packageRoot, pluginId, "browser module", path, path.split("/").slice(0, -1));
+    const pathSegments = path.split("/");
+    await validateBrowserDirectoryPrefixes(packageRoot, pluginId, "browser module", path, pathSegments.slice(0, -1));
+    await validateBrowserPathSpelling(packageRoot, pluginId, "browser module", path, pathSegments, directoryEntryNamesProvider);
   }
   return { path, filePath, revision };
+}
+
+async function validateBrowserPathSpelling(
+  packageRoot: string,
+  pluginId: string,
+  kind: "browser root" | "browser module",
+  entryPath: string,
+  pathSegments: readonly string[],
+  directoryEntryNamesProvider: DirectoryEntryNamesProvider,
+): Promise<void> {
+  let directoryPath = packageRoot;
+  for (const segment of pathSegments) {
+    const entryNames = await directoryEntryNamesProvider(directoryPath);
+    if (!entryNames.includes(segment)) {
+      throw new Error(`PI WEB plugin ${kind} path does not exactly match package directory entries for ${pluginId}: ${entryPath}`);
+    }
+    directoryPath = join(directoryPath, segment);
+  }
 }
 
 async function validateBrowserDirectoryPrefixes(
