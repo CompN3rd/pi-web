@@ -98,6 +98,38 @@ describe("PiWebPluginService", () => {
     await expect(service.readAsset("icons", "public/assets/leak.js")).resolves.toBeUndefined();
   });
 
+  it("reports ancestor browser-root aliases instead of silently dropping accepted plugins", async () => {
+    const pluginsRoot = join(tempDir, "plugins");
+    const rejectedRoot = join(pluginsRoot, "ancestor-root");
+    await writePlugin(rejectedRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "ancestor-root", browserRoot: "public", module: "public/browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    await symlink(rejectedRoot, join(rejectedRoot, "public"), process.platform === "win32" ? "junction" : "dir");
+
+    const safeRoot = join(pluginsRoot, "safe-root-alias");
+    await writePlugin(safeRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "safe-root-alias", browserRoot: "public", module: "public/browser.js" }] } },
+      files: { "assets/browser.js": "export default {};" },
+    });
+    await symlink(join(safeRoot, "assets"), join(safeRoot, "public"), process.platform === "win32" ? "junction" : "dir");
+
+    const service = new PiWebPluginService({
+      roots: [{ path: pluginsRoot, source: "test", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    await expect(service.manifest()).resolves.toMatchObject({ plugins: [{ id: "safe-root-alias" }] });
+    await expect(service.readAsset("safe-root-alias", "public/browser.js")).resolves.toBeDefined();
+    const lifecycle = await service.plugins();
+    expect(lifecycle.plugins.map(({ id }) => id)).toEqual(["safe-root-alias"]);
+    expect(lifecycle.diagnostics).toEqual([
+      expect.objectContaining({ kind: "discovery", snapshot: "desired", source: rejectedRoot }),
+    ]);
+    expect(lifecycle.diagnostics[0]?.message).toContain("browser root resolves to its logical parent or ancestor for ancestor-root");
+  });
+
   it("omits broad-root asset aliases into canonical excluded directories", async () => {
     const pluginDir = join(tempDir, "plugins", "broad-aliases");
     await writePlugin(pluginDir, {

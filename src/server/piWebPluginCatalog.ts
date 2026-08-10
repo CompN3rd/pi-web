@@ -341,6 +341,15 @@ async function discoverBrowserRoot(packageRoot: string, pluginId: string, path: 
   if (excludedDirectory !== undefined) {
     throw new Error(`PI WEB plugin browser root resolves inside excluded ${excludedDirectory} directory for ${pluginId}: ${path}`);
   }
+  if (path !== ".") {
+    const logicalParentDirectoryPath = await realpath(dirname(candidate)).catch(() => undefined);
+    if (logicalParentDirectoryPath === undefined) throw new Error(`PI WEB plugin browser root not found for ${pluginId}: ${path}`);
+    // Artifact traversal skips directory cycles. Reject the alias at discovery
+    // instead of accepting a plugin whose browser module cannot be captured.
+    if (isWithin(directoryPath, logicalParentDirectoryPath)) {
+      throw new Error(`PI WEB plugin browser root resolves to its logical parent or ancestor for ${pluginId}: ${path}`);
+    }
+  }
   return { path, directoryPath };
 }
 

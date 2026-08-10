@@ -118,6 +118,43 @@ describe("PiWebPluginCatalog", () => {
     ]));
   });
 
+  it("rejects browser roots aliased to their logical parent or ancestor with attributed diagnostics", async () => {
+    const pluginsRoot = join(tempDir, "plugins");
+    const directRoot = join(pluginsRoot, "direct-ancestor-root");
+    await writePlugin(directRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "direct-ancestor-root", browserRoot: "public", module: "public/browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    await symlink(directRoot, join(directRoot, "public"), process.platform === "win32" ? "junction" : "dir");
+
+    const nestedRoot = join(pluginsRoot, "nested-ancestor-root");
+    await writePlugin(nestedRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "nested-ancestor-root", browserRoot: "assets/public", module: "assets/public/browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    await mkdir(join(nestedRoot, "assets"), { recursive: true });
+    await symlink(nestedRoot, join(nestedRoot, "assets", "public"), process.platform === "win32" ? "junction" : "dir");
+
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: pluginsRoot, source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.diagnostics).toHaveLength(2);
+    for (const { source, pluginId } of [
+      { source: directRoot, pluginId: "direct-ancestor-root" },
+      { source: nestedRoot, pluginId: "nested-ancestor-root" },
+    ]) {
+      const diagnostic = snapshot.diagnostics.find((candidate) => candidate.source === source);
+      expect(diagnostic).toMatchObject({ code: "invalid-package", source });
+      expect(diagnostic?.message).toContain(`browser root resolves to its logical parent or ancestor for ${pluginId}`);
+    }
+  });
+
   it.each([".git", "node_modules"])("rejects browser roots canonically aliased into %s with an attributed diagnostic", async (excludedDirectory) => {
     const idSuffix = excludedDirectory === ".git" ? "git" : "node-modules";
     const pluginRoot = join(tempDir, "plugins", `root-alias-${idSuffix}`);
