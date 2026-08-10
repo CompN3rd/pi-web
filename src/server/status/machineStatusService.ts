@@ -107,9 +107,11 @@ export class MachineStatusService {
   }
 
   /**
-   * Never rejects: this runs as a background reaction to a status change, and a
-   * source that fails must leave the last good snapshot in place rather than
-   * take down the caller that reported the change.
+   * Never rejects: this runs as a background reaction to a status change, so a
+   * source or publisher that fails must be logged and left behind rather than
+   * escape as an unhandled rejection in the long-lived daemon. A source failure
+   * leaves the last good snapshot in place; a publication failure keeps the
+   * recomputed snapshot, which `GET /status` still serves.
    */
   private async publishIfChanged(): Promise<void> {
     let tree: MachineStatusTree;
@@ -126,7 +128,11 @@ export class MachineStatusService {
       ...tree,
       generatedAt: new Date().toISOString(),
     };
-    this.dependencies.publisher.publish(this.current);
+    try {
+      this.dependencies.publisher.publish(this.current);
+    } catch (error) {
+      this.dependencies.logger.warn({ err: error }, "machine status projection could not be published");
+    }
   }
 
   private async computeTree(): Promise<MachineStatusTree> {

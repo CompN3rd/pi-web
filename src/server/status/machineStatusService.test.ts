@@ -155,6 +155,18 @@ describe("MachineStatusService", () => {
     expect(message).toBe("machine status projection could not be recomputed");
     expect(details?.["err"]).toBeInstanceOf(Error);
   });
+
+  it("logs instead of rejecting into the daemon when publication fails", async () => {
+    const { service, logger, failPublication } = statusService({ unread: ["/home/user/scratch"] });
+    failPublication();
+
+    await expect(service.refresh()).resolves.toBeUndefined();
+
+    expect(service.snapshot().revision).toBe(1);
+    const [details, message] = logger.warn.mock.calls[0] ?? [];
+    expect(message).toBe("machine status projection could not be published");
+    expect(details?.["err"]).toBeInstanceOf(Error);
+  });
 });
 
 interface StatusServiceScenario {
@@ -174,6 +186,7 @@ function statusService(scenario: StatusServiceScenario = {}) {
   const published: MachineStatusSnapshot[] = [];
   const logger = { warn: vi.fn<(details: Record<string, unknown>, message: string) => void>() };
   let failUnreadRead = false;
+  let failPublish = false;
 
   const attribute = vi.fn((cwds: Iterable<string>) => Promise.resolve(
     new Map([...cwds].flatMap((cwd) => {
@@ -191,7 +204,12 @@ function statusService(scenario: StatusServiceScenario = {}) {
       },
     },
     attribution: { attribute },
-    publisher: { publish: (snapshot) => published.push(snapshot) },
+    publisher: {
+      publish: (snapshot) => {
+        if (failPublish) throw new Error("event hub unavailable");
+        published.push(snapshot);
+      },
+    },
     logger,
   });
 
@@ -202,6 +220,9 @@ function statusService(scenario: StatusServiceScenario = {}) {
     logger,
     failUnreadReads: (): void => {
       failUnreadRead = true;
+    },
+    failPublication: (): void => {
+      failPublish = true;
     },
   };
 }

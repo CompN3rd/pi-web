@@ -1,29 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { AppState } from "../appState";
 import { initialAppState } from "../appState";
 import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
+import { machineStatusSnapshot as snapshot } from "../machineStatus.testSupport";
 import { MachineStatusController } from "./machineStatusController";
-
-function snapshot(patch: Partial<MachineStatusSnapshot> = {}): MachineStatusSnapshot {
-  return {
-    epochId: "epoch-1",
-    revision: 1,
-    machine: { "core:working": true },
-    projects: {},
-    workspaces: {},
-    unattributed: {},
-    generatedAt: "now",
-    ...patch,
-  };
-}
-
-function stateWithSelectedMachine(machineId: string): AppState {
-  return { ...initialAppState(), selectedMachine: { id: machineId, name: machineId, kind: "remote", createdAt: "now", updatedAt: "now" } };
-}
 
 describe("MachineStatusController", () => {
   it("stores each machine's snapshot under its own id without mirroring the selected machine", () => {
-    let state = stateWithSelectedMachine("remote");
+    let state = initialAppState();
     const controller = new MachineStatusController(() => state, (patch) => { state = { ...state, ...patch }; });
 
     controller.apply("remote", snapshot({ machine: { "core:working": true } }));
@@ -68,12 +51,12 @@ describe("MachineStatusController", () => {
   });
 
   it("applies the fetched snapshot for the requested machine", async () => {
-    let state = stateWithSelectedMachine("remote");
+    let state = initialAppState();
     const controller = new MachineStatusController(() => state, (patch) => { state = { ...state, ...patch }; }, {
       api: { machineStatus: (machineId) => Promise.resolve(snapshot({ epochId: `epoch-${machineId}` })) },
     });
 
-    await controller.refresh();
+    await controller.refresh("remote");
     await controller.refresh("local");
 
     expect(state.machineStatusSnapshots["remote"]).toMatchObject({ epochId: "epoch-remote" });

@@ -1,6 +1,6 @@
 import { machineStatusApi as defaultApi } from "../api";
 import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
-import { selectedMachineId, type GetState, type SetState } from "./types";
+import type { GetState, SetState } from "./types";
 import { TrailingRefreshCoordinator } from "./trailingRefreshCoordinator";
 
 export interface MachineStatusApi {
@@ -37,7 +37,7 @@ export class MachineStatusController {
   }
 
   /** Fetch the current snapshot for explicit refresh paths. Rejects on failure. */
-  refresh(machineId = selectedMachineId(this.getState())): Promise<void> {
+  refresh(machineId: string): Promise<void> {
     return this.refreshes.request(machineId, async () => {
       this.apply(machineId, await this.api.machineStatus(machineId));
     });
