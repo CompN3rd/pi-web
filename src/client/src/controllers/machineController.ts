@@ -14,7 +14,12 @@ export class MachineController {
       const machines = await api.machines();
       const selectedMachine = await this.selectInitialMachine(machines, routeMachineId);
       const machineIds = new Set(machines.map((machine) => machine.id));
-      this.setState({ machines, selectedMachine, machineRuntimes: filterKeys(this.getState().machineRuntimes, machineIds) });
+      this.setState({
+        machines,
+        selectedMachine,
+        machineRuntimes: filterKeys(this.getState().machineRuntimes, machineIds),
+        machineStatusSnapshots: filterKeys(this.getState().machineStatusSnapshots, machineIds),
+      });
       void this.refreshMachineHealthFor(machines);
       void this.refreshMachineRuntimeFor(machines);
     } catch (error) {

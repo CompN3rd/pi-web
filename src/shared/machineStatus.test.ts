@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CORE_STATUS_FLAGS, hasAnyStatusFlag, parseMachineStatusSnapshot, rollUpStatusFlags } from "./machineStatus";
+import { CORE_STATUS_FLAGS, parseMachineStatusSnapshot, rollUpStatusFlags } from "./machineStatus";
 
 const snapshotWire = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   epochId: "epoch-1",
@@ -31,19 +31,6 @@ describe("rollUpStatusFlags", () => {
 
   it("keeps unknown flag ids from a newer daemon", () => {
     expect(rollUpStatusFlags([{ "core:future": true }])).toEqual({ "core:future": true });
-  });
-});
-
-describe("hasAnyStatusFlag", () => {
-  it("lights a row for any set flag, including one it does not recognise", () => {
-    expect(hasAnyStatusFlag({ "core:future": true })).toBe(true);
-    expect(hasAnyStatusFlag({ [CORE_STATUS_FLAGS.unread]: true })).toBe(true);
-  });
-
-  it("stays unlit without a set flag and without any flags at all", () => {
-    expect(hasAnyStatusFlag({ [CORE_STATUS_FLAGS.working]: false })).toBe(false);
-    expect(hasAnyStatusFlag({})).toBe(false);
-    expect(hasAnyStatusFlag(undefined)).toBe(false);
   });
 });
 
@@ -79,7 +66,7 @@ describe("parseMachineStatusSnapshot", () => {
     }));
 
     expect(parsed?.machine).toEqual({ [CORE_STATUS_FLAGS.working]: true, "core:future": true });
-    expect(hasAnyStatusFlag(parsed?.projects["project-1"])).toBe(true);
+    expect(parsed?.projects["project-1"]).toEqual({ "core:future": true });
   });
 
   it("drops flag entries that are not booleans and nodes that carry no flag map", () => {
@@ -98,6 +85,6 @@ describe("parseMachineStatusSnapshot", () => {
     const parsed = parseMachineStatusSnapshot(snapshotWire({ machine }));
 
     expect(Object.getPrototypeOf(parsed?.machine)).toBe(Object.prototype);
-    expect(hasAnyStatusFlag(parsed?.machine)).toBe(true);
+    expect(Object.entries(parsed?.machine ?? {})).toEqual([["__proto__", true]]);
   });
 });

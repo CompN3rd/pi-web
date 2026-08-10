@@ -182,6 +182,29 @@ describe("MachineController", () => {
     expect(state.error).toContain("Remote is unavailable");
   });
 
+  it("drops the status snapshot of a machine that is no longer configured", async () => {
+    // A machine removed from another tab or device must not keep lighting rows
+    // from its previous daemon's tree if its id is ever reused.
+    const localSnapshot = machineStatusSnapshot({ machine: { "core:working": true } });
+    let state: AppState = {
+      ...initialAppState(),
+      machines: [localMachine, remoteMachine],
+      selectedMachine: localMachine,
+      machineStatusSnapshots: { local: localSnapshot, [remoteMachine.id]: machineStatusSnapshot() },
+    };
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+
+    vi.spyOn(api, "machines").mockResolvedValue([localMachine]);
+    vi.spyOn(api, "health").mockResolvedValue({ machineId: "local", ok: true, checkedAt: "2026-05-26T00:00:01.000Z", status: "online" });
+    vi.spyOn(api, "runtime").mockResolvedValue({ machineId: "local", ok: true, checkedAt: "2026-05-26T00:00:02.000Z" });
+
+    const controller = new MachineController(() => state, setState, vi.fn(), { loadProjects: vi.fn() });
+
+    await controller.loadMachines();
+
+    expect(state.machineStatusSnapshots).toEqual({ local: localSnapshot });
+  });
+
   it("falls back to local when the routed machine is no longer configured", async () => {
     let state: AppState = initialAppState();
     const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };

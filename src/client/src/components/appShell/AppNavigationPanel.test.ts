@@ -37,6 +37,18 @@ describe("machine status wiring", () => {
     expect(section(panel, "workspace-list", WorkspaceList).statusSnapshot).toBe(local);
   });
 
+  it("reads the local machine's snapshot before a machine has been selected", async () => {
+    // `selectedMachine` is undefined until machines load, and can stay undefined
+    // if that load fails, while local project rows already render. The app keys
+    // snapshots by `selectedMachine?.id ?? LOCAL_MACHINE_ID`, so this panel must
+    // resolve the same id instead of blanking every indicator.
+    const local = machineStatusSnapshot({ projects: { "project-1": { "core:working": true } } });
+    const panel = await mountPanel({ local }, undefined);
+
+    expect(section(panel, "project-list", ProjectList).statusSnapshot).toBe(local);
+    expect(section(panel, "workspace-list", WorkspaceList).statusSnapshot).toBe(local);
+  });
+
   it("leaves project and workspace sections without a snapshot when the selected machine has none", async () => {
     const panel = await mountPanel({ "remote-a": machineStatusSnapshot() }, machine("local"));
 
@@ -45,11 +57,11 @@ describe("machine status wiring", () => {
   });
 });
 
-async function mountPanel(machineStatusSnapshots: Record<string, MachineStatusSnapshot>, selectedMachine: Machine): Promise<AppNavigationPanel> {
+async function mountPanel(machineStatusSnapshots: Record<string, MachineStatusSnapshot>, selectedMachine: Machine | undefined): Promise<AppNavigationPanel> {
   const panel = new AppNavigationPanel();
   panel.compact = true;
   panel.machines = [machine("local"), machine("remote-a")];
-  panel.selectedMachine = selectedMachine;
+  if (selectedMachine !== undefined) panel.selectedMachine = selectedMachine;
   panel.projects = [project("project-1")];
   panel.workspaces = [workspace("ws-1", "project-1")];
   panel.machineStatusSnapshots = machineStatusSnapshots;

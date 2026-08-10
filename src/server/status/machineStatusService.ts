@@ -41,8 +41,6 @@ export interface MachineStatusServiceDependencies {
   attribution: Pick<WorkspaceAttribution, "attribute">;
   publisher: MachineStatusPublisher;
   logger: MachineStatusLogger;
-  createEpochId?: () => string;
-  now?: () => Date;
 }
 
 /** The part of a snapshot that carries status; the rest is identity and ordering. */
@@ -58,23 +56,19 @@ type MachineStatusTree = Pick<MachineStatusSnapshot, "machine" | "projects" | "w
  * traffic after its first flag flip.
  */
 export class MachineStatusService {
-  private readonly createEpochId: () => string;
-  private readonly now: () => Date;
   private current: MachineStatusSnapshot;
   private pending = false;
   private running: Promise<void> | undefined;
 
   constructor(private readonly dependencies: MachineStatusServiceDependencies) {
-    this.createEpochId = dependencies.createEpochId ?? randomUUID;
-    this.now = dependencies.now ?? (() => new Date());
     this.current = {
-      epochId: this.createEpochId(),
+      epochId: randomUUID(),
       revision: 0,
       machine: {},
       projects: {},
       workspaces: {},
       unattributed: {},
-      generatedAt: this.now().toISOString(),
+      generatedAt: new Date().toISOString(),
     };
   }
 
@@ -130,7 +124,7 @@ export class MachineStatusService {
       epochId: this.current.epochId,
       revision: this.current.revision + 1,
       ...tree,
-      generatedAt: this.now().toISOString(),
+      generatedAt: new Date().toISOString(),
     };
     this.dependencies.publisher.publish(this.current);
   }

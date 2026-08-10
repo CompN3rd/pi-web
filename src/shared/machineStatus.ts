@@ -78,14 +78,6 @@ export function rollUpStatusFlags(sources: Iterable<StatusFlags>): StatusFlags {
 }
 
 /**
- * Whether any flag is set, which is what lights a row's generic indicator.
- * Unknown flag ids count, so a newer daemon's flag still lights the row.
- */
-export function hasAnyStatusFlag(flags: StatusFlags | undefined): boolean {
-  return flags !== undefined && Object.values(flags).some((isSet) => isSet);
-}
-
-/**
  * Parse a snapshot received over HTTP or the realtime socket.
  *
  * Structural fields are required, because a snapshot missing them cannot be

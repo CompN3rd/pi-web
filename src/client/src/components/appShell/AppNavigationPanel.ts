@@ -3,6 +3,7 @@ import { customElement, property, query } from "lit/decorators.js";
 import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace } from "../../api";
 import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import type { WorkspaceLabelItem } from "../../plugins/types";
+import { selectedMachineId } from "../../controllers/types";
 import type { NavigationSection } from "../../appShell/navigationState";
 import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
 import type { KeyboardNavigableSection } from "../navigationFocus";
@@ -184,10 +185,15 @@ export class AppNavigationPanel extends LitElement {
     `;
   }
 
-  /** Project and workspace rows always belong to the selected machine. */
+  /**
+   * Project and workspace rows always belong to the selected machine, resolved
+   * exactly as the rest of the app resolves it — including its local-machine
+   * default, which is the key snapshots arrive under before a machine has been
+   * selected. Diverging here would blank every row's indicator while a snapshot
+   * is in fact loaded.
+   */
   private selectedMachineStatusSnapshot(): MachineStatusSnapshot | undefined {
-    const machineId = this.selectedMachine?.id;
-    return machineId === undefined ? undefined : this.machineStatusSnapshots[machineId];
+    return this.machineStatusSnapshots[selectedMachineId({ selectedMachine: this.selectedMachine })];
   }
 
   private async focusNavigableSection(section: KeyboardNavigableSection | undefined): Promise<boolean> {
