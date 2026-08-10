@@ -484,6 +484,30 @@ describe("PiWebPluginCatalog", () => {
     });
   });
 
+  it.each([".git", "node_modules"])("rejects package metadata canonically aliased into %s with an attributed diagnostic", async (excludedDirectory) => {
+    const idSuffix = excludedDirectory === ".git" ? "git" : "node-modules";
+    const pluginRoot = join(tempDir, "plugins", `metadata-alias-${idSuffix}`);
+    const metadataPath = join(pluginRoot, excludedDirectory, "package.json");
+    await mkdir(join(pluginRoot, excludedDirectory), { recursive: true });
+    await writeFile(metadataPath, `${JSON.stringify({
+      piWeb: { plugins: [{ id: `metadata-alias-${idSuffix}`, browserRoot: ".", module: "browser.js" }] },
+    }, null, 2)}\n`);
+    await writeFile(join(pluginRoot, "browser.js"), "export default {};\n");
+    await symlink(metadataPath, join(pluginRoot, "package.json"));
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.diagnostics).toHaveLength(1);
+    expect(snapshot.diagnostics[0]).toMatchObject({ code: "invalid-package", source: pluginRoot });
+    expect(snapshot.diagnostics[0]?.message).toContain(`package metadata resolves inside excluded ${excludedDirectory} directory`);
+  });
+
   it("rejects package metadata symlinks that escape the canonical package root", async () => {
     const pluginRoot = join(tempDir, "plugins", "escaped-metadata");
     const externalMetadata = join(tempDir, "external-package.json");

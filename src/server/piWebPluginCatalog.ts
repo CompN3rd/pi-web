@@ -517,6 +517,10 @@ async function readPiWebPackageConfig(root: string): Promise<PiWebPackageConfig 
   if (!isWithin(packageRoot, canonicalPackagePath)) {
     throw new Error(`PI WEB plugin package metadata escapes its package: ${packagePath}`);
   }
+  const excludedDirectory = excludedArtifactDirectory(packageRoot, dirname(canonicalPackagePath));
+  if (excludedDirectory !== undefined) {
+    throw new Error(`PI WEB plugin package metadata resolves inside excluded ${excludedDirectory} directory: ${packagePath}`);
+  }
   const content = await readFile(canonicalPackagePath, "utf8").catch(() => undefined);
   if (content === undefined) return undefined;
   const parsed: unknown = JSON.parse(content);

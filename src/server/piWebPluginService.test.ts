@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, realpath, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveAgentProfileAccessError } from "./activeAgentProfileProvider.js";
+import { computePiWebPluginPackageRevision } from "./piWebPluginCatalog.js";
 import { PiWebPluginCatalog, PiWebPluginService, type PiPackageProvider } from "./piWebPluginService.js";
-import { WorkspaceCatalogProtocolError, type WorkspaceProviderRuntimeReader } from "./workspaces/workspaceCatalog.js";
+import { createWorkspaceProviderRuntimeSnapshot, WorkspaceCatalogProtocolError, type WorkspaceProviderRuntimeReader } from "./workspaces/workspaceCatalog.js";
 
 let tempDir: string;
 
@@ -171,6 +173,75 @@ describe("PiWebPluginService", () => {
     });
     await expect(service.readAsset("server-only", "server.js")).resolves.toBeUndefined();
     await expect(service.readAsset("dual", "browser.js")).resolves.toBeDefined();
+  });
+
+  it("rejects an excluded metadata alias before an equal-revision server entry change can be paired", async () => {
+    const pluginId = "excluded-metadata-pairing";
+    const pluginDir = join(tempDir, "plugins", pluginId);
+    const metadataPath = join(pluginDir, ".git", "package.json");
+    const metadataFor = (serverModule: string) => `${JSON.stringify({
+      piWeb: { plugins: [{ id: pluginId, browserRoot: ".", module: "browser.js", serverModule }] },
+    }, null, 2)}\n`;
+    await mkdir(join(pluginDir, ".git"), { recursive: true });
+    await writeFile(join(pluginDir, "browser.js"), "export default {};\n");
+    await writeFile(join(pluginDir, "server-a.js"), "export default { name: 'A' };\n");
+    await writeFile(join(pluginDir, "server-b.js"), "export default { name: 'B' };\n");
+    await writeFile(metadataPath, metadataFor("server-a.js"));
+    await symlink(metadataPath, join(pluginDir, "package.json"));
+
+    const activeRevision = await computePiWebPluginPackageRevision(pluginDir);
+    await writeFile(metadataPath, metadataFor("server-b.js"));
+    const desiredRevision = await computePiWebPluginPackageRevision(pluginDir);
+    expect(desiredRevision).toBe(activeRevision);
+
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }],
+      packageProvider: false,
+      configProvider: () => ({}),
+      warningSink: () => undefined,
+    });
+    const activeRuntime = createWorkspaceProviderRuntimeSnapshot(
+      [{
+        pluginId,
+        source: "test",
+        scope: "local",
+        moduleRevision: activeRevision,
+        browserRevision: activeRevision,
+        settingsRevision: `sha256:${createHash("sha256").update("{}").digest("hex")}`,
+        machineSpecific: true,
+        state: "active",
+        name: pluginId,
+      }],
+      [{ pluginId, health: { status: "healthy" } }],
+    );
+    const service = new PiWebPluginService({
+      catalog,
+      runtimeProvider: { providerRuntime: () => Promise.resolve(activeRuntime) },
+    });
+
+    await expect(service.manifest()).resolves.toEqual({ lifecycleVersion: 1, plugins: [] });
+    const lifecycle = await service.plugins();
+    expect(lifecycle).toMatchObject({
+      plugins: [{
+        id: pluginId,
+        discovered: false,
+        enabled: false,
+        server: {
+          state: "active",
+          activeRevision,
+          staleRevision: false,
+          restartRequired: true,
+        },
+      }],
+      diagnostics: [{
+        kind: "discovery",
+        snapshot: "desired",
+        source: pluginDir,
+      }],
+      serverRuntime: { status: "available", restartRequired: true },
+    });
+    expect(lifecycle.diagnostics[0]?.message).toContain("package metadata resolves inside excluded .git directory");
+    expect(lifecycle.plugins[0]).not.toHaveProperty("module");
   });
 
   it("pins every server-backed browser asset to the active package content revision", async () => {
