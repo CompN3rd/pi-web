@@ -133,13 +133,11 @@ export function parseProject(value: unknown): Project {
 
 export function parseWorkspace(value: unknown): Workspace {
   const record = requireRecord(value);
-  const branch = optionalString(record, "branch");
   return Object.freeze({
     id: requireString(record, "id"),
     projectId: requireString(record, "projectId"),
     path: requireString(record, "path"),
     label: requireString(record, "label"),
-    ...(branch === undefined ? {} : { branch }),
     isMain: requireBoolean(record, "isMain"),
     ...optionalField("provider", optionalWorkspaceProviderMetadata(record["provider"])),
     ...optionalField("removal", optionalWorkspaceRemovalPresentation(record["removal"])),

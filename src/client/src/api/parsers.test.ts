@@ -572,24 +572,26 @@ describe("API parsers", () => {
     })).toThrow("Invalid session warning severity");
   });
 
-  it("parses workspace effective upload config when present", () => {
-    expect(parseWorkspace({
+  it("parses workspace effective upload config without retaining the removed top-level branch alias", () => {
+    const workspace = parseWorkspace({
       id: "w1",
       projectId: "p1",
       path: "/repo",
       label: "main",
-      branch: "main",
-      isMain: true,
-      effectiveConfig: { uploads: { defaultFolder: "manual/uploads" } },
-    })).toEqual({
-      id: "w1",
-      projectId: "p1",
-      path: "/repo",
-      label: "main",
-      branch: "main",
+      branch: "legacy-wire-alias",
       isMain: true,
       effectiveConfig: { uploads: { defaultFolder: "manual/uploads" } },
     });
+
+    expect(workspace).toEqual({
+      id: "w1",
+      projectId: "p1",
+      path: "/repo",
+      label: "main",
+      isMain: true,
+      effectiveConfig: { uploads: { defaultFolder: "manual/uploads" } },
+    });
+    expect(workspace).not.toHaveProperty("branch");
   });
 
   it("parses generic workspace provider and removal metadata", () => {

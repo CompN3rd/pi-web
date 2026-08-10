@@ -20,9 +20,12 @@ describe("Info plugin copy-diagnostics action", () => {
           projectId: "proj-1",
           path: "/srv/dev/pi-web",
           label: "pi-web",
-          branch: "main",
           isMain: true,
-          provider: { pluginId: "git", capabilities: { request: true, remove: true } },
+          provider: {
+            pluginId: "git",
+            capabilities: { request: true, remove: true },
+            metadata: { branch: "main" },
+          },
         },
       },
     });
@@ -34,7 +37,7 @@ describe("Info plugin copy-diagnostics action", () => {
     expect(summary).toContain("PI WEB diagnostics");
     expect(summary).toContain("Status: unavailable");
     expect(summary).toContain("Machine: devbox (local machine)");
-    expect(summary).toContain("Workspace: pi-web — /srv/dev/pi-web (branch main, provider: git, main workspace)");
+    expect(summary).toContain("Workspace: pi-web — /srv/dev/pi-web (provider: git, main workspace)");
   });
 });
 

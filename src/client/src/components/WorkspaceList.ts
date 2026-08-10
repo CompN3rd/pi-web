@@ -163,12 +163,11 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
   }
 
   private renderWorkspaceDetails(label: string, items: WorkspaceLabelItem[], workspace: Workspace): TemplateResult {
-    const branchCopyAction = workspace.branch === undefined ? "Copy workspace label" : "Copy branch";
     return html`
       <dl class="workspace-menu-details">
         <div class="workspace-detail-row">
-          <dt>${workspace.branch === undefined ? "Workspace" : "Branch"}</dt>
-          <dd>${label}${this.renderDetailCopyButton(`${workspace.id}:branch`, workspace.branch ?? workspace.label, branchCopyAction)}</dd>
+          <dt>Workspace</dt>
+          <dd>${label}${this.renderDetailCopyButton(`${workspace.id}:label`, workspace.label, "Copy workspace label")}</dd>
         </div>
         <div class="workspace-detail-row">
           <dt>Path</dt>
@@ -245,7 +244,7 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
 }
 
 function workspacePrimaryLabel(workspace: Workspace): string {
-  return `${workspace.branch ?? workspace.label}${workspace.isMain ? " · main" : ""}`;
+  return `${workspace.label}${workspace.isMain ? " · main" : ""}`;
 }
 
 function workspaceMenuId(workspaceId: string): string {

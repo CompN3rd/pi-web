@@ -13,6 +13,7 @@ const providerWorkspace = {
   projectId: "project a",
   path: "/repo linked",
   label: "feature/one",
+  branch: "legacy-top-level",
   isMain: true,
   provider: {
     pluginId: "replacement",
@@ -32,7 +33,7 @@ const providerWorkspace = {
 };
 
 describe("SessionDaemonWorkspaceCatalog", () => {
-  it("uses encoded daemon operations and applies browser-v1 compatibility without provider-id branching", async () => {
+  it("uses encoded daemon operations and preserves provider metadata without restoring removed top-level aliases", async () => {
     const request = vi.fn<SessionDaemonRequestClient["request"]>((_method, path) => Promise.resolve(jsonResponse(
       path.endsWith("/w%2F1") ? providerWorkspace : providerResolution([providerWorkspace]),
     )));
@@ -53,11 +54,13 @@ describe("SessionDaemonWorkspaceCatalog", () => {
     });
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({
-      branch: "feature/one",
-      provider: { pluginId: "replacement", metadata: { detached: false } },
+      label: "feature/one",
+      provider: { pluginId: "replacement", metadata: { branch: "feature/one", detached: false } },
       removal: { precondition: "v1.confirmed" },
     });
-    expect(resolved).toMatchObject(listed[0] ?? {});
+    expect(listed[0]).not.toHaveProperty("branch");
+    expect(resolved).toEqual(listed[0]);
+    expect(resolved).not.toHaveProperty("branch");
     expect(Object.isFrozen(resolution)).toBe(true);
     expect(Object.isFrozen(resolution.workspaces)).toBe(true);
     expect(Object.isFrozen(listed[0])).toBe(true);

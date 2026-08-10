@@ -94,24 +94,24 @@ describe("workspace detail copy buttons", () => {
     expect(list.shadowRoot?.querySelector(".workspace-menu-panel")).not.toBeNull();
   });
 
-  it("copies the bare branch name without the main suffix", async () => {
+  it("copies the provider-authored workspace label without interpreting provider branch metadata", async () => {
     const writeText = stubClipboardWriteText(() => Promise.resolve());
-    const list = await mountWorkspaceList([{ ...workspace("ws-a"), branch: "feature-x" }], new Set());
-    openMenu(list, "feature-x");
-    await list.updateComplete;
-
-    detailCopyButton(list, "Copy branch").click();
-    await vi.waitFor(() => { expect(writeText).toHaveBeenCalledWith("feature-x"); });
-  });
-
-  it("offers to copy the workspace label when there is no branch", async () => {
-    const writeText = stubClipboardWriteText(() => Promise.resolve());
-    const list = await mountWorkspaceList([workspace("ws-a")], new Set());
-    openMenu(list, "ws-a");
+    const listed = workspace("ws-a", {
+      label: "review app",
+      provider: {
+        pluginId: "workspace-provider",
+        capabilities: { request: true, remove: false },
+        metadata: { branch: "feature-x" },
+      },
+    });
+    const list = await mountWorkspaceList([listed], new Set());
+    openMenu(list, "review app");
     await list.updateComplete;
 
     detailCopyButton(list, "Copy workspace label").click();
-    await vi.waitFor(() => { expect(writeText).toHaveBeenCalledWith("ws-a"); });
+    await vi.waitFor(() => { expect(writeText).toHaveBeenCalledWith("review app"); });
+    expect(list.shadowRoot?.querySelector(".workspace-detail-row dt")?.textContent).toBe("Workspace");
+    expect(list.shadowRoot?.querySelector("[aria-label='Copy branch']")).toBeNull();
   });
 
   it("keeps the copy action unchanged when the clipboard write fails", async () => {

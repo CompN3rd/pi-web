@@ -295,8 +295,11 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
               <p>
                 Browser entries default-export <code>{ apiVersion: 2, name, activate }</code>. The host rejects v1 with
                 an attributed unsupported-version error; no browser-v1 shim is provided. Server entries remain on
-                <code>apiVersion: 1</code>. During migration, replace browser-v1 Git aliases with provider metadata and
-                <code>refreshWorkspacePanels()</code>/<code>onInvalidate()</code>.
+                <code>apiVersion: 1</code>. During migration, replace browser-v1 Git aliases, including top-level
+                <code>workspace.branch</code>, with provider metadata and
+                <code>refreshWorkspacePanels()</code>/<code>onInvalidate()</code>. Generic presentation uses the
+                provider-authored <code>workspace.label</code>; provider-specific facts belong in
+                <code>workspace.provider.metadata</code> or the owning backend.
               </p>
               <p>
                 Browser activation <code>pluginId</code> is the stable package/source id on every machine and matches

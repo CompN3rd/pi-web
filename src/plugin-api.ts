@@ -140,8 +140,6 @@ export interface Workspace {
   readonly projectId: string;
   readonly path: string;
   readonly label: string;
-  /** @deprecated Provider-neutral browser integrations should use provider metadata. */
-  readonly branch?: string;
   readonly isMain: boolean;
   readonly provider?: WorkspaceProviderMetadata;
   readonly removal?: WorkspaceRemovalPresentation;

@@ -27,7 +27,6 @@ import {
   WORKSPACE_PROVIDER_RUNTIME_PROTOCOL_VERSION,
   type WorkspaceCatalog,
   type WorkspaceProviderRuntimeSnapshot,
-  withBrowserV1WorkspaceCompatibility,
 } from "./workspaceCatalog.js";
 
 const WORKSPACE_CATALOG_PATH = "/workspace-catalog";
@@ -53,7 +52,7 @@ export class SessionDaemonWorkspaceCatalog implements WorkspaceCatalog {
     if (workspace.projectId !== projectId || workspace.id !== workspaceId) {
       throw protocolError("workspace resolution response did not match the requested project and workspace");
     }
-    return withBrowserV1WorkspaceCompatibility(workspace);
+    return workspace;
   }
 
   async providerRuntime(): Promise<WorkspaceProviderRuntimeSnapshot> {
@@ -106,8 +105,7 @@ function parseWorkspaceProviderResolution(value: unknown, expectedProjectId: str
     throw protocolError("folder workspace resolution must not identify a provider owner");
   }
 
-  const workspaces = parseWorkspaceList(value["workspaces"], projectId)
-    .map(withBrowserV1WorkspaceCompatibility);
+  const workspaces = parseWorkspaceList(value["workspaces"], projectId);
   const diagnostics = parseArray(
     value["diagnostics"],
     "workspace provider diagnostics",
@@ -187,7 +185,6 @@ function parseWorkspace(value: unknown, label: string): WorkspaceListing {
   if (!isRecord(value)) throw protocolError(`${label} must be an object`);
   const path = requireString(value, "path", label);
   if (!isAbsolute(path)) throw protocolError(`${label} path must be absolute`);
-  const branch = optionalString(value, "branch", label);
   const provider = value["provider"] === undefined ? undefined : parseProvider(value["provider"], label);
   const removal = value["removal"] === undefined ? undefined : parseRemoval(value["removal"], label);
   return Object.freeze({
@@ -195,7 +192,6 @@ function parseWorkspace(value: unknown, label: string): WorkspaceListing {
     projectId: requireString(value, "projectId", label),
     path,
     label: requireString(value, "label", label),
-    ...(branch === undefined ? {} : { branch }),
     isMain: requireBoolean(value, "isMain", label),
     ...(provider === undefined ? {} : { provider }),
     ...(removal === undefined ? {} : { removal }),

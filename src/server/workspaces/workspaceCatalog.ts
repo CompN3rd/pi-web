@@ -74,19 +74,3 @@ export function workspaceCatalogHttpStatus(error: unknown, fallbackStatus: numbe
   }
   return fallbackStatus;
 }
-
-/**
- * Browser plugin v1 expects a top-level branch label. During the migration, an
- * owner may publish that deprecated value as public metadata; core does not
- * branch on provider identity and replacements are not required to publish it.
- */
-export function withBrowserV1WorkspaceCompatibility(workspace: WorkspaceListing): WorkspaceListing {
-  const metadata = workspace.provider?.metadata;
-  if (metadata === undefined) return workspace;
-
-  const branch = metadata["branch"];
-  return Object.freeze({
-    ...workspace,
-    ...(typeof branch === "string" ? { branch } : {}),
-  });
-}

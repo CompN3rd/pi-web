@@ -565,7 +565,7 @@ interface PluginActivationContext {
 
 `activate()` is called once when the UI loads the plugin. Keep it cheap and synchronous: define contributions there, but move expensive or async work into actions, custom elements, or explicit user interactions.
 
-Browser API v2 is a deliberate break: the host rejects browser v1 entries with the plugin/module identity and expected version; there is no v1 compatibility shim. Migrate a browser entry by setting `apiVersion: 2`, using stable `pluginId` for package/provider ownership, and using `runtimePluginId` when constructing a host-qualified contribution reference. Replace browser-v1 `refreshGit` with `refreshWorkspacePanels()` plus panel `onInvalidate()`, and read provider-specific facts from `workspace.provider.metadata` instead of `isGitRepo`/`isGitWorktree`. The former `@jmfederico/pi-web/plugin-api/unstable` type path is not part of v2 and is no longer exported.
+Browser API v2 is a deliberate break: the host rejects browser v1 entries with the plugin/module identity and expected version; there is no v1 compatibility shim. Migrate a browser entry by setting `apiVersion: 2`, using stable `pluginId` for package/provider ownership, and using `runtimePluginId` when constructing a host-qualified contribution reference. Replace browser-v1 `refreshGit` with `refreshWorkspacePanels()` plus panel `onInvalidate()`. The browser-v1 `isGitRepo`, `isGitWorktree`, and top-level `workspace.branch` aliases were removed; use the provider-authored `workspace.label` for generic presentation, and keep provider-specific facts in `workspace.provider.metadata` or the owning backend. The former `@jmfederico/pi-web/plugin-api/unstable` type path is not part of v2 and is no longer exported.
 
 Contribution ids authored in arrays remain local to the plugin. PI WEB qualifies them internally under the runtime identity:
 
@@ -888,12 +888,10 @@ interface Workspace {
     readonly metadata?: JsonObject;
   };
   readonly removal?: { readonly actionLabel: string; readonly confirmation: string };
-  /** @deprecated Provider-neutral browser integrations should use provider metadata. */
-  readonly branch?: string;
 }
 ```
 
-`machine.id` is included in panel contexts so plugins can keep caches machine-scoped. Do not infer the selected machine from global browser state. Use `workspace.provider` for provider-neutral integrations: its `pluginId` is the stable source id, and provider-published details such as Git status live in `workspace.provider.metadata`, which the server provider fills from browser-public `publicMetadata`. `capabilities.remove` describes only this workspace, not the provider in general. The legacy `isGitRepo`/`isGitWorktree` browser-v1 fields were removed; `branch` remains a deprecated legacy wire field and is not part of the server provider contract.
+`machine.id` is included in panel contexts so plugins can keep caches machine-scoped. Do not infer the selected machine from global browser state. Use the provider-authored `workspace.label` for provider-neutral presentation. `workspace.provider.pluginId` is the stable source id, and provider-published details such as Git status live in `workspace.provider.metadata`, which the server provider fills from browser-public `publicMetadata`. Provider-specific browser code may interpret metadata it owns; PI WEB core does not assign branch semantics to the generic workspace shape. `capabilities.remove` describes only this workspace, not the provider in general. The browser-v1 `isGitRepo`, `isGitWorktree`, and top-level `branch` aliases were removed.
 
 Use existing classes such as `toolbar`, `viewer`, `empty`, and `muted` for panel content when possible. Do not assume a panel owns the whole page; keep layout contained.
 

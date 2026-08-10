@@ -361,8 +361,6 @@ export interface Workspace {
   readonly projectId: string;
   readonly path: string;
   readonly label: string;
-  /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
-  readonly branch?: string;
   readonly isMain: boolean;
   readonly provider?: WorkspaceProviderMetadata;
   readonly removal?: WorkspaceRemovalHostState;
