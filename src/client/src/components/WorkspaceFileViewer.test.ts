@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileContentResponse } from "../api";
 import { MAX_INLINE_PREVIEW_BYTES } from "../../../shared/workspaceFiles";
-import type { WorkspaceFileViewMode, WorkspaceFileViewModeStore } from "../workspaceFileViewMode";
+import { workspaceFileViewModeStore, type WorkspaceFileViewMode, type WorkspaceFileViewModeStore } from "../workspaceFileViewMode";
 import { WorkspaceFileViewer, workspaceFilePreviewKind, workspaceFileViewerIdentityKey, type WorkspaceFileViewerIdentity } from "./WorkspaceFileViewer";
 
 afterEach(() => {
@@ -11,6 +11,7 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  window.history.replaceState({}, "", "/");
 });
 
 describe("workspace-file-viewer", () => {
@@ -139,6 +140,46 @@ describe("workspace-file-viewer", () => {
     viewer.file = image;
     await viewer.updateComplete;
     expect(store.published).toEqual(["preview", "raw"]);
+  });
+
+  it("restores each file history entry's rendered mode through Back and Forward", async () => {
+    const first = textFile("first.html", "<p>first</p>", { mediaType: "html", language: "html" });
+    const second = textFile("second.html", "<p>second</p>", { mediaType: "html", language: "html" });
+    replaceWorkspaceFileHistory(first.path, "raw");
+    const viewer = await mountViewer(first, { modeStore: workspaceFileViewModeStore });
+    expectHtmlMode(viewer, first.path, "raw");
+
+    const files = new Map([[first.path, first], [second.path, second]]);
+    const restoreFileFromRoute = (): void => {
+      const selectedPath = workspaceFileHistoryValue(WORKSPACE_FILE_PATH_QUERY_KEY) ?? undefined;
+      viewer.selectedPath = selectedPath;
+      viewer.file = selectedPath === undefined ? undefined : files.get(selectedPath);
+    };
+    window.addEventListener("popstate", restoreFileFromRoute);
+    try {
+      // Ordinary file selection pushes a history entry while retaining the
+      // current mode preference.
+      pushWorkspaceFileHistory(second.path);
+      viewer.selectedPath = second.path;
+      viewer.file = second;
+      await viewer.updateComplete;
+      expectHtmlMode(viewer, second.path, "raw");
+
+      // A mode switch replaces that file's current history entry.
+      modeButton(viewer, "Preview").click();
+      await viewer.updateComplete;
+      expectHtmlMode(viewer, second.path, "preview");
+
+      window.history.back();
+      await viewer.updateComplete;
+      expectHtmlMode(viewer, first.path, "raw");
+
+      window.history.forward();
+      await viewer.updateComplete;
+      expectHtmlMode(viewer, second.path, "preview");
+    } finally {
+      window.removeEventListener("popstate", restoreFileFromRoute);
+    }
   });
 
   it("ignores stale mode controls after a different file is selected", async () => {
@@ -379,6 +420,35 @@ async function mountViewer(file: FileContentResponse | undefined, patch: ViewerP
   document.body.append(viewer);
   await viewer.updateComplete;
   return viewer;
+}
+
+const WORKSPACE_FILE_PATH_QUERY_KEY = "core.workspace.files--file";
+const WORKSPACE_FILE_MODE_QUERY_KEY = "core.workspace.files--mode";
+
+function replaceWorkspaceFileHistory(path: string, mode: WorkspaceFileViewMode): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set(WORKSPACE_FILE_PATH_QUERY_KEY, path);
+  url.searchParams.set(WORKSPACE_FILE_MODE_QUERY_KEY, mode);
+  window.history.replaceState({}, "", url);
+}
+
+function pushWorkspaceFileHistory(path: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set(WORKSPACE_FILE_PATH_QUERY_KEY, path);
+  window.history.pushState({}, "", url);
+}
+
+function workspaceFileHistoryValue(key: string): string | null {
+  return new URL(window.location.href).searchParams.get(key);
+}
+
+function expectHtmlMode(viewer: WorkspaceFileViewer, path: string, mode: WorkspaceFileViewMode): void {
+  expect(workspaceFileHistoryValue(WORKSPACE_FILE_PATH_QUERY_KEY)).toBe(path);
+  expect(workspaceFileHistoryValue(WORKSPACE_FILE_MODE_QUERY_KEY)).toBe(mode);
+  expect(modeButton(viewer, mode === "raw" ? "Raw" : "Preview").getAttribute("aria-pressed")).toBe("true");
+  expect(modeButton(viewer, mode === "raw" ? "Preview" : "Raw").getAttribute("aria-pressed")).toBe("false");
+  expect(viewer.shadowRoot?.querySelector("code-viewer") !== null).toBe(mode === "raw");
+  expect(viewer.shadowRoot?.querySelector("iframe") !== null).toBe(mode === "preview");
 }
 
 const inertPreviewUrl: WorkspaceFileViewer["previewUrlBuilder"] = (_projectId, _workspaceId, path, options) => {
