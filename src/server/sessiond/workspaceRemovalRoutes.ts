@@ -24,6 +24,12 @@ export interface WorkspaceRemover {
 export interface WorkspaceRemovalRouteDependencies {
   projects: WorkspaceRemovalProjectReader;
   removals: WorkspaceRemover;
+  /**
+   * Reports that the project's workspaces may have changed. Called whatever the
+   * outcome, because a removal that fails part way still leaves the provider
+   * listing different from the one status attribution cached.
+   */
+  onWorkspacesMutated: () => void;
 }
 
 /** Internal sessiond endpoint for host-orchestrated provider workspace removal. */
@@ -62,6 +68,7 @@ export function registerWorkspaceRemovalRoutes(
       } catch (error) {
         return await removalRequestFailed(reply, error);
       } finally {
+        dependencies.onWorkspacesMutated();
         cancellation.dispose();
       }
     },

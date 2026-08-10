@@ -1,9 +1,5 @@
 import { isSessionActive, isWorkspaceActivityActive } from "../../shared/activity.js";
-import type { RealtimeEvent, SessionActivity, SessionStatus, TerminalInfo, WorkspaceActivity, WorkspaceActivityResponse } from "../../shared/apiTypes.js";
-
-export interface WorkspaceActivityPublisher {
-  publishRealtime(event: RealtimeEvent): void;
-}
+import type { SessionActivity, SessionStatus, TerminalInfo, WorkspaceActivity, WorkspaceActivityResponse } from "../../shared/apiTypes.js";
 
 interface SessionRecord {
   cwd: string;
@@ -15,11 +11,18 @@ interface TerminalRecord {
   cwd: string;
 }
 
+/**
+ * In-memory record of which working directories currently have session or
+ * terminal activity.
+ *
+ * It publishes nothing itself: attribution and roll-up belong to the machine
+ * status projection, which this service notifies whenever the record changes.
+ */
 export class WorkspaceActivityService {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly terminals = new Map<string, TerminalRecord>();
 
-  constructor(private readonly publisher?: WorkspaceActivityPublisher) {}
+  constructor(private readonly onChanged?: () => void) {}
 
   applySessionStatus(cwd: string, status: SessionStatus): void {
     const previousCwd = this.sessions.get(status.sessionId)?.cwd;
@@ -29,7 +32,7 @@ export class WorkspaceActivityService {
     if (!isSessionActive(status) && record.activity?.phase === "active") delete record.activity;
     this.sessions.set(status.sessionId, record);
     this.pruneIdleSession(status.sessionId);
-    this.publishChangedCwds(previousCwd, cwd);
+    this.notifyChangedCwds(previousCwd, cwd);
   }
 
   applySessionActivity(cwd: string, activity: SessionActivity): void {
@@ -39,13 +42,13 @@ export class WorkspaceActivityService {
     record.activity = activity;
     this.sessions.set(activity.sessionId, record);
     this.pruneIdleSession(activity.sessionId);
-    this.publishChangedCwds(previousCwd, cwd);
+    this.notifyChangedCwds(previousCwd, cwd);
   }
 
   removeSession(sessionId: string, cwd?: string): void {
     const previousCwd = this.sessions.get(sessionId)?.cwd ?? cwd;
     this.sessions.delete(sessionId);
-    this.publishCwd(previousCwd);
+    this.notifyCwd(previousCwd);
   }
 
   reconcileSessionActivity(cwd: string, sessionIds: Iterable<string>): void {
@@ -56,20 +59,20 @@ export class WorkspaceActivityService {
       this.sessions.delete(sessionId);
       changed = true;
     }
-    if (changed) this.publishCwd(cwd);
+    if (changed) this.notifyCwd(cwd);
   }
 
   updateTerminal(terminal: Pick<TerminalInfo, "id" | "cwd" | "exited">): void {
     const previousCwd = this.terminals.get(terminal.id)?.cwd;
     if (terminal.exited) this.terminals.delete(terminal.id);
     else this.terminals.set(terminal.id, { cwd: terminal.cwd });
-    this.publishChangedCwds(previousCwd, terminal.cwd);
+    this.notifyChangedCwds(previousCwd, terminal.cwd);
   }
 
   removeTerminal(terminalId: string, cwd?: string): void {
     const previousCwd = this.terminals.get(terminalId)?.cwd ?? cwd;
     this.terminals.delete(terminalId);
-    this.publishCwd(previousCwd);
+    this.notifyCwd(previousCwd);
   }
 
   snapshot(): WorkspaceActivityResponse {
@@ -84,14 +87,19 @@ export class WorkspaceActivityService {
     if (record !== undefined && !isSessionActive(record.status, record.activity)) this.sessions.delete(sessionId);
   }
 
-  private publishChangedCwds(previousCwd: string | undefined, cwd: string): void {
-    this.publishCwd(previousCwd);
-    if (previousCwd !== cwd) this.publishCwd(cwd);
+  private notifyChangedCwds(previousCwd: string | undefined, cwd: string): void {
+    this.notifyCwd(previousCwd);
+    if (previousCwd !== cwd) this.notifyCwd(cwd);
   }
 
-  private publishCwd(cwd: string | undefined): void {
+  /**
+   * The listener recomputes the whole projection, so it is told that something
+   * changed rather than which cwd changed. Repeated notifications are harmless:
+   * the projection publishes only when the computed tree actually differs.
+   */
+  private notifyCwd(cwd: string | undefined): void {
     if (cwd === undefined || cwd === "") return;
-    this.publisher?.publishRealtime({ type: "workspace.activity", activity: this.summaryForCwd(cwd) });
+    this.onChanged?.();
   }
 
   private activeCwds(): string[] {

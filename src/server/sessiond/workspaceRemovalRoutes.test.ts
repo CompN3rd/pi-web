@@ -41,7 +41,8 @@ afterEach(async () => {
 describe("session daemon workspace removal routes", () => {
   it("resolves the registered project and returns the host-owned command run", async () => {
     const remove = vi.fn<WorkspaceRemover["remove"]>(() => Promise.resolve(run));
-    registerWorkspaceRemovalRoutes(app, { projects: projectReader(), removals: { remove } });
+    const onWorkspacesMutated = vi.fn();
+    registerWorkspaceRemovalRoutes(app, { projects: projectReader(), removals: { remove }, onWorkspacesMutated });
 
     const response = await app.inject({
       method: "DELETE",
@@ -56,13 +57,15 @@ describe("session daemon workspace removal routes", () => {
     expect(call?.slice(0, 3)).toEqual([project, "linked", "v1.confirmed"]);
     expect(call?.[3]).toBeInstanceOf(AbortSignal);
     expect(call?.[3].aborted).toBe(false);
+    expect(onWorkspacesMutated).toHaveBeenCalledTimes(1);
   });
 
   it("serializes project, safety, and unexpected failures without a stack", async () => {
     const remove = vi.fn()
       .mockRejectedValueOnce(new WorkspaceRemovalError("Workspace owner is no longer current", 409))
       .mockRejectedValueOnce(new Error("unexpected failure"));
-    registerWorkspaceRemovalRoutes(app, { projects: projectReader(), removals: { remove } });
+    const onWorkspacesMutated = vi.fn();
+    registerWorkspaceRemovalRoutes(app, { projects: projectReader(), removals: { remove }, onWorkspacesMutated });
 
     const payload = { precondition: "v1.confirmed" };
     const missing = await app.inject({ method: "DELETE", url: "/workspace-removals/projects/missing/workspaces/linked", payload });
@@ -76,12 +79,15 @@ describe("session daemon workspace removal routes", () => {
     expect(failed.statusCode).toBe(500);
     expect(failed.json()).toEqual({ error: "unexpected failure" });
     expect(failed.body).not.toContain("stack");
+    // A removal that reached the provider and then failed may still have
+    // changed the workspace listing, so cached attribution is dropped too.
+    expect(onWorkspacesMutated).toHaveBeenCalledTimes(2);
   });
 
   it("rejects an absent confirmation precondition before project or removal work", async () => {
     const requireProject = vi.fn(projectReader().requireProject);
     const remove = vi.fn(() => Promise.resolve(run));
-    registerWorkspaceRemovalRoutes(app, { projects: { requireProject }, removals: { remove } });
+    registerWorkspaceRemovalRoutes(app, { projects: { requireProject }, removals: { remove }, onWorkspacesMutated: vi.fn() });
 
     const response = await app.inject({
       method: "DELETE",

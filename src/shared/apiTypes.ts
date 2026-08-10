@@ -1,3 +1,4 @@
+import type { MachineStatusUiEvent } from "./machineStatus.js";
 import type { WorkspaceFileMediaType } from "./workspaceFiles.js";
 
 export type MachineKind = "local" | "remote";
@@ -1359,4 +1360,4 @@ export type GlobalSessionEvent =
   | SessionNotificationSummaryEvent
   | SessionUnreadEvent
   | SessionStartupProgressEvent;
-export type RealtimeEvent = GlobalSessionEvent | TerminalUiEvent | WorkspaceActivityUiEvent;
+export type RealtimeEvent = GlobalSessionEvent | TerminalUiEvent | WorkspaceActivityUiEvent | MachineStatusUiEvent;

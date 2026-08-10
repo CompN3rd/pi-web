@@ -997,6 +997,9 @@ export class PiWebApp extends LitElement {
   private handleRealtimeEvent(machineId: string, event: BrowserRealtimeEvent): void {
     if (event.type === "sessions.unread") this.sessionUnread.applyEvent(machineId, event);
     else if (event.type === "workspace.activity") this.activity.applyWorkspaceActivity(event.activity);
+    // The machine status projection is not rendered yet; frames are dropped
+    // until the controller that owns them lands.
+    else if (event.type === "machine.status") return;
     else if (isTerminalEvent(event)) {
       this.applyTerminalEvent(event);
       if (event.type === "terminal.exited") void this.refreshWorkspaceDeletionRuns();

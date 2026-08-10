@@ -43,6 +43,15 @@ export interface MachineStatusSnapshot {
   generatedAt: string;
 }
 
+/**
+ * Realtime frame carrying a complete snapshot. There is no delta frame, so a
+ * receiver either accepts the whole tree or keeps the one it already had.
+ */
+export interface MachineStatusUiEvent {
+  type: "machine.status";
+  status: MachineStatusSnapshot;
+}
+
 /** The complete set of flags PI WEB itself publishes today. */
 export const CORE_STATUS_FLAGS = {
   /** A session in the subtree has work in progress (`isSessionActive`). */

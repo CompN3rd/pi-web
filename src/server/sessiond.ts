@@ -5,6 +5,9 @@ import Fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { WorkspaceActivityService } from "./activity/workspaceActivityService.js";
 import { registerWorkspaceActivityRoutes } from "./activity/workspaceActivityRoutes.js";
+import { MachineStatusService } from "./status/machineStatusService.js";
+import { registerMachineStatusRoutes } from "./status/machineStatusRoutes.js";
+import { CachedWorkspaceAttribution } from "./status/workspaceAttribution.js";
 import { SessionEventHub } from "./realtime/sessionEventHub.js";
 import { AuthService } from "./sessions/authService.js";
 import { bootstrapAndFreezeGlobalExtensionProviders } from "./sessions/globalProviderPolicy.js";
@@ -141,7 +144,10 @@ async function createSessionDaemonRuntime() {
       },
     });
     await unreadStore.load();
-    const workspaceActivity = new WorkspaceActivityService(eventHub);
+    // Activity and status are mutually dependent by design: the record notifies
+    // the projection, the projection reads the record. The notification runs
+    // long after both are constructed.
+    const workspaceActivity = new WorkspaceActivityService(() => { machineStatus.notifyChanged(); });
     const auth = await AuthService.create({ agentDir: activeAgentProfile.dir, logger: app.log });
     // Capture providers registered by global extensions while the runtime is
     // still mutable, then freeze every later extension-provider mutation before
@@ -170,6 +176,26 @@ async function createSessionDaemonRuntime() {
       serverPlugins.safeStartLevel(),
       serverPlugins.catalogDiagnostics(),
     );
+    const statusAttribution = new CachedWorkspaceAttribution({
+      projects,
+      workspaces: workspaceProviders,
+      logger: app.log,
+    });
+    const machineStatus = new MachineStatusService({
+      activity: workspaceActivity,
+      unread: unreadStore,
+      attribution: statusAttribution,
+      publisher: { publish: (snapshot) => { eventHub.publishRealtime({ type: "machine.status", status: snapshot }); } },
+      logger: app.log,
+    });
+    // Every global subscriber is handed the current projection on connect, so a
+    // browser never has to reconcile a snapshot fetch against live frames.
+    eventHub.setGlobalJoinFrame(() => ({ type: "machine.status", status: machineStatus.snapshot() }));
+    // Unread state was loaded from disk above, so the projection is computed
+    // once at startup instead of waiting for the first change. It is not
+    // awaited: resolving it lists workspaces through provider plugins, and
+    // daemon startup must not depend on how long that takes.
+    machineStatus.notifyChanged();
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
     const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
     const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
@@ -192,6 +218,7 @@ async function createSessionDaemonRuntime() {
       extensionDialogsTimeoutMs: config.extensionDialogsTimeoutMs,
       notificationStore,
       unreadStore,
+      onUnreadChanged: () => { machineStatus.notifyChanged(); },
       catalogRefreshStatus: catalogRefresher,
       sessionManager: createPiSessionManagerGateway({
         agentDir: activeAgentProfile.dir,
@@ -225,7 +252,7 @@ async function createSessionDaemonRuntime() {
         onFailure: () => { process.exitCode = 1; },
       });
     };
-    return { eventHub, workspaceActivity, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    return { eventHub, workspaceActivity, machineStatus, statusAttribution, auth, sessions, terminals, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals, shutdown };
   } catch (error) {
     try {
       await serverPlugins.stop();
@@ -236,8 +263,9 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, workspaceActivity, auth, sessions, terminals, runtimeComponent, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, workspaceActivity, machineStatus, statusAttribution, auth, sessions, terminals, runtimeComponent, projects, workspaceProviders, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
   registerWorkspaceActivityRoutes(app, workspaceActivity);
+  registerMachineStatusRoutes(app, machineStatus);
   registerAuthRoutes(app, auth);
   registerSessionRoutes(app, sessions, eventHub);
   registerTerminalRoutes(app, terminals);
@@ -249,10 +277,12 @@ function registerSessionDaemonRoutes({ eventHub, workspaceActivity, auth, sessio
   registerPluginBackendRoutes(app, {
     projects,
     backends: workspaceProviders,
+    onWorkspacesMutated: () => { statusAttribution.invalidate(); },
   });
   registerWorkspaceRemovalRoutes(app, {
     projects,
     removals: workspaceRemovals,
+    onWorkspacesMutated: () => { statusAttribution.invalidate(); },
   });
 
   app.get("/health", () => ({
