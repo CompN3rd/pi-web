@@ -33,7 +33,7 @@ export interface FileTreeResponse {
     scannedAt: string;
     truncated: boolean;
 }
-export type FileContentMediaType = "image";
+export type FileContentMediaType = "image" | "html" | "pdf" | "markdown";
 export interface FileContentResponse {
     path: string;
     language?: string;

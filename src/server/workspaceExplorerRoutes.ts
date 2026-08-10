@@ -5,7 +5,9 @@ import type { ProjectService } from "./projects/projectService.js";
 import { deleteWorkspaceFile, moveWorkspaceFile, readWorkspaceFile, writeWorkspaceFile } from "./workspaces/fileContentService.js";
 import { isAbsoluteishFileSuggestionQuery, listFileSuggestions, listPathSuggestions } from "./workspaces/fileSuggestions.js";
 import { listWorkspaceTree } from "./workspaces/fileTreeService.js";
-import { readWorkspaceImagePreview } from "./workspaces/imagePreviewService.js";
+import { readWorkspaceFilePreview } from "./workspaces/filePreviewService.js";
+import { workspaceFilePreviewResponsePolicy } from "./workspaces/filePreviewResponsePolicy.js";
+import { applyWorkspaceFilePreviewErrorResponsePolicy } from "./workspaces/filePreviewResponseHeaders.js";
 import { resolveWorkspaceContext } from "./workspaces/workspaceContext.js";
 import { pathAccessForWorkspaceContext } from "./workspaces/effectivePathAccess.js";
 import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
@@ -70,19 +72,23 @@ export function registerWorkspaceExplorerRoutes(app: FastifyInstance, projects: 
     }
   });
 
-  app.get<{ Params: { projectId: string; workspaceId: string }; Querystring: { path?: string } }>(`${prefix}/projects/:projectId/workspaces/:workspaceId/file/preview`, async (request, reply) => {
+  app.get<{ Params: { projectId: string; workspaceId: string }; Querystring: { path?: string; download?: string } }>(`${prefix}/projects/:projectId/workspaces/:workspaceId/file/preview`, async (request, reply) => {
     try {
       const context = await resolveWorkspaceContext(projects, workspaces, request.params.projectId, request.params.workspaceId);
-      const preview = await readWorkspaceImagePreview(context.root, request.query.path, await pathAccessForWorkspaceContext(context, options.config));
+      const download = request.query.download === "1" || request.query.download === "true";
+      const preview = await readWorkspaceFilePreview(context.root, request.query.path, await pathAccessForWorkspaceContext(context, options.config), { download });
+      const policy = workspaceFilePreviewResponsePolicy(preview.path, { download });
       return await reply
-        .type(preview.mimeType)
+        .header("Content-Type", policy.contentType)
         .header("Cache-Control", "private, max-age=3600")
         .header("Content-Length", String(preview.size))
-        .header("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'")
+        .header("Content-Disposition", policy.contentDisposition)
+        .header("Content-Security-Policy", policy.contentSecurityPolicy)
         .header("Last-Modified", new Date(preview.modifiedAt).toUTCString())
-        .header("X-Content-Type-Options", "nosniff")
-        .send(preview.stream);
+        .header("X-Content-Type-Options", policy.contentTypeOptions)
+        .send(preview.body);
     } catch (error) {
+      applyWorkspaceFilePreviewErrorResponsePolicy(reply);
       return sendWorkspaceRequestError(reply, error, 400);
     }
   });

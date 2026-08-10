@@ -23,6 +23,14 @@ const FILES_ROUTE_NAMESPACE = queryNamespace("core:workspace.files");
 type FileExplorerApi = Pick<typeof defaultApi, "workspaceFile" | "workspaceTree">;
 type UploadWorkspaceFiles = typeof defaultUploadWorkspaceFiles;
 
+interface FileRequestIdentity {
+  generation: number;
+  machineId: string;
+  projectId: string;
+  workspaceId: string;
+  path: string;
+}
+
 export interface FileExplorerControllerDependencies {
   api?: FileExplorerApi;
   uploadWorkspaceFiles?: UploadWorkspaceFiles;
@@ -49,6 +57,7 @@ export class FileExplorerController {
   private readonly now: () => string;
   private readonly uploadTasks = new Map<string, WorkspaceUploadTask<WriteWorkspaceFileResponse[]>>();
   private uploadBatchSequence = 0;
+  private fileRequestGeneration = 0;
 
   constructor(
     private readonly getState: GetState,
@@ -97,30 +106,49 @@ export class FileExplorerController {
   }
 
   async selectFile(path: string): Promise<void> {
-    this.setState({ selectedFilePath: path, selectedFileContent: undefined, workspaceTool: "core:workspace.files", mainView: this.getState().mainView === "chat" ? "chat" : "core:workspace.files" });
+    this.setState({
+      selectedFilePath: path,
+      selectedFileContent: undefined,
+      selectedFileLoadError: undefined,
+      workspaceTool: "core:workspace.files",
+      mainView: this.getState().mainView === "chat" ? "chat" : "core:workspace.files",
+    });
     setNamespacedQueryKey(FILES_ROUTE_NAMESPACE, "file", path);
     this.updateUrl({ replace: true });
     await this.restoreFile(path);
   }
 
   async restoreFile(path: string): Promise<void> {
-    const project = this.getState().selectedProject;
-    const workspace = this.getState().selectedWorkspace;
+    const generation = ++this.fileRequestGeneration;
+    const state = this.getState();
+    const project = state.selectedProject;
+    const workspace = state.selectedWorkspace;
     if (project === undefined || workspace === undefined) return;
-    this.setState({ selectedFilePath: path, selectedFileContent: undefined });
+    const request: FileRequestIdentity = {
+      generation,
+      machineId: selectedMachineId(state),
+      projectId: project.id,
+      workspaceId: workspace.id,
+      path,
+    };
+    this.setState({ selectedFilePath: path, selectedFileContent: undefined, selectedFileLoadError: undefined });
     try {
-      const content = await this.api.workspaceFile(project.id, workspace.id, path, selectedMachineId(this.getState()));
-      if (this.getState().selectedFilePath === path) this.setState({ selectedFileContent: content, error: "" });
+      const content = await this.api.workspaceFile(request.projectId, request.workspaceId, request.path, request.machineId);
+      if (!this.isCurrentFileRequest(request)) return;
+      this.setState({ selectedFileContent: content, selectedFileLoadError: undefined, error: "" });
     } catch (error) {
-      if (this.getState().selectedFilePath !== path) return;
-      if (isUnavailableFileError(error)) {
-        this.setState({ selectedFilePath: undefined, selectedFileContent: undefined, error: "" });
-        setNamespacedQueryKey(FILES_ROUTE_NAMESPACE, "file", undefined, { replace: true });
-        this.updateUrl({ replace: true });
-        return;
-      }
-      this.setState({ error: String(error) });
+      if (!this.isCurrentFileRequest(request)) return;
+      this.setState({ selectedFileContent: undefined, selectedFileLoadError: errorMessage(error) });
     }
+  }
+
+  private isCurrentFileRequest(request: FileRequestIdentity): boolean {
+    const state = this.getState();
+    return request.generation === this.fileRequestGeneration
+      && state.selectedFilePath === request.path
+      && state.selectedProject?.id === request.projectId
+      && state.selectedWorkspace?.id === request.workspaceId
+      && selectedMachineId(state) === request.machineId;
   }
 
   startWorkspaceUpload(files: readonly File[], options: StartWorkspaceUploadOptions): WorkspaceUploadRun | undefined {
@@ -239,11 +267,6 @@ export class FileExplorerController {
     const state = this.getState();
     return state.selectedProject?.id === batch.projectId && state.selectedWorkspace?.id === batch.workspaceId && selectedMachineId(state) === batch.machineId;
   }
-}
-
-function isUnavailableFileError(error: unknown): boolean {
-  const message = String(error);
-  return message.includes("Path does not exist") || message.includes("ENOENT") || message.includes("no such file or directory");
 }
 
 function isWorkspaceUploadCancelled(error: unknown): boolean {
