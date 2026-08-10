@@ -2,10 +2,10 @@ import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
 import { createGitBrowserContributions } from "./git-panel.js";
 
 const plugin: PiWebPlugin = {
-  apiVersion: 1,
+  apiVersion: 2,
   name: "Git",
-  activate: ({ pluginId, html, svg }) => ({
-    contributions: createGitBrowserContributions(pluginId, html, svg),
+  activate: ({ pluginId, runtimePluginId, html, svg }) => ({
+    contributions: createGitBrowserContributions(pluginId, runtimePluginId, html, svg),
   }),
 };
 

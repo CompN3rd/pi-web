@@ -103,7 +103,7 @@ describe("PiWebApp plugin host", () => {
     stubPluginLoadRendering(app);
     let activationAttempts = 0;
     const retryable: PiWebPlugin = {
-      apiVersion: 1,
+      apiVersion: 2,
       name: "Retryable",
       activate: () => {
         activationAttempts += 1;
@@ -186,7 +186,7 @@ function stubPluginLoadRendering(app: PiWebApp): void {
 
 function pluginWithPanel(name: string, onInvalidate: (context: WorkspacePanelContext) => void): PiWebPlugin {
   return {
-    apiVersion: 1,
+    apiVersion: 2,
     name,
     activate: ({ html }) => ({
       contributions: {
@@ -197,7 +197,7 @@ function pluginWithPanel(name: string, onInvalidate: (context: WorkspacePanelCon
 }
 
 function emptyPlugin(name: string): PiWebPlugin {
-  return { apiVersion: 1, name, activate: () => ({ contributions: {} }) };
+  return { apiVersion: 2, name, activate: () => ({ contributions: {} }) };
 }
 
 function callAppMethod(app: PiWebApp, name: string, ...args: unknown[]): unknown {

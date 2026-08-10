@@ -9,10 +9,10 @@ Plugins can currently:
 - add compact workspace-label items in the workspace list, panel header, and status bar;
 - call browser APIs and documented PI WEB plugin context helpers;
 - read workspace files and start workspace terminal commands through documented helpers;
-- serve their own static assets from the plugin directory;
+- serve browser-public files from an explicitly declared `browserRoot`;
 - contribute one server-side workspace provider, with optional JSON backend requests and workspace-removal planning.
 
-Browser entries run in the PI WEB page. Declared server entries run in the session daemon through the narrow server-plugin v1 API. Plugins do not get raw Fastify access, arbitrary routes, concrete core services, a generic event bus, Pi model-provider registration, or a general server-hook API. Neither entry is sandboxed.
+Browser entries run in the PI WEB page through browser plugin API v2. Declared server entries run in the session daemon through the separate server-plugin API v1. Plugins do not get raw Fastify access, arbitrary routes, concrete core services, a generic event bus, Pi model-provider registration, or a general server-hook API. Neither entry is sandboxed.
 
 ## Pi packages, Pi extensions, and PI WEB plugins
 
@@ -103,7 +103,7 @@ Before coding, read the PI WEB plugin docs:
 https://pi-web.dev/plugins
 Full API reference:
 https://pi-web.dev/plugins.md
-Keep the plugin compatible with the documented v1 API.
+Keep the browser entry on API v2 and any server entry on API v1.
 After editing, check the manifest endpoint and browser-console failure cases.
 ```
 
@@ -137,7 +137,7 @@ Package metadata:
   "private": true,
   "piWeb": {
     "plugins": [
-      { "id": "info", "module": "pi-web-plugin.js" }
+      { "id": "info", "browserRoot": ".", "module": "pi-web-plugin.js" }
     ]
   }
 }
@@ -147,7 +147,7 @@ Module shape excerpt:
 
 ```js
 export default {
-  apiVersion: 1,
+  apiVersion: 2,
   name: "Info Plugin",
   activate: ({ html, svg }) => ({
     contributions: {
@@ -171,7 +171,7 @@ The bundled `git` plugin is the production example for a paired browser module a
 
 ```text
 pi-web-plugins/git/package.json
-pi-web-plugins/git/pi-web-plugin.ts
+pi-web-plugins/git/browser/pi-web-plugin.ts
 pi-web-plugins/git/server-plugin.ts
 ```
 
@@ -185,6 +185,14 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
 ```
 
 Git declares `machineSpecific: true`, contributes a fallback workspace provider, and implements its status/diff backend and removal plan through the public provider callbacks. It receives no raw routes or private PI WEB services. Use it to understand the demonstrated contract, not as a template for Git-specific fields: replacement providers define their own private data, public metadata, backend operations, and removal wording.
+
+## Copyable standalone workspace-provider example
+
+The repository and published npm package include [`examples/workspace-provider-plugin/`](https://github.com/jmfederico/pi-web/tree/main/examples/workspace-provider-plugin), a small standalone package you can copy without PI WEB source imports. It includes package metadata, a strict NodeNext TypeScript configuration, browser and server source, and build/install instructions.
+
+The example uses browser API v2 and server API v1. Its browser entry compares `workspace.provider.pluginId` with the stable source `pluginId`, uses `runtimePluginId` only to open its qualified panel, displays non-secret `publicMetadata`, and calls the backend owned by the selected workspace. Its server provider conservatively claims only projects containing `.pi-web/example-workspace-provider`. The explicit `browserRoot: "dist/browser"` keeps `dist/server.js`, source, package metadata, and dependencies outside browser asset routes.
+
+Copy the example from a checkout or from `node_modules/@jmfederico/pi-web/examples/workspace-provider-plugin`, then follow its README. It deliberately does not advertise removal; use the removal contract below when adding that capability.
 
 ## Local plugin usage
 
@@ -227,7 +235,9 @@ For portable plugin assets, prefer URLs relative to the plugin module:
 const url = new URL("./asset.json", import.meta.url);
 ```
 
-If a remote plugin constructs absolute asset URLs, it should use the `pluginId` from `activate()` because PI WEB gives remote plugins a gateway-scoped runtime id. Hard-coded `/pi-web-plugins/<original-id>/...` URLs may point at the gateway instead of the remote machine.
+In browser API v2, activation `pluginId` is always the stable package/source id, locally and through federation. Compare it directly with `workspace.provider.pluginId` for ownership. `runtimePluginId` is the separately named host-unique id for qualified contribution references such as `${runtimePluginId}:workspace.panel`; a remote host may machine-scope it.
+
+Do not construct absolute plugin asset routes from either identity. Module-relative URLs keep the host-selected runtime scope and deployment base automatically; hard-coded `/pi-web-plugins/...` paths can point at the wrong machine or break nested deployments.
 
 ## Manage PI WEB plugins
 
@@ -428,10 +438,15 @@ A package can expose one or more PI WEB plugin entries. There is exactly one sup
   "type": "module",
   "piWeb": {
     "plugins": [
-      { "id": "review", "module": "dist/review.js" },
+      {
+        "id": "review",
+        "browserRoot": "dist/review",
+        "module": "dist/review/index.js"
+      },
       {
         "id": "workspaces",
-        "module": "dist/browser.js",
+        "browserRoot": "dist/browser",
+        "module": "dist/browser/index.js",
         "serverModule": "dist/server.js",
         "machineSpecific": true
       },
@@ -445,13 +460,16 @@ Rules:
 
 - `piWeb.plugins` must be an array of objects.
 - Each entry must have an explicit `id` and at least one of `module` or `serverModule`.
-- `id` must match `^[a-z][a-z0-9.-]*$`.
-- Both module paths must be safe relative paths to existing files inside the package root; backslashes, absolute paths, `..`, `.git`, and `node_modules` segments are rejected.
+- `id` must match `^[a-z][a-z0-9.-]*$`. Externally declared ids `core`, `themes`, and every `machine.*` id are reserved for the host and rejected with an attributed package diagnostic.
+- Both module paths must be safe canonical relative paths to existing files inside the package root. Backslashes, absolute or Windows drive-qualified paths, and empty, `.`, `..`, `.git`, or `node_modules` segments are rejected.
+- Every browser entry must declare `browserRoot`; a server-only entry must not. The root is `.` or a safe canonical package-relative directory with no empty, `.`, `..`, `.git`, or `node_modules` segment; Windows drive-qualified roots are rejected. It must resolve inside the package, and the browser module must remain inside it both logically and after symlink resolution.
 - Server entries are imported as Node ES modules. When a `serverModule` uses a `.js` path, declare `"type": "module"` in that plugin package; `.mjs` is the explicit-extension alternative.
 - `machineSpecific` is optional and must be boolean. Browser-only and server-only entries default to `false`. Dual browser/server entries default to `true` and cannot explicitly set it to `false`.
 - `plugins.<id>.settings` must be JSON-compatible for server entries; sessiond captures a private copy at startup and diagnostics expose only a fingerprint.
 - A plugin id has one package owner across its browser and server capabilities. Duplicates are diagnosed and never merged or auto-renamed; later package records are skipped.
 - Legacy shortcuts such as `piWeb.plugin`, string entries in `piWeb.plugins`, `piWeb.id` fallback ids, and no-`package.json` fallbacks are not supported.
+
+Discovery hashes the package (without traversing `.git` or `node_modules`) to produce one package-wide revision and enforce one package-wide artifact budget. A package is rejected when the scan exceeds **4,096 directory entries** or **16 MiB of file content**. These limits include files outside `browserRoot`, even though those files are not served. Keep generated caches and unrelated large artifacts out of the installed plugin package.
 
 ### Manifest and assets
 
@@ -463,7 +481,7 @@ The manifest contains a lifecycle version and each publishable browser module. C
   "plugins": [
     {
       "id": "workspaces",
-      "module": "/pi-web-plugins/workspaces/browser.js?v=<content-revision>",
+      "module": "/pi-web-plugins/workspaces/dist/browser/index.js?v=<content-revision>",
       "backendRevision": "<active-server-revision>",
       "source": "local",
       "scope": "local",
@@ -477,37 +495,49 @@ The browser maps leading application-root references into the current applicatio
 
 `source` describes where the plugin came from (`bundled`, `local`, or the Pi package source). `scope` is `bundled`, `local`, `user`, or `project`. `machineSpecific` controls whether the gateway copy is valid for remote machines or only each selected machine's own copy can appear. A server-only entry has no browser manifest record. A dual entry is omitted unless sessiond reports the exact active, compatible, non-unhealthy package pairing.
 
-At an origin-root deployment, a plugin's static assets are available under:
+At an origin-root deployment, a browser-public file is available under its package-relative path:
 
 ```text
-/pi-web-plugins/<plugin-id>/<path-inside-plugin-root>
+/pi-web-plugins/<plugin-id>/<package-relative-path-under-browserRoot>
 ```
 
-Prefer module-relative asset URLs so they also work for remote machine plugins. For example, a built plugin module can reference an SVG shipped beside it:
+Only files logically inside `browserRoot` and canonically inside that same directory after symlink resolution are captured and served. Files elsewhere in the package—including a sibling server module, source, metadata, and dependencies—return not found through plugin asset routes. Declaring `browserRoot: "."` therefore makes almost the whole scanned package browser-public; prefer a narrow output directory and never place secrets inside it. Unsafe, missing, package-escaping, or module-excluding roots fail discovery with an attributed diagnostic.
+
+Prefer module-relative asset URLs so they also work for remote machine plugins and nested deployments. For example, a built plugin module can reference an SVG shipped beside it:
 
 ```js
 const iconUrl = new URL("./assets/icon.svg", import.meta.url);
 ```
 
-The final installed plugin package must contain `assets/icon.svg` at that path relative to the final built module. PI WEB serves files that already exist in the package; it does not copy a source `public/` directory or apply Vite-style public-directory semantics. Configure the plugin build and package contents to emit or copy the asset into its final module-relative location.
+The final installed plugin package must contain `assets/icon.svg` at that path relative to the final built module and inside `browserRoot`. PI WEB serves files that already exist in the package; it does not copy a source `public/` directory or apply Vite-style public-directory semantics. Configure the plugin build and package contents to emit or copy the asset into its final module-relative location.
 
-PI WEB prevents asset path traversal outside the plugin root. JavaScript, JSON, CSS, HTML, and SVG files get appropriate content types; unknown file types are served as octet-stream.
+PI WEB returns executable JavaScript MIME types for both `.js` and `.mjs`. JSON, CSS, HTML, and SVG receive their corresponding content types; unknown file types are served as octet-stream.
 
-## Browser module shape
+## Browser module shape and v2 migration
 
-TypeScript browser entries should import the published declarations. The built JavaScript must not import PI WEB source internals:
+TypeScript browser entries should use a type-only import from the published declaration entrypoint. The built JavaScript must not import PI WEB source internals:
 
 ```ts
 import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
 
 const plugin: PiWebPlugin = {
-  apiVersion: 1,
+  apiVersion: 2,
   name: "My Plugin",
-  activate: ({ pluginId, html }) => ({
+  activate: ({ pluginId, runtimePluginId, html }) => ({
     contributions: {
-      actions: [],
-      workspacePanels: [],
-      workspaceLabels: [],
+      actions: [{
+        id: "workspace.open",
+        title: "Open my panel",
+        run: ({ selectWorkspaceTool }) => {
+          selectWorkspaceTool(`${runtimePluginId}:workspace.my-panel`);
+        },
+      }],
+      workspacePanels: [{
+        id: "workspace.my-panel",
+        title: "My panel",
+        visible: ({ workspace }) => workspace.provider?.pluginId === pluginId,
+        render: ({ workspace }) => html`<p>${workspace.label}</p>`,
+      }],
     },
   }),
 };
@@ -515,32 +545,35 @@ const plugin: PiWebPlugin = {
 export default plugin;
 ```
 
-The declaration contract is:
+The activation boundary is:
 
 ```ts
 interface PiWebPlugin {
-  apiVersion: 1;
+  apiVersion: 2;
   name: string;
   activate(context: PluginActivationContext): PluginActivationResult;
 }
 
 interface PluginActivationContext {
-  apiVersion: 1;
-  pluginId: string;
-  html: typeof import("lit").html;
-  svg: typeof import("lit").svg;
+  readonly apiVersion: 2;
+  readonly pluginId: string;
+  readonly runtimePluginId: string;
+  readonly html: HtmlTemplateTag;
+  readonly svg: SvgTemplateTag;
 }
 ```
 
 `activate()` is called once when the UI loads the plugin. Keep it cheap and synchronous: define contributions there, but move expensive or async work into actions, custom elements, or explicit user interactions.
 
-The plugin id comes from `package.json`, not from the JavaScript module. Contribution ids are local to the plugin and PI WEB qualifies them internally as:
+Browser API v2 is a deliberate break: the host rejects browser v1 entries with the plugin/module identity and expected version; there is no v1 compatibility shim. Migrate a browser entry by setting `apiVersion: 2`, using stable `pluginId` for package/provider ownership, and using `runtimePluginId` when constructing a host-qualified contribution reference. Replace browser-v1 `refreshGit` with `refreshWorkspacePanels()` plus panel `onInvalidate()`. The browser-v1 `isGitRepo`, `isGitWorktree`, and top-level `workspace.branch` aliases were removed; use the provider-authored `workspace.label` for generic presentation, and keep provider-specific facts in `workspace.provider.metadata` or the owning backend. The former `@jmfederico/pi-web/plugin-api/unstable` type path is not part of v2 and is no longer exported.
+
+Contribution ids authored in arrays remain local to the plugin. PI WEB qualifies them internally under the runtime identity:
 
 ```text
-<plugin-id>:<local-contribution-id>
+<runtime-plugin-id>:<local-contribution-id>
 ```
 
-For example, plugin `info` with action `workspace.show-path` becomes `info:workspace.show-path`.
+For a local plugin the runtime and source ids are normally equal. A federated registration may machine-scope `runtimePluginId`, while `pluginId` and `workspace.provider.pluginId` remain the same source id.
 
 ## Server module and workspace provider shape
 
@@ -591,9 +624,11 @@ interface ServerPluginActivation {
 }
 ```
 
-A server plugin may contribute at most one `workspaceProvider`. The activation context contains its `pluginId`, `packageRoot`, JSON settings snapshot, scoped logger, activation `AbortSignal`, and an argv-based `execFile()` helper. `execFile()` has host-owned timeout/output bounds; pass the current callback's signal into every command request. The API exposes no shell parser, Fastify instance, route registration, concrete service, event bus, or service locator.
+A server plugin may contribute at most one `workspaceProvider`. The host-owned frozen activation context contains its `pluginId`, `packageRoot`, JSON settings snapshot, scoped logger, activation `AbortSignal`, and an argv-based `execFile()` helper. `execFile()` has host-owned timeout/output bounds; pass the current callback's signal into every command request. The API exposes no shell parser, Fastify instance, route registration, concrete service, event bus, or service locator.
 
-Sessiond resolves the enabled catalog once per process start. It imports, validates, activates, and starts each server entry before publishing its contribution. A failed entry is attributed and skipped without aborting ordinary activation of other plugins; a failed `start` is rolled back with `stop` when available. Successful plugins stop in reverse activation order. Sessiond inspects each optional `health()` callback once while building the startup workspace authority; an unhealthy provider is excluded, a degraded provider remains eligible, and that inspection is not polled again during the process lifetime. Lifecycle and provider deadlines are cooperative: plugins must observe the supplied signal, and server entries are never hot-reloaded or unloaded after config/package edits.
+Every activation, lifecycle, provider, and request signal is scoped to that one invocation. The host aborts it when the invocation times out or settles. Do not retain a signal as a plugin-lifetime shutdown notification; release plugin-owned resources in the explicit `stop()` callback. Deadlines remain cooperative, so plugins must observe each supplied signal.
+
+Sessiond resolves the enabled catalog once per process start. It imports, validates, activates, and starts each server entry before publishing its contribution. A failed entry is attributed and skipped without aborting ordinary activation of other plugins; a failed `start` is rolled back with `stop` when available. Successful plugins stop in reverse activation order. Sessiond inspects each optional `health()` callback once while building the startup workspace authority; an unhealthy provider is excluded, a degraded provider remains eligible, and that inspection is not polled again during the process lifetime. Server entries are never hot-reloaded or unloaded after config/package edits.
 
 ### Workspace provider contract
 
@@ -619,12 +654,13 @@ interface ProviderWorkspace {
 
 - `probe()` must return only `"claim"` or `"pass"`. Leave `fallback` unset/false for a replacement that should run before bundled Git.
 - `list()` runs only for the selected owner. Return stable provider-local keys, accessible absolute directory paths, unique paths/keys, non-empty labels, and exactly one main workspace.
-- `data` is round-tripped privately to that provider during the current resolution. `publicMetadata` appears under `workspace.provider.metadata`; do not put secrets in either browser-visible metadata or removal wording.
-- `request()` is optional and receives a validated current owner/workspace plus a bounded operation id, JSON input, and abort signal. It must return JSON.
-- `removal` is display text only and requires `prepareRemove()`. The host re-resolves ownership, enforces generic project/main/current-workspace safety, asks the provider for a title/command plan, and runs the plan as a visible host-owned terminal command.
+- `data` is round-tripped privately to that provider during the current resolution. `publicMetadata` appears under `workspace.provider.metadata` and is visible to **all browser code and API consumers**. Never put secrets in `publicMetadata` or removal wording.
+- `request()` is optional and receives a host-validated frozen current owner/workspace projection plus a bounded operation id, JSON input, and operation-scoped abort signal. It must return JSON.
+- `removal` is display text only and requires `prepareRemove()`. It advertises removal for that specific workspace; browser `workspace.provider.capabilities.remove` is true only when that workspace advertises it and the owning provider implements removal.
+- `prepareRemove()` returns a plan for a visible host-owned terminal run; returning the plan approves the operation but does **not** mean removal has completed. `command` is shell source interpreted by the host's login shell. The host chooses a safe current working directory outside the target, so the provider must use the supplied absolute `workspace.path`, shell-quote it, and keep removal in the foreground. The host records completion when the shell exits, with exit status 0 meaning success.
 - Provider failures and conflicts are diagnostics. A claimant that fails `list()` does not permit fallback takeover for the same resolution.
 
-The declarations installed with the npm package are `plugin-api.d.ts`, `dist/plugin-api.d.ts`, `server-plugin-api.d.ts`, and `dist/server-plugin-api.d.ts`. The canonical import paths are `@jmfederico/pi-web/plugin-api` and `@jmfederico/pi-web/server-plugin-api`.
+The only supported plugin type entrypoints are the type-only package exports `@jmfederico/pi-web/plugin-api` and `@jmfederico/pi-web/server-plugin-api`. Use them with `import type`; there is no runtime JavaScript export. Private `dist/**` deep imports and any other plugin API subpath are not part of the package contract.
 
 ## Contributions
 
@@ -719,7 +755,7 @@ Notes:
 - `openTerminal()` switches to the built-in terminal panel. Pass `{ terminalId }` to deep-link to a specific terminal.
 - `refreshWorkspacePanels()` invokes `onInvalidate` for the selected workspace, either for every plugin panel or for one qualified `panelId`. The callback owns its refresh and should request a render when its visible state changes.
 - `checkForPiWebUpdates()` forces a fresh update check on the selected machine and refreshes `state.piWebStatus`. It is optional so plugins remain compatible with older PI WEB hosts.
-- Only fields documented here and declared in `plugin-api.d.ts` are stable public plugin API. Anything else is experimental: it may become public API later, change shape, or disappear.
+- Only fields documented here and declared by `@jmfederico/pi-web/plugin-api` are stable public browser API. Anything else is experimental: it may become public API later, change shape, or disappear.
 
 ### Prompt editor API
 
@@ -831,8 +867,6 @@ interface WorkspacePanelContext {
 
 `machine`, `workspace`, `files`, optional `backend`, `prompt`, `terminal`, and `host` are documented as stable for panel callbacks. The `files` helper supports `readFile`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Listing workspace files](#listing-workspace-files), and [Writing, deleting, and moving workspace files](#writing-deleting-and-moving-workspace-files). A browser entry with a paired active provider uses `backend.request()` instead of constructing API routes — see [Calling paired workspace backends](#calling-paired-workspace-backends). The `prompt` helper supports panel interactions that insert workspace context into the current prompt — see [Prompt editor API](#prompt-editor-api). Use `terminal.open()` to switch to the built-in terminal panel; pass `{ terminalId }` to deep-link to a specific terminal. `routeAliases` is only for migrating former URL tool/view values. Implement `onInvalidate()` to refresh plugin-owned panel data when an action or host refresh calls `refreshWorkspacePanels()`; call `host.requestRender()` when async state changes should make PI WEB re-evaluate `badge`, `visible`, or `render`.
 
-For compatibility, PI WEB still provides the old `context.openTerminal()` workspace-panel helper at runtime. It is deprecated, intentionally omitted from the public TypeScript declarations, and planned for removal in v2. Existing JavaScript plugins keep working, while typed plugins should migrate to `context.terminal.open()`.
-
 Useful workspace and machine shapes:
 
 ```ts
@@ -843,23 +877,21 @@ interface PluginMachine {
 }
 
 interface Workspace {
-  id: string;
-  projectId: string;
-  path: string;
-  label: string;
-  isMain: boolean;
-  provider?: {
-    pluginId: string;
-    capabilities: { request: boolean; remove: boolean };
-    metadata?: JsonObject;
+  readonly id: string;
+  readonly projectId: string;
+  readonly path: string;
+  readonly label: string;
+  readonly isMain: boolean;
+  readonly provider?: {
+    readonly pluginId: string;
+    readonly capabilities: { readonly request: boolean; readonly remove: boolean };
+    readonly metadata?: JsonObject;
   };
-  removal?: { actionLabel: string; confirmation: string };
-  /** @deprecated Provider-neutral browser integrations should use provider metadata. */
-  branch?: string;
+  readonly removal?: { readonly actionLabel: string; readonly confirmation: string };
 }
 ```
 
-`machine.id` is included in panel contexts so plugins can keep caches machine-scoped. Do not infer the selected machine from global browser state. Use `workspace.provider` for provider-neutral integrations: provider-published details such as Git status live in `workspace.provider.metadata`, which the server provider fills from its `publicMetadata`. The legacy `isGitRepo`/`isGitWorktree` browser-v1 fields were removed; `branch` remains as a deprecated browser-v1 compatibility field and is not part of the server provider contract.
+`machine.id` is included in panel contexts so plugins can keep caches machine-scoped. Do not infer the selected machine from global browser state. Use the provider-authored `workspace.label` for provider-neutral presentation. `workspace.provider.pluginId` is the stable source id, and provider-published details such as Git status live in `workspace.provider.metadata`, which the server provider fills from browser-public `publicMetadata`. Provider-specific browser code may interpret metadata it owns; PI WEB core does not assign branch semantics to the generic workspace shape. `capabilities.remove` describes only this workspace, not the provider in general. The browser-v1 `isGitRepo`, `isGitWorktree`, and top-level `branch` aliases were removed.
 
 Use existing classes such as `toolbar`, `viewer`, `empty`, and `muted` for panel content when possible. Do not assume a panel owns the whole page; keep layout contained.
 
@@ -957,7 +989,7 @@ if (!customElements.get("my-workspace-badge")) {
 }
 
 export default {
-  apiVersion: 1,
+  apiVersion: 2,
   name: "My Plugin",
   activate: ({ html }) => ({
     contributions: {
@@ -1207,9 +1239,9 @@ Review command strings carefully. They are trusted shell commands executed in th
 
 ## Private and experimental PI WEB APIs
 
-PI WEB's `/api/...` HTTP and WebSocket routes, runtime-only browser fields, source files, Fastify instance, and internal services are private implementation details. They are outside the v1 compatibility promise and may change or disappear.
+PI WEB's `/api/...` HTTP and WebSocket routes, runtime-only browser fields, source files, Fastify instance, and internal services are private implementation details. They are outside the supported browser-v2 and server-v1 package contracts and may change or disappear.
 
-The stable browser API is the documented helpers and declarations in `plugin-api.d.ts`; the stable server API is the narrow contract in `server-plugin-api.d.ts`. Use `context.backend.request()` for paired browser/server work. If browser code intentionally relies on another private surface, keep that dependency local and expect to revisit it after PI WEB upgrades. A server plugin must not import PI WEB source internals.
+The stable browser API is the documented helpers and the type-only `@jmfederico/pi-web/plugin-api` export; the stable server API is the narrow type-only `@jmfederico/pi-web/server-plugin-api` export. Use `context.backend.request()` for paired browser/server work. If browser code intentionally relies on another private surface, keep that dependency local and expect to revisit it after PI WEB upgrades. A server plugin must not import PI WEB source internals or private `dist/**` declarations.
 
 ## Async data and caching
 
@@ -1226,19 +1258,20 @@ PI WEB does not provide a plugin cache/invalidation framework. Keep host callbac
 If you are an AI agent building or editing a PI WEB plugin, follow this checklist:
 
 1. Create or update a package folder with `package.json` and at least one built JavaScript entry. Declare `"type": "module"` when a `.js` server entry is present, or emit it as `.mjs`.
-2. Use `piWeb.plugins` entries shaped as `{ id, module?, serverModule?, machineSpecific? }`; declare at least one module and use ids matching `^[a-z][a-z0-9.-]*$`.
-3. Import browser types only from `@jmfederico/pi-web/plugin-api` and server types only from `@jmfederico/pi-web/server-plugin-api`; do not import source internals.
-4. Default-export `{ apiVersion: 1, name, activate }` from each declared entry.
-5. In a browser entry, return `{ contributions: { actions, workspacePanels, workspaceLabels } }`, keep `activate()` synchronous/cheap, and use the activation context's `html`/`svg` tags.
+2. Use `piWeb.plugins` entries shaped as `{ id, browserRoot?, module?, serverModule?, machineSpecific? }`; declare at least one module, give every browser entry a safe root containing its module, and use non-reserved ids matching `^[a-z][a-z0-9.-]*$`.
+3. Import browser types only from `@jmfederico/pi-web/plugin-api` and server types only from `@jmfederico/pi-web/server-plugin-api`, always with `import type`; do not use private subpaths or source internals.
+4. Default-export `{ apiVersion: 2, name, activate }` from a browser entry and `{ apiVersion: 1, name, activate }` from a server entry.
+5. In a browser entry, use source `pluginId` for ownership and `runtimePluginId` for qualified contribution references; return contributions synchronously and use the activation context's `html`/`svg` tags.
 6. Add actions for command-palette operations, panels for larger workspace UI, and labels for compact inline metadata.
 7. Return arrays synchronously from workspace label `items()`; return an empty array to render nothing.
-8. Use documented browser helpers first: `files`, `terminal`, `backend`, `host.requestRender`, `workspace`, `machine`, `state`, and `prompt`. Never construct PI WEB backend or federation URLs.
-9. In a server entry, return only the demonstrated lifecycle callbacks and at most one `workspaceProvider`; forward every supplied `AbortSignal`.
+8. Use documented browser helpers first: `files`, `terminal`, `backend`, `host.requestRender`, `workspace`, `machine`, `state`, and `prompt`. Never construct PI WEB backend, federation, or absolute asset URLs.
+9. In a server entry, return only the demonstrated lifecycle callbacks and at most one `workspaceProvider`; treat every supplied `AbortSignal` as operation-scoped and forward it to bounded work.
 10. Make provider claims conservative. Return exactly one main workspace, stable keys, absolute accessible directories, JSON data/metadata, and optional request/removal capabilities.
-11. Keep backend operations JSON-only, bounded, and provider-owned. Put no secrets in browser-visible metadata, responses, or diagnostics.
-12. Treat both entries as trusted code. A server module shares sessiond's process and user permissions.
-13. For browser-only edits, reload or hard-reload the page. For a server-backed edit, restart sessiond and then reload the page.
-14. Warn that restarting `pi-web-sessiond.service` may interrupt active sessions/runtime ownership.
+11. Keep backend operations JSON-only, bounded, and provider-owned. Put no secrets in `publicMetadata`, browser responses, removal wording, or diagnostics.
+12. Keep the installed package at or below 4,096 entries and 16 MiB, and keep every browser-public file inside a narrow `browserRoot`.
+13. Treat both entries as trusted code. A server module shares sessiond's process and user permissions.
+14. For browser-only edits, reload or hard-reload the page. For a server-backed edit, restart sessiond and then reload the page.
+15. Warn that restarting `pi-web-sessiond.service` may interrupt active sessions/runtime ownership.
 
 ## Troubleshooting
 
@@ -1257,11 +1290,11 @@ curl http://127.0.0.1:8504/pi-web-plugins/my-plugin/pi-web-plugin.js
 Common issues:
 
 - invalid plugin or contribution id;
-- missing default export, `apiVersion: 1`, non-empty `name`, or `activate` function;
-- missing `package.json`, incorrect `piWeb.plugins` metadata, neither module declared, a `.js` server entry without `"type": "module"`, or a dual entry explicitly marked `machineSpecific: false`;
+- missing default export, browser `apiVersion: 2` or server `apiVersion: 1`, non-empty `name`, or `activate` function;
+- missing `package.json`, incorrect `piWeb.plugins` metadata, neither module declared, missing/unsafe `browserRoot`, a browser module outside its root, a `.js` server entry without `"type": "module"`, or a dual entry explicitly marked `machineSpecific: false`;
 - legacy shortcuts such as `piWeb.plugin`, string plugin entries, or no-`package.json` fallback;
 - duplicate plugin ids; records are diagnosed, skipped rather than merged, and never renamed;
-- entry path is unsafe, points outside the package root, enters `.git`/`node_modules`, or does not exist;
+- entry/root path is unsafe, points outside the package, enters `.git`/`node_modules`, does not exist, or the package exceeds 4,096 entries/16 MiB;
 - package is not installed through Pi or under `$PI_WEB_DATA_DIR/plugins` (`~/.pi-web/plugins` by default);
 - browser import/activation/render failure; check the browser console;
 - server state is failed, incompatible, unhealthy, disabled, missing, stale, or conflicted; check **Settings → PI WEB plugins** and `pi-web logs` on the target machine;

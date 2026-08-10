@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { GitStatusFile } from "./git-contract.js";
-import { pointerName, segmentName } from "./gitFileShared.js";
+import type { GitStatusFile } from "./browser/git-contract.js";
+import { pointerName, segmentName } from "./browser/gitFileShared.js";
 
 describe("pointerName", () => {
   it("renders the moved pointer as <from> → <to>", () => {

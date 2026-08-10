@@ -22,17 +22,14 @@ describe("bundled PI WEB plugins", () => {
       for (const { pattern, message } of forbiddenPatterns) {
         if (pattern.test(content)) violations.push(`${file}: ${message}`);
       }
-      if (content.includes("piWebUnstable") && !content.includes("@jmfederico/pi-web/plugin-api/unstable")) {
-        violations.push(`${file}: piWebUnstable use without explicit unstable type import`);
-      }
     }
 
     expect(violations).toEqual([]);
   });
 
   it("keeps the bundled Git browser graph on the public API and package-local modules", async () => {
-    const entry = resolve("pi-web-plugins/git/pi-web-plugin.ts");
-    const root = resolve("pi-web-plugins/git");
+    const root = resolve("pi-web-plugins/git/browser");
+    const entry = resolve(root, "pi-web-plugin.ts");
     const pending = [entry];
     const visited = new Set<string>();
     const violations: string[] = [];

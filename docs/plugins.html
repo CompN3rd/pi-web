@@ -6,7 +6,7 @@
     <title>PI WEB plugins — extend the UI and workspace providers</title>
     <meta
       name="description"
-      content="Build trusted PI WEB browser plugins and server-backed workspace providers through the public v1 contracts."
+      content="Build trusted PI WEB browser-v2 plugins and server-v1 workspace providers through the public package contracts."
     />
     <link rel="canonical" href="https://pi-web.dev/plugins" />
     <meta property="og:type" content="website" />
@@ -94,6 +94,7 @@
             <a href="#pi-extension-dialogs">Pi extension dialogs</a>
             <a href="#ask-ai">What to ask AI to build</a>
             <a href="#example">Canonical examples</a>
+            <a href="#author-contract">Authoring contract</a>
             <a href="#provider-contract">Workspace providers</a>
             <a href="#built-in-plugins">Built-in plugins</a>
             <a href="#manage-plugins">Manage PI WEB plugins</a>
@@ -113,7 +114,7 @@
                 <li><strong>Action palette commands</strong> for custom workflows.</li>
                 <li><strong>Workspace tools and panels</strong> next to Files and Terminal.</li>
                 <li><strong>Workspace labels</strong> in the workspace list, header, and status bar.</li>
-                <li><strong>Static assets</strong> served from the plugin folder.</li>
+                <li><strong>Browser-public assets</strong> served only from an explicit <code>browserRoot</code>.</li>
                 <li><strong>Browser helpers</strong> for files, terminals, prompts, rendering, and paired backends.</li>
                 <li><strong>One workspace provider</strong> from an optional sessiond server entry.</li>
               </ul>
@@ -240,7 +241,7 @@ Before coding, read the PI WEB plugin docs:
 https://pi-web.dev/plugins
 Full API reference:
 https://pi-web.dev/plugins.md
-Keep the plugin compatible with the documented v1 API.
+Keep the browser entry on API v2 and any server entry on API v1.
 After editing, check the manifest endpoint and browser-console failure cases.</code></pre>
               </div>
             </section>
@@ -248,18 +249,18 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
             <section id="example">
               <h2>Canonical examples</h2>
               <p>
-                The bundled <strong>Info</strong> plugin is the small browser-only example: one action, one workspace
-                label, and one panel. Its metadata and TypeScript source live under
-                <code>pi-web-plugins/info/</code>; builds emit the browser module under
-                <code>dist/pi-web-plugins/info/</code>.
+                The repository and published npm package include a
+                <a href="https://github.com/jmfederico/pi-web/tree/main/examples/workspace-provider-plugin">standalone
+                dual-entry workspace-provider example</a>. Copy <code>examples/workspace-provider-plugin/</code> for
+                package metadata, a strict NodeNext TypeScript build, browser/server source, and concise install guidance.
+                It conservatively claims only projects with an opt-in marker, publishes non-secret metadata, and calls
+                the backend that owns the workspace without Git-specific behavior or PI WEB internal imports.
               </p>
               <p>
-                The bundled <strong>Git</strong> plugin is the production dual-entry example. Its browser and server
-                entries import only public package declarations and package-local code; Git receives no private route or
-                service. Every metadata entry needs an id plus <code>module</code>, <code>serverModule</code>, or both. A
-                <code>.js</code> server entry is Node ESM, so the package must declare <code>"type": "module"</code> (or
-                emit <code>.mjs</code>). Browser-only and server-only entries default to
-                <code>machineSpecific: false</code>; dual entries default to <code>true</code> and cannot set it false.
+                Bundled <strong>Info</strong> remains the small browser-only example under
+                <code>pi-web-plugins/info/</code>. Bundled <strong>Git</strong> is the production provider example; its
+                browser entry moved to <code>pi-web-plugins/git/browser/pi-web-plugin.ts</code>, while its server entry is
+                <code>pi-web-plugins/git/server-plugin.ts</code>.
               </p>
               <div class="code-card">
                 <div class="copy-row">
@@ -271,7 +272,8 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
   "piWeb": {
     "plugins": [{
       "id": "workspaces",
-      "module": "dist/browser.js",
+      "browserRoot": "dist/browser",
+      "module": "dist/browser/index.js",
       "serverModule": "dist/server.js",
       "machineSpecific": true
     }]
@@ -286,9 +288,41 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
                 <pre id="plugin-public-imports"><code>import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
 import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/server-plugin-api";</code></pre>
               </div>
+            </section>
+
+            <section id="author-contract">
+              <h2>Browser v2, server v1, and the package boundary</h2>
               <p>
-                Read the full API, metadata shape, and source pointers in <a href="plugins.md">plugins.md</a>.
+                Browser entries default-export <code>{ apiVersion: 2, name, activate }</code>. The host rejects v1 with
+                an attributed unsupported-version error; no browser-v1 shim is provided. Server entries remain on
+                <code>apiVersion: 1</code>. During migration, replace browser-v1 Git aliases, including top-level
+                <code>workspace.branch</code>, with provider metadata and
+                <code>refreshWorkspacePanels()</code>/<code>onInvalidate()</code>. Generic presentation uses the
+                provider-authored <code>workspace.label</code>; provider-specific facts belong in
+                <code>workspace.provider.metadata</code> or the owning backend.
               </p>
+              <p>
+                Browser activation <code>pluginId</code> is the stable package/source id on every machine and matches
+                <code>workspace.provider.pluginId</code>. Use the separate host-unique <code>runtimePluginId</code> only
+                for qualified contribution references. The only supported type entrypoints are the type-only exports
+                <code>@jmfederico/pi-web/plugin-api</code> and
+                <code>@jmfederico/pi-web/server-plugin-api</code>. The former
+                <code>plugin-api/unstable</code> path and private <code>dist/**</code> deep imports are not contracts.
+              </p>
+              <p>
+                Browser and server module paths must use canonical package-relative form; empty or <code>.</code>
+                segments, traversal, backslashes, and absolute or Windows drive-qualified paths are rejected. Each
+                browser entry must declare a safe package-relative <code>browserRoot</code> containing its module;
+                server-only entries must not declare one. Invalid, missing, package-escaping, symlink-escaping, or
+                module-excluding roots fail discovery. Externally declared ids <code>core</code>, <code>themes</code>,
+                and the <code>machine.*</code> namespace are reserved and rejected.
+              </p>
+              <ul>
+                <li>Only files logically and canonically inside <code>browserRoot</code> are served; everything else in the package stays outside plugin asset routes.</li>
+                <li><code>browserRoot: "."</code> makes almost the whole scanned package browser-public, so prefer a narrow build directory and put no secrets inside it.</li>
+                <li>The package-wide scan allows at most 4,096 entries and 16 MiB of file content, excluding traversal into <code>.git</code> and <code>node_modules</code>; files outside the browser root still count.</li>
+                <li>Both <code>.js</code> and <code>.mjs</code> are served with executable JavaScript MIME types. Prefer module-relative asset URLs for federation and nested deployments.</li>
+              </ul>
             </section>
 
             <section id="provider-contract">
@@ -302,16 +336,22 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
               <p>
                 A server module default-exports <code>{ apiVersion: 1, name, activate }</code>. Activation may return
                 cooperative <code>start</code>, <code>stop</code>, and <code>health</code> callbacks plus at most one
-                provider. Ordinary failures are attributed and quarantined; successful entries stop in reverse order,
-                and server code is never hot-reloaded. Optional health is inspected once while sessiond builds its
-                startup authority: unhealthy providers are excluded, degraded providers remain eligible, and the result
-                is fixed until restart.
+                provider. Every activation, lifecycle, provider, and request signal is scoped to that one invocation and
+                is aborted when it times out or settles; it is not a plugin-lifetime shutdown signal. Release resources
+                in explicit <code>stop()</code>. Server code is never hot-reloaded.
               </p>
               <p>
                 A provider returns stable workspace keys, accessible absolute directories, labels, exactly one main
-                workspace, optional JSON data/browser metadata, and optional request/removal capabilities. PI WEB
-                re-resolves ownership before a backend request or removal plan and retains host-owned path, project,
-                current-workspace, terminal, deadline, and JSON validation.
+                workspace, optional private JSON data, browser-visible <code>publicMetadata</code>, and optional
+                request/removal capabilities. Public metadata is visible to all browser code and API consumers, so it
+                must never contain secrets. <code>capabilities.remove</code> is true only for a workspace that advertises
+                removal and whose owner implements it.
+              </p>
+              <p>
+                A removal plan approves a visible host-owned terminal run; it does not mean removal has completed. Its
+                command is shell source interpreted by the host's login shell from a host-selected safe non-target
+                working directory. Providers must use and shell-quote the supplied absolute workspace path, keep the
+                operation in the foreground, and treat shell exit 0 as successful completion.
               </p>
               <p>
                 Panels and labels receive optional <code>context.backend</code> only when their browser entry has a
@@ -512,6 +552,8 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
                 With <a href="machines">machine federation</a>, the gateway loads compatible browser entries from the
                 selected remote machine while server entries stay in that target's sessiond. Actions, panels, labels,
                 file/terminal helpers, and <code>context.backend.request()</code> all follow the selected machine.
+                Activation <code>pluginId</code> and workspace-provider ownership keep the stable source id;
+                <code>runtimePluginId</code> may be machine-scoped so qualified contributions remain host-unique.
               </p>
               <ul>
                 <li>Paired backend requests carry the source plugin id and active target revision through the gateway.</li>
@@ -572,8 +614,9 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
               </p>
               <p>
                 If you want to understand the API yourself, ask an agent to read that file and explain the relevant
-                public extension points for the plugin you want. Browser private routes/runtime fields and PI WEB source
-                internals are not stable APIs. Server entries must use only the published server-plugin declaration path.
+                public extension points for the plugin you want. Browser private routes/runtime fields, source internals,
+                and <code>dist/**</code> declarations are not stable APIs. Use only the two documented type-only package
+                exports for browser and server entries.
               </p>
             </section>
 
@@ -581,7 +624,8 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
               <h2>Develop and debug</h2>
               <ul>
                 <li>Keep the source folder outside <code>~/.pi-web/plugins</code> and symlink it in.</li>
-                <li>Build entry JavaScript at the exact package-relative paths declared in metadata; declare <code>"type": "module"</code> for a <code>.js</code> server entry or emit <code>.mjs</code>.</li>
+                <li>Build entry JavaScript at the exact package-relative paths declared in metadata, and keep the browser module/assets inside a narrow declared <code>browserRoot</code>.</li>
+                <li>Declare <code>"type": "module"</code> for a <code>.js</code> server entry or emit <code>.mjs</code>.</li>
                 <li>After browser-only edits, reload or hard-reload the tab and check its console.</li>
                 <li>After server edits, restart sessiond, reload the tab, and inspect <code>pi-web logs</code>.</li>
                 <li>Use <strong>Settings → PI WEB plugins</strong> for desired/active, health, conflict, and revision diagnostics.</li>

@@ -67,10 +67,72 @@ describe("PluginRegistry", () => {
     expect(registry.getWorkspacePanels().map((panel) => panel.id)).toEqual(["core:workspace.files", "core:workspace.terminal"]);
   });
 
+  it("rejects legacy browser plugins with an attributed API-version error", () => {
+    const registry = new PluginRegistry();
+    const legacyPlugin: PiWebPlugin = {
+      apiVersion: 2,
+      name: "Legacy",
+      activate: () => ({ contributions: {} }),
+    };
+    Reflect.set(legacyPlugin, "apiVersion", 1);
+
+    expect(() => { registry.register({ id: "legacy", plugin: legacyPlugin }); }).toThrow(
+      "Unsupported browser plugin API version for legacy: 1 (expected 2)",
+    );
+    expect(registry.hasPlugin("legacy")).toBe(false);
+  });
+
+  it("gives federated plugins stable source identity and a separate runtime identity", async () => {
+    const registry = new PluginRegistry();
+    const runtimePluginId = machineScopedPluginId("remote-1", "board-tools");
+    const activate = vi.fn<PiWebPlugin["activate"]>(({ pluginId, runtimePluginId: activationRuntimePluginId }) => ({
+      contributions: {
+        actions: [{
+          id: "open",
+          title: "Open Board",
+          enabled: (context) => context.state.selectedWorkspace?.provider?.pluginId === pluginId,
+          run: (context) => { context.selectWorkspaceTool(`${activationRuntimePluginId}:workspace.board`); },
+        }],
+      },
+    }));
+    registry.register({
+      id: runtimePluginId,
+      sourcePluginId: "board-tools",
+      machineId: "remote-1",
+      machineSpecific: true,
+      plugin: { apiVersion: 2, name: "Board Tools", activate },
+    });
+
+    expect(activate).toHaveBeenCalledOnce();
+    const activationContext = activate.mock.calls[0]?.[0];
+    if (activationContext === undefined) throw new Error("Expected browser plugin activation context");
+    expect(activationContext).toMatchObject({
+      apiVersion: 2,
+      pluginId: "board-tools",
+      runtimePluginId,
+    });
+    expect(Object.isFrozen(activationContext)).toBe(true);
+
+    const owned = createContext({
+      selectedMachine: testMachine("remote-1"),
+      selectedWorkspace: testWorkspace({ provider: { pluginId: "board-tools", capabilities: { request: true, remove: false } } }),
+    });
+    const action = registry.getActions(owned.context)[0];
+    expect(action).toMatchObject({ id: `${runtimePluginId}:open`, enabled: true });
+    await action?.run();
+    expect(owned.calls).toEqual([`selectWorkspaceTool:${runtimePluginId}:workspace.board`]);
+
+    const runtimeOwned = createContext({
+      selectedMachine: testMachine("remote-1"),
+      selectedWorkspace: testWorkspace({ provider: { pluginId: runtimePluginId, capabilities: { request: true, remove: false } } }),
+    });
+    expect(registry.getActions(runtimeOwned.context)[0]?.enabled).toBe(false);
+  });
+
   it("resolves panel and shortcut migrations to the active machine-scoped contribution", () => {
     const registry = new PluginRegistry();
     const plugin: PiWebPlugin = {
-      apiVersion: 1,
+      apiVersion: 2,
       name: "VCS",
       activate: () => ({
         contributions: {
@@ -94,7 +156,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Example",
         activate: ({ html, svg }) => ({
           contributions: {
@@ -122,7 +184,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -155,7 +217,7 @@ describe("PluginRegistry", () => {
       registry.register({
         id: "example",
         plugin: {
-          apiVersion: 1,
+          apiVersion: 2,
           name: "Example",
           activate: () => ({
             contributions: {
@@ -174,7 +236,7 @@ describe("PluginRegistry", () => {
     const registry = new PluginRegistry();
     let fail = true;
     const plugin = {
-      apiVersion: 1 as const,
+      apiVersion: 2 as const,
       name: "Retryable",
       activate: () => ({
         contributions: {
@@ -210,7 +272,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -468,7 +530,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -499,7 +561,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -535,7 +597,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "example",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Example",
         activate: () => ({
           contributions: {
@@ -561,7 +623,7 @@ describe("PluginRegistry", () => {
       machineId: "remote-1",
       sourcePluginId: "project-tools",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Project Tools",
         activate: () => ({
           contributions: {
@@ -597,10 +659,11 @@ describe("PluginRegistry", () => {
       sourcePluginId: "board-tools",
       backendRevision: "server-r7",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Board Tools",
-        activate: ({ pluginId }) => {
-          expect(pluginId).toBe(registrationPluginId);
+        activate: ({ pluginId, runtimePluginId }) => {
+          expect(pluginId).toBe("board-tools");
+          expect(runtimePluginId).toBe(registrationPluginId);
           return {
             contributions: {
               workspacePanels: [{
@@ -667,7 +730,7 @@ describe("PluginRegistry", () => {
     const registry = new PluginRegistry();
     const remotePluginId = machineScopedPluginId("remote-1", "pair-tools");
     const pairedPlugin = (name: string) => ({
-      apiVersion: 1 as const,
+      apiVersion: 2 as const,
       name,
       activate: () => ({
         contributions: {
@@ -722,7 +785,7 @@ describe("PluginRegistry", () => {
       machineId: "remote-1",
       sourcePluginId: "shared-tools",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Remote Shared Tools",
         activate: () => ({
           contributions: {
@@ -739,7 +802,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "shared-tools",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Gateway Shared Tools",
         activate: () => ({
           contributions: {
@@ -771,7 +834,7 @@ describe("PluginRegistry", () => {
       id: "updates",
       machineSpecific: true,
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Gateway Updates",
         activate: () => ({
           contributions: {
@@ -792,7 +855,7 @@ describe("PluginRegistry", () => {
       machineId: "remote-1",
       sourcePluginId: "updates",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Remote Updates",
         activate: () => ({
           contributions: {
@@ -822,7 +885,7 @@ describe("PluginRegistry", () => {
     registry.register({
       id: "status-tools",
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Gateway Status Tools",
         activate: () => ({ contributions: { actions: [{ id: "open", title: "Open Gateway Status", run: () => undefined }] } }),
       },
@@ -836,7 +899,7 @@ describe("PluginRegistry", () => {
       sourcePluginId: "status-tools",
       machineSpecific: true,
       plugin: {
-        apiVersion: 1,
+        apiVersion: 2,
         name: "Remote Status Tools",
         activate: () => ({ contributions: { actions: [{ id: "open", title: "Open Remote Status", run: () => undefined }] } }),
       },
@@ -849,13 +912,13 @@ describe("PluginRegistry", () => {
   it("does not activate remote duplicates when the gateway plugin is already registered", () => {
     const registry = new PluginRegistry();
     const remoteActivate = vi.fn(() => ({ contributions: { actions: [{ id: "remote-action", title: "Remote Action", run: () => undefined }] } }));
-    registry.register({ id: "shared-tools", plugin: { apiVersion: 1, name: "Gateway Shared Tools", activate: () => ({ contributions: {} }) } });
+    registry.register({ id: "shared-tools", plugin: { apiVersion: 2, name: "Gateway Shared Tools", activate: () => ({ contributions: {} }) } });
 
     registry.register({
       id: machineScopedPluginId("remote-1", "shared-tools"),
       machineId: "remote-1",
       sourcePluginId: "shared-tools",
-      plugin: { apiVersion: 1, name: "Remote Shared Tools", activate: remoteActivate },
+      plugin: { apiVersion: 2, name: "Remote Shared Tools", activate: remoteActivate },
     });
 
     expect(remoteActivate).not.toHaveBeenCalled();

@@ -507,4 +507,3 @@ function uploadFileDetail(file: WorkspaceUploadFileState): string {
 function formatPercent(value: number): string {
   return `${String(Math.round(Math.max(0, Math.min(1, value)) * 100))}%`;
 }
-

@@ -19,7 +19,7 @@ describe("bundled Git package metadata", () => {
     expect(metadata).toMatchObject({
       private: true,
       type: "module",
-      piWeb: { plugins: [{ id: "git", module: "pi-web-plugin.js", serverModule: "server-plugin.js" }] },
+      piWeb: { plugins: [{ id: "git", browserRoot: "browser", module: "browser/pi-web-plugin.js", serverModule: "server-plugin.js" }] },
     });
   });
 
@@ -33,7 +33,8 @@ describe("bundled Git package metadata", () => {
         scope: "bundled",
         machineSpecific: true,
         enabled: true,
-        browserModule: { path: "pi-web-plugin.js" },
+        browserRoot: { path: "browser" },
+        browserModule: { path: "browser/pi-web-plugin.js" },
         serverModule: { path: "server-plugin.js" },
       }],
       diagnostics: [],
@@ -133,10 +134,10 @@ async function gitCatalogFixture(enabled: boolean): Promise<{ catalog: PiWebPlug
   tempRoots.push(root);
   const pluginsRoot = join(root, "plugins");
   const pluginRoot = join(pluginsRoot, "git");
-  await mkdir(pluginRoot, { recursive: true });
+  await mkdir(join(pluginRoot, "browser"), { recursive: true });
   await Promise.all([
     writeFile(join(pluginRoot, "package.json"), await readFile("pi-web-plugins/git/package.json", "utf8"), "utf8"),
-    writeFile(join(pluginRoot, "pi-web-plugin.js"), "export default {};\n", "utf8"),
+    writeFile(join(pluginRoot, "browser", "pi-web-plugin.js"), "export default {};\n", "utf8"),
     writeFile(join(pluginRoot, "server-plugin.js"), "export default {};\n", "utf8"),
   ]);
   return {

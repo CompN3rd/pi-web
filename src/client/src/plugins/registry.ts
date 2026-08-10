@@ -32,30 +32,39 @@ export class PluginRegistry {
   private readonly contributionIds = new Set<QualifiedContributionId>();
 
   register(registration: PiWebPluginRegistration): void {
-    const { id, plugin } = registration;
-    this.validatePluginId(id);
-    const machineSpecific = this.parseMachineSpecific(id, registration.machineSpecific);
-    const backendRevision = this.parseBackendRevision(id, registration.backendRevision);
-    if (this.pluginIds.has(id) || this.registeringPluginIds.has(id)) throw new Error(`Duplicate plugin id: ${id}`);
+    const { plugin } = registration;
+    const runtimePluginId = registration.id;
+    const sourcePluginId = registration.sourcePluginId ?? runtimePluginId;
+    this.validatePluginId(runtimePluginId);
+    this.validatePluginId(sourcePluginId);
+    const machineSpecific = this.parseMachineSpecific(runtimePluginId, registration.machineSpecific);
+    const backendRevision = this.parseBackendRevision(runtimePluginId, registration.backendRevision);
+    if (this.pluginIds.has(runtimePluginId) || this.registeringPluginIds.has(runtimePluginId)) throw new Error(`Duplicate plugin id: ${runtimePluginId}`);
     if (this.isRemoteDuplicateHiddenByGateway(registration.sourcePluginId, registration.machineId, machineSpecific)) return;
 
-    this.registeringPluginIds.add(id);
+    this.registeringPluginIds.add(runtimePluginId);
     try {
       const apiVersion: unknown = plugin.apiVersion;
-      if (apiVersion !== 1) throw new Error(`Unsupported plugin API version for ${id}: ${String(apiVersion)}`);
-      const contributions = plugin.activate({ apiVersion: 1, pluginId: id, html, svg }).contributions;
+      if (apiVersion !== 2) throw new Error(`Unsupported browser plugin API version for ${sourcePluginId}: ${String(apiVersion)} (expected 2)`);
+      const contributions = plugin.activate(Object.freeze({
+        apiVersion: 2,
+        pluginId: sourcePluginId,
+        runtimePluginId,
+        html,
+        svg,
+      })).contributions;
       const contributionIds = new Set<QualifiedContributionId>();
-      const actions = (contributions.actions ?? []).map((action) => this.qualifyAction(id, action, registration.machineId, registration.sourcePluginId, contributionIds));
-      const workspacePanels = (contributions.workspacePanels ?? []).map((panel) => this.qualifyWorkspacePanel(id, panel, registration.machineId, registration.sourcePluginId, backendRevision, contributionIds));
-      const workspaceLabels = (contributions.workspaceLabels ?? []).map((contribution) => this.qualifyWorkspaceLabelContribution(id, contribution, registration.machineId, registration.sourcePluginId, backendRevision, contributionIds));
+      const actions = (contributions.actions ?? []).map((action) => this.qualifyAction(runtimePluginId, action, registration.machineId, registration.sourcePluginId, contributionIds));
+      const workspacePanels = (contributions.workspacePanels ?? []).map((panel) => this.qualifyWorkspacePanel(runtimePluginId, panel, registration.machineId, registration.sourcePluginId, backendRevision, contributionIds));
+      const workspaceLabels = (contributions.workspaceLabels ?? []).map((contribution) => this.qualifyWorkspaceLabelContribution(runtimePluginId, contribution, registration.machineId, registration.sourcePluginId, backendRevision, contributionIds));
       const themes = registration.machineId === undefined
-        ? (contributions.themes ?? []).map((theme) => this.qualifyTheme(id, theme, contributionIds))
+        ? (contributions.themes ?? []).map((theme) => this.qualifyTheme(runtimePluginId, theme, contributionIds))
         : [];
       const themePairs = registration.machineId === undefined
-        ? (contributions.themePairs ?? []).map((pair) => this.qualifyThemePair(id, pair, contributionIds))
+        ? (contributions.themePairs ?? []).map((pair) => this.qualifyThemePair(runtimePluginId, pair, contributionIds))
         : [];
 
-      this.pluginIds.add(id);
+      this.pluginIds.add(runtimePluginId);
       for (const contributionId of contributionIds) this.contributionIds.add(contributionId);
       this.actions.push(...actions);
       this.workspacePanels.push(...workspacePanels);
@@ -63,13 +72,13 @@ export class PluginRegistry {
       this.themes.push(...themes);
       this.themePairs.push(...themePairs);
       if (registration.machineId === undefined) {
-        this.gatewayPluginIds.add(id);
-        if (machineSpecific) this.gatewayMachineSpecificPluginIds.add(id);
+        this.gatewayPluginIds.add(runtimePluginId);
+        if (machineSpecific) this.gatewayMachineSpecificPluginIds.add(runtimePluginId);
       } else if (registration.sourcePluginId !== undefined && machineSpecific) {
         addMappedSetValue(this.remoteMachineSpecificPluginIds, registration.sourcePluginId, registration.machineId);
       }
     } finally {
-      this.registeringPluginIds.delete(id);
+      this.registeringPluginIds.delete(runtimePluginId);
     }
   }
 

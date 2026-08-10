@@ -43,6 +43,24 @@ export class WorkspaceFileViewer extends LitElement {
    */
   private selectionToken = 0;
   private failedPreviewToken: number | undefined;
+  private readonly restoreModeFromHistory = (): void => {
+    this.mode = this.modeStore.adopt();
+    // The restored entry owns the address-bar value. Forget the prior entry's
+    // publication so this render can canonicalize a missing/invalid mode too.
+    this.publishedMode = undefined;
+    this.failedPreviewToken = undefined;
+    this.requestUpdate();
+  };
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener("popstate", this.restoreModeFromHistory);
+  }
+
+  override disconnectedCallback(): void {
+    window.removeEventListener("popstate", this.restoreModeFromHistory);
+    super.disconnectedCallback();
+  }
 
   protected override willUpdate(): void {
     this.mode ??= this.modeStore.adopt();

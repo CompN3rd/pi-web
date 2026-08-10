@@ -18,6 +18,7 @@ export {
   type LocalPluginRoot,
   type PiPackageProvider,
   type PiWebPluginCatalogDiagnostic,
+  type PiWebPluginCatalogBrowserRoot,
   type PiWebPluginCatalogDiagnosticCode,
   type PiWebPluginCatalogEntry,
   type PiWebPluginCatalogModule,
@@ -45,6 +46,9 @@ interface CachedBrowserArtifact {
   pluginId: string;
   revision: string;
   entryPath: string;
+  entryFilePath: string;
+  browserRootPath: string;
+  browserRootDirectoryPath: string;
   packageRoot: string;
   backendRevision?: string;
   files: ReadonlyMap<string, Buffer>;
@@ -128,9 +132,15 @@ export class PiWebPluginService {
   ): Promise<CachedBrowserArtifact | undefined> {
     const module = plugin.browserModule;
     if (module === undefined) return undefined;
+    const browserRoot = plugin.browserRoot;
+    if (browserRoot === undefined) throw new Error(`PI WEB plugin has no browser root: ${plugin.id}`);
     const cached = this.browserArtifacts.get(plugin.id);
     if (cached !== undefined) {
       const matches = cached.revision === module.revision
+        && cached.entryPath === module.path
+        && cached.entryFilePath === module.filePath
+        && cached.browserRootPath === browserRoot.path
+        && cached.browserRootDirectoryPath === browserRoot.directoryPath
         && cached.packageRoot === plugin.packageRoot
         && cached.backendRevision === backendRevision;
       if (matches) {
@@ -138,12 +148,15 @@ export class PiWebPluginService {
         return cached;
       }
     }
-    const packageArtifact = await readPiWebPluginPackageArtifact(plugin.packageRoot).catch(() => undefined);
-    if (packageArtifact?.revision !== module.revision) return undefined;
+    const packageArtifact = await readPiWebPluginPackageArtifact(plugin.packageRoot, browserRoot).catch(() => undefined);
+    if (packageArtifact?.revision !== module.revision || !packageArtifact.files.has(module.path)) return undefined;
     const artifact: CachedBrowserArtifact = {
       pluginId: plugin.id,
       revision: module.revision,
       entryPath: module.path,
+      entryFilePath: module.filePath,
+      browserRootPath: browserRoot.path,
+      browserRootDirectoryPath: browserRoot.directoryPath,
       packageRoot: plugin.packageRoot,
       ...(backendRevision === undefined ? {} : { backendRevision }),
       files: packageArtifact.files,
@@ -253,7 +266,7 @@ function isTruthyEnv(key: string): boolean {
 
 function contentTypeFor(path: string): string {
   const lowerPath = path.toLowerCase();
-  if (lowerPath.endsWith(".js")) return "application/javascript; charset=utf-8";
+  if (lowerPath.endsWith(".js") || lowerPath.endsWith(".mjs")) return "application/javascript; charset=utf-8";
   if (lowerPath.endsWith(".json")) return "application/json; charset=utf-8";
   if (lowerPath.endsWith(".css")) return "text/css; charset=utf-8";
   if (lowerPath.endsWith(".html")) return "text/html; charset=utf-8";
