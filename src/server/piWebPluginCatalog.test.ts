@@ -118,7 +118,7 @@ describe("PiWebPluginCatalog", () => {
     ]));
   });
 
-  it("rejects browser roots aliased to their logical parent or ancestor with attributed diagnostics", async () => {
+  it("rejects browser-root directory paths that revisit canonical ancestors with attributed diagnostics", async () => {
     const pluginsRoot = join(tempDir, "plugins");
     const directRoot = join(pluginsRoot, "direct-ancestor-root");
     await writePlugin(directRoot, {
@@ -135,6 +135,105 @@ describe("PiWebPluginCatalog", () => {
     await mkdir(join(nestedRoot, "assets"), { recursive: true });
     await symlink(nestedRoot, join(nestedRoot, "assets", "public"), process.platform === "win32" ? "junction" : "dir");
 
+    const intermediateRoot = join(pluginsRoot, "intermediate-ancestor-root");
+    await writePlugin(intermediateRoot, {
+      packageJson: { piWeb: { plugins: [{
+        id: "intermediate-ancestor-root",
+        browserRoot: "assets/public/dist",
+        module: "assets/public/dist/browser.js",
+      }] } },
+      files: { "assets/dist/browser.js": "export default {};" },
+    });
+    await symlink(join(intermediateRoot, "assets"), join(intermediateRoot, "assets", "public"), process.platform === "win32" ? "junction" : "dir");
+
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: pluginsRoot, source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.diagnostics).toHaveLength(3);
+    for (const { source, pluginId } of [
+      { source: directRoot, pluginId: "direct-ancestor-root" },
+      { source: nestedRoot, pluginId: "nested-ancestor-root" },
+      { source: intermediateRoot, pluginId: "intermediate-ancestor-root" },
+    ]) {
+      const diagnostic = snapshot.diagnostics.find((candidate) => candidate.source === source);
+      expect(diagnostic).toMatchObject({ code: "invalid-package", source });
+      expect(diagnostic?.message).toContain(`browser root path revisits a canonical ancestor for ${pluginId}`);
+    }
+  });
+
+  it("rejects browser-root prefixes that leave the package or enter an excluded directory before returning", async () => {
+    const pluginsRoot = join(tempDir, "plugins");
+    const escapedRoot = join(pluginsRoot, "escaped-root-prefix");
+    await writePlugin(escapedRoot, {
+      packageJson: { piWeb: { plugins: [{
+        id: "escaped-root-prefix",
+        browserRoot: "assets/public/dist",
+        module: "assets/public/dist/browser.js",
+      }] } },
+      files: { "assets/dist/browser.js": "export default {};" },
+    });
+    const externalPrefix = join(tempDir, "external-browser-prefix");
+    await mkdir(externalPrefix, { recursive: true });
+    await symlink(externalPrefix, join(escapedRoot, "assets", "public"), process.platform === "win32" ? "junction" : "dir");
+    await symlink(join(escapedRoot, "assets", "dist"), join(externalPrefix, "dist"), process.platform === "win32" ? "junction" : "dir");
+
+    const excludedRoot = join(pluginsRoot, "excluded-root-prefix");
+    await writePlugin(excludedRoot, {
+      packageJson: { piWeb: { plugins: [{
+        id: "excluded-root-prefix",
+        browserRoot: "assets/public/dist",
+        module: "assets/public/dist/browser.js",
+      }] } },
+      files: { "assets/dist/browser.js": "export default {};" },
+    });
+    await mkdir(join(excludedRoot, ".git"), { recursive: true });
+    await symlink(join(excludedRoot, ".git"), join(excludedRoot, "assets", "public"), process.platform === "win32" ? "junction" : "dir");
+    await symlink(join(excludedRoot, "assets", "dist"), join(excludedRoot, ".git", "dist"), process.platform === "win32" ? "junction" : "dir");
+
+    const catalog = new PiWebPluginCatalog({
+      roots: [{ path: pluginsRoot, source: "fixture", scope: "local" }],
+      packageProvider: false,
+      warningSink: () => undefined,
+    });
+
+    const snapshot = await catalog.snapshot();
+
+    expect(snapshot.plugins).toEqual([]);
+    expect(snapshot.diagnostics).toHaveLength(2);
+    const escapedDiagnostic = snapshot.diagnostics.find(({ source }) => source === escapedRoot);
+    expect(escapedDiagnostic).toMatchObject({ code: "invalid-package", source: escapedRoot });
+    expect(escapedDiagnostic?.message).toContain("browser root path escapes its package for escaped-root-prefix");
+    const excludedDiagnostic = snapshot.diagnostics.find(({ source }) => source === excludedRoot);
+    expect(excludedDiagnostic).toMatchObject({ code: "invalid-package", source: excludedRoot });
+    expect(excludedDiagnostic?.message).toContain("browser root path resolves inside excluded .git directory for excluded-root-prefix");
+  });
+
+  it("rejects browser-module directory paths that revisit canonical ancestors for narrow and broad roots", async () => {
+    const pluginsRoot = join(tempDir, "plugins");
+    const narrowRoot = join(pluginsRoot, "narrow-module-cycle");
+    await writePlugin(narrowRoot, {
+      packageJson: { piWeb: { plugins: [{
+        id: "narrow-module-cycle",
+        browserRoot: "public",
+        module: "public/alias/browser.js",
+      }] } },
+      files: { "public/browser.js": "export default {};" },
+    });
+    await symlink(join(narrowRoot, "public"), join(narrowRoot, "public", "alias"), process.platform === "win32" ? "junction" : "dir");
+
+    const broadRoot = join(pluginsRoot, "broad-module-cycle");
+    await writePlugin(broadRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "broad-module-cycle", browserRoot: ".", module: "alias/browser.js" }] } },
+      files: { "browser.js": "export default {};" },
+    });
+    await symlink(broadRoot, join(broadRoot, "alias"), process.platform === "win32" ? "junction" : "dir");
+
     const catalog = new PiWebPluginCatalog({
       roots: [{ path: pluginsRoot, source: "fixture", scope: "local" }],
       packageProvider: false,
@@ -146,12 +245,12 @@ describe("PiWebPluginCatalog", () => {
     expect(snapshot.plugins).toEqual([]);
     expect(snapshot.diagnostics).toHaveLength(2);
     for (const { source, pluginId } of [
-      { source: directRoot, pluginId: "direct-ancestor-root" },
-      { source: nestedRoot, pluginId: "nested-ancestor-root" },
+      { source: narrowRoot, pluginId: "narrow-module-cycle" },
+      { source: broadRoot, pluginId: "broad-module-cycle" },
     ]) {
       const diagnostic = snapshot.diagnostics.find((candidate) => candidate.source === source);
       expect(diagnostic).toMatchObject({ code: "invalid-package", source });
-      expect(diagnostic?.message).toContain(`browser root resolves to its logical parent or ancestor for ${pluginId}`);
+      expect(diagnostic?.message).toContain(`browser module path revisits a canonical ancestor for ${pluginId}`);
     }
   });
 

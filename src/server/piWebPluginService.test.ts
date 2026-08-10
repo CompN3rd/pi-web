@@ -98,14 +98,36 @@ describe("PiWebPluginService", () => {
     await expect(service.readAsset("icons", "public/assets/leak.js")).resolves.toBeUndefined();
   });
 
-  it("reports ancestor browser-root aliases instead of silently dropping accepted plugins", async () => {
+  it("reports untraversable browser entry prefixes before lifecycle publication", async () => {
     const pluginsRoot = join(tempDir, "plugins");
-    const rejectedRoot = join(pluginsRoot, "ancestor-root");
-    await writePlugin(rejectedRoot, {
-      packageJson: { piWeb: { plugins: [{ id: "ancestor-root", browserRoot: "public", module: "public/browser.js" }] } },
+    const intermediateRoot = join(pluginsRoot, "intermediate-root-cycle");
+    await writePlugin(intermediateRoot, {
+      packageJson: { piWeb: { plugins: [{
+        id: "intermediate-root-cycle",
+        browserRoot: "assets/public/dist",
+        module: "assets/public/dist/browser.js",
+      }] } },
+      files: { "assets/dist/browser.js": "export default {};" },
+    });
+    await symlink(join(intermediateRoot, "assets"), join(intermediateRoot, "assets", "public"), process.platform === "win32" ? "junction" : "dir");
+
+    const narrowModuleRoot = join(pluginsRoot, "narrow-module-cycle");
+    await writePlugin(narrowModuleRoot, {
+      packageJson: { piWeb: { plugins: [{
+        id: "narrow-module-cycle",
+        browserRoot: "public",
+        module: "public/alias/browser.js",
+      }] } },
+      files: { "public/browser.js": "export default {};" },
+    });
+    await symlink(join(narrowModuleRoot, "public"), join(narrowModuleRoot, "public", "alias"), process.platform === "win32" ? "junction" : "dir");
+
+    const broadModuleRoot = join(pluginsRoot, "broad-module-cycle");
+    await writePlugin(broadModuleRoot, {
+      packageJson: { piWeb: { plugins: [{ id: "broad-module-cycle", browserRoot: ".", module: "alias/browser.js" }] } },
       files: { "browser.js": "export default {};" },
     });
-    await symlink(rejectedRoot, join(rejectedRoot, "public"), process.platform === "win32" ? "junction" : "dir");
+    await symlink(broadModuleRoot, join(broadModuleRoot, "alias"), process.platform === "win32" ? "junction" : "dir");
 
     const safeRoot = join(pluginsRoot, "safe-root-alias");
     await writePlugin(safeRoot, {
@@ -124,10 +146,16 @@ describe("PiWebPluginService", () => {
     await expect(service.readAsset("safe-root-alias", "public/browser.js")).resolves.toBeDefined();
     const lifecycle = await service.plugins();
     expect(lifecycle.plugins.map(({ id }) => id)).toEqual(["safe-root-alias"]);
-    expect(lifecycle.diagnostics).toEqual([
-      expect.objectContaining({ kind: "discovery", snapshot: "desired", source: rejectedRoot }),
-    ]);
-    expect(lifecycle.diagnostics[0]?.message).toContain("browser root resolves to its logical parent or ancestor for ancestor-root");
+    expect(lifecycle.diagnostics).toHaveLength(3);
+    for (const { source, kind } of [
+      { source: intermediateRoot, kind: "browser root" },
+      { source: narrowModuleRoot, kind: "browser module" },
+      { source: broadModuleRoot, kind: "browser module" },
+    ]) {
+      const diagnostic = lifecycle.diagnostics.find((candidate) => candidate.source === source);
+      expect(diagnostic).toMatchObject({ kind: "discovery", snapshot: "desired", source });
+      expect(diagnostic?.message).toContain(`${kind} path revisits a canonical ancestor`);
+    }
   });
 
   it("omits broad-root asset aliases into canonical excluded directories", async () => {

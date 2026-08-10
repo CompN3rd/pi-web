@@ -341,15 +341,13 @@ async function discoverBrowserRoot(packageRoot: string, pluginId: string, path: 
   if (excludedDirectory !== undefined) {
     throw new Error(`PI WEB plugin browser root resolves inside excluded ${excludedDirectory} directory for ${pluginId}: ${path}`);
   }
-  if (path !== ".") {
-    const logicalParentDirectoryPath = await realpath(dirname(candidate)).catch(() => undefined);
-    if (logicalParentDirectoryPath === undefined) throw new Error(`PI WEB plugin browser root not found for ${pluginId}: ${path}`);
-    // Artifact traversal skips directory cycles. Reject the alias at discovery
-    // instead of accepting a plugin whose browser module cannot be captured.
-    if (isWithin(directoryPath, logicalParentDirectoryPath)) {
-      throw new Error(`PI WEB plugin browser root resolves to its logical parent or ancestor for ${pluginId}: ${path}`);
-    }
-  }
+  await validateBrowserDirectoryPrefixes(
+    packageRoot,
+    pluginId,
+    "browser root",
+    path,
+    path === "." ? [] : path.split("/"),
+  );
   return { path, directoryPath };
 }
 
@@ -376,7 +374,44 @@ async function discoverModule(
   if (browserRoot !== undefined && (!isLogicalPathWithin(browserRoot.path, path) || !isWithin(browserRoot.directoryPath, filePath))) {
     throw new Error(`PI WEB plugin browser module is outside browser root for ${pluginId}: ${path}`);
   }
+  if (kind === "browser") {
+    await validateBrowserDirectoryPrefixes(packageRoot, pluginId, "browser module", path, path.split("/").slice(0, -1));
+  }
   return { path, filePath, revision };
+}
+
+async function validateBrowserDirectoryPrefixes(
+  packageRoot: string,
+  pluginId: string,
+  kind: "browser root" | "browser module",
+  entryPath: string,
+  directorySegments: readonly string[],
+): Promise<void> {
+  const canonicalAncestors = new Set([packageRoot]);
+  let candidate = packageRoot;
+  for (const segment of directorySegments) {
+    candidate = join(candidate, segment);
+    const [entryStat, directoryPath] = await Promise.all([
+      stat(candidate).catch(() => undefined),
+      realpath(candidate).catch(() => undefined),
+    ]);
+    if (entryStat?.isDirectory() !== true || directoryPath === undefined) {
+      throw new Error(`PI WEB plugin ${kind} path cannot be traversed for ${pluginId}: ${entryPath}`);
+    }
+    if (!isWithin(packageRoot, directoryPath)) {
+      throw new Error(`PI WEB plugin ${kind} path escapes its package for ${pluginId}: ${entryPath}`);
+    }
+    const excludedDirectory = excludedArtifactDirectory(packageRoot, directoryPath);
+    if (excludedDirectory !== undefined) {
+      throw new Error(`PI WEB plugin ${kind} path resolves inside excluded ${excludedDirectory} directory for ${pluginId}: ${entryPath}`);
+    }
+    // Keep discovery aligned with the artifact scanner, which skips a logical
+    // directory cycle instead of capturing entries hidden behind that path.
+    if ([...canonicalAncestors].some((ancestor) => isWithin(directoryPath, ancestor))) {
+      throw new Error(`PI WEB plugin ${kind} path revisits a canonical ancestor for ${pluginId}: ${entryPath}`);
+    }
+    canonicalAncestors.add(directoryPath);
+  }
 }
 
 export const PI_WEB_PLUGIN_ARTIFACT_MAX_ENTRIES = 4_096;
