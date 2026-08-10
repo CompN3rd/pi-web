@@ -106,6 +106,10 @@ describe("production build contents", () => {
           normalizeLineEndings(actual),
           `${declarationPath} changed; update the baseline only for an intentional public API change`,
         ).toBe(normalizeLineEndings(baseline));
+        expect(
+          actual,
+          `${declarationPath} must not expose the host-internal terminal command-run filter`,
+        ).not.toContain("TerminalCommandRunFilter");
       }
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });

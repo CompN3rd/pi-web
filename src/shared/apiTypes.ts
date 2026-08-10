@@ -21,7 +21,6 @@ import type {
   PiWebStatusSeverity,
   PiWebVersionResponse,
   TerminalCommandRun,
-  TerminalCommandRunFilter,
   TerminalCommandRunHandle,
   TerminalCommandRunStatus,
   WorkspaceProviderCapabilities,
@@ -54,7 +53,6 @@ export type {
   PiWebStatusSeverity,
   PiWebVersionResponse,
   TerminalCommandRun,
-  TerminalCommandRunFilter,
   TerminalCommandRunHandle,
   TerminalCommandRunStatus,
   WorkspaceProviderCapabilities,
@@ -63,6 +61,15 @@ export type {
   WriteWorkspaceFileOptions,
   WriteWorkspaceFileResponse,
 };
+
+/** Internal query shape for PI WEB's terminal-command-runs host protocol. */
+export interface TerminalCommandRunFilter {
+  projectId?: string;
+  workspaceId?: string;
+  terminalId?: string;
+  statuses?: TerminalCommandRunStatus[];
+  metadata?: Record<string, string>;
+}
 
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
