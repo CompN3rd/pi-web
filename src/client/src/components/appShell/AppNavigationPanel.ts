@@ -1,10 +1,10 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
-import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace, WorkspaceActivity } from "../../api";
+import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace } from "../../api";
+import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import type { WorkspaceLabelItem } from "../../plugins/types";
 import type { NavigationSection } from "../../appShell/navigationState";
 import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
-import { EMPTY_UNREAD_PRESENCE, type UnreadPresence } from "../../unreadPresence";
 import type { KeyboardNavigableSection } from "../navigationFocus";
 import "../MachineList";
 import "../MachineSwitcher";
@@ -19,20 +19,17 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) machines: Machine[] = [];
   @property({ attribute: false }) selectedMachine?: Machine;
   @property({ attribute: false }) machineStatuses: Record<string, MachineHealth> = {};
-  @property({ attribute: false }) machineActivities: Record<string, Record<string, WorkspaceActivity>> = {};
+  @property({ attribute: false }) machineStatusSnapshots: Record<string, MachineStatusSnapshot> = {};
   @property({ attribute: false }) projects: Project[] = [];
   @property({ attribute: false }) selectedProject?: Project;
   @property({ attribute: false }) workspaces: Workspace[] = [];
   @property({ attribute: false }) selectedWorkspace?: Workspace;
   @property({ attribute: false }) sessions: SessionInfo[] = [];
   @property({ attribute: false }) selectedSession?: SessionInfo;
-  @property({ attribute: false }) workspaceActivities: Record<string, WorkspaceActivity> = {};
   @property({ attribute: false }) sessionActivities: Record<string, SessionActivity> = {};
   @property({ attribute: false }) sessionStatuses: Record<string, SessionStatus> = {};
   @property({ attribute: false }) sendingPrompts: Record<string, true> = {};
   @property({ attribute: false }) unreadSessionIds: ReadonlySet<string> = new Set();
-  @property({ attribute: false }) unreadPresence: UnreadPresence = EMPTY_UNREAD_PRESENCE;
-  @property({ attribute: false }) workspacesByProjectId: Record<string, Workspace[]> = {};
   @property({ attribute: false }) deletingWorkspaceIds: string[] = [];
   @property({ attribute: false }) workspaceLabelItems: (workspace: Workspace) => WorkspaceLabelItem[] = () => [];
   @property({ attribute: false }) refreshControl: unknown;
@@ -98,8 +95,7 @@ export class AppNavigationPanel extends LitElement {
             .machines=${this.machines}
             .selected=${this.selectedMachine}
             .statuses=${this.machineStatuses}
-            .activities=${this.machineActivities}
-            .unreadMachineIds=${this.unreadPresence.machines}
+            .statusSnapshots=${this.machineStatusSnapshots}
             .onSelect=${(machine: Machine) => this.onSelectMachine?.(machine)}
             .onRemove=${(machine: Machine) => this.onRemoveMachine?.(machine)}
             .onFocusNextSection=${() => { this.focusNextFrom("machines"); }}
@@ -116,8 +112,7 @@ export class AppNavigationPanel extends LitElement {
           .machines=${this.machines}
           .selected=${this.selectedMachine}
           .statuses=${this.machineStatuses}
-          .activities=${this.machineActivities}
-          .unreadMachineIds=${this.unreadPresence.machines}
+          .statusSnapshots=${this.machineStatusSnapshots}
           .collapsible=${this.collapsible}
           .collapsed=${this.machinesCollapsed}
           .onToggleCollapsed=${() => { this.onToggleMachines?.(); }}
@@ -130,9 +125,7 @@ export class AppNavigationPanel extends LitElement {
       <project-list
         .projects=${this.projects}
         .selected=${this.selectedProject}
-        .activities=${this.workspaceActivities}
-        .workspacesByProjectId=${this.workspacesByProjectId}
-        .unreadProjectIds=${this.unreadPresence.projects}
+        .statusSnapshot=${this.selectedMachineStatusSnapshot()}
         .collapsible=${this.collapsible}
         .collapsed=${this.projectsCollapsed}
         .onToggleCollapsed=${() => { this.onToggleProjects?.(); }}
@@ -145,9 +138,8 @@ export class AppNavigationPanel extends LitElement {
       <workspace-list
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
-        .activities=${this.workspaceActivities}
+        .statusSnapshot=${this.selectedMachineStatusSnapshot()}
         .deletingWorkspaceIds=${this.deletingWorkspaceIds}
-        .unreadWorkspaceIds=${this.unreadPresence.workspaces}
         .collapsible=${this.collapsible}
         .collapsed=${this.workspacesCollapsed}
         .workspaceLabelItems=${this.workspaceLabelItems}
@@ -190,6 +182,12 @@ export class AppNavigationPanel extends LitElement {
         .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
       ></session-list>
     `;
+  }
+
+  /** Project and workspace rows always belong to the selected machine. */
+  private selectedMachineStatusSnapshot(): MachineStatusSnapshot | undefined {
+    const machineId = this.selectedMachine?.id;
+    return machineId === undefined ? undefined : this.machineStatusSnapshots[machineId];
   }
 
   private async focusNavigableSection(section: KeyboardNavigableSection | undefined): Promise<boolean> {

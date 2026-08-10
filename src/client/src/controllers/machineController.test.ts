@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, type Machine, type MachineHealth } from "../api";
 import { initialAppState, type AppState } from "../appState";
+import { machineStatusSnapshot } from "../machineStatus.testSupport";
 import { MachineController } from "./machineController";
 
 const localMachine: Machine = {
@@ -92,6 +93,28 @@ describe("MachineController", () => {
     expect(updateUrl).toHaveBeenCalledOnce();
     expect(health).toHaveBeenCalledWith(addedMachine.id);
     expect(runtime).toHaveBeenCalledWith(addedMachine.id, true);
+  });
+
+  it("keeps machine status snapshots when switching machines", async () => {
+    // Machine rows and their project rows now read the same snapshot, so
+    // selecting a machine can no longer leave a lit machine dot standing over
+    // descendant state that selection cleared.
+    const snapshot = machineStatusSnapshot({ machine: { "core:working": true }, projects: { p1: { "core:working": true } } });
+    let state: AppState = {
+      ...initialAppState(),
+      machines: [localMachine, remoteMachine],
+      selectedMachine: localMachine,
+      machineStatusSnapshots: { local: snapshot },
+    };
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    vi.spyOn(api, "health").mockResolvedValue({ machineId: remoteMachine.id, ok: true, checkedAt: "2026-05-27T00:00:01.000Z", status: "online" });
+    vi.spyOn(api, "runtime").mockResolvedValue({ machineId: remoteMachine.id, ok: true, checkedAt: "2026-05-27T00:00:02.000Z" });
+    const controller = new MachineController(() => state, setState, vi.fn(), { loadProjects: vi.fn() });
+
+    await controller.selectMachine(remoteMachine, { updateUrl: false });
+
+    expect(state.selectedMachine).toEqual(remoteMachine);
+    expect(state.machineStatusSnapshots).toEqual({ local: snapshot });
   });
 
   it("preserves the current machine state when adding a machine fails", async () => {

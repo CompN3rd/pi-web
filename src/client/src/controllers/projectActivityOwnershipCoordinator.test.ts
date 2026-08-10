@@ -2,10 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppState } from "../appState";
 import { initialAppState } from "../appState";
 import type { Machine, Project, Workspace, WorkspaceActivity } from "../api";
-import { projectActivityIndicator } from "../workspaceActivity";
+import { projectOwnsWorkspacePath } from "../workspaceActivity";
 import { ActivityController } from "./activityController";
 import { ProjectActivityOwnershipCoordinator } from "./projectActivityOwnershipCoordinator";
 import { ProjectController } from "./projectController";
+
+/**
+ * The cwd-level project indicator these tests assert against. It now lives
+ * here because navigation rows render from the server-computed status tree;
+ * this coordinator and this file go away with the rest of the cwd-level
+ * activity machinery in the deletion task.
+ */
+function projectActivityIndicator(project: Project, knownWorkspaces: Workspace[], activities: Record<string, WorkspaceActivity>): "session" | "terminal" | undefined {
+  const matched = Object.values(activities).filter((activity) => projectOwnsWorkspacePath(project, knownWorkspaces, activity.cwd));
+  if (matched.some((activity) => activity.hasSessionActivity)) return "session";
+  if (matched.some((activity) => activity.hasTerminalActivity)) return "terminal";
+  return undefined;
+}
 
 const localMachine: Machine = {
   id: "local",
