@@ -78,7 +78,7 @@ export class MachineController {
       await api.deleteMachine(machine.id);
       const machines = this.getState().machines.filter((candidate) => candidate.id !== machine.id);
       const local = machines.find((candidate) => candidate.id === "local") ?? machines[0];
-      this.setState({ machines, machineStatuses: omitKey(this.getState().machineStatuses, machine.id), machineRuntimes: omitKey(this.getState().machineRuntimes, machine.id), machineActivities: omitKey(this.getState().machineActivities, machine.id) });
+      this.setState({ machines, machineStatuses: omitKey(this.getState().machineStatuses, machine.id), machineRuntimes: omitKey(this.getState().machineRuntimes, machine.id), machineActivities: omitKey(this.getState().machineActivities, machine.id), machineStatusSnapshots: omitKey(this.getState().machineStatusSnapshots, machine.id) });
       if (wasSelected && local !== undefined) {
         if (options.selectFallback === false) return local;
         await this.selectMachine(local);

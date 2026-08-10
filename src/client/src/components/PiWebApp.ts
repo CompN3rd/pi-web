@@ -10,6 +10,7 @@ import { ActivityController } from "../controllers/activityController";
 import { AuthController } from "../controllers/authController";
 import { FileExplorerController } from "../controllers/fileExplorerController";
 import { MachineController } from "../controllers/machineController";
+import { MachineStatusController } from "../controllers/machineStatusController";
 import { ProjectController } from "../controllers/projectController";
 import { ProjectActivityOwnershipCoordinator } from "../controllers/projectActivityOwnershipCoordinator";
 import { PiWebStatusController } from "../controllers/piWebStatusController";
@@ -162,6 +163,10 @@ export class PiWebApp extends LitElement {
     () => this.state,
     (patch) => { this.setState(patch); },
     { onActivityApplied: (machineId) => { void this.projectActivityOwnership.handleActivityApplied(machineId); } },
+  );
+  private readonly machineStatus = new MachineStatusController(
+    () => this.state,
+    (patch) => { this.setState(patch); },
   );
   private readonly auth = new AuthController(
     () => this.state,
@@ -438,6 +443,7 @@ export class PiWebApp extends LitElement {
     await Promise.all([
       this.sessions.refreshSelectedSession(),
       this.refreshMachineActivities(),
+      this.refreshMachineStatusSnapshots(),
       this.refreshWorkspaceDeletionRuns(),
       this.refreshCurrentWorkspaceSurface(),
       this.workspaces.refreshSelectedProjectTopology(),
@@ -467,12 +473,30 @@ export class PiWebApp extends LitElement {
   }
 
   private async refreshMachineActivities(): Promise<void> {
-    const machineIds = this.state.machines.length === 0
-      ? [selectedMachineId(this.state)]
-      : this.state.machines
-        .filter((machine) => shouldRefreshMachineActivity(machine, this.state.machineStatuses[machine.id]))
-        .map((machine) => machine.id);
-    await Promise.all(machineIds.map((machineId) => this.refreshWorkspaceActivity(machineId)));
+    await Promise.all(this.refreshableMachineIds().map((machineId) => this.refreshWorkspaceActivity(machineId)));
+  }
+
+  /**
+   * Explicit-refresh path for the status tree. Socket frames keep a loaded
+   * snapshot current, including the one sent on connect, so this only covers
+   * resumes and manual refreshes. A machine whose daemon does not serve the
+   * route simply keeps no snapshot, which renders as no indicators.
+   */
+  private async refreshMachineStatusSnapshots(): Promise<void> {
+    await Promise.all(this.refreshableMachineIds().map(async (machineId) => {
+      try {
+        await this.machineStatus.refresh(machineId);
+      } catch (error) {
+        console.warn(`Failed to refresh machine status for ${machineId}`, error);
+      }
+    }));
+  }
+
+  private refreshableMachineIds(): string[] {
+    if (this.state.machines.length === 0) return [selectedMachineId(this.state)];
+    return this.state.machines
+      .filter((machine) => shouldRefreshMachineActivity(machine, this.state.machineStatuses[machine.id]))
+      .map((machine) => machine.id);
   }
 
   private async loadClientConfig(): Promise<void> {
@@ -495,6 +519,7 @@ export class PiWebApp extends LitElement {
       await Promise.all([
         this.sessions.refreshSelectedSession(),
         this.refreshMachineActivities(),
+        this.refreshMachineStatusSnapshots(),
         this.loadClientConfig(),
         this.refreshWorkspaceDeletionRuns(),
         this.refreshCurrentWorkspaceSurface(),
@@ -992,14 +1017,13 @@ export class PiWebApp extends LitElement {
   private handleMachineActivityEvent(machineId: string, event: BrowserRealtimeEvent): void {
     if (event.type === "sessions.unread") this.sessionUnread.applyEvent(machineId, event);
     else if (event.type === "workspace.activity") this.activity.applyWorkspaceActivity(event.activity, machineId);
+    else if (event.type === "machine.status") this.machineStatus.apply(machineId, event.status);
   }
 
   private handleRealtimeEvent(machineId: string, event: BrowserRealtimeEvent): void {
     if (event.type === "sessions.unread") this.sessionUnread.applyEvent(machineId, event);
     else if (event.type === "workspace.activity") this.activity.applyWorkspaceActivity(event.activity);
-    // The machine status projection is not rendered yet; frames are dropped
-    // until the controller that owns them lands.
-    else if (event.type === "machine.status") return;
+    else if (event.type === "machine.status") this.machineStatus.apply(machineId, event.status);
     else if (isTerminalEvent(event)) {
       this.applyTerminalEvent(event);
       if (event.type === "terminal.exited") void this.refreshWorkspaceDeletionRuns();

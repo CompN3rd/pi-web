@@ -1,5 +1,6 @@
 import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogAnswer, ExtensionDialogCloseReason, FileContentResponse, FileTreeEntry, Machine, MachineHealth, MachineRuntime, OAuthFlowState, PendingAskUser, PendingExtensionDialog, PiWebStatusResponse, Project, QueuedSessionMessage, SessionActivity, SessionInfo, SessionStatus, SessionTreeSnapshot, TerminalCommandRun, Workspace, WorkspaceActivity } from "./api";
 import type { ChatLine } from "./components/shared";
+import type { MachineStatusSnapshot } from "../../shared/machineStatus";
 import type { QualifiedContributionId } from "./plugins/ids";
 import type { SelectedSessionNotificationInbox } from "./sessionNotifications";
 import type { WorkspaceUploadBatchState } from "./workspaceUploadState";
@@ -10,6 +11,8 @@ export interface AppState {
   isLoadingMachines: boolean;
   machineStatuses: Record<string, MachineHealth>;
   machineRuntimes: Record<string, MachineRuntime>;
+  /** Latest per-machine status tree published by each machine's daemon. */
+  machineStatusSnapshots: Record<string, MachineStatusSnapshot>;
   projects: Project[];
   workspaces: Workspace[];
   sessions: SessionInfo[];
@@ -141,6 +144,7 @@ export function initialAppState(): AppState {
     isLoadingMachines: false,
     machineStatuses: {},
     machineRuntimes: {},
+    machineStatusSnapshots: {},
     projects: [],
     workspaces: [],
     sessions: [],
