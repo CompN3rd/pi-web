@@ -272,6 +272,67 @@ describe("AuthController", () => {
     expect(startMachines).toEqual(["remote-a"]);
   });
 
+  it("ignores stale direct login discovery after a newer remote flow starts", async () => {
+    const provider = authProvider("anthropic", "oauth");
+    const staleProviderLookup = deferred<{ providers: AuthProviderOption[] }>();
+    const startCalls: { providerId: string; machineId: string | undefined }[] = [];
+    const pollCalls: { flowId: string; machineId: string | undefined }[] = [];
+    const clearedTimers: number[] = [];
+    let pollCallback: (() => void) | undefined;
+    vi.stubGlobal("window", {
+      setInterval: (callback: () => void) => {
+        pollCallback = callback;
+        return 7;
+      },
+      clearInterval: (timer: number) => { clearedTimers.push(timer); },
+    });
+    const { controller, getState, setState } = createController(
+      { selectedMachine: remoteMachine("remote-a") },
+      {
+        authProviders: (options) => options?.machineId === "remote-a"
+          ? staleProviderLookup.promise
+          : Promise.resolve({ providers: [provider] }),
+        startOAuthLogin: (providerId, machineId) => {
+          startCalls.push({ providerId, machineId });
+          return Promise.resolve(oauthFlow({ flowId: machineId === "remote-b" ? "flow-b" : "flow-a" }));
+        },
+        oauthFlow: (flowId, machineId) => {
+          pollCalls.push({ flowId, machineId });
+          return Promise.resolve(oauthFlow({ flowId }));
+        },
+      },
+    );
+
+    try {
+      const staleLogin = controller.openLogin(provider.id);
+      setState({ selectedMachine: remoteMachine("remote-b") });
+      await controller.openLogin(provider.id);
+      const newerDialog = getState().authDialog;
+      const newerPollCallback = pollCallback;
+      if (newerPollCallback === undefined) throw new Error("Expected newer auth polling to start");
+
+      expect(startCalls).toEqual([{ providerId: "anthropic", machineId: "remote-b" }]);
+      expect(newerDialog).toMatchObject({ step: "oauth", machineId: "remote-b", flow: { flowId: "flow-b" } });
+
+      staleProviderLookup.resolve({ providers: [provider] });
+      await staleLogin;
+
+      expect(startCalls).toEqual([{ providerId: "anthropic", machineId: "remote-b" }]);
+      expect(getState().authDialog).toBe(newerDialog);
+      expect(clearedTimers).toEqual([]);
+
+      newerPollCallback();
+      await flushMicrotasks();
+
+      expect(pollCalls).toEqual([{ flowId: "flow-b", machineId: "remote-b" }]);
+      expect(getState().authDialog).toMatchObject({ step: "oauth", machineId: "remote-b", flow: { flowId: "flow-b" } });
+    } finally {
+      staleProviderLookup.resolve({ providers: [provider] });
+      controller.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps dialog logout bound while provider discovery is pending", async () => {
     const provider = authProvider("anthropic", "oauth");
     const providerLookup = deferred<{ providers: AuthProviderOption[] }>();
@@ -327,6 +388,38 @@ describe("AuthController", () => {
     await pendingLogout;
 
     expect(logoutMachines).toEqual(["remote-a"]);
+  });
+
+  it("ignores stale direct logout discovery after a newer dialog opens", async () => {
+    const provider = authProvider("anthropic", "oauth");
+    const staleProviderLookup = deferred<{ providers: AuthProviderOption[] }>();
+    const logoutMachines: (string | undefined)[] = [];
+    const { controller, getState, setState } = createController(
+      { selectedMachine: remoteMachine("remote-a") },
+      {
+        authProviders: (options) => options?.machineId === "remote-a"
+          ? staleProviderLookup.promise
+          : Promise.resolve({ providers: [provider] }),
+        logoutProvider: (_providerId, machineId) => {
+          logoutMachines.push(machineId);
+          return Promise.resolve({ accepted: true as const });
+        },
+      },
+    );
+
+    const staleLogout = controller.openLogout(provider.id);
+    setState({ selectedMachine: remoteMachine("remote-b") });
+    await controller.openLogout();
+    const newerDialog = getState().authDialog;
+
+    expect(newerDialog).toMatchObject({ step: "logout", machineId: "remote-b", providers: [provider] });
+
+    staleProviderLookup.resolve({ providers: [provider] });
+    await staleLogout;
+
+    expect(logoutMachines).toEqual([]);
+    expect(getState().authDialog).toBe(newerDialog);
+    expect(getState().error).toBe("");
   });
 
   it("keeps OAuth prompt input and submit state across poll refreshes for the same request", async () => {
