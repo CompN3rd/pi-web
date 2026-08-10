@@ -53,19 +53,24 @@ export class AuthController {
   }
 
   async openLogin(providerId?: string): Promise<void> {
+    const machineId = selectedMachineId(this.getState());
     if (providerId !== undefined && providerId !== "") {
-      await this.openLoginProvider(providerId);
+      await this.openLoginProvider(providerId, machineId);
       return;
     }
-    this.setState({ authDialog: { step: "method" } });
+    this.setState({ authDialog: { step: "method", machineId } });
   }
 
   async chooseLoginMethod(authType: AuthType): Promise<void> {
+    const dialog = this.getState().authDialog;
+    if (dialog?.step !== "method") return;
+    const { machineId } = dialog;
     try {
-      const { providers } = await this.api.authProviders({ mode: "login", authType, machineId: selectedMachineId(this.getState()) });
-      this.setState({ authDialog: { step: "providers", mode: "login", authType, providers } });
+      const { providers } = await this.api.authProviders({ mode: "login", authType, machineId });
+      if (this.getState().authDialog !== dialog) return;
+      this.setState({ authDialog: { step: "providers", mode: "login", machineId, authType, providers } });
     } catch (error) {
-      this.setState({ error: String(error) });
+      if (this.getState().authDialog === dialog) this.setState({ error: String(error) });
     }
   }
 
@@ -74,32 +79,29 @@ export class AuthController {
     if (dialog?.step !== "providers") return;
     const provider = dialog.providers.find((candidate) => candidate.id === providerId && (authType === undefined || candidate.authType === authType));
     if (provider === undefined) return;
-    if (provider.authType === "oauth" || provider.loginFlow === "interactive") await this.startLoginFlow(provider);
+    if (provider.authType === "oauth" || provider.loginFlow === "interactive") await this.startLoginFlow(provider, dialog.machineId);
   }
 
   async openLogout(providerId?: string): Promise<void> {
+    const machineId = selectedMachineId(this.getState());
     try {
-      const { providers } = await this.api.authProviders({ mode: "logout", machineId: selectedMachineId(this.getState()) });
+      const { providers } = await this.api.authProviders({ mode: "logout", machineId });
       if (providerId !== undefined && providerId !== "") {
         const provider = providers.find((candidate) => candidate.id === providerId);
-        if (provider !== undefined) await this.logoutProvider(provider.id);
+        if (provider !== undefined) await this.logoutProviderOnMachine(provider.id, machineId);
         else this.setState({ error: `No stored credentials for ${providerId}` });
         return;
       }
-      this.setState({ authDialog: { step: "logout", providers } });
+      this.setState({ authDialog: { step: "logout", machineId, providers } });
     } catch (error) {
       this.setState({ error: String(error) });
     }
   }
 
   async logoutProvider(providerId: string): Promise<void> {
-    try {
-      await this.api.logoutProvider(providerId, selectedMachineId(this.getState()));
-      this.closeDialog();
-      void this.refreshStatus();
-    } catch (error) {
-      this.setState({ error: String(error) });
-    }
+    const dialog = this.getState().authDialog;
+    if (dialog?.step !== "logout") return;
+    await this.logoutProviderOnMachine(providerId, dialog.machineId);
   }
 
   updateOAuthInput(value: string): void {
@@ -162,31 +164,40 @@ export class AuthController {
     this.setState({ authDialog: undefined });
   }
 
-  private async openLoginProvider(providerId: string): Promise<void> {
+  private async openLoginProvider(providerId: string, machineId: string): Promise<void> {
     try {
-      const { providers } = await this.api.authProviders({ mode: "login", machineId: selectedMachineId(this.getState()) });
+      const { providers } = await this.api.authProviders({ mode: "login", machineId });
       const exact = providers.filter((provider) => provider.id === providerId);
       if (exact.length === 0) {
         this.setState({ error: `Auth provider not found: ${providerId}` });
         return;
       }
       if (exact.length > 1) {
-        this.setState({ authDialog: { step: "providers", mode: "login", providers: exact } });
+        this.setState({ authDialog: { step: "providers", mode: "login", machineId, providers: exact } });
         return;
       }
       const provider = exact[0];
       if (provider === undefined) return;
-      if (provider.authType === "oauth" || provider.loginFlow === "interactive") await this.startLoginFlow(provider);
+      if (provider.authType === "oauth" || provider.loginFlow === "interactive") await this.startLoginFlow(provider, machineId);
     } catch (error) {
       this.setState({ error: String(error) });
     }
   }
 
-  private async startLoginFlow(provider: AuthProviderOption): Promise<void> {
+  private async logoutProviderOnMachine(providerId: string, machineId: string): Promise<void> {
+    try {
+      await this.api.logoutProvider(providerId, machineId);
+      this.closeDialog();
+      void this.refreshStatus(machineId);
+    } catch (error) {
+      this.setState({ error: String(error) });
+    }
+  }
+
+  private async startLoginFlow(provider: AuthProviderOption, machineId: string): Promise<void> {
     const operationGeneration = ++this.oauthOperationGeneration;
     this.stopPolling();
     try {
-      const machineId = selectedMachineId(this.getState());
       const flow = provider.authType === "oauth"
         ? await this.api.startOAuthLogin(provider.id, machineId)
         : await this.api.startInteractiveApiKeyLogin(provider.id, machineId);

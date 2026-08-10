@@ -27,7 +27,7 @@ describe("AuthController", () => {
     const providers = [authProvider("anthropic", "oauth"), { ...authProvider("anthropic", "api_key"), loginFlow: "interactive" as const }];
     const calls: string[] = [];
     const { controller } = createController(
-      { authDialog: { step: "providers", mode: "login", providers } },
+      { authDialog: { step: "providers", mode: "login", machineId: "local", providers } },
       {
         startOAuthLogin: (providerId) => {
           calls.push(`oauth:${providerId}`);
@@ -55,7 +55,7 @@ describe("AuthController", () => {
     const provider: AuthProviderOption = { ...authProvider("amazon-bedrock", "api_key"), loginFlow: "interactive" };
     const calls: { providerId: string; machineId: string | undefined }[] = [];
     const { controller, getState } = createController(
-      { authDialog: { step: "providers", mode: "login", authType: "api_key", providers: [provider] } },
+      { authDialog: { step: "providers", mode: "login", machineId: "local", authType: "api_key", providers: [provider] } },
       {
         startInteractiveApiKeyLogin: (providerId, machineId) => {
           calls.push({ providerId, machineId });
@@ -95,7 +95,7 @@ describe("AuthController", () => {
     const { controller, getState } = createController(
       {
         selectedMachine: remoteMachine("remote-1"),
-        authDialog: { step: "providers", mode: "login", authType: "oauth", providers: [provider] },
+        authDialog: { step: "providers", mode: "login", machineId: "remote-1", authType: "oauth", providers: [provider] },
       },
       {
         startOAuthLogin: (providerId, machineId) => {
@@ -177,7 +177,7 @@ describe("AuthController", () => {
     const { controller, getState } = createController(
       {
         selectedMachine: remoteMachine("remote-1"),
-        authDialog: { step: "logout", providers: [provider] },
+        authDialog: { step: "logout", machineId: "remote-1", providers: [provider] },
       },
       {
         logoutProvider: (providerId, machineId) => {
@@ -212,6 +212,121 @@ describe("AuthController", () => {
 
     expect(logoutCalls).toEqual([{ providerId: "anthropic", machineId: "remote-1" }]);
     expect(getState().error).toBe("");
+  });
+
+  it("keeps method-based provider selection bound to the machine where login opened", async () => {
+    const provider = authProvider("anthropic", "oauth");
+    const providerLookup = deferred<{ providers: AuthProviderOption[] }>();
+    const providerLookupMachines: (string | undefined)[] = [];
+    const startMachines: (string | undefined)[] = [];
+    const { controller, getState, setState } = createController(
+      { selectedMachine: remoteMachine("remote-a") },
+      {
+        authProviders: (options) => {
+          providerLookupMachines.push(options?.machineId);
+          return providerLookup.promise;
+        },
+        startOAuthLogin: (_providerId, machineId) => {
+          startMachines.push(machineId);
+          return Promise.resolve(oauthFlow({ status: "complete" }));
+        },
+      },
+    );
+
+    await controller.openLogin();
+    expect(getState().authDialog).toEqual({ step: "method", machineId: "remote-a" });
+
+    const pendingLookup = controller.chooseLoginMethod("oauth");
+    setState({ selectedMachine: remoteMachine("remote-b") });
+    providerLookup.resolve({ providers: [provider] });
+    await pendingLookup;
+
+    expect(providerLookupMachines).toEqual(["remote-a"]);
+    expect(getState().authDialog).toMatchObject({ step: "providers", machineId: "remote-a", providers: [provider] });
+
+    await controller.selectLoginProvider(provider.id, provider.authType);
+
+    expect(startMachines).toEqual(["remote-a"]);
+  });
+
+  it("keeps a direct login command bound while provider discovery is pending", async () => {
+    const provider = authProvider("anthropic", "oauth");
+    const providerLookup = deferred<{ providers: AuthProviderOption[] }>();
+    const startMachines: (string | undefined)[] = [];
+    const { controller, setState } = createController(
+      { selectedMachine: remoteMachine("remote-a") },
+      {
+        authProviders: () => providerLookup.promise,
+        startOAuthLogin: (_providerId, machineId) => {
+          startMachines.push(machineId);
+          return Promise.resolve(oauthFlow({ status: "complete" }));
+        },
+      },
+    );
+
+    const pendingLogin = controller.openLogin(provider.id);
+    setState({ selectedMachine: remoteMachine("remote-b") });
+    providerLookup.resolve({ providers: [provider] });
+    await pendingLogin;
+
+    expect(startMachines).toEqual(["remote-a"]);
+  });
+
+  it("keeps dialog logout bound while provider discovery is pending", async () => {
+    const provider = authProvider("anthropic", "oauth");
+    const providerLookup = deferred<{ providers: AuthProviderOption[] }>();
+    const logoutMachines: (string | undefined)[] = [];
+    const statusMachines: (string | undefined)[] = [];
+    const { controller, getState, setState } = createController(
+      { selectedMachine: remoteMachine("remote-a"), selectedSession: sessionInfo("session-a") },
+      {
+        authProviders: () => providerLookup.promise,
+        logoutProvider: (_providerId, machineId) => {
+          logoutMachines.push(machineId);
+          return Promise.resolve({ accepted: true as const });
+        },
+        status: (session, machineId) => {
+          statusMachines.push(machineId);
+          return Promise.resolve(sessionStatus(session.id));
+        },
+      },
+    );
+
+    const pendingLookup = controller.openLogout();
+    setState({ selectedMachine: remoteMachine("remote-b"), selectedSession: sessionInfo("session-b") });
+    providerLookup.resolve({ providers: [provider] });
+    await pendingLookup;
+
+    expect(getState().authDialog).toMatchObject({ step: "logout", machineId: "remote-a", providers: [provider] });
+
+    await controller.logoutProvider(provider.id);
+    await flushMicrotasks();
+
+    expect(logoutMachines).toEqual(["remote-a"]);
+    expect(statusMachines).toEqual([]);
+  });
+
+  it("keeps a direct logout command bound while provider discovery is pending", async () => {
+    const provider = authProvider("anthropic", "oauth");
+    const providerLookup = deferred<{ providers: AuthProviderOption[] }>();
+    const logoutMachines: (string | undefined)[] = [];
+    const { controller, setState } = createController(
+      { selectedMachine: remoteMachine("remote-a") },
+      {
+        authProviders: () => providerLookup.promise,
+        logoutProvider: (_providerId, machineId) => {
+          logoutMachines.push(machineId);
+          return Promise.resolve({ accepted: true as const });
+        },
+      },
+    );
+
+    const pendingLogout = controller.openLogout(provider.id);
+    setState({ selectedMachine: remoteMachine("remote-b") });
+    providerLookup.resolve({ providers: [provider] });
+    await pendingLogout;
+
+    expect(logoutMachines).toEqual(["remote-a"]);
   });
 
   it("keeps OAuth prompt input and submit state across poll refreshes for the same request", async () => {
@@ -530,7 +645,7 @@ describe("AuthController", () => {
     const { controller, getState } = createController(
       {
         selectedMachine: remoteMachine("remote-1"),
-        authDialog: { step: "providers", mode: "login", authType: "api_key", providers: [provider] },
+        authDialog: { step: "providers", mode: "login", machineId: "remote-1", authType: "api_key", providers: [provider] },
       },
       {
         startInteractiveApiKeyLogin: () => start.promise,
@@ -596,7 +711,7 @@ describe("AuthController", () => {
     const { controller, getState, setState } = createController(
       {
         selectedMachine: remoteMachine("remote-1"),
-        authDialog: { step: "providers", mode: "login", authType: "api_key", providers: [provider] },
+        authDialog: { step: "providers", mode: "login", machineId: "remote-1", authType: "api_key", providers: [provider] },
       },
       {
         startInteractiveApiKeyLogin: () => Promise.resolve(flow),
