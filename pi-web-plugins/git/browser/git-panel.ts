@@ -24,7 +24,6 @@ import { readGitFileView, writeGitFileView, type GitFileView } from "./gitFileVi
 import { createGitDiffRoute, type GitDiffRoute } from "./gitRoute.js";
 import { parseUnifiedDiff, type UnifiedDiffLine, type UnifiedDiffTextSpan } from "./unifiedDiff.js";
 
-const GIT_PROVIDER_ID = "git";
 const GIT_PANEL_LOCAL_ID = "workspace.git";
 const GIT_POLL_INTERVAL_MS = 8_000;
 // Keep navigation state for a few recent workspaces; heavy diff views are
@@ -71,12 +70,13 @@ const EMPTY_LIST_MODEL: GitFileListModel = { submodules: [], files: [] };
 const EMPTY_VIEW_STATE: GitViewState = { nodes: [], listModel: EMPTY_LIST_MODEL, expandablePaths: [] };
 
 export function createGitBrowserContributions(
-  pluginId: string,
+  sourcePluginId: string,
+  runtimePluginId: string,
   html: HtmlTemplateTag,
   svg: SvgTemplateTag,
 ): PluginContributions {
-  const panelId = `${pluginId}:${GIT_PANEL_LOCAL_ID}`;
-  const controller = new GitUiController(createGitDiffRoute(panelId));
+  const panelId = `${runtimePluginId}:${GIT_PANEL_LOCAL_ID}`;
+  const controller = new GitUiController(sourcePluginId, createGitDiffRoute(panelId));
   defineGitPanelActivityElement();
   return {
     actions: createGitActions(panelId, controller),
@@ -91,10 +91,13 @@ class GitUiController {
   private routeNavigationPending = true;
   private view: GitFileView = readGitFileView();
 
-  constructor(private readonly route: GitDiffRoute) {}
+  constructor(
+    private readonly sourcePluginId: string,
+    private readonly route: GitDiffRoute,
+  ) {}
 
   isOwnedWorkspace(workspace: Workspace | undefined): boolean {
-    return workspace?.provider?.pluginId === GIT_PROVIDER_ID;
+    return workspace?.provider?.pluginId === this.sourcePluginId;
   }
 
   state(context: WorkspacePanelContext): GitWorkspaceUiState {

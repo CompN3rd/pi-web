@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PiWebServerPlugin, ServerPluginActivation, WorkspaceProvider } from "../../server-plugin-api.js";
+import type { PiWebServerPlugin, ServerPluginActivation, ServerPluginActivationContext, WorkspaceProvider } from "../../server-plugin-api.js";
 import type { PiWebPluginScope } from "../../shared/apiTypes.js";
 import type { PiWebPluginCatalogEntry, PiWebPluginCatalogSnapshot } from "../piWebPluginCatalog.js";
 import {
@@ -81,6 +81,43 @@ describe("server plugin runtime", () => {
       "stop:alpha",
     ]);
     expect(runtime.providerContributions()).toEqual([]);
+  });
+
+  it("freezes activation inputs and scopes lifecycle signals to individual invocations", async () => {
+    let activationContext: ServerPluginActivationContext | undefined;
+    const lifecycleSignals: AbortSignal[] = [];
+    const runtime = await createServerPluginRuntime({
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([entry("scoped")])) },
+      importer: () => Promise.resolve({
+        default: plugin("Scoped", (context) => {
+          activationContext = context;
+          lifecycleSignals.push(context.signal);
+          return {
+            start: (signal) => { lifecycleSignals.push(signal); },
+            health: (signal) => {
+              lifecycleSignals.push(signal);
+              return { status: "healthy" };
+            },
+            stop: (signal) => { lifecycleSignals.push(signal); },
+          };
+        }),
+      }),
+      logger: testLogger(),
+    });
+
+    if (activationContext === undefined) throw new Error("Expected server plugin activation context");
+    expect(Object.isFrozen(activationContext)).toBe(true);
+    expect(Object.isFrozen(activationContext.logger)).toBe(true);
+    expect(Object.isFrozen(activationContext.settings)).toBe(true);
+    expect(lifecycleSignals).toHaveLength(2);
+    expect(lifecycleSignals.every((signal) => signal.aborted)).toBe(true);
+
+    await runtime.inspectHealth();
+    await runtime.stop();
+
+    expect(lifecycleSignals).toHaveLength(4);
+    expect(new Set(lifecycleSignals).size).toBe(4);
+    expect(lifecycleSignals.every((signal) => signal.aborted)).toBe(true);
   });
 
   it("applies disabled and both safe-start states before importing any skipped module", async () => {

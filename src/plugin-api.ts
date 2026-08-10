@@ -1,5 +1,5 @@
 import type { TemplateResult } from "lit";
-import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/apiTypes.js";
+import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, MachineKind, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
 
 export type {
   FileContentMediaType,
@@ -21,7 +21,6 @@ export type {
   PiWebStatusSeverity,
   PiWebVersionResponse,
   TerminalCommandRun,
-  TerminalCommandRunFilter,
   TerminalCommandRunHandle,
   TerminalCommandRunStatus,
   WorkspaceProviderCapabilities,
@@ -32,7 +31,7 @@ export type {
   DeleteWorkspaceFileResponse,
   MoveWorkspaceFileOptions,
   MoveWorkspaceFileResponse,
-} from "./shared/apiTypes.js";
+} from "./shared/pluginApiTypes.js";
 
 export type PluginId = string;
 export type LocalContributionId = string;
@@ -41,16 +40,20 @@ export type HtmlTemplateTag = (strings: TemplateStringsArray, ...values: unknown
 export type SvgTemplateTag = (strings: TemplateStringsArray, ...values: unknown[]) => TemplateResult;
 
 export interface PiWebPlugin {
-  apiVersion: 1;
+  apiVersion: 2;
   name: string;
   activate: (context: PluginActivationContext) => PluginActivationResult;
 }
 
+/** Host-owned frozen values supplied once during browser plugin activation. */
 export interface PluginActivationContext {
-  apiVersion: 1;
-  pluginId: PluginId;
-  html: HtmlTemplateTag;
-  svg: SvgTemplateTag;
+  readonly apiVersion: 2;
+  /** Stable package/source identity, including on federated machines. */
+  readonly pluginId: PluginId;
+  /** Host-unique identity for qualified contribution references in this runtime. */
+  readonly runtimePluginId: PluginId;
+  readonly html: HtmlTemplateTag;
+  readonly svg: SvgTemplateTag;
 }
 
 export interface PluginActivationResult {
@@ -130,16 +133,15 @@ export interface PluginAction {
   run: (context: PluginRuntimeContext) => void | Promise<void>;
 }
 
+/** Host-resolved workspace snapshot exposed to browser plugin callbacks. */
 export interface Workspace {
-  id: string;
-  projectId: string;
-  path: string;
-  label: string;
-  /** @deprecated Provider-neutral browser integrations should use provider metadata. */
-  branch?: string;
-  isMain: boolean;
-  provider?: WorkspaceProviderMetadata;
-  removal?: WorkspaceRemovalPresentation;
+  readonly id: string;
+  readonly projectId: string;
+  readonly path: string;
+  readonly label: string;
+  readonly isMain: boolean;
+  readonly provider?: WorkspaceProviderMetadata;
+  readonly removal?: WorkspaceRemovalPresentation;
 }
 
 export interface WorkspaceFiles {

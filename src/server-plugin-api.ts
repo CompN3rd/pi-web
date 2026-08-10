@@ -1,9 +1,6 @@
-/** JSON values accepted across the PI WEB server-plugin boundary. */
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
-export interface JsonObject {
-  readonly [key: string]: JsonValue;
-}
+import type { JsonObject, JsonPrimitive, JsonValue, WorkspaceRemovalPresentation } from "./shared/pluginApiTypes.js";
+
+export type { JsonObject, JsonPrimitive, JsonValue, WorkspaceRemovalPresentation };
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -14,26 +11,31 @@ export interface PiWebServerPlugin {
   activate(context: ServerPluginActivationContext): MaybePromise<ServerPluginActivation>;
 }
 
+/** Host-owned frozen values supplied during server plugin activation. */
 export interface ServerPluginActivationContext {
-  apiVersion: 1;
-  pluginId: string;
-  packageRoot: string;
-  logger: ServerPluginLogger;
-  settings: JsonObject;
+  readonly apiVersion: 1;
+  readonly pluginId: string;
+  readonly packageRoot: string;
+  readonly logger: ServerPluginLogger;
+  readonly settings: JsonObject;
   /**
    * Execute an argv-based command through host-owned output and time bounds.
    * The caller must forward the signal for its current bounded operation.
    */
-  execFile(request: ServerPluginExecFileRequest): Promise<ServerPluginExecFileResult>;
-  /** Aborted when the host's activation deadline expires. */
-  signal: AbortSignal;
+  readonly execFile: (request: ServerPluginExecFileRequest) => Promise<ServerPluginExecFileResult>;
+  /**
+   * Signal for this activation invocation. It is aborted when activation times
+   * out or settles; it is not a plugin-lifetime shutdown signal.
+   */
+  readonly signal: AbortSignal;
 }
 
+/** Host-owned logger supplied through the frozen activation context. */
 export interface ServerPluginLogger {
-  debug(message: string, details?: JsonObject): void;
-  info(message: string, details?: JsonObject): void;
-  warn(message: string, details?: JsonObject): void;
-  error(message: string, details?: JsonObject): void;
+  readonly debug: (message: string, details?: JsonObject) => void;
+  readonly info: (message: string, details?: JsonObject) => void;
+  readonly warn: (message: string, details?: JsonObject) => void;
+  readonly error: (message: string, details?: JsonObject) => void;
 }
 
 export interface ServerPluginExecFileRequest {
@@ -57,10 +59,18 @@ export interface ServerPluginExecFileResult {
   stderrTruncated: boolean;
 }
 
+/**
+ * Signals passed to lifecycle callbacks are scoped to that single invocation
+ * and are aborted when it times out or settles. They are not plugin-lifetime
+ * shutdown signals; the host invokes `stop()` explicitly during shutdown.
+ */
 export interface ServerPluginActivation {
   workspaceProvider?: WorkspaceProvider;
+  /** Initialize resources within one host-bounded start invocation. */
   start?(signal: AbortSignal): MaybePromise<void>;
+  /** Release resources within one host-bounded stop invocation. */
   stop?(signal: AbortSignal): MaybePromise<void>;
+  /** Inspect health within one host-bounded health invocation. */
   health?(signal: AbortSignal): MaybePromise<ServerPluginHealth>;
 }
 
@@ -70,6 +80,11 @@ export interface ServerPluginHealth {
   details?: JsonObject;
 }
 
+/**
+ * Every signal supplied to a provider is scoped to that single callback
+ * invocation. The host aborts it when the operation times out or settles; it
+ * must not be retained as a plugin-lifetime shutdown signal.
+ */
 export interface WorkspaceProvider {
   /** Fallback providers are considered only after all primary providers pass. */
   fallback?: boolean;
@@ -82,9 +97,9 @@ export interface WorkspaceProvider {
 export type ProviderClaim = "claim" | "pass";
 
 export interface ProjectInput {
-  id: string;
-  name: string;
-  path: string;
+  readonly id: string;
+  readonly name: string;
+  readonly path: string;
 }
 
 export interface ProviderWorkspace {
@@ -96,36 +111,47 @@ export interface ProviderWorkspace {
   isMain: boolean;
   /** Opaque provider-private data returned to this provider during the resolution. */
   data?: JsonValue;
-  /** Opaque serializable data exposed only to the owning browser plugin. */
+  /**
+   * Serializable data included in browser workspace responses. It is visible
+   * to all browser code and API consumers, so it must never contain secrets.
+   */
   publicMetadata?: JsonObject;
   removal?: WorkspaceRemovalPresentation;
 }
 
 export interface ProviderRequestContext {
-  project: ProjectInput;
-  workspace: ProviderWorkspace;
-  operation: string;
-  input: JsonValue;
-  signal: AbortSignal;
+  readonly project: ProjectInput;
+  /** Host-validated, frozen projection of one listed provider workspace. */
+  readonly workspace: Readonly<ProviderWorkspace>;
+  readonly operation: string;
+  readonly input: JsonValue;
+  readonly signal: AbortSignal;
 }
 
 /** Provider-private JSON result returned through the host's scoped bridge. */
 export type ProviderResponse = JsonValue;
 
 export interface ProviderRemoveContext {
-  project: ProjectInput;
-  workspace: ProviderWorkspace;
-  signal: AbortSignal;
+  readonly project: ProjectInput;
+  /** Host-validated, frozen projection of one listed provider workspace. */
+  readonly workspace: Readonly<ProviderWorkspace>;
+  readonly signal: AbortSignal;
 }
 
-/** Serializable provider wording advertised with a removable workspace. */
-export interface WorkspaceRemovalPresentation {
-  actionLabel: string;
-  confirmation: string;
-}
-
-/** Host-validated plan run as a visible terminal command from a safe workspace. */
+/**
+ * Plugin-authored plan for a visible host terminal run. Returning this plan
+ * approves the operation; it does not mean removal has completed.
+ */
 export interface WorkspaceRemovePlan {
+  /** Human-readable title for the host-owned terminal run. */
   title: string;
+  /**
+   * Shell source interpreted by the host's login shell. The host chooses a safe
+   * current non-target workspace as the working directory, so any workspace
+   * path used here must be the absolute `workspace.path` supplied in the
+   * request and must be shell-quoted by the provider. Keep the removal in the
+   * foreground: the host records completion when the shell exits, with exit 0
+   * meaning the removal succeeded.
+   */
   command: string;
 }

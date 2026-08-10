@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGitDiffResponse, parseGitStatusResponse } from "./git-contract.js";
+import { parseGitDiffResponse, parseGitStatusResponse } from "./browser/git-contract.js";
 
 describe("Git browser backend contract", () => {
   it("parses status, submodule pointers, and diffs from JSON-only backend results", () => {

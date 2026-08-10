@@ -56,7 +56,10 @@ describe("session daemon workspace catalog routes", () => {
       allowedCwds: [hostPath("/repo")],
     });
 
-    listed = [providerWorkspace("root", hostPath("/repo"), true), providerWorkspace("linked", hostPath("/linked"), false)];
+    listed = [
+      providerWorkspace("root", hostPath("/repo"), true),
+      providerWorkspace("linked", hostPath("/linked"), false, { branch: "feature/linked" }),
+    ];
     const [response, spawnDecision] = await Promise.all([
       app.inject({ method: "GET", url: "/workspace-catalog/projects/p1/workspaces" }),
       spawnTargets.resolveSpawnTarget(hostPath("/repo"), hostPath("/linked")),
@@ -70,9 +73,17 @@ describe("session daemon workspace catalog routes", () => {
 
     const linked = resolution.workspaces.find(({ path }) => path === hostPath("/linked"));
     if (linked === undefined) throw new Error("Expected linked workspace");
+    expect(linked).toMatchObject({
+      label: "linked",
+      provider: { metadata: { branch: "feature/linked" } },
+    });
+    expect(linked).not.toHaveProperty("branch");
+
     const current = await app.inject({ method: "GET", url: `/workspace-catalog/projects/p1/workspaces/${linked.id}` });
     expect(current.statusCode).toBe(200);
-    expect(current.json<Workspace>()).toMatchObject({ id: linked.id, path: hostPath("/linked") });
+    const currentWorkspace = current.json<Workspace>();
+    expect(currentWorkspace).toMatchObject({ id: linked.id, path: hostPath("/linked") });
+    expect(currentWorkspace).not.toHaveProperty("branch");
 
     listed = [providerWorkspace("root", hostPath("/repo"), true)];
     const stale = await app.inject({ method: "GET", url: `/workspace-catalog/projects/p1/workspaces/${linked.id}` });
@@ -174,6 +185,11 @@ function contribution(pluginId: string, workspaceProvider: WorkspaceProvider): S
   };
 }
 
-function providerWorkspace(key: string, path: string, isMain: boolean): ProviderWorkspace {
-  return { key, path, label: key, isMain };
+function providerWorkspace(
+  key: string,
+  path: string,
+  isMain: boolean,
+  publicMetadata?: ProviderWorkspace["publicMetadata"],
+): ProviderWorkspace {
+  return { key, path, label: key, isMain, ...(publicMetadata === undefined ? {} : { publicMetadata }) };
 }

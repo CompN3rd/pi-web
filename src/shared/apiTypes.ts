@@ -1,6 +1,76 @@
-import type { WorkspaceFileMediaType } from "./workspaceFiles.js";
+import type {
+  DeleteWorkspaceFileResponse,
+  FileContentMediaType,
+  FileContentResponse,
+  FileTreeEntry,
+  FileTreeResponse,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+  MachineKind,
+  MoveWorkspaceFileOptions,
+  MoveWorkspaceFileResponse,
+  PiWebComponentStatus,
+  PiWebDockerMode,
+  PiWebInstallationInfo,
+  PiWebInstallationKind,
+  PiWebReleaseStatus,
+  PiWebServiceComponent,
+  PiWebStatusMessage,
+  PiWebStatusResponse,
+  PiWebStatusSeverity,
+  PiWebVersionResponse,
+  TerminalCommandRun,
+  TerminalCommandRunHandle,
+  TerminalCommandRunStatus,
+  WorkspaceProviderCapabilities,
+  WorkspaceProviderMetadata,
+  WorkspaceRemovalPresentation,
+  WriteWorkspaceFileOptions,
+  WriteWorkspaceFileResponse,
+} from "./pluginApiTypes.js";
 
-export type MachineKind = "local" | "remote";
+export type {
+  DeleteWorkspaceFileResponse,
+  FileContentMediaType,
+  FileContentResponse,
+  FileTreeEntry,
+  FileTreeResponse,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+  MachineKind,
+  MoveWorkspaceFileOptions,
+  MoveWorkspaceFileResponse,
+  PiWebComponentStatus,
+  PiWebDockerMode,
+  PiWebInstallationInfo,
+  PiWebInstallationKind,
+  PiWebReleaseStatus,
+  PiWebServiceComponent,
+  PiWebStatusMessage,
+  PiWebStatusResponse,
+  PiWebStatusSeverity,
+  PiWebVersionResponse,
+  TerminalCommandRun,
+  TerminalCommandRunHandle,
+  TerminalCommandRunStatus,
+  WorkspaceProviderCapabilities,
+  WorkspaceProviderMetadata,
+  WorkspaceRemovalPresentation,
+  WriteWorkspaceFileOptions,
+  WriteWorkspaceFileResponse,
+};
+
+/** Internal query shape for PI WEB's terminal-command-runs host protocol. */
+export interface TerminalCommandRunFilter {
+  projectId?: string;
+  workspaceId?: string;
+  terminalId?: string;
+  statuses?: TerminalCommandRunStatus[];
+  metadata?: Record<string, string>;
+}
+
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
 /**
@@ -258,32 +328,13 @@ export interface Project {
 }
 
 export interface WorkspaceEffectiveConfig {
-  uploads?: PiWebUploadsConfig;
+  readonly uploads?: Readonly<PiWebUploadsConfig>;
 }
 
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
-export interface JsonObject {
-  [key: string]: JsonValue;
-}
-
-export interface WorkspaceProviderCapabilities {
-  request: boolean;
-  remove: boolean;
-}
-
-/** Public identity and opaque browser data for the plugin that owns a workspace. */
-export interface WorkspaceProviderMetadata {
-  pluginId: string;
-  capabilities: WorkspaceProviderCapabilities;
-  metadata?: JsonObject;
-}
-
-export interface WorkspaceRemovalPresentation {
-  actionLabel: string;
-  confirmation: string;
-  /** Host-issued opaque token binding a removal confirmation to this exact owner snapshot. */
-  precondition: string;
+/** Host-only removal state carried by PI WEB's browser/sessiond protocol. */
+export interface WorkspaceRemovalHostState extends WorkspaceRemovalPresentation {
+  /** Opaque token binding a removal confirmation to this exact owner snapshot. */
+  readonly precondition: string;
 }
 
 export interface WorkspaceRemovalRequest {
@@ -295,34 +346,33 @@ export type WorkspaceProviderTier = "primary" | "fallback";
 export type WorkspaceProviderDiagnosticCode = "probe-failed" | "claim-conflict" | "list-failed";
 
 export interface WorkspaceProviderDiagnostic {
-  code: WorkspaceProviderDiagnosticCode;
-  message: string;
-  tier: WorkspaceProviderTier;
-  pluginId?: string;
-  pluginIds?: readonly string[];
+  readonly code: WorkspaceProviderDiagnosticCode;
+  readonly message: string;
+  readonly tier: WorkspaceProviderTier;
+  readonly pluginId?: string;
+  readonly pluginIds?: readonly string[];
 }
 
 /** Provider-neutral result of resolving one project's current workspace owner. */
 export interface WorkspaceProviderResolution {
-  status: WorkspaceProviderResolutionStatus;
-  projectId: string;
-  ownerPluginId?: string;
-  workspaces: readonly Workspace[];
-  diagnostics: readonly WorkspaceProviderDiagnostic[];
+  readonly status: WorkspaceProviderResolutionStatus;
+  readonly projectId: string;
+  readonly ownerPluginId?: string;
+  readonly workspaces: readonly Workspace[];
+  readonly diagnostics: readonly WorkspaceProviderDiagnostic[];
 }
 
+/** Host-resolved workspace snapshot. */
 export interface Workspace {
-  id: string;
-  projectId: string;
-  path: string;
-  label: string;
-  /** Legacy browser-v1 Git compatibility field; not required by provider contracts. */
-  branch?: string;
-  isMain: boolean;
-  provider?: WorkspaceProviderMetadata;
-  removal?: WorkspaceRemovalPresentation;
+  readonly id: string;
+  readonly projectId: string;
+  readonly path: string;
+  readonly label: string;
+  readonly isMain: boolean;
+  readonly provider?: WorkspaceProviderMetadata;
+  readonly removal?: WorkspaceRemovalHostState;
   /** Workspace-effective project/global settings needed by workspace UI features. Always present on current server workspace responses. */
-  effectiveConfig: WorkspaceEffectiveConfig;
+  readonly effectiveConfig: WorkspaceEffectiveConfig;
 }
 
 /** Workspace as listed by the workspace authority, before the browser route layer attaches the wire-required effectiveConfig. */
@@ -1011,65 +1061,6 @@ export interface FileSuggestion {
   kind: "tracked" | "untracked" | "other";
 }
 
-export interface FileTreeEntry {
-  name: string;
-  path: string;
-  type: "file" | "directory" | "symlink";
-  size?: number;
-  modifiedAt?: string;
-}
-
-export interface FileTreeResponse {
-  path: string;
-  entries: FileTreeEntry[];
-  scannedAt: string;
-  truncated: boolean;
-}
-
-export type FileContentMediaType = WorkspaceFileMediaType;
-
-export interface FileContentResponse {
-  path: string;
-  language?: string;
-  mediaType?: FileContentMediaType;
-  mimeType?: string;
-  encoding: "utf8";
-  size: number;
-  modifiedAt: string;
-  content: string;
-  truncated: boolean;
-  binary: boolean;
-}
-
-export interface WriteWorkspaceFileOptions {
-  createDirs?: boolean;     // default: true — mkdir -p equivalent
-  overwrite?: boolean;      // default: true — throw if false and file exists
-}
-
-export interface WriteWorkspaceFileResponse {
-  path: string;
-  size: number;
-  modifiedAt: string;
-  created: boolean;  // true if file was created, false if overwritten
-}
-
-export interface DeleteWorkspaceFileResponse {
-  path: string;
-  existed: boolean;  // true if file existed and was deleted, false if file did not exist
-}
-
-export interface MoveWorkspaceFileOptions {
-  createDirs?: boolean;   // default: true — mkdir -p equivalent for target parent directory
-  overwrite?: boolean;    // default: false — throw if target exists (safer default than writeFile)
-}
-
-export interface MoveWorkspaceFileResponse {
-  fromPath: string;
-  toPath: string;
-  size: number;
-  modifiedAt: string;
-}
-
 export interface TerminalInfo {
   id: string;
   cwd: string;
@@ -1080,68 +1071,12 @@ export interface TerminalInfo {
   commandRunId?: string;
 }
 
-export type TerminalCommandRunStatus = "queued" | "running" | "succeeded" | "failed";
-
-export interface TerminalCommandRun {
-  id: string;
-  origin: string;
-  projectId: string;
-  workspaceId: string;
-  terminalId: string;
-  title: string;
-  command: string;
-  status: TerminalCommandRunStatus;
-  exitCode?: number;
-  createdAt: string;
-  startedAt?: string;
-  completedAt?: string;
-  metadata: Record<string, string>;
-}
-
 export interface RunTerminalCommandInput {
   workspace: Workspace;
   title: string;
   command: string;
   metadata?: Record<string, string>;
   open?: boolean;
-}
-
-export interface TerminalCommandRunHandle {
-  run: TerminalCommandRun;
-  completed: Promise<TerminalCommandRun>;
-}
-
-export interface TerminalCommandRunFilter {
-  projectId?: string;
-  workspaceId?: string;
-  terminalId?: string;
-  statuses?: TerminalCommandRunStatus[];
-  metadata?: Record<string, string>;
-}
-
-export type PiWebServiceComponent = "web" | "sessiond";
-export type PiWebStatusSeverity = "info" | "warning" | "error";
-export type PiWebInstallationKind = "pi-package" | "npm-global" | "local" | "docker" | "unknown";
-export type PiWebDockerMode = "runtime" | "dev";
-
-export interface PiWebInstallationInfo {
-  kind: PiWebInstallationKind;
-  path?: string;
-  source?: string;
-  scope?: "user" | "project";
-  npmRoot?: string;
-  dockerMode?: PiWebDockerMode;
-}
-
-export interface PiWebComponentStatus {
-  component: PiWebServiceComponent;
-  label: string;
-  runtimeVersion?: string;
-  installedVersion?: string;
-  stale: boolean;
-  available: boolean;
-  installation?: PiWebInstallationInfo;
-  error?: string;
 }
 
 /** Secret-free identity of the Pi-compatible CLI/state profile fixed for one sessiond lifetime. */
@@ -1164,32 +1099,6 @@ export interface PiWebRuntimeComponent {
   error?: string;
 }
 
-export interface PiWebReleaseStatus {
-  packageName: string;
-  latestVersion?: string;
-  updateAvailable: boolean;
-  checkedAt?: string;
-  skipped?: boolean;
-  error?: string;
-}
-
-export interface PiWebStatusMessage {
-  id: string;
-  severity: PiWebStatusSeverity;
-  title: string;
-  body: string;
-  command?: string;
-}
-
-export interface PiWebVersionResponse {
-  packageName: string;
-  generatedAt: string;
-  components: {
-    web: PiWebComponentStatus;
-    sessiond: PiWebComponentStatus;
-  };
-}
-
 export interface PiWebRuntimeResponse {
   packageName: string;
   generatedAt: string;
@@ -1198,18 +1107,6 @@ export interface PiWebRuntimeResponse {
     sessiond: PiWebRuntimeComponent;
   };
   capabilities: PiWebCapability[];
-}
-
-export interface PiWebStatusResponse extends PiWebVersionResponse {
-  release: PiWebReleaseStatus;
-  commands: {
-    update?: string;
-    restart?: string;
-    restartWeb?: string;
-    restartSessiond?: string;
-    status?: string;
-  };
-  messages: PiWebStatusMessage[];
 }
 
 export type TerminalUiEvent =

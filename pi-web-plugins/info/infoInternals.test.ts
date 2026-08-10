@@ -59,7 +59,7 @@ describe("diagnosticsSummary", () => {
       "Release: Update available: 1.1.0 (checked 2025-01-02T03:04:05Z)",
       "Status generated: 2025-01-02T03:04:06Z",
       "Machine: devbox (local machine)",
-      "Workspace: pi-web — /srv/dev/pi-web (branch main, provider: git, main workspace)",
+      "Workspace: pi-web — /srv/dev/pi-web (provider: git, main workspace)",
     ].join("\n"));
   });
 
@@ -151,9 +151,12 @@ function workspaceFixture(patch: Partial<Workspace> = {}): Workspace {
     projectId: "proj-1",
     path: "/srv/dev/pi-web",
     label: "pi-web",
-    branch: "main",
     isMain: true,
-    provider: { pluginId: "git", capabilities: { request: true, remove: true } },
+    provider: {
+      pluginId: "git",
+      capabilities: { request: true, remove: true },
+      metadata: { branch: "main" },
+    },
     ...patch,
   };
 }

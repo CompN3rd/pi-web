@@ -242,11 +242,11 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     expect(test.backgroundErrors).toEqual([{ message: `Failed to refresh workspaces for project ${repo.id} on local`, error: failure }]);
   });
 
-  it("re-points the selected workspace at refreshed metadata when its branch changed outside PI WEB", async () => {
+  it("re-points the selected workspace when its provider-authored label changed outside PI WEB", async () => {
     const repo = project("p1", "/repo");
     const main = workspace(repo.id, repo.path, { isMain: true });
-    const selected = { ...workspace(repo.id, "/repo-feature"), label: "feature-a", branch: "feature-a" };
-    const switched = { ...selected, label: "feature-b", branch: "feature-b" };
+    const selected = { ...workspace(repo.id, "/repo-feature"), label: "feature-a" };
+    const switched = { ...selected, label: "feature-b" };
     const loadWorkspaces = vi.fn().mockResolvedValue([main, switched]);
     const test = harness(
       {

@@ -3,8 +3,8 @@
 import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonValue, PluginRuntimeContext, Workspace, WorkspaceBackend, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
-import { GIT_FILE_VIEW_STORAGE_KEY } from "./gitFileViewPreference.js";
-import plugin from "./pi-web-plugin.js";
+import { GIT_FILE_VIEW_STORAGE_KEY } from "./browser/gitFileViewPreference.js";
+import plugin from "./browser/pi-web-plugin.js";
 
 const projectId = "project-1";
 const workspaceId = "workspace-1";
@@ -65,6 +65,24 @@ describe("bundled Git browser plugin", () => {
     backend.request.mockClear();
     await panel.onInvalidate?.(context);
     expect(backend.request).toHaveBeenCalledWith("status", null);
+  });
+
+  it("uses source identity for ownership and runtime identity for federated routes", async () => {
+    const runtimePluginId = "machine.72656d6f74652d31.git";
+    const contributions = activate("git", runtimePluginId);
+    const panel = requiredPanel(contributions);
+    const backend = backendFixture();
+
+    expect(panel.visible?.(panelContext(backend.request))).toBe(true);
+    expect(panel.visible?.(panelContext(backend.request, {
+      ...gitWorkspace,
+      provider: { pluginId: runtimePluginId, capabilities: { request: true, remove: false } },
+    }))).toBe(false);
+
+    const selectMainView = vi.fn<PluginRuntimeContext["selectMainView"]>();
+    const action = contributions.actions?.find((candidate) => candidate.id === "view.git");
+    await action?.run(runtimeContext({ selectMainView }));
+    expect(selectMainView).toHaveBeenCalledWith(`${runtimePluginId}:workspace.git`);
   });
 
   it("keeps visibility checks free of route side effects", () => {
@@ -240,8 +258,8 @@ describe("bundled Git browser plugin", () => {
   });
 });
 
-function activate(pluginId: string) {
-  return plugin.activate({ apiVersion: 1, pluginId, html, svg }).contributions;
+function activate(pluginId: string, runtimePluginId = pluginId) {
+  return plugin.activate({ apiVersion: 2, pluginId, runtimePluginId, html, svg }).contributions;
 }
 
 function requiredPanel(contributions: ReturnType<typeof activate>) {

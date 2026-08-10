@@ -63,9 +63,6 @@ export function componentDetails(component: PiWebComponentStatus): string {
 
 export function workspaceFlags(workspace: Workspace): string[] {
   return [
-    // Browser plugin v1 retains the deprecated top-level branch compatibility field.
-    // eslint-disable-next-line @typescript-eslint/no-deprecated
-    workspace.branch === undefined || workspace.branch === "" ? undefined : `branch ${workspace.branch}`,
     workspace.provider === undefined ? "folder workspace" : `provider: ${workspace.provider.pluginId}`,
     workspace.isMain ? "main workspace" : undefined,
   ].filter((flag): flag is string => flag !== undefined);

@@ -61,23 +61,35 @@ describe("WorkspaceProviderRegistry", () => {
         isMain: true,
         provider: {
           pluginId: "primary",
-          capabilities: { request: true, remove: true },
+          capabilities: { request: true, remove: false },
           metadata: { changeId: "abc", nested: [1, true, null] },
         },
       }),
       expect.objectContaining({
         projectId: project.id,
         path: hostPath("/linked"),
+        provider: {
+          pluginId: "primary",
+          capabilities: { request: true, remove: true },
+        },
       }),
     ]);
+    const root = resolution.workspaces.find(({ path }) => path === hostPath("/repo"));
     const linked = resolution.workspaces.find(({ path }) => path === hostPath("/linked"));
-    expect(linked?.removal).toMatchObject({
+    if (root === undefined || linked === undefined) throw new Error("Expected primary provider workspaces");
+    expect(linked.removal).toMatchObject({
       actionLabel: "Remove",
       confirmation: "Remove linked?",
     });
-    expect(linked?.removal?.precondition).toMatch(/^v1\.[A-Za-z0-9_-]{43}$/u);
-    expect(resolution.workspaces[0]?.id).not.toBe(resolution.workspaces[1]?.id);
-    expect(Object.isFrozen(resolution.workspaces[0]?.provider?.metadata)).toBe(true);
+    expect(linked.removal?.precondition).toMatch(/^v1\.[A-Za-z0-9_-]{43}$/u);
+    expect(root.id).not.toBe(linked.id);
+    expect(Object.isFrozen(resolution)).toBe(true);
+    expect(Object.isFrozen(resolution.workspaces)).toBe(true);
+    expect(Object.isFrozen(root)).toBe(true);
+    expect(Object.isFrozen(root.provider)).toBe(true);
+    expect(Object.isFrozen(root.provider?.capabilities)).toBe(true);
+    expect(Object.isFrozen(root.provider?.metadata)).toBe(true);
+    expect(Object.isFrozen(linked.removal)).toBe(true);
   });
 
   it("coalesces only equivalent in-flight resolutions and never retains a completed result", async () => {
@@ -481,6 +493,9 @@ describe("WorkspaceProviderRegistry", () => {
       input: { cards: ["alpha", "closed"], includeClosed: false },
     });
     expect(observedContext?.signal.aborted).toBe(true);
+    expect(Object.isFrozen(observedContext)).toBe(true);
+    expect(Object.isFrozen(observedContext?.project)).toBe(true);
+    expect(Object.isFrozen(observedContext?.workspace)).toBe(true);
     expect(Object.isFrozen(observedContext?.workspace.data)).toBe(true);
     expect(Object.hasOwn(requireRecord(observedContext?.workspace.data, "observed private data"), "__proto__")).toBe(true);
   });
@@ -706,6 +721,10 @@ describe("WorkspaceProviderRegistry", () => {
       workspace: { path: hostPath("/view"), data: { privateId: "view-1" } },
     });
     expect(observedRemoveContext?.signal).toBeInstanceOf(AbortSignal);
+    expect(Object.isFrozen(observedRemoveContext)).toBe(true);
+    expect(Object.isFrozen(observedRemoveContext?.project)).toBe(true);
+    expect(Object.isFrozen(observedRemoveContext?.workspace)).toBe(true);
+    expect(Object.isFrozen(observedRemoveContext?.workspace.removal)).toBe(true);
     await expect(registry.resolveRemoval(project, "stale-id"))
       .rejects.toMatchObject({ code: "workspace-not-found", statusCode: 404 });
     const conflict = registryFor([

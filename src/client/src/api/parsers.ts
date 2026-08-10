@@ -133,18 +133,16 @@ export function parseProject(value: unknown): Project {
 
 export function parseWorkspace(value: unknown): Workspace {
   const record = requireRecord(value);
-  const branch = optionalString(record, "branch");
-  return {
+  return Object.freeze({
     id: requireString(record, "id"),
     projectId: requireString(record, "projectId"),
     path: requireString(record, "path"),
     label: requireString(record, "label"),
-    ...(branch === undefined ? {} : { branch }),
     isMain: requireBoolean(record, "isMain"),
     ...optionalField("provider", optionalWorkspaceProviderMetadata(record["provider"])),
     ...optionalField("removal", optionalWorkspaceRemovalPresentation(record["removal"])),
     effectiveConfig: requireWorkspaceEffectiveConfig(record["effectiveConfig"]),
-  };
+  });
 }
 
 export function parseWorkspaceProviderResolution(value: unknown): WorkspaceProviderResolution {
@@ -159,13 +157,14 @@ export function parseWorkspaceProviderResolution(value: unknown): WorkspaceProvi
   if (workspaces.length === 0 || workspaces.some((workspace) => workspace.projectId !== projectId)) {
     throw new Error("Workspace resolution contains invalid project workspaces");
   }
-  return {
+  const diagnostics = arrayOf(parseWorkspaceProviderDiagnostic)(record["diagnostics"]);
+  return Object.freeze({
     status,
     projectId,
     ...(ownerPluginId === undefined ? {} : { ownerPluginId }),
-    workspaces,
-    diagnostics: arrayOf(parseWorkspaceProviderDiagnostic)(record["diagnostics"]),
-  };
+    workspaces: Object.freeze(workspaces),
+    diagnostics: Object.freeze(diagnostics),
+  });
 }
 
 function parseWorkspaceProviderResolutionStatus(value: unknown): WorkspaceProviderResolutionStatus {
@@ -179,13 +178,13 @@ function parseWorkspaceProviderDiagnostic(value: unknown): WorkspaceProviderDiag
   const pluginIds = record["pluginIds"] === undefined
     ? undefined
     : arrayOfString(record["pluginIds"], "pluginIds");
-  return {
+  return Object.freeze({
     code: parseWorkspaceProviderDiagnosticCode(record["code"]),
     message: requireString(record, "message"),
     tier: parseWorkspaceProviderTier(record["tier"]),
     ...(pluginId === undefined ? {} : { pluginId }),
-    ...(pluginIds === undefined ? {} : { pluginIds }),
-  };
+    ...(pluginIds === undefined ? {} : { pluginIds: Object.freeze(pluginIds) }),
+  });
 }
 
 function parseWorkspaceProviderDiagnosticCode(value: unknown): WorkspaceProviderDiagnosticCode {
@@ -204,44 +203,47 @@ function optionalWorkspaceProviderMetadata(value: unknown): Workspace["provider"
   const capabilities = value["capabilities"];
   if (!isRecord(capabilities) || Array.isArray(capabilities)) throw new Error("Invalid workspace provider capabilities field");
   const metadata = value["metadata"];
-  return {
+  return Object.freeze({
     pluginId: requireString(value, "pluginId"),
-    capabilities: {
+    capabilities: Object.freeze({
       request: requireBoolean(capabilities, "request"),
       remove: requireBoolean(capabilities, "remove"),
-    },
+    }),
     ...optionalField("metadata", metadata === undefined ? undefined : parseJsonObject(metadata, "workspace provider metadata")),
-  };
+  });
 }
 
 function optionalWorkspaceRemovalPresentation(value: unknown): Workspace["removal"] | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid workspace removal field");
-  return {
+  return Object.freeze({
     actionLabel: requireNonEmptyString(value, "actionLabel"),
     confirmation: requireNonEmptyString(value, "confirmation"),
     precondition: requireNonEmptyString(value, "precondition"),
-  };
+  });
 }
 
-function parseJsonObject(value: unknown, field: string): NonNullable<Workspace["provider"]>["metadata"] {
+function parseJsonObject(value: unknown, field: string): NonNullable<NonNullable<Workspace["provider"]>["metadata"]> {
   if (!isRecord(value) || Array.isArray(value)) throw new Error(`Invalid ${field} field`);
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, parseJsonValue(item, field)]));
+  return Object.freeze(Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, parseJsonValue(item, field)]),
+  ));
 }
 
 function parseJsonValue(value: unknown, field: string): JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (Array.isArray(value)) return value.map((item) => parseJsonValue(item, field));
-  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, parseJsonValue(item, field)]));
+  if (Array.isArray(value)) return Object.freeze(value.map((item) => parseJsonValue(item, field)));
+  if (isRecord(value)) return parseJsonObject(value, field);
   throw new Error(`Invalid ${field} field`);
 }
 
 function requireWorkspaceEffectiveConfig(value: unknown): WorkspaceEffectiveConfig {
   if (!isRecord(value) || Array.isArray(value)) throw new Error("Expected workspace effectiveConfig field");
-  return {
-    ...optionalField("uploads", optionalUploads(value["uploads"])),
-  };
+  const uploads = optionalUploads(value["uploads"]);
+  return Object.freeze({
+    ...optionalField("uploads", uploads === undefined ? undefined : Object.freeze({ ...uploads })),
+  });
 }
 
 export function parseSessionInfo(value: unknown): SessionInfo {

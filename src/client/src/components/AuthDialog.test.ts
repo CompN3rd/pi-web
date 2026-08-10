@@ -60,20 +60,20 @@ describe("isBrowserRemoteOAuthMachine", () => {
 
 describe("auth-dialog focus on open", () => {
   it("focuses the dialog section when opened on the method step", async () => {
-    const dialog = await mountDialog({ step: "method" });
+    const dialog = await mountDialog({ step: "method", machineId: "local" });
 
     expect(deepActiveElement()).toBe(dialogSection(dialog));
     expect(dialogSection(dialog).getAttribute("aria-label")).toBe("Configure provider authentication");
   });
 
   it("focuses the dialog section when opened on the providers step", async () => {
-    const dialog = await mountDialog({ step: "providers", mode: "login", providers: [providerOption("p1", "One")] });
+    const dialog = await mountDialog({ step: "providers", mode: "login", machineId: "local", providers: [providerOption("p1", "One")] });
 
     expect(deepActiveElement()).toBe(dialogSection(dialog));
   });
 
   it("focuses the dialog section when opened on the logout step", async () => {
-    const dialog = await mountDialog({ step: "logout", providers: [providerOption("p1", "One")] });
+    const dialog = await mountDialog({ step: "logout", machineId: "local", providers: [providerOption("p1", "One")] });
 
     expect(deepActiveElement()).toBe(dialogSection(dialog));
   });
@@ -96,7 +96,7 @@ describe("auth-dialog focus on open", () => {
 
   it("moves focus back into the dialog when a step change replaces the focused control", async () => {
     const onChooseMethod = vi.fn<(authType: "oauth" | "api_key") => void>();
-    const dialog = await mountDialog({ step: "method" }, { onChooseMethod });
+    const dialog = await mountDialog({ step: "method", machineId: "local" }, { onChooseMethod });
     const firstOption = requiredElement(optionButtons(dialog)[0], "first method option");
     firstOption.focus();
     pressNativeButtonEnter(firstOption);
@@ -104,7 +104,7 @@ describe("auth-dialog focus on open", () => {
 
     // The host app answers the method choice by advancing the dialog to the
     // providers step, replacing the button that held focus.
-    dialog.state = { step: "providers", mode: "login", authType: "oauth", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] };
+    dialog.state = { step: "providers", mode: "login", machineId: "local", authType: "oauth", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] };
     await settleDialog(dialog);
 
     expect(deepActiveElement()).toBe(dialogSection(dialog));
@@ -170,7 +170,7 @@ describe("auth-dialog focus on open", () => {
 describe("auth-dialog Escape", () => {
   it("cancels the dialog on Escape from an option-list step", async () => {
     const onCancel = vi.fn<() => void>();
-    const dialog = await mountDialog({ step: "method" }, { onCancel });
+    const dialog = await mountDialog({ step: "method", machineId: "local" }, { onCancel });
 
     pressKey(dialogSurface(dialog), "Escape");
 
@@ -191,7 +191,7 @@ describe("auth-dialog Escape", () => {
 
 describe("auth-dialog option-list keyboard navigation", () => {
   it("moves the selection with ArrowDown and ArrowUp, wrapping at both ends", async () => {
-    const dialog = await mountDialog({ step: "providers", mode: "login", providers: [providerOption("p1", "One"), providerOption("p2", "Two"), providerOption("p3", "Three")] });
+    const dialog = await mountDialog({ step: "providers", mode: "login", machineId: "local", providers: [providerOption("p1", "One"), providerOption("p2", "Two"), providerOption("p3", "Three")] });
     expect(selectedOptionIndex(dialog)).toBe(0);
 
     // happy-dom does not propagate events out of shadow roots, so key presses
@@ -216,7 +216,7 @@ describe("auth-dialog option-list keyboard navigation", () => {
 
   it("activates the selected login method with Enter", async () => {
     const onChooseMethod = vi.fn<(authType: "oauth" | "api_key") => void>();
-    const dialog = await mountDialog({ step: "method" }, { onChooseMethod });
+    const dialog = await mountDialog({ step: "method", machineId: "local" }, { onChooseMethod });
 
     pressKey(dialogSurface(dialog), "ArrowDown");
     await settleDialog(dialog);
@@ -229,7 +229,7 @@ describe("auth-dialog option-list keyboard navigation", () => {
   it("activates the selected provider with Enter", async () => {
     const onSelectProvider = vi.fn<(providerId: string, authType: "oauth" | "api_key") => void>();
     const dialog = await mountDialog(
-      { step: "providers", mode: "login", authType: "oauth", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] },
+      { step: "providers", mode: "login", machineId: "local", authType: "oauth", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] },
       { onSelectProvider },
     );
 
@@ -243,7 +243,7 @@ describe("auth-dialog option-list keyboard navigation", () => {
   it("lets a focused option own Enter and exposes that option as current", async () => {
     const onSelectProvider = vi.fn<(providerId: string, authType: "oauth" | "api_key") => void>();
     const dialog = await mountDialog(
-      { step: "providers", mode: "login", authType: "oauth", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] },
+      { step: "providers", mode: "login", machineId: "local", authType: "oauth", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] },
       { onSelectProvider },
     );
     const secondOption = requiredElement(optionButtons(dialog)[1], "second provider option");
@@ -263,7 +263,7 @@ describe("auth-dialog option-list keyboard navigation", () => {
 
   it("activates the selected stored credential with Enter on the logout step", async () => {
     const onLogoutProvider = vi.fn<(providerId: string) => void>();
-    const dialog = await mountDialog({ step: "logout", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] }, { onLogoutProvider });
+    const dialog = await mountDialog({ step: "logout", machineId: "local", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] }, { onLogoutProvider });
 
     pressKey(dialogSurface(dialog), "Enter");
 
@@ -274,7 +274,7 @@ describe("auth-dialog option-list keyboard navigation", () => {
     const onLogoutProvider = vi.fn<(providerId: string) => void>();
     const onCancel = vi.fn<() => void>();
     const dialog = await mountDialog(
-      { step: "logout", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] },
+      { step: "logout", machineId: "local", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] },
       { onLogoutProvider, onCancel },
     );
     const secondProvider = requiredElement(optionButtons(dialog)[1], "second logout provider");
@@ -293,12 +293,12 @@ describe("auth-dialog option-list keyboard navigation", () => {
   });
 
   it("restarts the selection at the first option when the step changes", async () => {
-    const dialog = await mountDialog({ step: "providers", mode: "login", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] });
+    const dialog = await mountDialog({ step: "providers", mode: "login", machineId: "local", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] });
     pressKey(dialogSurface(dialog), "ArrowDown");
     await settleDialog(dialog);
     expect(selectedOptionIndex(dialog)).toBe(1);
 
-    dialog.state = { step: "logout", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] };
+    dialog.state = { step: "logout", machineId: "local", providers: [providerOption("p1", "One"), providerOption("p2", "Two")] };
     await settleDialog(dialog);
 
     expect(selectedOptionIndex(dialog)).toBe(0);

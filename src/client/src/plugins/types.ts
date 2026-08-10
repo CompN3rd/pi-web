@@ -25,16 +25,19 @@ export interface WorkspacePluginBinding {
 }
 
 export interface PiWebPlugin {
-  apiVersion: 1;
+  apiVersion: 2;
   name: string;
   activate: (context: PluginActivationContext) => PluginActivationResult;
 }
 
 export interface PluginActivationContext {
-  apiVersion: 1;
-  pluginId: PluginId;
-  html: HtmlTemplateTag;
-  svg: SvgTemplateTag;
+  readonly apiVersion: 2;
+  /** Stable package/source identity, including on federated machines. */
+  readonly pluginId: PluginId;
+  /** Host-unique identity for qualified contribution references in this runtime. */
+  readonly runtimePluginId: PluginId;
+  readonly html: HtmlTemplateTag;
+  readonly svg: SvgTemplateTag;
 }
 
 export interface PluginActivationResult {

@@ -5,13 +5,18 @@
   "license": "MIT",
   "author": "Federico Jaramillo Martinez",
   "type": "module",
+  "exports": {
+    "./plugin-api": {
+      "types": "./dist/plugin-api.d.ts"
+    },
+    "./server-plugin-api": {
+      "types": "./dist/server-plugin-api.d.ts"
+    }
+  },
   "typesVersions": {
     "*": {
       "plugin-api": [
         "dist/plugin-api.d.ts"
-      ],
-      "plugin-api/unstable": [
-        "dist/plugin-api/unstable.d.ts"
       ],
       "server-plugin-api": [
         "dist/server-plugin-api.d.ts"
@@ -30,11 +35,11 @@
     "README.md",
     "LICENSE",
     "extensions",
+    "examples/workspace-provider-plugin",
     "docs/plugins.md",
     "docs/config.md",
     "docs/assets",
     "plugin-api.d.ts",
-    "plugin-api/unstable.d.ts",
     "server-plugin-api.d.ts"
   ],
   "scripts": {
