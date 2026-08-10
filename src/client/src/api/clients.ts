@@ -51,8 +51,8 @@ import {
   parseTerminalInfo,
   parseThinkingLevelsResponse,
   parseWriteWorkspaceFileResponse,
-  parseWorkspaceActivityResponse,
   parseWorkspaceProviderResolution,
+  requireMachineStatusSnapshot,
 } from "./parsers";
 import { messagePath } from "./urls";
 
@@ -142,8 +142,8 @@ export const piPackagesApi = {
   },
 };
 
-export const activityApi = {
-  workspaceActivity: (machineId = "local") => request(`${machinePrefix(machineId)}/activity`, parseWorkspaceActivityResponse),
+export const machineStatusApi = {
+  machineStatus: (machineId = "local") => request(`${machinePrefix(machineId)}/status`, requireMachineStatusSnapshot),
 };
 
 export const projectsApi = {
@@ -371,7 +371,6 @@ export const api = {
   ...configApi,
   ...pluginsApi,
   ...piPackagesApi,
-  ...activityApi,
   ...projectsApi,
   ...workspacesApi,
   ...sessionsApi,

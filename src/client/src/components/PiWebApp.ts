@@ -6,12 +6,11 @@ import { initialAppState, type AppState } from "../appState";
 import { isSessionActive } from "../../../shared/activity";
 import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
-import { ActivityController } from "../controllers/activityController";
 import { AuthController } from "../controllers/authController";
 import { FileExplorerController } from "../controllers/fileExplorerController";
 import { MachineController } from "../controllers/machineController";
+import { MachineStatusController } from "../controllers/machineStatusController";
 import { ProjectController } from "../controllers/projectController";
-import { ProjectActivityOwnershipCoordinator } from "../controllers/projectActivityOwnershipCoordinator";
 import { PiWebStatusController } from "../controllers/piWebStatusController";
 import { SessionController } from "../controllers/sessionController";
 import { SessionNotificationController } from "../controllers/sessionNotificationController";
@@ -26,7 +25,6 @@ import { machineSessionKey } from "../machineKeys";
 import { sessionCleanupRequestKey } from "../sessionCleanupUi";
 import { selectedNotificationView } from "../sessionNotifications";
 import { SessionUnreadController } from "../sessionUnread";
-import { deriveUnreadPresence, EMPTY_UNREAD_PRESENCE, sameUnreadPresence, type UnreadPresence } from "../unreadPresence";
 import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility, toggleSessionWarnings } from "../sessionWarningVisibility";
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
 import type { PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePluginBinding } from "../plugins/types";
@@ -111,7 +109,6 @@ export class PiWebApp extends LitElement {
 
   private readonly sessionUnread = new SessionUnreadController({
     onChange: (machineId) => {
-      this.syncUnreadPresence();
       if (selectedMachineId(this.state) !== machineId) return;
       this.syncUnreadSessionIds();
       this.syncSelectedSessionReadState();
@@ -121,7 +118,6 @@ export class PiWebApp extends LitElement {
     },
   });
   @state() private unreadSessionIds: ReadonlySet<string> = this.sessionUnread.unreadSessionIds(selectedMachineId(this.state), this.state.sessions);
-  @state() private unreadPresence: UnreadPresence = EMPTY_UNREAD_PRESENCE;
   private unreadConnected = false;
   private committedChatIdentity: string | undefined;
   private readyChatIdentity: string | undefined;
@@ -148,20 +144,9 @@ export class PiWebApp extends LitElement {
       },
     },
   );
-  private readonly projectActivityOwnership = new ProjectActivityOwnershipCoordinator(
+  private readonly machineStatus = new MachineStatusController(
     () => this.state,
     (patch) => { this.setState(patch); },
-    {
-      api: workspacesApi,
-      onError: ({ machineId, projectId, error }) => {
-        console.warn(`Failed to discover project activity ownership for ${projectId} on ${machineId}`, error);
-      },
-    },
-  );
-  private readonly activity = new ActivityController(
-    () => this.state,
-    (patch) => { this.setState(patch); },
-    { onActivityApplied: (machineId) => { void this.projectActivityOwnership.handleActivityApplied(machineId); } },
   );
   private readonly auth = new AuthController(
     () => this.state,
@@ -179,7 +164,6 @@ export class PiWebApp extends LitElement {
     () => this.state,
     (patch) => { this.setState(patch); },
     this.workspaces,
-    { onProjectsApplied: (machineId) => { void this.projectActivityOwnership.handleProjectsApplied(machineId); } },
   );
   private readonly machines = new MachineController(
     () => this.state,
@@ -317,18 +301,6 @@ export class PiWebApp extends LitElement {
     if (!sameStringSet(next, this.unreadSessionIds)) this.unreadSessionIds = next;
   }
 
-  private syncUnreadPresence(): void {
-    const next = deriveUnreadPresence({
-      machineIds: this.state.machines.map((machine) => machine.id),
-      projectionFor: (machineId) => this.sessionUnread.projection(machineId),
-      selectedMachineId: selectedMachineId(this.state),
-      projects: this.state.projects,
-      workspaces: this.state.workspaces,
-      workspacesByProjectId: this.state.workspacesByProjectId,
-    });
-    if (!sameUnreadPresence(next, this.unreadPresence)) this.unreadPresence = next;
-  }
-
   private isSessionSeen(machineId: string, session: SessionInfo): boolean {
     if (!this.unreadConnected) return false;
     const identity = unreadChatIdentity(machineId, session);
@@ -361,7 +333,6 @@ export class PiWebApp extends LitElement {
     this.connectRealtime();
     this.syncSessionUnreadMachines();
     this.piWebStatusTimer = window.setInterval(() => { this.schedulePiWebStatusRefresh(); }, PI_WEB_STATUS_REFRESH_MS);
-    void this.refreshWorkspaceActivity();
     void this.loadClientConfig();
     void this.ensureGatewayPluginsLoaded();
     void this.loadProjectsAndRestoreRoute().finally(() => { this.schedulePiWebStatusRefresh(); });
@@ -402,7 +373,6 @@ export class PiWebApp extends LitElement {
     }
     if (machineUnreadInputsChanged(previous, this.state)) this.syncSessionUnreadMachines();
     this.syncUnreadSessionIds();
-    this.syncUnreadPresence();
     this.handleActivityTransition(previous, this.state);
     this.handleWorkspaceChange(previous, this.state);
     this.handleMachineChange(previous, this.state);
@@ -437,7 +407,7 @@ export class PiWebApp extends LitElement {
     await this.sessionUnread.refreshAll();
     await Promise.all([
       this.sessions.refreshSelectedSession(),
-      this.refreshMachineActivities(),
+      this.refreshMachineStatusSnapshots(),
       this.refreshWorkspaceDeletionRuns(),
       this.refreshCurrentWorkspaceSurface(),
       this.workspaces.refreshSelectedProjectTopology(),
@@ -458,21 +428,27 @@ export class PiWebApp extends LitElement {
     this.piWebStatusDeferredTimer = undefined;
   }
 
-  private async refreshWorkspaceActivity(machineId = selectedMachineId(this.state)): Promise<void> {
-    try {
-      await this.activity.refresh(machineId);
-    } catch (error) {
-      console.warn(`Failed to refresh workspace activity for ${machineId}`, error);
-    }
+  /**
+   * Explicit-refresh path for the status tree. Socket frames keep a loaded
+   * snapshot current, including the one sent on connect, so this only covers
+   * resumes and manual refreshes. A machine whose daemon does not serve the
+   * route simply keeps no snapshot, which renders as no indicators.
+   */
+  private async refreshMachineStatusSnapshots(): Promise<void> {
+    await Promise.all(this.refreshableMachineIds().map(async (machineId) => {
+      try {
+        await this.machineStatus.refresh(machineId);
+      } catch (error) {
+        console.warn(`Failed to refresh machine status for ${machineId}`, error);
+      }
+    }));
   }
 
-  private async refreshMachineActivities(): Promise<void> {
-    const machineIds = this.state.machines.length === 0
-      ? [selectedMachineId(this.state)]
-      : this.state.machines
-        .filter((machine) => shouldRefreshMachineActivity(machine, this.state.machineStatuses[machine.id]))
-        .map((machine) => machine.id);
-    await Promise.all(machineIds.map((machineId) => this.refreshWorkspaceActivity(machineId)));
+  private refreshableMachineIds(): string[] {
+    if (this.state.machines.length === 0) return [selectedMachineId(this.state)];
+    return this.state.machines
+      .filter((machine) => shouldRefreshMachineActivity(machine, this.state.machineStatuses[machine.id]))
+      .map((machine) => machine.id);
   }
 
   private async loadClientConfig(): Promise<void> {
@@ -494,7 +470,7 @@ export class PiWebApp extends LitElement {
     try {
       await Promise.all([
         this.sessions.refreshSelectedSession(),
-        this.refreshMachineActivities(),
+        this.refreshMachineStatusSnapshots(),
         this.loadClientConfig(),
         this.refreshWorkspaceDeletionRuns(),
         this.refreshCurrentWorkspaceSurface(),
@@ -948,7 +924,6 @@ export class PiWebApp extends LitElement {
         void this.sessionUnread.refresh(machineId);
         const workspace = this.state.selectedWorkspace;
         if (workspace !== undefined) void this.refreshActiveTerminals(workspace);
-        void this.refreshWorkspaceActivity(machineId);
       },
       machineId,
     );
@@ -966,10 +941,7 @@ export class PiWebApp extends LitElement {
       const socket = new RealtimeSocket();
       socket.connect(
         (event) => { this.handleMachineActivityEvent(machineId, event); },
-        () => {
-          void this.sessionUnread.refresh(machineId);
-          void this.refreshWorkspaceActivity(machineId);
-        },
+        () => { void this.sessionUnread.refresh(machineId); },
         machineId,
       );
       this.machineRealtimeSockets.set(machineId, socket);
@@ -991,12 +963,12 @@ export class PiWebApp extends LitElement {
 
   private handleMachineActivityEvent(machineId: string, event: BrowserRealtimeEvent): void {
     if (event.type === "sessions.unread") this.sessionUnread.applyEvent(machineId, event);
-    else if (event.type === "workspace.activity") this.activity.applyWorkspaceActivity(event.activity, machineId);
+    else if (event.type === "machine.status") this.machineStatus.apply(machineId, event.status);
   }
 
   private handleRealtimeEvent(machineId: string, event: BrowserRealtimeEvent): void {
     if (event.type === "sessions.unread") this.sessionUnread.applyEvent(machineId, event);
-    else if (event.type === "workspace.activity") this.activity.applyWorkspaceActivity(event.activity);
+    else if (event.type === "machine.status") this.machineStatus.apply(machineId, event.status);
     else if (isTerminalEvent(event)) {
       this.applyTerminalEvent(event);
       if (event.type === "terminal.exited") void this.refreshWorkspaceDeletionRuns();
@@ -1043,7 +1015,6 @@ export class PiWebApp extends LitElement {
 
   private handleMachineChange(previous: AppState, next: AppState): void {
     if ((previous.selectedMachine?.id ?? "local") === (next.selectedMachine?.id ?? "local")) return;
-    this.projectActivityOwnership.handleSelectedMachineChanged();
     const pendingMachineId = this.pendingRemoteRouteRestore?.machineId ?? "local";
     if (pendingMachineId !== (next.selectedMachine?.id ?? "local")) this.clearPendingRemoteRouteRestore();
     this.sessions.clearActiveSession();
@@ -1224,15 +1195,13 @@ export class PiWebApp extends LitElement {
         .machines=${this.state.machines}
         .selectedMachine=${this.state.selectedMachine}
         .machineStatuses=${this.state.machineStatuses}
-        .machineActivities=${this.state.machineActivities}
+        .machineStatusSnapshots=${this.state.machineStatusSnapshots}
         .machinesCollapsed=${this.navigationSections.isCollapsed("machines")}
         .onToggleMachines=${() => { this.navigationSections.toggle("machines"); }}
         .onSelectMachine=${(machine: Machine) => this.selectNavigationItem("machines", "projects", () => this.selectMachineWithMemory(machine))}
         .onRemoveMachine=${(machine: Machine) => { void this.removeMachine(machine); }}
         .projects=${this.state.projects}
         .selectedProject=${this.state.selectedProject}
-        .workspaceActivities=${this.state.workspaceActivities}
-        .workspacesByProjectId=${this.state.workspacesByProjectId}
         .workspaces=${this.state.workspaces}
         .selectedWorkspace=${this.state.selectedWorkspace}
         .deletingWorkspaceIds=${pendingWorkspaceDeletionIds(this.state.workspaceDeletionRuns)}
@@ -1241,7 +1210,6 @@ export class PiWebApp extends LitElement {
         .sessionActivities=${this.state.sessionActivities}
         .sendingPrompts=${this.state.sendingPrompts}
         .unreadSessionIds=${this.unreadSessionIds}
-        .unreadPresence=${this.unreadPresence}
         .selectedSession=${this.state.selectedSession}
         .startingSessionCount=${this.state.startingSessionCount}
         .canStartSession=${!!this.state.selectedWorkspace}

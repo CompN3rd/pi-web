@@ -32,6 +32,12 @@ export interface PluginBackendDispatcher {
 export interface PluginBackendRouteDependencies {
   projects: PluginBackendProjectReader;
   backends: PluginBackendDispatcher;
+  /**
+   * Reports that the project's workspaces may have changed. A provider
+   * operation is opaque here, so every completed request is reported rather
+   * than guessing which operations create or remove a workspace.
+   */
+  onWorkspacesMutated: () => void;
 }
 
 /** JSON-only sessiond boundary for the active owner of one current workspace. */
@@ -88,7 +94,9 @@ export function registerPluginBackendRoutes(
         );
         return await reply.type("application/json; charset=utf-8").send(serialized);
       } catch (error) {
-        return pluginBackendRequestFailed(reply, error, pluginId, operation);
+        return await pluginBackendRequestFailed(reply, error, pluginId, operation);
+      } finally {
+        dependencies.onWorkspacesMutated();
       }
     },
   );

@@ -1,12 +1,12 @@
 import { LitElement, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { Workspace, WorkspaceActivity } from "../api";
+import type { Workspace } from "../api";
+import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
 import { writeClipboardText } from "../clipboard";
 import type { WorkspaceLabelItem } from "../plugins/types";
-import { workspaceActivityFor, workspaceActivityIndicator } from "../workspaceActivity";
 import { canDeleteWorkspace } from "../workspaceDeletion";
 import { actionMenuPanelStyle } from "./actionMenu";
-import { renderActionActivityIndicator } from "./activityBadge";
+import { hasStatusUnread, renderActionActivityIndicator, statusActivityKind } from "./activityBadge";
 import type { KeyboardNavigableSection } from "./navigationFocus";
 import { activateSelectableRow, focusSelectedOrFirstSelectableRow, handleSelectableRowKeyboard } from "./selectableRow";
 import { listStyles } from "./shared";
@@ -19,9 +19,9 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ attribute: false }) workspaceLabelItems: (workspace: Workspace) => WorkspaceLabelItem[] = () => [];
-  @property({ attribute: false }) activities: Record<string, WorkspaceActivity> = {};
+  /** Status tree of the machine these workspaces belong to; absent means no indicators. */
+  @property({ attribute: false }) statusSnapshot: MachineStatusSnapshot | undefined;
   @property({ attribute: false }) deletingWorkspaceIds: string[] = [];
-  @property({ attribute: false }) unreadWorkspaceIds: ReadonlySet<string> = new Set();
   @property({ attribute: false }) onSelect?: (workspace: Workspace) => void;
   @property({ attribute: false }) onDelete?: (workspace: Workspace) => void;
   @property({ attribute: false }) onToggleCollapsed?: () => void;
@@ -108,8 +108,9 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
   }
 
   private renderActivity(workspace: Workspace): TemplateResult | undefined {
-    const kind = workspaceActivityIndicator(workspaceActivityFor(workspace, this.activities));
-    const unreadLabel = this.unreadWorkspaceIds.has(workspace.id) ? "Unread sessions in this workspace" : undefined;
+    const flags = this.statusSnapshot?.workspaces[workspace.id];
+    const kind = statusActivityKind(flags);
+    const unreadLabel = hasStatusUnread(flags) ? "Unread sessions in this workspace" : undefined;
     return renderActionActivityIndicator(kind, kind === "terminal" ? "Workspace terminal active" : "Workspace active", unreadLabel);
   }
 

@@ -1,3 +1,4 @@
+import type { MachineStatusUiEvent } from "./machineStatus.js";
 import type {
   DeleteWorkspaceFileResponse,
   FileContentMediaType,
@@ -1038,18 +1039,6 @@ export interface SessionStatus {
   pendingDialogs?: PendingExtensionDialog[];
 }
 
-export interface WorkspaceActivity {
-  cwd: string;
-  hasSessionActivity: boolean;
-  hasTerminalActivity: boolean;
-  updatedAt: string;
-}
-
-export interface WorkspaceActivityResponse {
-  workspaces: WorkspaceActivity[];
-  generatedAt: string;
-}
-
 export interface SlashCommand {
   name: string;
   description?: string;
@@ -1113,11 +1102,6 @@ export type TerminalUiEvent =
   | { type: "terminal.created"; terminal: TerminalInfo }
   | { type: "terminal.exited"; terminal: TerminalInfo }
   | { type: "terminal.closed"; terminalId: string; cwd: string };
-
-export interface WorkspaceActivityUiEvent {
-  type: "workspace.activity";
-  activity: WorkspaceActivity;
-}
 
 export interface CommandOption {
   value: string;
@@ -1256,4 +1240,4 @@ export type GlobalSessionEvent =
   | SessionNotificationSummaryEvent
   | SessionUnreadEvent
   | SessionStartupProgressEvent;
-export type RealtimeEvent = GlobalSessionEvent | TerminalUiEvent | WorkspaceActivityUiEvent;
+export type RealtimeEvent = GlobalSessionEvent | TerminalUiEvent | MachineStatusUiEvent;

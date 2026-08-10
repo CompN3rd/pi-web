@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { Workspace, WorkspaceActivity } from "../api";
+import type { Workspace } from "../api";
+import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
+import { machineStatusSnapshot } from "../machineStatus.testSupport";
 import { WorkspaceList } from "./WorkspaceList";
 
 let restoreClipboardStub: () => void = () => undefined;
@@ -47,9 +49,12 @@ describe("workspace-list removal actions", () => {
   });
 });
 
-describe("workspace unread indicator", () => {
-  it("shows an unread dot only on workspaces tracked as unread", async () => {
-    const list = await mountWorkspaceList([workspace("ws-a"), workspace("ws-b")], new Set(["ws-b"]));
+describe("workspace status indicator", () => {
+  it("reads workspace status by workspace id", async () => {
+    const list = await mountWorkspaceList(
+      [workspace("ws-a"), workspace("ws-b")],
+      machineStatusSnapshot({ workspaces: { "ws-b": { "core:unread": true } } }),
+    );
 
     expect(unreadDot(rowFor(list, "ws-a"))).toBeNull();
     const dot = unreadDot(rowFor(list, "ws-b"));
@@ -57,20 +62,21 @@ describe("workspace unread indicator", () => {
     expect(dot?.getAttribute("title")).toBe("Unread sessions in this workspace");
   });
 
-  it("clears the dot once the workspace is no longer tracked as unread", async () => {
-    const list = await mountWorkspaceList([workspace("ws-a")], new Set(["ws-a"]));
+  it("clears the dot once a newer snapshot reports nothing unread", async () => {
+    const list = await mountWorkspaceList([workspace("ws-a")], machineStatusSnapshot({ workspaces: { "ws-a": { "core:unread": true } } }));
     expect(list.shadowRoot?.querySelector(".activity-indicator.unread")).not.toBeNull();
 
-    list.unreadWorkspaceIds = new Set();
+    list.statusSnapshot = machineStatusSnapshot({ revision: 2 });
     await list.updateComplete;
 
     expect(list.shadowRoot?.querySelector(".activity-indicator.unread")).toBeNull();
   });
 
   it("wraps the work dot in an unread ring when the workspace is busy and unread", async () => {
-    const list = await mountWorkspaceList([workspace("ws-a")], new Set(["ws-a"]));
-    list.activities = { "/repo/ws-a": workspaceActivity("/repo/ws-a", false, true) };
-    await list.updateComplete;
+    const list = await mountWorkspaceList(
+      [workspace("ws-a")],
+      machineStatusSnapshot({ workspaces: { "ws-a": { "core:terminal": true, "core:unread": true } } }),
+    );
 
     const row = rowFor(list, "ws-a");
     const ring = row.querySelector(".unread-ring");
@@ -78,12 +84,24 @@ describe("workspace unread indicator", () => {
     expect(ring?.getAttribute("title")).toBe("Unread sessions in this workspace · Workspace terminal active");
     expect(row.querySelector(".activity-indicator.unread")).toBeNull();
   });
+
+  it("shows no indicator when the machine publishes no snapshot", async () => {
+    const list = await mountWorkspaceList([workspace("ws-a")]);
+
+    expect(rowFor(list, "ws-a").querySelector(".activity-indicator")).toBeNull();
+  });
+
+  it("still lights a row from a flag id this build does not know", async () => {
+    const list = await mountWorkspaceList([workspace("ws-a")], machineStatusSnapshot({ workspaces: { "ws-a": { "core:future": true } } }));
+
+    expect(rowFor(list, "ws-a").querySelector(".activity-indicator.session")).not.toBeNull();
+  });
 });
 
 describe("workspace detail copy buttons", () => {
   it("copies the workspace path from the menu details and keeps the menu open", async () => {
     const writeText = stubClipboardWriteText(() => Promise.resolve());
-    const list = await mountWorkspaceList([workspace("ws-a")], new Set());
+    const list = await mountWorkspaceList([workspace("ws-a")]);
     openMenu(list, "ws-a");
     await list.updateComplete;
 
@@ -104,7 +122,7 @@ describe("workspace detail copy buttons", () => {
         metadata: { branch: "feature-x" },
       },
     });
-    const list = await mountWorkspaceList([listed], new Set());
+    const list = await mountWorkspaceList([listed]);
     openMenu(list, "review app");
     await list.updateComplete;
 
@@ -116,7 +134,7 @@ describe("workspace detail copy buttons", () => {
 
   it("keeps the copy action unchanged when the clipboard write fails", async () => {
     const writeText = stubClipboardWriteText(() => Promise.reject(new Error("denied")));
-    const list = await mountWorkspaceList([workspace("ws-a")], new Set());
+    const list = await mountWorkspaceList([workspace("ws-a")]);
     openMenu(list, "ws-a");
     await list.updateComplete;
 
@@ -164,10 +182,10 @@ function restoreStubbedProperty(target: object, key: string, descriptor: Propert
   Object.defineProperty(target, key, descriptor);
 }
 
-async function mountWorkspaceList(workspaces: Workspace[], unreadWorkspaceIds: ReadonlySet<string>): Promise<WorkspaceList> {
+async function mountWorkspaceList(workspaces: Workspace[], statusSnapshot?: MachineStatusSnapshot): Promise<WorkspaceList> {
   const list = new WorkspaceList();
   list.workspaces = workspaces;
-  list.unreadWorkspaceIds = unreadWorkspaceIds;
+  list.statusSnapshot = statusSnapshot;
   document.body.append(list);
   await list.updateComplete;
   return list;
@@ -182,10 +200,6 @@ function rowFor(list: WorkspaceList, workspaceLabel: string): Element {
 
 function unreadDot(row: Element): Element | null {
   return row.querySelector(".activity-indicator.unread");
-}
-
-function workspaceActivity(cwd: string, hasSessionActivity: boolean, hasTerminalActivity: boolean): WorkspaceActivity {
-  return { cwd, hasSessionActivity, hasTerminalActivity, updatedAt: "2026-06-04T00:00:00.000Z" };
 }
 
 function workspace(id: string, patch: Partial<Workspace> = {}): Workspace {
