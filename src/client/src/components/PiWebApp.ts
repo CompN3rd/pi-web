@@ -6,13 +6,11 @@ import { initialAppState, type AppState } from "../appState";
 import { isSessionActive } from "../../../shared/activity";
 import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
-import { ActivityController } from "../controllers/activityController";
 import { AuthController } from "../controllers/authController";
 import { FileExplorerController } from "../controllers/fileExplorerController";
 import { MachineController } from "../controllers/machineController";
 import { MachineStatusController } from "../controllers/machineStatusController";
 import { ProjectController } from "../controllers/projectController";
-import { ProjectActivityOwnershipCoordinator } from "../controllers/projectActivityOwnershipCoordinator";
 import { PiWebStatusController } from "../controllers/piWebStatusController";
 import { SessionController } from "../controllers/sessionController";
 import { SessionNotificationController } from "../controllers/sessionNotificationController";
@@ -146,21 +144,6 @@ export class PiWebApp extends LitElement {
       },
     },
   );
-  private readonly projectActivityOwnership = new ProjectActivityOwnershipCoordinator(
-    () => this.state,
-    (patch) => { this.setState(patch); },
-    {
-      api: workspacesApi,
-      onError: ({ machineId, projectId, error }) => {
-        console.warn(`Failed to discover project activity ownership for ${projectId} on ${machineId}`, error);
-      },
-    },
-  );
-  private readonly activity = new ActivityController(
-    () => this.state,
-    (patch) => { this.setState(patch); },
-    { onActivityApplied: (machineId) => { void this.projectActivityOwnership.handleActivityApplied(machineId); } },
-  );
   private readonly machineStatus = new MachineStatusController(
     () => this.state,
     (patch) => { this.setState(patch); },
@@ -181,7 +164,6 @@ export class PiWebApp extends LitElement {
     () => this.state,
     (patch) => { this.setState(patch); },
     this.workspaces,
-    { onProjectsApplied: (machineId) => { void this.projectActivityOwnership.handleProjectsApplied(machineId); } },
   );
   private readonly machines = new MachineController(
     () => this.state,
@@ -351,7 +333,6 @@ export class PiWebApp extends LitElement {
     this.connectRealtime();
     this.syncSessionUnreadMachines();
     this.piWebStatusTimer = window.setInterval(() => { this.schedulePiWebStatusRefresh(); }, PI_WEB_STATUS_REFRESH_MS);
-    void this.refreshWorkspaceActivity();
     void this.loadClientConfig();
     void this.ensureGatewayPluginsLoaded();
     void this.loadProjectsAndRestoreRoute().finally(() => { this.schedulePiWebStatusRefresh(); });
@@ -426,7 +407,6 @@ export class PiWebApp extends LitElement {
     await this.sessionUnread.refreshAll();
     await Promise.all([
       this.sessions.refreshSelectedSession(),
-      this.refreshMachineActivities(),
       this.refreshMachineStatusSnapshots(),
       this.refreshWorkspaceDeletionRuns(),
       this.refreshCurrentWorkspaceSurface(),
@@ -446,18 +426,6 @@ export class PiWebApp extends LitElement {
     if (this.piWebStatusDeferredTimer === undefined) return;
     window.clearTimeout(this.piWebStatusDeferredTimer);
     this.piWebStatusDeferredTimer = undefined;
-  }
-
-  private async refreshWorkspaceActivity(machineId = selectedMachineId(this.state)): Promise<void> {
-    try {
-      await this.activity.refresh(machineId);
-    } catch (error) {
-      console.warn(`Failed to refresh workspace activity for ${machineId}`, error);
-    }
-  }
-
-  private async refreshMachineActivities(): Promise<void> {
-    await Promise.all(this.refreshableMachineIds().map((machineId) => this.refreshWorkspaceActivity(machineId)));
   }
 
   /**
@@ -502,7 +470,6 @@ export class PiWebApp extends LitElement {
     try {
       await Promise.all([
         this.sessions.refreshSelectedSession(),
-        this.refreshMachineActivities(),
         this.refreshMachineStatusSnapshots(),
         this.loadClientConfig(),
         this.refreshWorkspaceDeletionRuns(),
@@ -957,7 +924,6 @@ export class PiWebApp extends LitElement {
         void this.sessionUnread.refresh(machineId);
         const workspace = this.state.selectedWorkspace;
         if (workspace !== undefined) void this.refreshActiveTerminals(workspace);
-        void this.refreshWorkspaceActivity(machineId);
       },
       machineId,
     );
@@ -975,10 +941,7 @@ export class PiWebApp extends LitElement {
       const socket = new RealtimeSocket();
       socket.connect(
         (event) => { this.handleMachineActivityEvent(machineId, event); },
-        () => {
-          void this.sessionUnread.refresh(machineId);
-          void this.refreshWorkspaceActivity(machineId);
-        },
+        () => { void this.sessionUnread.refresh(machineId); },
         machineId,
       );
       this.machineRealtimeSockets.set(machineId, socket);
@@ -1000,13 +963,11 @@ export class PiWebApp extends LitElement {
 
   private handleMachineActivityEvent(machineId: string, event: BrowserRealtimeEvent): void {
     if (event.type === "sessions.unread") this.sessionUnread.applyEvent(machineId, event);
-    else if (event.type === "workspace.activity") this.activity.applyWorkspaceActivity(event.activity, machineId);
     else if (event.type === "machine.status") this.machineStatus.apply(machineId, event.status);
   }
 
   private handleRealtimeEvent(machineId: string, event: BrowserRealtimeEvent): void {
     if (event.type === "sessions.unread") this.sessionUnread.applyEvent(machineId, event);
-    else if (event.type === "workspace.activity") this.activity.applyWorkspaceActivity(event.activity);
     else if (event.type === "machine.status") this.machineStatus.apply(machineId, event.status);
     else if (isTerminalEvent(event)) {
       this.applyTerminalEvent(event);
@@ -1054,7 +1015,6 @@ export class PiWebApp extends LitElement {
 
   private handleMachineChange(previous: AppState, next: AppState): void {
     if ((previous.selectedMachine?.id ?? "local") === (next.selectedMachine?.id ?? "local")) return;
-    this.projectActivityOwnership.handleSelectedMachineChanged();
     const pendingMachineId = this.pendingRemoteRouteRestore?.machineId ?? "local";
     if (pendingMachineId !== (next.selectedMachine?.id ?? "local")) this.clearPendingRemoteRouteRestore();
     this.sessions.clearActiveSession();

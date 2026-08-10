@@ -37,10 +37,10 @@ describe("PiWebApp workspace topology refresh wiring", () => {
   it("still re-lists workspaces when a sibling refresh in the same resume batch fails", async () => {
     const app = createApp();
     stubBackgroundRefreshes(app);
-    failBackgroundRefresh(app, "refreshMachineActivities", new Error("machine activity unavailable"));
+    failBackgroundRefresh(app, "refreshMachineStatusSnapshots", new Error("machine status unavailable"));
     const refreshTopology = spyOnTopologyRefresh(app);
 
-    await expect(browserResumeRefresh(app)()).rejects.toThrow("machine activity unavailable");
+    await expect(browserResumeRefresh(app)()).rejects.toThrow("machine status unavailable");
     expect(refreshTopology).toHaveBeenCalledOnce();
   });
 });
@@ -62,7 +62,7 @@ function createApp(): PiWebApp {
 function stubBackgroundRefreshes(app: PiWebApp): void {
   const result = () => Promise.resolve();
   for (const name of [
-    "refreshMachineActivities",
+    "refreshMachineStatusSnapshots",
     "refreshWorkspaceDeletionRuns",
     "loadClientConfig",
     "refreshCurrentWorkspaceSurface",

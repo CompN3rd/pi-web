@@ -51,7 +51,6 @@ import {
   parseTerminalInfo,
   parseThinkingLevelsResponse,
   parseWriteWorkspaceFileResponse,
-  parseWorkspaceActivityResponse,
   parseWorkspaceProviderResolution,
   requireMachineStatusSnapshot,
 } from "./parsers";
@@ -141,10 +140,6 @@ export const piPackagesApi = {
     const body: PiPackageUpdateRequest | undefined = source === undefined ? undefined : { source };
     return request(piPackagePath("update", machineId), parsePiPackageMutationResponse, { method: "POST", ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   },
-};
-
-export const activityApi = {
-  workspaceActivity: (machineId = "local") => request(`${machinePrefix(machineId)}/activity`, parseWorkspaceActivityResponse),
 };
 
 export const machineStatusApi = {
@@ -376,7 +371,6 @@ export const api = {
   ...configApi,
   ...pluginsApi,
   ...piPackagesApi,
-  ...activityApi,
   ...projectsApi,
   ...workspacesApi,
   ...sessionsApi,

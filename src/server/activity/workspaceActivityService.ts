@@ -1,5 +1,12 @@
-import { isSessionActive, isWorkspaceActivityActive } from "../../shared/activity.js";
-import type { SessionActivity, SessionStatus, TerminalInfo, WorkspaceActivity, WorkspaceActivityResponse } from "../../shared/apiTypes.js";
+import { isSessionActive } from "../../shared/activity.js";
+import type { SessionActivity, SessionStatus, TerminalInfo } from "../../shared/apiTypes.js";
+
+/** One working directory that currently has session or terminal activity. */
+export interface ActiveWorkspaceActivity {
+  cwd: string;
+  hasSessionActivity: boolean;
+  hasTerminalActivity: boolean;
+}
 
 interface SessionRecord {
   cwd: string;
@@ -75,11 +82,8 @@ export class WorkspaceActivityService {
     this.notifyCwd(previousCwd);
   }
 
-  snapshot(): WorkspaceActivityResponse {
-    return {
-      workspaces: this.activeCwds().map((cwd) => this.summaryForCwd(cwd)).filter(isWorkspaceActivityActive),
-      generatedAt: new Date().toISOString(),
-    };
+  snapshot(): { workspaces: ActiveWorkspaceActivity[] } {
+    return { workspaces: this.activeCwds().map((cwd) => this.summaryForCwd(cwd)) };
   }
 
   private pruneIdleSession(sessionId: string): void {
@@ -111,12 +115,11 @@ export class WorkspaceActivityService {
     return [...cwds].sort((a, b) => a.localeCompare(b));
   }
 
-  private summaryForCwd(cwd: string): WorkspaceActivity {
+  private summaryForCwd(cwd: string): ActiveWorkspaceActivity {
     return {
       cwd,
       hasSessionActivity: [...this.sessions.values()].some((record) => record.cwd === cwd && isSessionActive(record.status, record.activity)),
       hasTerminalActivity: [...this.terminals.values()].some((terminal) => terminal.cwd === cwd),
-      updatedAt: new Date().toISOString(),
     };
   }
 }
