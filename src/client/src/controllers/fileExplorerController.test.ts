@@ -67,7 +67,7 @@ describe("FileExplorerController file tree workflows", () => {
         docs: [fileEntry("docs/stale.md")],
       },
       fileTreeStale: true,
-      error: "stale failure",
+      error: "Failed to start workspace removal: HTTP request cancelled",
     });
 
     await harness.controller.refreshFiles();
@@ -79,6 +79,21 @@ describe("FileExplorerController file tree workflows", () => {
     expect(harness.state.fileTree).toEqual(rootEntries);
     expect(harness.state.expandedDirs).toEqual({ src: refreshedSrcEntries, docs: refreshedDocsEntries });
     expect(harness.state.fileTreeStale).toBe(false);
+    // A background refresh must not erase another action's failure before the
+    // user has read it.
+    expect(harness.state.error).toBe("Failed to start workspace removal: HTTP request cancelled");
+  });
+
+  it("clears its own tree failure once a later refresh succeeds", async () => {
+    const workspaceTree = vi.fn<WorkspaceTree>()
+      .mockRejectedValueOnce(new Error("tree unavailable"))
+      .mockImplementation((_projectId, _workspaceId, path = "") => Promise.resolve(treeResponse(path, [fileEntry("README.md")])));
+    const harness = createHarness({ api: createApi({ workspaceTree }) });
+
+    await harness.controller.refreshFiles();
+    expect(harness.state.error).toBe("Error: tree unavailable");
+
+    await harness.controller.refreshFiles();
     expect(harness.state.error).toBe("");
   });
 

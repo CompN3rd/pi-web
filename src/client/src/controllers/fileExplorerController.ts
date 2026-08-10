@@ -16,6 +16,7 @@ import {
   updateWorkspaceUploadBatchProgress,
   type WorkspaceUploadBatchState,
 } from "../workspaceUploadState";
+import { ReportedError } from "./reportedError";
 import { selectedMachineId, type GetState, type SetState, type UpdateUrl } from "./types";
 
 const FILES_ROUTE_NAMESPACE = queryNamespace("core:workspace.files");
@@ -56,6 +57,7 @@ export class FileExplorerController {
   private readonly createUploadBatchId: () => string;
   private readonly now: () => string;
   private readonly uploadTasks = new Map<string, WorkspaceUploadTask<WriteWorkspaceFileResponse[]>>();
+  private readonly reportedError: ReportedError;
   private uploadBatchSequence = 0;
   private fileRequestGeneration = 0;
 
@@ -65,6 +67,7 @@ export class FileExplorerController {
     private readonly updateUrl: UpdateUrl,
     deps: FileExplorerControllerDependencies = {},
   ) {
+    this.reportedError = new ReportedError(getState, setState);
     this.api = deps.api ?? defaultApi;
     this.uploadWorkspaceFiles = deps.uploadWorkspaceFiles ?? defaultUploadWorkspaceFiles;
     this.createUploadBatchId = deps.createUploadBatchId ?? (() => {
@@ -83,9 +86,10 @@ export class FileExplorerController {
       const root = await this.api.workspaceTree(project.id, workspace.id, "", machineId);
       const expanded = { ...this.getState().expandedDirs };
       await Promise.all(Object.keys(expanded).map(async (path) => { expanded[path] = (await this.api.workspaceTree(project.id, workspace.id, path, machineId)).entries; }));
-      this.setState({ fileTree: root.entries, expandedDirs: expanded, fileTreeStale: false, error: "" });
+      this.setState({ fileTree: root.entries, expandedDirs: expanded, fileTreeStale: false });
+      this.reportedError.clear();
     } catch (error) {
-      this.setState({ error: String(error) });
+      this.reportedError.report(String(error));
     }
   }
 
@@ -99,9 +103,10 @@ export class FileExplorerController {
     }
     try {
       const response = await this.api.workspaceTree(project.id, workspace.id, path, selectedMachineId(this.getState()));
-      this.setState({ expandedDirs: { ...this.getState().expandedDirs, [path]: response.entries }, error: "" });
+      this.setState({ expandedDirs: { ...this.getState().expandedDirs, [path]: response.entries } });
+      this.reportedError.clear();
     } catch (error) {
-      this.setState({ error: String(error) });
+      this.reportedError.report(String(error));
     }
   }
 
@@ -135,7 +140,8 @@ export class FileExplorerController {
     try {
       const content = await this.api.workspaceFile(request.projectId, request.workspaceId, request.path, request.machineId);
       if (!this.isCurrentFileRequest(request)) return;
-      this.setState({ selectedFileContent: content, selectedFileLoadError: undefined, error: "" });
+      this.setState({ selectedFileContent: content, selectedFileLoadError: undefined });
+      this.reportedError.clear();
     } catch (error) {
       if (!this.isCurrentFileRequest(request)) return;
       this.setState({ selectedFileContent: undefined, selectedFileLoadError: errorMessage(error) });
@@ -155,7 +161,7 @@ export class FileExplorerController {
     const project = this.getState().selectedProject;
     const workspace = this.getState().selectedWorkspace;
     if (project === undefined || workspace === undefined) {
-      this.setState({ error: "Select a workspace before uploading files." });
+      this.reportedError.report("Select a workspace before uploading files.");
       return undefined;
     }
     if (files.length === 0) return undefined;
@@ -177,7 +183,7 @@ export class FileExplorerController {
         startedAt: this.now(),
       });
     } catch (error) {
-      this.setState({ error: String(error) });
+      this.reportedError.report(String(error));
       return undefined;
     }
 
@@ -226,7 +232,8 @@ export class FileExplorerController {
   private async completeUploadBatch(batchId: string, responses: WriteWorkspaceFileResponse[], options: StartWorkspaceUploadOptions): Promise<void> {
     const batch = this.getUploadBatch(batchId);
     if (batch?.status !== "uploading") return;
-    this.setUploadBatch(completeWorkspaceUploadBatch(batch, responses, this.now()), { error: "" });
+    this.setUploadBatch(completeWorkspaceUploadBatch(batch, responses, this.now()));
+    this.reportedError.clear();
     if (!this.isCurrentWorkspaceBatch(batch)) return;
     await this.refreshFiles();
     const uploadedPath = responses[0]?.path;
@@ -251,7 +258,8 @@ export class FileExplorerController {
     }
     const message = errorMessage(error);
     const failed = failWorkspaceUploadBatch(batch, message, this.now());
-    this.setUploadBatch(failed, { error: message });
+    this.setUploadBatch(failed);
+    this.reportedError.report(message);
     return failed;
   }
 
@@ -259,8 +267,8 @@ export class FileExplorerController {
     return this.getState().workspaceUploadBatches[batchId];
   }
 
-  private setUploadBatch(batch: WorkspaceUploadBatchState, patch: { error?: string } = {}): void {
-    this.setState({ workspaceUploadBatches: { ...this.getState().workspaceUploadBatches, [batch.id]: batch }, ...patch });
+  private setUploadBatch(batch: WorkspaceUploadBatchState): void {
+    this.setState({ workspaceUploadBatches: { ...this.getState().workspaceUploadBatches, [batch.id]: batch } });
   }
 
   private isCurrentWorkspaceBatch(batch: WorkspaceUploadBatchState): boolean {
