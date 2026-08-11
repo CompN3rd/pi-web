@@ -5,7 +5,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultPiWebConfigPath, defaultPiWebDataDir, effectivePiWebConfig, examplePiWebConfig } from "./config.js";
+import { defaultPiWebConfigPath, defaultPiWebDataDir, examplePiWebConfig } from "./config.js";
 import { piWebDockerCommand, type PiWebDockerMode } from "./docker/piWebDockerCommandPlan.js";
 import { runPluginRecoveryCli, type SessionDaemonRestartPlan } from "./pluginRecoveryCli.js";
 import { packageVersion, printPiWebVersionReport } from "./piWebVersionReport.js";
@@ -859,17 +859,14 @@ export function nodeVersionCheck(): string {
   });
 }
 
-export function agentCommandForChecks(env: NodeJS.ProcessEnv = process.env): string {
-  return effectivePiWebConfig({ env }).config.agent.command;
-}
-
-function generalDoctorChecks(): Check[] {
+export function generalDoctorChecks(): Check[] {
   const shell = serviceShellLabel();
-  const agentCommand = agentCommandForChecks();
   return [
     [`Caller login ${shell} can find node >= ${minimumSupportedNodeVersion}`, serviceShellCommand(nodeVersionCheck())],
     [`Caller login ${shell} can find npm`, serviceShellCommand(commandWithVersionCheck("npm"))],
-    [`Caller login ${shell} can find ${agentCommand}`, serviceShellCommand(commandWithVersionCheck(agentCommand))],
+    // Sessions run on the bundled pi SDK; the only CLI check is a hardcoded
+    // `pi` PATH probe — nothing names or locates a configurable command.
+    [`Caller login ${shell} can find pi`, serviceShellCommand(commandWithVersionCheck("pi"))],
   ];
 }
 

@@ -1,0 +1,9 @@
+---
+"@jmfederico/pi-web": patch
+---
+
+Always run sessions on the bundled Pi runtime and resolve Pi's agent state directory from Pi's own environment variables. **Breaking configuration change:** the `agent.command` config key and the `PI_WEB_AGENT_COMMAND` environment variable no longer do anything (they never replaced the embedded runtime), and `PI_WEB_AGENT_DIR`, `PI_WEB_AGENT_SESSION_DIR`, and the `agent.dir` config key are now deprecated aliases for `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`. Deprecated inputs are still honored for this release and surface a non-dismissable warning in the UI that names each input and its replacement and clears once you remove them; support will be removed in a future release. Migrate by renaming the environment variables to their `PI_CODING_AGENT_*` equivalents and deleting `agent.*` from your PI WEB config. `pi-web doctor` and the status/update flow now probe the `pi` command on `PATH` directly, and the session daemon exports the resolved state directory to everything it starts, so terminals, the bash tool, and agent-started `pi` processes all use the same directory as your sessions.
+
+Starting a second PI WEB instance against state owned by a live instance now fails loudly at startup with an actionable error naming the owner and the distinct `PI_WEB_DATA_DIR` / `PI_WEB_SESSIOND_SOCKET` / ports to set, instead of silently sharing state. Sessions carry `PI_WEB_SESSION=1` and receive environment facts explaining they run nested inside PI WEB, including the precautions for running another instance and for restarting services (web before sessiond); agent-spawned processes now inherit the daemon's `PI_WEB_*` environment, and the startup environment scrub removes only `NODE_ENV` and `PORT`.
+
+Restart the session daemon after upgrading.
