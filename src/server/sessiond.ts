@@ -30,7 +30,7 @@ import { TerminalService } from "./terminals/terminalService.js";
 import { registerTerminalRoutes } from "./terminals/terminalRoutes.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
-import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled } from "../config.js";
+import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
 import { PiWebPluginCatalog } from "./piWebPluginCatalog.js";
@@ -49,13 +49,24 @@ import { WorkspaceRemovalService } from "./workspaces/workspaceRemovalService.js
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
 const serverPluginRecovery = loadServerPluginRecoveryConfig({ env: daemonEnvironment });
-const { config } = effectivePiWebConfig({ env: daemonEnvironment });
-const activeAgentProfile = createActiveAgentProfileDescriptor({
-  command: config.agent.command,
-  dir: config.agent.dir,
-  sessionDirEnvKeys: agentSessionDirEnvKeys(config.agent.command),
-});
+const { config, deprecatedAgentInputs } = effectivePiWebConfig({ env: daemonEnvironment });
+const activeAgentProfile = createActiveAgentProfileDescriptor(config.agent);
+// Normalize the resolved agent state locations into the canonical pi SDK env
+// vars before anything agent-visible can spawn: the embedded SDK's own
+// resolution (getAgentDir(), its session-dir override), terminals, the bash
+// tool, and subsessions then all observe the same values by inheritance. This
+// also repairs the split-brain for values sourced from the deprecated
+// PI_WEB_AGENT_* aliases, which the environment scrub below hides from agent
+// processes.
+process.env[PI_CODING_AGENT_DIR_ENV] = activeAgentProfile.dir;
+const agentSessionDirOverride = agentSessionDirEnvOverride(daemonEnvironment);
+if (agentSessionDirOverride !== undefined) {
+  process.env[PI_CODING_AGENT_SESSION_DIR_ENV] = agentSessionDirOverride;
+}
 const app = Fastify({ logger: true, bodyLimit: maxUploadBytes(daemonEnvironment, config) });
+if (deprecatedAgentInputs.length > 0) {
+  app.log.warn({ deprecatedAgentInputs }, "deprecated agent configuration inputs detected; support will be removed in a future release");
+}
 if (serverPluginRecovery.safeStartDiagnostic !== undefined) {
   app.log.error(
     { component: "server-plugins", configPath: serverPluginRecovery.path },
@@ -222,7 +233,6 @@ async function createSessionDaemonRuntime() {
       sessionManager: createPiSessionManagerGateway({
         agentDir: activeAgentProfile.dir,
         env: daemonEnvironment,
-        sessionDirEnvKeys: activeAgentProfile.sessionDirEnvKeys,
       }),
     }));
     auth.subscribe((change) => { sessions.applyAuthChange(change); });

@@ -23,7 +23,7 @@ describe("session daemon panel notices", () => {
     expect(sessiondDescription(targetLabel)).toContain("Lab Mac (remote machine)");
 
     const notices = sessiondPanelNotices(config, noticeContext({
-      activeProfile: activeProfile("pi", "/srv/pi"),
+      activeProfile: activeProfile("/srv/pi"),
       targetLabel,
     }));
 
@@ -37,7 +37,7 @@ describe("session daemon panel notices", () => {
     const config = configResponse({ agent: { command: "agent-lab", dir: "/srv/agent-lab" }, spawnSessions: false });
 
     const notices = sessiondPanelNotices(config, noticeContext({
-      activeProfile: activeProfile("pi", "/srv/pi"),
+      activeProfile: activeProfile("/srv/pi"),
       error: "Failed to save session-daemon config.",
       savedMessage: "Session daemon settings saved.",
     }));
@@ -52,7 +52,7 @@ describe("session daemon panel notices", () => {
     const config = configResponse({ agent: { command: "agent-lab", dir: "/srv/agent-lab" } });
 
     const notices = sessiondPanelNotices(config, noticeContext({
-      activeProfile: activeProfile("agent-lab", "/srv/agent-lab"),
+      activeProfile: activeProfile("/srv/agent-lab"),
     }));
 
     expect(notices).toEqual([]);
@@ -115,13 +115,10 @@ function noticeContext(overrides: Partial<SessiondPanelNoticeContext>): Sessiond
   };
 }
 
-function activeProfile(command: string, dir: string): ActiveAgentProfileDescriptor {
+function activeProfile(dir: string): ActiveAgentProfileDescriptor {
   return {
-    schemaVersion: 1,
-    revision: `sha256:${"a".repeat(64)}`,
-    command,
+    schemaVersion: 2,
     dir,
-    sessionDirEnvKeys: ["PI_WEB_AGENT_SESSION_DIR"],
   };
 }
 

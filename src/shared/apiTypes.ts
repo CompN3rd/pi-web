@@ -136,9 +136,9 @@ export interface PiWebUploadsConfig {
 }
 
 export interface PiWebAgentConfig {
-  /** Pi-compatible companion CLI used for diagnostics and safe package-managed updates. */
+  /** Deprecated and ignored: the multi-implementation CLI abstraction was removed; sessions always run on the bundled pi SDK. Detected for the deprecation warning. */
   command?: string;
-  /** Pi-compatible profile directory containing auth.json, models.json, settings.json, and sessions/. */
+  /** Deprecated alias for the PI_CODING_AGENT_DIR env var: pi agent state directory containing auth.json, models.json, settings.json, and sessions/. */
   dir?: string;
 }
 
@@ -1068,13 +1068,10 @@ export interface RunTerminalCommandInput {
   open?: boolean;
 }
 
-/** Secret-free identity of the Pi-compatible CLI/state profile fixed for one sessiond lifetime. */
+/** Secret-free identity of the pi agent state directory fixed for one sessiond lifetime. */
 export interface ActiveAgentProfileDescriptor {
-  readonly schemaVersion: 1;
-  readonly revision: string;
-  readonly command: string;
+  readonly schemaVersion: 2;
   readonly dir: string;
-  readonly sessionDirEnvKeys: readonly string[];
 }
 
 export interface PiWebRuntimeComponent {

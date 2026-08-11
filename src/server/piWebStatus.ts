@@ -11,7 +11,7 @@ import { effectivePiWebCapabilities, WEB_RUNTIME_CAPABILITIES } from "../shared/
 import { piWebDockerCommand } from "../docker/piWebDockerCommandPlan.js";
 import { parsePiWebRuntimeComponent } from "../shared/piWebStatusParsing.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
-import { isHostAbsoluteAgentDir, isPiCompanionCommand, isSafeAgentCommandForHost, PI_CODING_AGENT_DIR_ENV } from "../config.js";
+import { isHostAbsoluteAgentDir, PI_CODING_AGENT_DIR_ENV } from "../config.js";
 import { createPiWebReleaseLookupCache, type PiWebReleaseLookup } from "./piWebReleaseLookupCache.js";
 
 const PI_WEB_PACKAGE_NAME = "@jmfederico/pi-web";
@@ -455,9 +455,9 @@ export async function updateCommandFor(installation: PiWebInstallationInfo | und
   if (restartCommand === undefined) return undefined;
   if (installation?.kind === "pi-package") {
     const profile = options.activeAgentProfile;
-    if (profile === undefined || !isSafeAgentCommandForHost(profile.command) || !isHostAbsoluteAgentDir(profile.dir) || !isPiCompanionCommand(profile.command)) return undefined;
-    if (!(await options.hasCommand(profile.command))) return undefined;
-    return `${PI_CODING_AGENT_DIR_ENV}=${shellQuote(profile.dir)} ${shellQuote(profile.command)} update ${shellQuote(installation.source ?? PI_WEB_NPM_SOURCE)} && ${restartCommand}`;
+    if (profile === undefined || !isHostAbsoluteAgentDir(profile.dir)) return undefined;
+    if (!(await options.hasCommand("pi"))) return undefined;
+    return `${PI_CODING_AGENT_DIR_ENV}=${shellQuote(profile.dir)} pi update ${shellQuote(installation.source ?? PI_WEB_NPM_SOURCE)} && ${restartCommand}`;
   }
   if (installation?.kind === "local" && installation.path !== undefined) {
     if (!(await hasCommand("npm")) || !(await isGitCheckoutWithUpstream(installation.path))) return undefined;

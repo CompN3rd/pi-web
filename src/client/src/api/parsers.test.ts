@@ -77,28 +77,22 @@ describe("API parsers", () => {
           available: true,
           capabilities: [],
           activeAgentProfile: {
-            schemaVersion: 1,
-            revision: `sha256:${"a".repeat(64)}`,
-            command: "agent-lab",
-            dir: "/srv/agent-lab",
-            sessionDirEnvKeys: ["PI_WEB_AGENT_SESSION_DIR"],
+            schemaVersion: 2,
+            dir: "/srv/pi-state",
           },
         },
       },
       capabilities: ["piPackages.manage", "future.capability"],
     })).toMatchObject({
       capabilities: [],
-      components: { sessiond: { activeAgentProfile: { command: "agent-lab", dir: "/srv/agent-lab" } } },
+      components: { sessiond: { activeAgentProfile: { schemaVersion: 2, dir: "/srv/pi-state" } } },
     });
   });
 
   it("retains portable active profiles in machine runtime snapshots and rejects invalid ownership", () => {
     const profile = {
-      schemaVersion: 1,
-      revision: `sha256:${"b".repeat(64)}`,
-      command: "C:\\tools\\pi.exe",
-      dir: "C:\\agent-profiles\\work",
-      sessionDirEnvKeys: ["PI_WEB_AGENT_SESSION_DIR"],
+      schemaVersion: 2,
+      dir: "C:\\pi-profiles\\work",
     };
     const components = {
       web: { component: "web", label: "Web/UI", available: true, capabilities: [] },
@@ -107,7 +101,7 @@ describe("API parsers", () => {
 
     const parsed = parseMachineRuntime({ machineId: "remote-a", ok: true, checkedAt: "now", components, capabilities: [] });
 
-    expect(parsed.components?.sessiond.activeAgentProfile).toMatchObject({ command: profile.command, dir: profile.dir });
+    expect(parsed.components?.sessiond.activeAgentProfile).toEqual({ schemaVersion: 2, dir: profile.dir });
     expect(Object.isFrozen(parsed.components?.sessiond.activeAgentProfile)).toBe(true);
     expect(() => parseMachineRuntime({
       machineId: "remote-a",

@@ -5,7 +5,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultPiWebConfigPath, defaultPiWebDataDir, effectivePiWebConfig, examplePiWebConfig } from "./config.js";
+import { defaultPiWebConfigPath, defaultPiWebDataDir, examplePiWebConfig } from "./config.js";
 import { piWebDockerCommand, type PiWebDockerMode } from "./docker/piWebDockerCommandPlan.js";
 import { runPluginRecoveryCli, type SessionDaemonRestartPlan } from "./pluginRecoveryCli.js";
 import { packageVersion, printPiWebVersionReport } from "./piWebVersionReport.js";
@@ -859,8 +859,8 @@ export function nodeVersionCheck(): string {
   });
 }
 
-export function agentCommandForChecks(env: NodeJS.ProcessEnv = process.env): string {
-  return effectivePiWebConfig({ env }).config.agent.command;
+export function agentCommandForChecks(): string {
+  return "pi";
 }
 
 function generalDoctorChecks(): Check[] {

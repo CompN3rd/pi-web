@@ -59,7 +59,7 @@ describe("PI WEB status", () => {
         capabilities: [],
       });
 
-      const status = await getPiWebVersionStatus(daemon, { activeAgentProfile: activeProfile("a", "alt-agent", agentDir) });
+      const status = await getPiWebVersionStatus(daemon, { activeAgentProfile: activeProfile(agentDir) });
 
       expect(status.components.sessiond.installation).toMatchObject({ kind: "pi-package", source: process.cwd(), scope: "user" });
     } finally {
@@ -102,11 +102,8 @@ describe("PI WEB status", () => {
 
   it("carries the daemon-owned active agent profile through the web runtime response", async () => {
     const activeAgentProfile = {
-      schemaVersion: 1 as const,
-      revision: `sha256:${"a".repeat(64)}`,
-      command: "acme-agent",
-      dir: "/opt/acme-agent/state",
-      sessionDirEnvKeys: ["PI_WEB_AGENT_SESSION_DIR"],
+      schemaVersion: 2 as const,
+      dir: "/opt/pi/state",
     };
     const daemon = daemonWithRuntime({
       component: "sessiond",
@@ -216,7 +213,7 @@ describe("PI WEB status", () => {
     }
   });
 
-  it("suppresses Pi package update planning without an active companion command", async () => {
+  it("suppresses Pi package update planning without an active state profile", async () => {
     const hasCommand = vi.fn(() => Promise.resolve(true));
 
     const updateCommand = await updateCommandFor(
@@ -230,18 +227,17 @@ describe("PI WEB status", () => {
   });
 
   it("preserves and shell-quotes the active state profile in Pi-package update commands", async () => {
-    const command = "/tmp/agent's/pi";
     const dir = "/tmp/profile's/state";
     const updateCommand = await updateCommandFor(
       { kind: "pi-package", source: "npm:@jmfederico/pi-web", scope: "user", path: "/tmp/pi-web" },
       "pi-web restart",
       {
-        activeAgentProfile: activeProfile("a", command, dir),
-        hasCommand: (candidate) => Promise.resolve(candidate === command),
+        activeAgentProfile: activeProfile(dir),
+        hasCommand: (candidate) => Promise.resolve(candidate === "pi"),
       },
     );
 
-    expect(updateCommand).toBe("PI_CODING_AGENT_DIR='/tmp/profile'\\''s/state' '/tmp/agent'\\''s/pi' update 'npm:@jmfederico/pi-web' && pi-web restart");
+    expect(updateCommand).toBe("PI_CODING_AGENT_DIR='/tmp/profile'\\''s/state' pi update 'npm:@jmfederico/pi-web' && pi-web restart");
   });
 
   it("scopes node-pty script approval in npm-global update commands", async () => {
@@ -264,20 +260,27 @@ describe("PI WEB status", () => {
     expect(updateCommand).toBeUndefined();
   });
 
-  it.each([
-    activeProfile("a", "acme-agent", "/opt/acme/state"),
-    activeProfile("b", "pi", "relative/state"),
-  ])("suppresses Pi-package updates when the active companion profile cannot be represented safely", async (profile) => {
+  it("suppresses Pi-package updates when the active state profile cannot be represented safely", async () => {
     const hasCommand = vi.fn(() => Promise.resolve(true));
 
     const updateCommand = await updateCommandFor(
       { kind: "pi-package", source: "npm:@jmfederico/pi-web", scope: "user", path: "/tmp/pi-web" },
       "pi-web restart",
-      { activeAgentProfile: profile, hasCommand },
+      { activeAgentProfile: activeProfile("relative/state"), hasCommand },
     );
 
     expect(updateCommand).toBeUndefined();
     expect(hasCommand).not.toHaveBeenCalled();
+  });
+
+  it("suppresses Pi-package updates when the pi command is not on PATH", async () => {
+    const updateCommand = await updateCommandFor(
+      { kind: "pi-package", source: "npm:@jmfederico/pi-web", scope: "user", path: "/tmp/pi-web" },
+      "pi-web restart",
+      { activeAgentProfile: activeProfile("/opt/pi/state"), hasCommand: () => Promise.resolve(false) },
+    );
+
+    expect(updateCommand).toBeUndefined();
   });
 
   it.skipIf(process.platform !== "linux")("suggests native systemd commands for local development services", async () => {
@@ -381,13 +384,10 @@ describe("PI WEB status", () => {
   });
 });
 
-function activeProfile(revisionCharacter: string, command: string, dir: string) {
+function activeProfile(dir: string) {
   return {
-    schemaVersion: 1 as const,
-    revision: `sha256:${revisionCharacter.repeat(64)}`,
-    command,
+    schemaVersion: 2 as const,
     dir,
-    sessionDirEnvKeys: ["PI_WEB_AGENT_SESSION_DIR"],
   };
 }
 

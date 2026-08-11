@@ -16,7 +16,6 @@ import {
 
 const originalShell = process.env["SHELL"];
 const originalPiWebConfig = process.env["PI_WEB_CONFIG"];
-const originalPiWebAgentCommand = process.env["PI_WEB_AGENT_COMMAND"];
 
 afterEach(() => {
   if (originalShell === undefined) {
@@ -28,11 +27,6 @@ afterEach(() => {
     delete process.env["PI_WEB_CONFIG"];
   } else {
     process.env["PI_WEB_CONFIG"] = originalPiWebConfig;
-  }
-  if (originalPiWebAgentCommand === undefined) {
-    delete process.env["PI_WEB_AGENT_COMMAND"];
-  } else {
-    process.env["PI_WEB_AGENT_COMMAND"] = originalPiWebAgentCommand;
   }
 });
 
@@ -73,23 +67,8 @@ describe("nodeVersionCheck", () => {
 });
 
 describe("agentCommandForChecks", () => {
-  it("reads the configured agent command for doctor checks", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pi-web-cli-test-"));
-    try {
-      const configPath = join(dir, "config.json");
-      writeFileSync(configPath, `${JSON.stringify({ agent: { command: "acme-agent", dir: "/opt/acme-agent/state" } })}\n`);
-      process.env["PI_WEB_CONFIG"] = configPath;
-      delete process.env["PI_WEB_AGENT_COMMAND"];
-
-      expect(agentCommandForChecks()).toBe("acme-agent");
-      expect(agentCommandForChecks({
-        PI_WEB_CONFIG: configPath,
-        PI_WEB_AGENT_COMMAND: "environment-agent",
-        PI_WEB_AGENT_DIR: join(dir, "environment-agent-state"),
-      })).toBe("environment-agent");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it("probes the hardcoded pi command on PATH", () => {
+    expect(agentCommandForChecks()).toBe("pi");
   });
 });
 

@@ -44,29 +44,22 @@ describe("PI WEB status parsing", () => {
           available: true,
           capabilities: [],
           activeAgentProfile: {
-            schemaVersion: 1,
-            revision: `sha256:${"a".repeat(64)}`,
-            command: "acme-agent",
-            dir: "/opt/acme-agent/state",
-            sessionDirEnvKeys: ["PI_WEB_AGENT_SESSION_DIR"],
+            schemaVersion: 2,
+            dir: "/opt/pi/state",
           },
         },
       },
       capabilities: [],
     });
 
-    expect(parsed?.components.sessiond.activeAgentProfile).toMatchObject({ command: "acme-agent", dir: "/opt/acme-agent/state" });
+    expect(parsed?.components.sessiond.activeAgentProfile).toEqual({ schemaVersion: 2, dir: "/opt/pi/state" });
     expect(Object.isFrozen(parsed?.components.sessiond.activeAgentProfile)).toBe(true);
-    expect(Object.isFrozen(parsed?.components.sessiond.activeAgentProfile?.sessionDirEnvKeys)).toBe(true);
   });
 
   it("rejects malformed, secret-bearing, or web-owned active profile descriptors", () => {
     const profile = {
-      schemaVersion: 1,
-      revision: `sha256:${"a".repeat(64)}`,
-      command: "acme-agent",
-      dir: "/opt/acme-agent/state",
-      sessionDirEnvKeys: ["PI_WEB_AGENT_SESSION_DIR"],
+      schemaVersion: 2,
+      dir: "/opt/pi/state",
     };
     const responseFor = (webProfile: unknown, sessiondProfile: unknown) => ({
       packageName: "@jmfederico/pi-web",
@@ -79,9 +72,8 @@ describe("PI WEB status parsing", () => {
     });
 
     expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, token: "secret" }))).toBeUndefined();
-    expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, command: "./acme-agent" }))).toBeUndefined();
     expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, dir: "relative/state" }))).toBeUndefined();
-    expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, sessionDirEnvKeys: ["ARBITRARY_AGENT_SESSION_DIR"] }))).toBeUndefined();
+    expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, schemaVersion: 1 }))).toBeUndefined();
     expect(parsePiWebRuntimeResponse(responseFor(profile, undefined))).toBeUndefined();
   });
 

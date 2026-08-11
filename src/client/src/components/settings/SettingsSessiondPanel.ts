@@ -48,8 +48,7 @@ export class SettingsSessiondPanel extends LitElement {
     const askUserOverridden = config?.envOverrides.askUser === true;
     const effectiveAskUser = config?.effectiveConfig.askUser === true;
     const agentCommandOverridden = config?.envOverrides.agentCommand === true;
-    const draftCommand = agentCommandOverridden ? (config.effectiveConfig.agent?.command ?? this.agentDraft.command) : this.agentDraft.command;
-    const agentDirLocked = agentDirFieldOverridden(config?.envOverrides, draftCommand);
+    const agentDirLocked = agentDirFieldOverridden(config?.envOverrides);
     const effectiveAgentDirOverridden = config?.envOverrides.agentDir === true;
     const effectiveAgent = config?.effectiveConfig.agent;
     const profileActivation = agentProfileActivationState(config, this.activeAgentProfile);
@@ -159,9 +158,7 @@ export class SettingsSessiondPanel extends LitElement {
           <section class="effective-card" aria-label="Desired and active session daemon configuration summary">
             <h3>Desired after environment overrides</h3>
             <dl>
-              <div><dt>Desired command</dt><dd>${effectiveAgent?.command ?? html`<span class="muted">Unavailable</span>`}</dd></div>
               <div><dt>Desired state</dt><dd>${effectiveAgent?.dir ?? html`<span class="muted">Unavailable</span>`}</dd></div>
-              <div><dt>Active command</dt><dd>${this.activeAgentProfile?.command ?? html`<span class="muted">Unavailable</span>`}</dd></div>
               <div><dt>Active state</dt><dd>${this.activeAgentProfile?.dir ?? html`<span class="muted">Unavailable</span>`}</dd></div>
               <div><dt>Profile status</dt><dd>${profileActivationLabel(profileActivation)}</dd></div>
               <div><dt>Spawn sessions</dt><dd>${effectiveSpawn ? "Enabled" : html`<span class="muted">Disabled</span>`}</dd></div>

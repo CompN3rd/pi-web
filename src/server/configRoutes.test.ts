@@ -113,7 +113,7 @@ describe("config routes", () => {
   });
 
   it.each([
-    { agent: { command: "./agent", dir: "/srv/agent" }, error: "safe bare executable name or host-absolute executable path" },
+    { agent: { command: "agent", dir: "relative/agent" }, error: "agent.dir must be a host-absolute path" },
     { agent: { command: "agent", dir: "/srv/agent", futureSetting: true }, error: 'agent contains unknown key "futureSetting"' },
   ])("rejects unsafe agent profile payloads before writing", async ({ agent, error }) => {
     const response = await app.inject({
@@ -177,7 +177,7 @@ describe("config routes", () => {
   });
 
   it("keeps foreign-platform agent paths portable at federation transport boundaries", () => {
-    const agent = { command: "C:\\tools\\pi.exe", dir: "C:\\agent-profiles\\pi" };
+    const agent = { command: "C:\\tools\\pi.exe", dir: "C:\\pi-profiles\\work" };
     const response = {
       ...responseFor({ agent }, true),
       effectiveConfig: { agent },
@@ -186,7 +186,7 @@ describe("config routes", () => {
     expect(parsePiWebConfigResponseBody(response).config.agent).toEqual(agent);
     expect(parseSelectedMachineConfigRequest({ agent }, "portable").agent).toEqual(agent);
     if (process.platform !== "win32") {
-      expect(() => parseSelectedMachineConfigRequest({ agent })).toThrow("host-absolute executable path");
+      expect(() => parseSelectedMachineConfigRequest({ agent })).toThrow("agent.dir must be a host-absolute path");
     }
   });
 

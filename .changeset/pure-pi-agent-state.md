@@ -1,0 +1,5 @@
+---
+"@jmfederico/pi-web": patch
+---
+
+Always run sessions on the bundled pi runtime and resolve pi's state directory from pi's own environment variables. **Breaking configuration change:** the `agent.command` config key and `PI_WEB_AGENT_COMMAND` environment variable no longer do anything (they never replaced the embedded runtime), and `PI_WEB_AGENT_DIR` / `PI_WEB_AGENT_SESSION_DIR` / the `agent.dir` config key are now deprecated aliases for `PI_CODING_AGENT_DIR` / `PI_CODING_AGENT_SESSION_DIR`. Deprecated inputs are still honored for this release and reported as a warning in the UI that clears once you remove them; support will be removed in a future release. Rename the environment variables to their `PI_CODING_AGENT_*` equivalents and delete `agent.*` from your PI WEB config. The session daemon now also exports the resolved state directory to everything it starts, so terminals, the bash tool, and agent-started `pi` processes all use the same directory as your sessions. Restart the session daemon after upgrading.
