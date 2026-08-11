@@ -194,7 +194,7 @@ This setting does not change the PI WEB config file selected by `PI_WEB_CONFIG` 
 
 ### Agent process environment
 
-Agent shells, terminals, and spawned sessions do not inherit the session daemon's own configuration. When the daemon starts, it removes its `PI_WEB_*` configuration keys, `NODE_ENV`, `PORT`, and `PI_CODING_AGENT_SESSION_DIR` from the environment agent processes see, so development commands behave normally inside sessions — for example, `npm install` is not affected by a production `NODE_ENV` meant for the daemon, and a second PI WEB instance started from a session does not pick up the live daemon's data directory or socket. `PI_CODING_AGENT_DIR` and ordinary variables (`PATH`, `HOME`, proxy settings, and the like) remain visible. The daemon itself keeps using the values it captured at startup.
+Agent shells, terminals, and spawned sessions do not inherit the session daemon's own configuration. When the daemon starts, it removes its `PI_WEB_*` configuration keys, `NODE_ENV`, and `PORT` from the environment agent processes see, so development commands behave normally inside sessions — for example, `npm install` is not affected by a production `NODE_ENV` meant for the daemon, and a second PI WEB instance started from a session does not pick up the live daemon's data directory or socket. `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, and ordinary variables (`PATH`, `HOME`, proxy settings, and the like) remain visible, so a `pi` CLI started from inside a session uses the same agent profile — auth, models, and session storage — as the daemon. The daemon itself keeps using the values it captured at startup.
 
 ### External path access
 

@@ -43,8 +43,11 @@ describe("agent process environment visibility", () => {
       "PI_WEB_DOCKER_HELPER_IMAGE",
       "HOSTEXEC_MODE",
       "HOSTEXEC_IMAGE",
-      // Agents running the `pi` CLI need the profile's auth and models.
+      // Agents running the `pi` CLI need the profile's auth and models, and a
+      // deployment-set session dir must apply to agent-run `pi` CLIs the same
+      // way it applies to the daemon.
       "PI_CODING_AGENT_DIR",
+      "PI_CODING_AGENT_SESSION_DIR",
       "PI_OFFLINE",
     ];
     for (const key of agentFacing) expect(isAgentVisibleEnvKey(key)).toBe(true);
@@ -55,9 +58,6 @@ describe("agent process environment visibility", () => {
     // package-export conditions; PORT is the web/API's listener config.
     expect(isAgentVisibleEnvKey("NODE_ENV")).toBe(false);
     expect(isAgentVisibleEnvKey("PORT")).toBe(false);
-    // Daemon session-discovery wiring; agent-run `pi` CLIs must not write
-    // sessions into daemon-managed storage.
-    expect(isAgentVisibleEnvKey("PI_CODING_AGENT_SESSION_DIR")).toBe(false);
   });
 
   it("removes hidden keys from the environment and reports them sorted", () => {

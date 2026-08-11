@@ -24,8 +24,10 @@
  *   which the agent-facing `pi-web-docker` CLI reads.
  * - `HOSTEXEC_*` stays: agents use `hostexec`.
  * - `PI_CODING_AGENT_DIR` stays so agent-spawned `pi` CLIs find the profile's
- *   auth and models; `PI_CODING_AGENT_SESSION_DIR` is daemon session-discovery
- *   wiring and is removed.
+ *   auth and models; `PI_CODING_AGENT_SESSION_DIR` stays for the same reason:
+ *   it is companion-CLI configuration (documented in `pi --help`), not daemon
+ *   wiring, so a deployment that sets it wants every `pi` process — whether
+ *   daemon-spawned or started by an agent — using the same session storage.
  * - `NODE_ENV` and `PORT` are app-runtime configuration, removed like
  *   `PI_WEB_*`. Nothing in PI WEB reads `NODE_ENV` at runtime, but tools
  *   agents run (npm, Vite, Node itself) change behavior based on it.
@@ -38,10 +40,9 @@ const AGENT_VISIBLE_PI_WEB_PREFIXES = ["PI_WEB_DOCKER_"] as const;
  * Non-`PI_WEB_` keys that still configure the daemon or app rather than the
  * processes agents run. Daemon configuration should use `PI_WEB_`-prefixed
  * keys so it is covered by the prefix rule above; a key only belongs here when
- * it cannot carry the prefix (deployment conventions like `NODE_ENV`) or is a
- * compatibility name owned by the companion CLI (`PI_CODING_AGENT_*`).
+ * it cannot carry the prefix (deployment conventions like `NODE_ENV`).
  */
-const DAEMON_ONLY_ENV_KEYS = new Set(["NODE_ENV", "PORT", "PI_CODING_AGENT_SESSION_DIR"]);
+const DAEMON_ONLY_ENV_KEYS = new Set(["NODE_ENV", "PORT"]);
 
 export function isAgentVisibleEnvKey(key: string): boolean {
   if (key.startsWith("PI_WEB_")) return AGENT_VISIBLE_PI_WEB_PREFIXES.some((prefix) => key.startsWith(prefix));
