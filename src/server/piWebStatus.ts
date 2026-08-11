@@ -104,8 +104,28 @@ export interface PiWebRuntimeOptions {
   loadConfig?: () => LoadedPiWebConfig;
 }
 
+/**
+ * The web component's runtime report with deprecated-input detection contained
+ * at the component boundary: a malformed config file must not blank the whole
+ * runtime report (the endpoint has no error handler, and federation peers
+ * would mark the machine failed). Version and capabilities stay intact and
+ * only the undetectable web-sourced deprecated inputs are omitted; the failure
+ * travels through the component error channel, the same channel
+ * `unavailableSessiondRuntime` uses for the daemon.
+ */
+function webRuntimeComponent(loadConfig: () => LoadedPiWebConfig): PiWebRuntimeComponent {
+  try {
+    return getPiWebRuntimeComponent("web", WEB_RUNTIME_CAPABILITIES, loadConfig().deprecatedAgentInputs);
+  } catch (error) {
+    return {
+      ...getPiWebRuntimeComponent("web", WEB_RUNTIME_CAPABILITIES),
+      error: `Could not check for deprecated agent configuration inputs: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 export async function getPiWebRuntime(daemon: PiWebStatusDaemon = new SessionDaemonClient(), options: PiWebRuntimeOptions = {}): Promise<PiWebRuntimeResponse> {
-  const web = getPiWebRuntimeComponent("web", WEB_RUNTIME_CAPABILITIES, (options.loadConfig ?? loadPiWebConfig)().deprecatedAgentInputs);
+  const web = webRuntimeComponent(options.loadConfig ?? loadPiWebConfig);
   const sessiond = await getSessiondRuntimeComponent(daemon);
   return {
     packageName: PI_WEB_PACKAGE_NAME,

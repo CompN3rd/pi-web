@@ -88,8 +88,14 @@ export interface EffectivePiWebAgentConfig {
  * cannot drift from pi.
  */
 export function effectiveAgentConfig(env: NodeJS.ProcessEnv = process.env, config: Pick<PiWebConfig, "agent"> = {}): EffectivePiWebAgentConfig {
-  const configuredDir = envValue(env, PI_WEB_AGENT_DIR_ENV) ?? envValue(env, PI_CODING_AGENT_DIR_ENV) ?? config.agent?.dir ?? defaultAgentDir(env);
-  return { dir: resolveAgentDirPath(configuredDir, env, "agent.dir", "environment") };
+  const sources: readonly (readonly [string, string | undefined])[] = [
+    [PI_WEB_AGENT_DIR_ENV, envValue(env, PI_WEB_AGENT_DIR_ENV)],
+    [PI_CODING_AGENT_DIR_ENV, envValue(env, PI_CODING_AGENT_DIR_ENV)],
+    ["agent.dir", config.agent?.dir],
+  ];
+  const configured = sources.find((source): source is readonly [string, string] => source[1] !== undefined);
+  const [sourceName, configuredDir] = configured ?? ["the agent directory default", defaultAgentDir(env)];
+  return { dir: resolveAgentDirPath(configuredDir, env, sourceName, "environment") };
 }
 
 /** The session storage override from the environment, in `AGENT_SESSION_DIR_ENV_KEYS` precedence order. */
@@ -490,6 +496,10 @@ function expandHomePath(value: string, env: NodeJS.ProcessEnv): string {
   return value;
 }
 
+// Exact mirror of the pi SDK default (`getAgentDir()`: `~/.pi/agent`) rather
+// than a delegation, so the injected `env` stays authoritative; if the bundled
+// SDK is ever swapped for a fork whose default moves, this mirror must move
+// with it or the two resolutions drift.
 function defaultAgentDir(env: NodeJS.ProcessEnv): string {
   return expandHomePath("~/.pi/agent", env);
 }

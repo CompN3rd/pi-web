@@ -160,6 +160,23 @@ describe("PI WEB status", () => {
     expect(runtime.components.sessiond).not.toHaveProperty("deprecatedAgentInputs");
   });
 
+  it("keeps the web runtime component well-formed when the config file cannot be loaded", async () => {
+    const daemon = daemonWithRuntime(runningSessiondRuntime());
+
+    const runtime = await getPiWebRuntime(daemon, {
+      loadConfig: () => { throw new Error("PI WEB config agent.dir must be a host-absolute path or start with ~: /tmp/config.json"); },
+    });
+
+    expect(runtime.components.web.available).toBe(true);
+    expect(runtime.components.web.capabilities).toEqual(["plugins.lifecycle"]);
+    expect(runtime.components.web.runtimeVersion).toBeDefined();
+    expect(runtime.components.web).not.toHaveProperty("deprecatedAgentInputs");
+    expect(runtime.components.web.error).toContain("Could not check for deprecated agent configuration inputs");
+    expect(runtime.components.web.error).toContain("agent.dir must be a host-absolute path");
+    expect(runtime.components.sessiond.available).toBe(true);
+    expect(runtime.capabilities).toEqual(["plugins.lifecycle"]);
+  });
+
   it("bypasses cached npm release data for a forced check", async () => {
     Reflect.deleteProperty(process.env, "PI_WEB_SKIP_VERSION_CHECK");
     process.env["PI_WEB_DOCKER_RUNTIME"] = "1";

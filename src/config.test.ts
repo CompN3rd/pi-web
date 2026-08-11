@@ -102,7 +102,13 @@ describe("PI WEB config persistence", () => {
   });
 
   it("rejects home expansion that would create a workspace-relative agent directory", () => {
-    expect(() => effectiveAgentConfig({ HOME: "relative-home" })).toThrow("agent.dir must be a host-absolute path");
+    expect(() => effectiveAgentConfig({ HOME: "relative-home" })).toThrow("the agent directory default must be a host-absolute path");
+  });
+
+  it("attributes agent directory resolution failures to the input that supplied the directory", () => {
+    expect(() => effectiveAgentConfig({ PI_WEB_AGENT_DIR: "relative/web", PI_CODING_AGENT_DIR: "relative/pi" })).toThrow("PI_WEB_AGENT_DIR must be a host-absolute path");
+    expect(() => effectiveAgentConfig({ PI_CODING_AGENT_DIR: "relative/pi" })).toThrow("PI_CODING_AGENT_DIR must be a host-absolute path");
+    expect(() => effectiveAgentConfig({}, { agent: { dir: "relative/config" } })).toThrow("agent.dir must be a host-absolute path");
   });
 
   it("expands the configured agent state directory against HOME", () => {

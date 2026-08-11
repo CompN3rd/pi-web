@@ -199,7 +199,7 @@ export interface PiWebConfigValues {
    * Tuning knob only — extension dialogs are always enabled.
    */
   extensionDialogsTimeoutMs?: number;
-  /** Desired Pi-compatible agent profile and companion CLI (Pi by default). */
+  /** Deprecated agent-configuration keys, still honored as aliases during the deprecation window and detected for the deprecation warning (see PiWebAgentConfig). */
   agent?: PiWebAgentConfig;
 }
 
