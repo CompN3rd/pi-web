@@ -239,7 +239,11 @@ async function createSessionDaemonRuntime() {
     const terminals = new TerminalService(eventHub, workspaceActivity);
     const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals);
     const runtimeComponent = Object.freeze({
-      ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES),
+      // The deprecated-input report is fixed at startup: it was detected from
+      // the captured pre-scrub daemon environment and the config snapshot this
+      // daemon actually honors, so it stays accurate for this daemon lifetime
+      // and clears only when the inputs are removed and the daemon restarts.
+      ...getPiWebRuntimeComponent("sessiond", SESSIOND_RUNTIME_CAPABILITIES, deprecatedAgentInputs),
       activeAgentProfile,
     });
     let disposed = false;

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
-import type { PiWebConfigValues } from "./shared/apiTypes.js";
+import type { PiWebConfigValues, PiWebDeprecatedAgentInput } from "./shared/apiTypes.js";
 import { isPiWebPluginId, piWebPluginIdPattern } from "./shared/pluginIds.js";
 
 export type PiWebConfig = PiWebConfigValues;
@@ -101,22 +101,12 @@ export function agentSessionDirEnvOverride(env: Readonly<NodeJS.ProcessEnv>): st
   return undefined;
 }
 
-export type DeprecatedAgentInputSource = "environment" | "config";
-
 /**
  * A deprecated agent-configuration input detected in a process environment or
- * config file. Values from the `PI_WEB_AGENT_*` env vars and the `agent.*`
- * config keys are still honored (or, for the removed command concept, ignored)
- * during the deprecation window; every detected input is surfaced as a
- * non-dismissable UI warning until the input is removed.
+ * config file; the canonical wire shape lives in `shared/apiTypes.ts` so the
+ * runtime/status pipeline reports exactly what the loader detects.
  */
-export interface DeprecatedAgentInput {
-  readonly source: DeprecatedAgentInputSource;
-  /** The deprecated input as the user set it: an env var name or a config key path. */
-  readonly name: string;
-  /** The replacement input; absent when the concept was removed and the input should simply be deleted. */
-  readonly replacement?: string;
-}
+export type DeprecatedAgentInput = PiWebDeprecatedAgentInput;
 
 export function detectDeprecatedAgentInputs(env: Readonly<NodeJS.ProcessEnv>, config: Pick<PiWebConfig, "agent"> = {}): DeprecatedAgentInput[] {
   const inputs: DeprecatedAgentInput[] = [];

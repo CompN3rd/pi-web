@@ -114,6 +114,8 @@ export interface MachineRuntime {
   generatedAt?: string;
   components?: PiWebRuntimeResponse["components"];
   capabilities?: PiWebCapability[];
+  /** Deprecated agent-configuration inputs detected on this machine (union of the web and session daemon reports, deduplicated); omitted when none. */
+  deprecatedAgentInputs?: readonly PiWebDeprecatedAgentInput[];
   error?: string;
 }
 
@@ -140,6 +142,22 @@ export interface PiWebAgentConfig {
   command?: string;
   /** Deprecated alias for the PI_CODING_AGENT_DIR env var: pi agent state directory containing auth.json, models.json, settings.json, and sessions/. */
   dir?: string;
+}
+
+/**
+ * A deprecated agent-configuration input detected on one machine, as reported
+ * over the runtime/status pipeline. Values from the legacy PI_WEB_AGENT_* env
+ * vars and the agent.* config keys are still honored (or, for the removed
+ * command concept, ignored) during the deprecation window; every detected
+ * input is surfaced as a non-dismissable UI warning until the input is removed.
+ */
+export interface PiWebDeprecatedAgentInput {
+  /** Where the input was found: the process environment or the config file. */
+  readonly source: "environment" | "config";
+  /** The deprecated input as the user set it: an env var name or a config key path. */
+  readonly name: string;
+  /** The replacement input; absent when the concept was removed and the input should simply be deleted. */
+  readonly replacement?: string;
 }
 
 export interface PiWebConfigValues {
@@ -1075,6 +1093,8 @@ export interface PiWebRuntimeComponent {
   capabilities: PiWebCapability[];
   /** Present only for a session daemon that supports active-profile reporting. */
   activeAgentProfile?: ActiveAgentProfileDescriptor;
+  /** Deprecated agent-configuration inputs detected in this component's process environment and config file; omitted when none. */
+  deprecatedAgentInputs?: readonly PiWebDeprecatedAgentInput[];
   error?: string;
 }
 

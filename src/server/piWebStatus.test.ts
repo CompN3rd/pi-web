@@ -120,6 +120,46 @@ describe("PI WEB status", () => {
     expect(runtime.components.web.activeAgentProfile).toBeUndefined();
   });
 
+  it("reports web-process deprecated agent inputs through the runtime response", async () => {
+    const deprecatedAgentInputs = [
+      { source: "environment" as const, name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+      { source: "config" as const, name: "agent.dir", replacement: "PI_CODING_AGENT_DIR" },
+    ];
+    const daemon = daemonWithRuntime(runningSessiondRuntime());
+
+    const runtime = await getPiWebRuntime(daemon, {
+      loadConfig: () => ({ path: "/tmp/config.json", exists: true, config: {}, deprecatedAgentInputs }),
+    });
+
+    expect(runtime.components.web.deprecatedAgentInputs).toEqual(deprecatedAgentInputs);
+    expect(runtime.components.sessiond.deprecatedAgentInputs).toBeUndefined();
+  });
+
+  it("carries daemon-reported deprecated agent inputs through the session daemon component", async () => {
+    const deprecatedAgentInputs = [
+      { source: "environment" as const, name: "PI_WEB_AGENT_SESSION_DIR", replacement: "PI_CODING_AGENT_SESSION_DIR" },
+      { source: "config" as const, name: "agent.command" },
+    ];
+    const daemon = daemonWithRuntime({ ...runningSessiondRuntime(), deprecatedAgentInputs });
+
+    const runtime = await getPiWebRuntime(daemon, {
+      loadConfig: () => ({ path: "/tmp/config.json", exists: false, config: {}, deprecatedAgentInputs: [] }),
+    });
+
+    expect(runtime.components.sessiond.deprecatedAgentInputs).toEqual(deprecatedAgentInputs);
+  });
+
+  it("omits the deprecated-input report when neither component detects anything", async () => {
+    const daemon = daemonWithRuntime(runningSessiondRuntime());
+
+    const runtime = await getPiWebRuntime(daemon, {
+      loadConfig: () => ({ path: "/tmp/config.json", exists: false, config: {}, deprecatedAgentInputs: [] }),
+    });
+
+    expect(runtime.components.web).not.toHaveProperty("deprecatedAgentInputs");
+    expect(runtime.components.sessiond).not.toHaveProperty("deprecatedAgentInputs");
+  });
+
   it("bypasses cached npm release data for a forced check", async () => {
     Reflect.deleteProperty(process.env, "PI_WEB_SKIP_VERSION_CHECK");
     process.env["PI_WEB_DOCKER_RUNTIME"] = "1";

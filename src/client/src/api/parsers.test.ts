@@ -117,6 +117,43 @@ describe("API parsers", () => {
     });
   });
 
+  it("parses deprecated agent input reports in machine runtime snapshots", () => {
+    const parsed = parseMachineRuntime({
+      machineId: "remote-a",
+      ok: true,
+      checkedAt: "now",
+      deprecatedAgentInputs: [
+        { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+        { source: "config", name: "agent.command" },
+      ],
+    });
+
+    expect(parsed.deprecatedAgentInputs).toEqual([
+      { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+      { source: "config", name: "agent.command" },
+    ]);
+  });
+
+  it("drops malformed deprecated-input entries but rejects a non-array report", () => {
+    const parsed = parseMachineRuntime({
+      machineId: "remote-a",
+      ok: true,
+      checkedAt: "now",
+      deprecatedAgentInputs: [
+        { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+        { source: "process", name: "PI_WEB_AGENT_DIR" },
+        { source: "config" },
+      ],
+    });
+
+    expect(parsed.deprecatedAgentInputs).toEqual([
+      { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+    ]);
+
+    expect(() => parseMachineRuntime({ machineId: "remote-a", ok: true, checkedAt: "now", deprecatedAgentInputs: "PI_WEB_AGENT_DIR" }))
+      .toThrow("Invalid PI WEB deprecated agent inputs");
+  });
+
   it("rejects config responses missing a required override flag", () => {
     const envOverrides = { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false };
     for (const flag of ["host", "port", "allowedHosts", "spawnSessions", "subsessions", "askUser"] as const) {

@@ -77,6 +77,70 @@ describe("PI WEB status parsing", () => {
     expect(parsePiWebRuntimeResponse(responseFor(profile, undefined))).toBeUndefined();
   });
 
+  it("carries per-component deprecated agent input reports through runtime responses", () => {
+    const parsed = parsePiWebRuntimeResponse({
+      packageName: "@jmfederico/pi-web",
+      generatedAt: "now",
+      components: {
+        web: {
+          component: "web",
+          label: "Web/UI",
+          available: true,
+          capabilities: [],
+          deprecatedAgentInputs: [
+            { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+            { source: "config", name: "agent.command" },
+          ],
+        },
+        sessiond: {
+          component: "sessiond",
+          label: "Session daemon",
+          available: true,
+          capabilities: [],
+          deprecatedAgentInputs: [{ source: "environment", name: "PI_WEB_AGENT_SESSION_DIR", replacement: "PI_CODING_AGENT_SESSION_DIR" }],
+        },
+      },
+      capabilities: [],
+    });
+
+    expect(parsed?.components.web.deprecatedAgentInputs).toEqual([
+      { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+      { source: "config", name: "agent.command" },
+    ]);
+    expect(parsed?.components.sessiond.deprecatedAgentInputs).toEqual([
+      { source: "environment", name: "PI_WEB_AGENT_SESSION_DIR", replacement: "PI_CODING_AGENT_SESSION_DIR" },
+    ]);
+  });
+
+  it("drops malformed deprecated-input reports without failing the runtime response", () => {
+    const parsed = parsePiWebRuntimeResponse({
+      packageName: "@jmfederico/pi-web",
+      generatedAt: "now",
+      components: {
+        web: {
+          component: "web",
+          label: "Web/UI",
+          available: true,
+          capabilities: [],
+          deprecatedAgentInputs: [
+            { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+            { source: "process", name: "PI_WEB_AGENT_DIR" },
+            { source: "config" },
+            { source: "config", name: "agent.dir", replacement: 42 },
+            "PI_WEB_AGENT_DIR",
+          ],
+        },
+        sessiond: { component: "sessiond", label: "Session daemon", available: true, capabilities: [], deprecatedAgentInputs: "PI_WEB_AGENT_DIR" },
+      },
+      capabilities: [],
+    });
+
+    expect(parsed?.components.web.deprecatedAgentInputs).toEqual([
+      { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+    ]);
+    expect(parsed?.components.sessiond).not.toHaveProperty("deprecatedAgentInputs");
+  });
+
   it("parses Docker installation metadata", () => {
     expect(parsePiWebInstallationInfo({ kind: "docker", path: "/srv/pi-web-docker", dockerMode: "runtime" })).toEqual({
       kind: "docker",
