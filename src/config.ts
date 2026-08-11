@@ -340,9 +340,10 @@ function parseBooleanKey(value: unknown, key: string, path: string): boolean {
  * `environmentFacts` config key to `false` to leave the system prompt
  * untouched. The env var takes precedence over the config file.
  *
- * PI WEB only has facts to add in Docker deployments today, so the resolved
- * value has no effect elsewhere. The env var deliberately avoids the
- * `PI_WEB_DOCKER_` prefix, which agent processes inherit for `pi-web-docker`.
+ * The facts describe the pi-web session nesting every session runs in; Docker
+ * deployments append container facts on top. The env var deliberately avoids
+ * the `PI_WEB_DOCKER_` prefix, which agent processes inherit for
+ * `pi-web-docker`.
  */
 export function environmentFactsEnabled(env: NodeJS.ProcessEnv = process.env, config: PiWebConfig = {}): boolean {
   const fromEnv = env["PI_WEB_ENVIRONMENT_FACTS"];

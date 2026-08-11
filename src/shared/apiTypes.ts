@@ -187,9 +187,9 @@ export interface PiWebConfigValues {
    */
   askUser?: boolean;
   /**
-   * When true, PI WEB appends deployment environment facts to session system
-   * prompts. On by default. Only Docker deployments have facts to add today, so
-   * the value has no effect elsewhere.
+   * When true, PI WEB appends environment facts to session system prompts:
+   * the pi-web session nesting every session runs in, plus container facts in
+   * Docker deployments. On by default.
    */
   environmentFacts?: boolean;
   /**
