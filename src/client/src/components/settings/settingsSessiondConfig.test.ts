@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveAgentProfileDescriptor, PiWebConfigResponse, PiWebConfigValues } from "../../api";
-import { agentDirFieldOverridden, agentProfileActivationState, askUserConfigPatch, mergeSelectedMachineSessiondConfig, spawnSessionsConfigPatch, subsessionsConfigPatch } from "./settingsSessiondConfig";
+import { agentProfileActivationState, askUserConfigPatch, mergeSelectedMachineSessiondConfig, spawnSessionsConfigPatch, subsessionsConfigPatch } from "./settingsSessiondConfig";
 
 describe("session daemon settings config helpers", () => {
   it("builds daemon-only save patches for the sessiond toggles", () => {
@@ -23,22 +23,6 @@ describe("session daemon settings config helpers", () => {
     expect(agentProfileActivationState(undefined, activeProfile("/effective"))).toBe("unavailable");
   });
 
-  it("locks the directory field for either agent directory environment source", () => {
-    const baseOverrides = configResponse({}).envOverrides;
-
-    expect(agentDirFieldOverridden({ ...baseOverrides, agentDir: true, agentDirSource: "pi-compatibility" })).toBe(true);
-    expect(agentDirFieldOverridden({ ...baseOverrides, agentDir: true, agentDirSource: "pi-web" })).toBe(true);
-    expect(agentDirFieldOverridden({ ...baseOverrides, agentDir: true })).toBe(false);
-    expect(agentDirFieldOverridden(undefined)).toBe(false);
-  });
-
-  it("does not leak the gateway agent directory source into a selected-machine response", () => {
-    const gateway = configResponse({}, { agentDir: true, agentDirSource: "pi-web" });
-    const selectedMachine = configResponse({}, { agentDir: false });
-
-    expect(mergeSelectedMachineSessiondConfig(gateway, selectedMachine).envOverrides.agentDirSource).toBeUndefined();
-  });
-
   it("merges local selected-machine daemon config into gateway config without dropping gateway-only values", () => {
     const gateway = configResponse({
       host: "127.0.0.1",
@@ -52,7 +36,7 @@ describe("session daemon settings config helpers", () => {
     });
     const selectedMachine = configResponse(
       { spawnSessions: true, subsessions: true, agent: { command: "machine-agent", dir: "/srv/machine-agent" } },
-      { spawnSessions: true, subsessions: false, agentCommand: true, agentDir: false, agentDirSource: "pi-compatibility", agentSessionDir: true },
+      { spawnSessions: true, subsessions: false },
       { spawnSessions: true, subsessions: true, agent: { command: "env-agent", dir: "/srv/machine-agent" } },
     );
 
@@ -85,10 +69,6 @@ describe("session daemon settings config helpers", () => {
         spawnSessions: true,
         subsessions: false,
         askUser: false,
-        agentCommand: true,
-        agentDir: false,
-        agentDirSource: "pi-compatibility",
-        agentSessionDir: true,
       },
     });
   });
@@ -118,9 +98,6 @@ function configResponse(
       spawnSessions: false,
       subsessions: false,
       askUser: false,
-      agentCommand: false,
-      agentDir: false,
-      agentSessionDir: false,
       ...overrides,
     },
   };

@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  agentCommandForChecks,
   commandWithVersionCheck,
   doctorExitCode,
+  generalDoctorChecks,
   isCliEntrypoint,
   launchdRuntimeDetails,
   nodeVersionCheck,
@@ -66,9 +66,15 @@ describe("nodeVersionCheck", () => {
   });
 });
 
-describe("agentCommandForChecks", () => {
-  it("probes the hardcoded pi command on PATH", () => {
-    expect(agentCommandForChecks()).toBe("pi");
+describe("generalDoctorChecks", () => {
+  it("probes node and npm, then a hardcoded pi on PATH", () => {
+    process.env["SHELL"] = "/bin/bash";
+
+    const checks = generalDoctorChecks();
+    const piCheck = checks.find(([label]) => label.endsWith("can find pi"));
+
+    expect(checks.map(([label]) => label)).toHaveLength(3);
+    expect(piCheck?.[1].at(-1)).toBe(commandWithVersionCheck("pi"));
   });
 });
 

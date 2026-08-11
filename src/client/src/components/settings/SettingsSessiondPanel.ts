@@ -4,7 +4,7 @@ import type { ActiveAgentProfileDescriptor, PiWebConfigResponse, PiWebConfigValu
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
 import { agentProfileConfigPatchFromDraft, agentProfileDraftFromConfig, agentProfileDraftMatchesConfig, emptyAgentProfileConfigDraft, type AgentProfileConfigDraft } from "./settingsConfigDraft";
-import { agentDirFieldOverridden, agentProfileActivationState, askUserConfigPatch, spawnSessionsConfigPatch, subsessionsConfigPatch } from "./settingsSessiondConfig";
+import { agentProfileActivationState, askUserConfigPatch, spawnSessionsConfigPatch, subsessionsConfigPatch } from "./settingsSessiondConfig";
 
 @customElement("settings-sessiond-panel")
 export class SettingsSessiondPanel extends LitElement {
@@ -47,9 +47,6 @@ export class SettingsSessiondPanel extends LitElement {
     const effectiveSubsessions = config?.effectiveConfig.subsessions === true && effectiveSpawn;
     const askUserOverridden = config?.envOverrides.askUser === true;
     const effectiveAskUser = config?.effectiveConfig.askUser === true;
-    const agentCommandOverridden = config?.envOverrides.agentCommand === true;
-    const agentDirLocked = agentDirFieldOverridden(config?.envOverrides);
-    const effectiveAgentDirOverridden = config?.envOverrides.agentDir === true;
     const effectiveAgent = config?.effectiveConfig.agent;
     const profileActivation = agentProfileActivationState(config, this.activeAgentProfile);
     return html`
@@ -70,7 +67,6 @@ export class SettingsSessiondPanel extends LitElement {
             <label class="field">
               <span class="field-heading">
                 <span>Companion CLI command</span>
-                ${agentCommandOverridden ? html`<span class="override-badge">environment override</span>` : null}
               </span>
               <input
                 class="text-input"
@@ -79,7 +75,7 @@ export class SettingsSessiondPanel extends LitElement {
                 spellcheck="false"
                 .value=${this.agentDraft.command}
                 placeholder="pi"
-                ?disabled=${this.loading || this.saving || agentCommandOverridden}
+                ?disabled=${this.loading || this.saving}
                 @input=${(event: Event) => { this.updateAgentDraft({ command: inputValue(event) }); }}
               >
               <small>Set the Pi-compatible companion CLI used for doctor and update checks. The embedded session runtime remains PI WEB's bundled Pi SDK.</small>
@@ -87,7 +83,6 @@ export class SettingsSessiondPanel extends LitElement {
             <label class="field">
               <span class="field-heading">
                 <span>Profile state directory</span>
-                ${effectiveAgentDirOverridden ? html`<span class="override-badge">environment override</span>` : null}
               </span>
               <input
                 class="text-input"
@@ -96,13 +91,13 @@ export class SettingsSessiondPanel extends LitElement {
                 spellcheck="false"
                 .value=${this.agentDraft.dir}
                 placeholder="~/.pi/agent or ~/agent-profiles/work"
-                ?disabled=${this.loading || this.saving || agentDirLocked}
+                ?disabled=${this.loading || this.saving}
                 @input=${(event: Event) => { this.updateAgentDraft({ dir: inputValue(event) }); }}
               >
               <small>Choose the Pi-compatible auth, models, settings, and sessions PI WEB reads. An alternate command and its required state directory are saved together.</small>
             </label>
             <footer class="form-actions">
-              <button class="primary" type="submit" ?disabled=${this.loading || this.saving || (agentCommandOverridden && agentDirLocked)}>${this.saving ? "Saving…" : "Save agent profile"}</button>
+              <button class="primary" type="submit" ?disabled=${this.loading || this.saving}>${this.saving ? "Saving…" : "Save agent profile"}</button>
             </footer>
           </form>
           <div class="field">

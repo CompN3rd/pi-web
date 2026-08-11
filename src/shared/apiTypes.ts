@@ -297,8 +297,6 @@ export interface PiPackageMutationResponse extends PiPackagesResponse {
   removed?: boolean;
 }
 
-export type PiWebAgentDirEnvSource = "pi-web" | "pi-compatibility";
-
 export interface PiWebConfigEnvOverrides {
   host: boolean;
   port: boolean;
@@ -306,11 +304,6 @@ export interface PiWebConfigEnvOverrides {
   spawnSessions: boolean;
   subsessions: boolean;
   askUser: boolean;
-  agentCommand: boolean;
-  agentDir: boolean;
-  /** The configured directory environment source, even when Pi compatibility is inactive for the desired command. */
-  agentDirSource?: PiWebAgentDirEnvSource;
-  agentSessionDir: boolean;
 }
 
 export interface PiWebConfigResponse {

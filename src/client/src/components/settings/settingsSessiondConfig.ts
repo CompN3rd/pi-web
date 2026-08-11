@@ -1,4 +1,4 @@
-import type { ActiveAgentProfileDescriptor, PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues } from "../../api";
+import type { ActiveAgentProfileDescriptor, PiWebConfigResponse, PiWebConfigValues } from "../../api";
 
 export type AgentProfileActivationState = "active" | "restart-required" | "unavailable";
 
@@ -23,27 +23,16 @@ export function agentProfileActivationState(
   return desiredDir === activeProfile.dir ? "active" : "restart-required";
 }
 
-export function agentDirFieldOverridden(envOverrides: PiWebConfigEnvOverrides | undefined): boolean {
-  return envOverrides?.agentDirSource !== undefined;
-}
-
 export function mergeSelectedMachineSessiondConfig(base: PiWebConfigResponse, selectedMachine: PiWebConfigResponse): PiWebConfigResponse {
-  const envOverrides: PiWebConfigEnvOverrides = {
-    ...base.envOverrides,
-    spawnSessions: selectedMachine.envOverrides.spawnSessions,
-    subsessions: selectedMachine.envOverrides.subsessions,
-    askUser: selectedMachine.envOverrides.askUser,
-    agentCommand: selectedMachine.envOverrides.agentCommand,
-    agentDir: selectedMachine.envOverrides.agentDir,
-    agentSessionDir: selectedMachine.envOverrides.agentSessionDir,
-  };
-  if (selectedMachine.envOverrides.agentDirSource === undefined) delete envOverrides.agentDirSource;
-  else envOverrides.agentDirSource = selectedMachine.envOverrides.agentDirSource;
-
   return {
     ...base,
     config: { ...base.config, ...selectedMachine.config },
     effectiveConfig: { ...base.effectiveConfig, ...selectedMachine.effectiveConfig },
-    envOverrides,
+    envOverrides: {
+      ...base.envOverrides,
+      spawnSessions: selectedMachine.envOverrides.spawnSessions,
+      subsessions: selectedMachine.envOverrides.subsessions,
+      askUser: selectedMachine.envOverrides.askUser,
+    },
   };
 }

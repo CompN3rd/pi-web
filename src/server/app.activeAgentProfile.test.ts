@@ -177,9 +177,6 @@ function configResponse(config: PiWebConfigResponse["config"]): PiWebConfigRespo
       spawnSessions: false,
       subsessions: false,
       askUser: false,
-      agentCommand: false,
-      agentDir: false,
-      agentSessionDir: false,
     },
   };
 }
@@ -197,9 +194,6 @@ function emptyConfigService(): PiWebConfigService {
       spawnSessions: false,
       subsessions: false,
       askUser: false,
-      agentCommand: false,
-      agentDir: false,
-      agentSessionDir: false,
     },
   };
   return {

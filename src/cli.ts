@@ -859,17 +859,14 @@ export function nodeVersionCheck(): string {
   });
 }
 
-export function agentCommandForChecks(): string {
-  return "pi";
-}
-
-function generalDoctorChecks(): Check[] {
+export function generalDoctorChecks(): Check[] {
   const shell = serviceShellLabel();
-  const agentCommand = agentCommandForChecks();
   return [
     [`Caller login ${shell} can find node >= ${minimumSupportedNodeVersion}`, serviceShellCommand(nodeVersionCheck())],
     [`Caller login ${shell} can find npm`, serviceShellCommand(commandWithVersionCheck("npm"))],
-    [`Caller login ${shell} can find ${agentCommand}`, serviceShellCommand(commandWithVersionCheck(agentCommand))],
+    // Sessions run on the bundled pi SDK; the only CLI check is a hardcoded
+    // `pi` PATH probe — nothing names or locates a configurable command.
+    [`Caller login ${shell} can find pi`, serviceShellCommand(commandWithVersionCheck("pi"))],
   ];
 }
 

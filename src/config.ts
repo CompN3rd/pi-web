@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
-import type { PiWebAgentDirEnvSource, PiWebConfigValues } from "./shared/apiTypes.js";
+import type { PiWebConfigValues } from "./shared/apiTypes.js";
 import { isPiWebPluginId, piWebPluginIdPattern } from "./shared/pluginIds.js";
 
 export type PiWebConfig = PiWebConfigValues;
@@ -99,20 +99,6 @@ export function agentSessionDirEnvOverride(env: Readonly<NodeJS.ProcessEnv>): st
     if (value !== undefined && value !== "") return value;
   }
   return undefined;
-}
-
-export function agentDirEnvSource(env: NodeJS.ProcessEnv): PiWebAgentDirEnvSource | undefined {
-  if (isEnvSet(env[PI_WEB_AGENT_DIR_ENV])) return "pi-web";
-  if (isEnvSet(env[PI_CODING_AGENT_DIR_ENV])) return "pi-compatibility";
-  return undefined;
-}
-
-export function hasAgentDirEnvOverride(env: NodeJS.ProcessEnv): boolean {
-  return agentDirEnvSource(env) !== undefined;
-}
-
-export function hasAgentSessionDirEnvOverride(env: NodeJS.ProcessEnv): boolean {
-  return agentSessionDirEnvOverride(env) !== undefined;
 }
 
 export type DeprecatedAgentInputSource = "environment" | "config";
@@ -394,14 +380,21 @@ function parseString(value: unknown, key: string, path: string): string {
   return value;
 }
 
-const AGENT_CONFIG_KEYS = new Set(["command", "dir"]);
+/**
+ * Keys still accepted under `agent` during the deprecation window: `command`
+ * is parsed only so the file round-trips and the deprecation detector can name
+ * it (the concept is gone), and `dir` remains honored as a deprecated alias.
+ * The section has no live schema — every accepted key is deprecated — so any
+ * other key fails loudly, naming the deprecated survivors.
+ */
+const DEPRECATED_AGENT_CONFIG_KEYS = new Set(["command", "dir"]);
 
 export type AgentPathHost = "current" | "portable";
 
 export function parseAgentConfig(value: unknown, path: string, pathHost: AgentPathHost = "current"): NonNullable<PiWebConfig["agent"]> {
   if (!isRecord(value)) throw new Error(`PI WEB config agent must be an object: ${path}`);
-  const unknownKey = Object.keys(value).find((key) => !AGENT_CONFIG_KEYS.has(key));
-  if (unknownKey !== undefined) throw new Error(`PI WEB config agent contains unknown key ${JSON.stringify(unknownKey)}: ${path}`);
+  const unknownKey = Object.keys(value).find((key) => !DEPRECATED_AGENT_CONFIG_KEYS.has(key));
+  if (unknownKey !== undefined) throw new Error(`PI WEB config agent accepts only the deprecated keys "command" and "dir"; unknown key ${JSON.stringify(unknownKey)}: ${path}`);
   const command = value["command"];
   const dir = value["dir"];
   return {

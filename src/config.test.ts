@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS, DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_UPLOADS_FOLDER, AGENT_SESSION_DIR_ENV_KEYS, agentDirEnvSource, agentSessionDirEnvOverride, askUserEnabled, detectDeprecatedAgentInputs, effectiveAgentConfig, environmentFactsEnabled, effectivePiWebConfig, hasAgentDirEnvOverride, hasAgentSessionDirEnvOverride, loadPiWebConfig, maxUploadBytes, offlineModeEnabled, savePiWebConfig, spawnSessionsEnabled, subsessionsEnabled } from "./config.js";
+import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS, DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_UPLOADS_FOLDER, AGENT_SESSION_DIR_ENV_KEYS, agentSessionDirEnvOverride, askUserEnabled, detectDeprecatedAgentInputs, effectiveAgentConfig, environmentFactsEnabled, effectivePiWebConfig, loadPiWebConfig, maxUploadBytes, offlineModeEnabled, savePiWebConfig, spawnSessionsEnabled, subsessionsEnabled } from "./config.js";
 
 let tempDir: string;
 let configPath: string;
@@ -124,8 +124,7 @@ describe("PI WEB config persistence", () => {
     expect(effectiveAgentConfig(env, { agent: { dir: "~/agent-profiles/acme" } })).toEqual({
       dir: join(tempDir, ".home", "agent-profiles", "acme"),
     });
-    expect(hasAgentDirEnvOverride(env)).toBe(false);
-    expect(hasAgentSessionDirEnvOverride(env)).toBe(false);
+    expect(agentSessionDirEnvOverride(env)).toBeUndefined();
   });
 
   it("resolves the agent directory with the deprecated alias first, then the canonical env var, then config", () => {
@@ -136,8 +135,6 @@ describe("PI WEB config persistence", () => {
     expect(effectiveAgentConfig({ PI_WEB_AGENT_DIR: webDir, PI_CODING_AGENT_DIR: piDir }, { agent: { dir: configDir } }).dir).toBe(webDir);
     expect(effectiveAgentConfig({ PI_CODING_AGENT_DIR: piDir }, { agent: { dir: configDir } }).dir).toBe(piDir);
     expect(effectiveAgentConfig({}, { agent: { dir: configDir } }).dir).toBe(configDir);
-    expect(agentDirEnvSource({ PI_WEB_AGENT_DIR: webDir, PI_CODING_AGENT_DIR: piDir })).toBe("pi-web");
-    expect(agentDirEnvSource({ PI_CODING_AGENT_DIR: piDir })).toBe("pi-compatibility");
   });
 
   it("orders session directory env overrides with the deprecated alias first", () => {
@@ -181,8 +178,8 @@ describe("PI WEB config persistence", () => {
     const original = { agent: { command: "acme-agent", dir: join(tempDir, "agent"), futureSetting: true } };
     await writeFile(configPath, `${JSON.stringify(original, null, 2)}\n`, "utf8");
 
-    expect(() => loadPiWebConfig(testOptions())).toThrow('PI WEB config agent contains unknown key "futureSetting"');
-    expect(() => savePiWebConfig({ port: 9000 }, testOptions())).toThrow('PI WEB config agent contains unknown key "futureSetting"');
+    expect(() => loadPiWebConfig(testOptions())).toThrow('PI WEB config agent accepts only the deprecated keys "command" and "dir"; unknown key "futureSetting"');
+    expect(() => savePiWebConfig({ port: 9000 }, testOptions())).toThrow('PI WEB config agent accepts only the deprecated keys "command" and "dir"; unknown key "futureSetting"');
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(original);
   });
 
