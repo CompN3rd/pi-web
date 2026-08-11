@@ -64,8 +64,11 @@ describe("API parsers", () => {
     });
   });
 
-  it("parses PI WEB runtime responses including the daemon-owned active profile", () => {
-    expect(parsePiWebRuntimeResponse({
+  it("parses PI WEB runtime responses and ignores the daemon-reported active agent profile", () => {
+    // The session daemon still reports its active agent profile for server-side
+    // flows; the client no longer surfaces it, so parsing must drop it without
+    // failing (rolling compatibility with daemons that keep sending it).
+    const parsed = parsePiWebRuntimeResponse({
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",
       components: {
@@ -83,40 +86,35 @@ describe("API parsers", () => {
         },
       },
       capabilities: ["piPackages.manage", "future.capability"],
-    })).toMatchObject({
+    });
+
+    expect(parsed.components.sessiond).toEqual({
+      component: "sessiond",
+      label: "Session daemon",
+      runtimeVersion: "1.0.0",
+      available: true,
       capabilities: [],
-      components: { sessiond: { activeAgentProfile: { schemaVersion: 2, dir: "/srv/pi-state" } } },
     });
   });
 
-  it("retains portable active profiles in machine runtime snapshots and rejects invalid ownership", () => {
-    const profile = {
-      schemaVersion: 2,
-      dir: "C:\\pi-profiles\\work",
-    };
-    const components = {
-      web: { component: "web", label: "Web/UI", available: true, capabilities: [] },
-      sessiond: { component: "sessiond", label: "Session daemon", available: true, capabilities: [], activeAgentProfile: profile },
-    };
-
-    const parsed = parseMachineRuntime({ machineId: "remote-a", ok: true, checkedAt: "now", components, capabilities: [] });
-
-    expect(parsed.components?.sessiond.activeAgentProfile).toEqual({ schemaVersion: 2, dir: profile.dir });
-    expect(Object.isFrozen(parsed.components?.sessiond.activeAgentProfile)).toBe(true);
-    expect(() => parseMachineRuntime({
+  it("ignores the daemon-reported active agent profile in machine runtime snapshots", () => {
+    const parsed = parseMachineRuntime({
       machineId: "remote-a",
       ok: true,
       checkedAt: "now",
-      components: { ...components, web: { ...components.web, activeAgentProfile: profile } },
+      components: {
+        web: { component: "web", label: "Web/UI", available: true, capabilities: [] },
+        sessiond: { component: "sessiond", label: "Session daemon", available: true, capabilities: [], activeAgentProfile: { schemaVersion: 2, dir: "C:\\pi-profiles\\work" } },
+      },
       capabilities: [],
-    })).toThrow("Invalid active agent profile descriptor");
-    expect(() => parseMachineRuntime({
-      machineId: "remote-a",
-      ok: true,
-      checkedAt: "now",
-      components: { ...components, sessiond: { ...components.sessiond, activeAgentProfile: { ...profile, token: "secret" } } },
+    });
+
+    expect(parsed.components?.sessiond).toEqual({
+      component: "sessiond",
+      label: "Session daemon",
+      available: true,
       capabilities: [],
-    })).toThrow("Invalid active agent profile descriptor");
+    });
   });
 
   it("rejects config responses missing a required override flag", () => {

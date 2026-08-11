@@ -1,26 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { ActiveAgentProfileDescriptor, PiWebConfigResponse, PiWebConfigValues } from "../../api";
-import { agentProfileActivationState, askUserConfigPatch, mergeSelectedMachineSessiondConfig, spawnSessionsConfigPatch, subsessionsConfigPatch } from "./settingsSessiondConfig";
+import type { PiWebConfigResponse, PiWebConfigValues } from "../../api";
+import { askUserConfigPatch, mergeSelectedMachineSessiondConfig, spawnSessionsConfigPatch, subsessionsConfigPatch } from "./settingsSessiondConfig";
 
 describe("session daemon settings config helpers", () => {
   it("builds daemon-only save patches for the sessiond toggles", () => {
     expect(spawnSessionsConfigPatch(false)).toEqual({ spawnSessions: false });
     expect(subsessionsConfigPatch(true)).toEqual({ subsessions: true });
     expect(askUserConfigPatch(false)).toEqual({ askUser: false });
-  });
-
-  it("compares the desired effective state directory with the daemon-owned active profile", () => {
-    const config = configResponse(
-      { agent: { dir: "/configured" } },
-      {},
-      { agent: { dir: "/effective" } },
-    );
-
-    expect(agentProfileActivationState(config, activeProfile("/effective"))).toBe("active");
-    expect(agentProfileActivationState(config, activeProfile("/other"))).toBe("restart-required");
-    expect(agentProfileActivationState(config, undefined)).toBe("unavailable");
-    expect(agentProfileActivationState(configResponse({}, {}, {}), activeProfile("/effective"))).toBe("unavailable");
-    expect(agentProfileActivationState(undefined, activeProfile("/effective"))).toBe("unavailable");
   });
 
   it("merges local selected-machine daemon config into gateway config without dropping gateway-only values", () => {
@@ -73,13 +59,6 @@ describe("session daemon settings config helpers", () => {
     });
   });
 });
-
-function activeProfile(dir: string): ActiveAgentProfileDescriptor {
-  return {
-    schemaVersion: 2,
-    dir,
-  };
-}
 
 function configResponse(
   config: PiWebConfigValues,

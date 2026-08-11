@@ -1,6 +1,4 @@
-import type { ActiveAgentProfileDescriptor, PiWebConfigResponse, PiWebConfigValues } from "../../api";
-
-export type AgentProfileActivationState = "active" | "restart-required" | "unavailable";
+import type { PiWebConfigResponse, PiWebConfigValues } from "../../api";
 
 export function spawnSessionsConfigPatch(enabled: boolean): PiWebConfigValues {
   return { spawnSessions: enabled };
@@ -12,15 +10,6 @@ export function subsessionsConfigPatch(enabled: boolean): PiWebConfigValues {
 
 export function askUserConfigPatch(enabled: boolean): PiWebConfigValues {
   return { askUser: enabled };
-}
-
-export function agentProfileActivationState(
-  config: PiWebConfigResponse | undefined,
-  activeProfile: ActiveAgentProfileDescriptor | undefined,
-): AgentProfileActivationState {
-  const desiredDir = config?.effectiveConfig.agent?.dir;
-  if (desiredDir === undefined || activeProfile === undefined) return "unavailable";
-  return desiredDir === activeProfile.dir ? "active" : "restart-required";
 }
 
 export function mergeSelectedMachineSessiondConfig(base: PiWebConfigResponse, selectedMachine: PiWebConfigResponse): PiWebConfigResponse {
