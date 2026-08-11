@@ -1270,10 +1270,12 @@ export class PiSessionService implements SessionRouteService {
   /**
    * The models a session may pick from: its scoped set when model-scoped,
    * otherwise the runtime's available snapshot. Refreshes the runtime catalog
-   * first so callers see newly configured providers and models.
+   * first so callers see newly configured providers and models. The refresh
+   * stays local (`allowNetwork: false`); network refreshes belong to the
+   * bounded background catalog refresher, not this request path.
    */
   private async sessionModelCandidates(session: PiAgentSession): Promise<readonly AgentModel[]> {
-    await session.modelRuntime.refresh();
+    await session.modelRuntime.refresh({ allowNetwork: false });
     return session.scopedModels.length > 0
       ? session.scopedModels.map((scoped) => scoped.model)
       : session.modelRuntime.getAvailableSnapshot();
