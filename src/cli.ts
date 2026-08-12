@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { defaultPiWebConfigPath, defaultPiWebDataDir, examplePiWebConfig } from "./config.js";
 import { piWebDockerCommand, type PiWebDockerMode } from "./docker/piWebDockerCommandPlan.js";
 import { runPluginRecoveryCli, type SessionDaemonRestartPlan } from "./pluginRecoveryCli.js";
-import { packageVersion, printPiWebVersionReport } from "./piWebVersionReport.js";
+import { packageVersion, printPiWebVersionReport, runningComponentsReady, type RunningComponentId } from "./piWebVersionReport.js";
 import { checkNodePtyDarwinSpawnHelper, formatNodePtyDarwinSpawnHelperCheck } from "./server/diagnostics/nodePtySpawnHelper.js";
 import { checkNodePtyNativeModule, formatNodePtyNativeModuleCheck } from "./server/diagnostics/nodePtyNativeModule.js";
 import {
@@ -1037,12 +1037,33 @@ function printPathSetupAdvice(shell: NativeServiceShell = detectServiceShell()):
   }
 }
 
+/**
+ * Running components an installed deployment must keep ready: the API-serving
+ * component whenever the web or UI dev service file is installed (the version
+ * endpoint probes the API port in both modes), and the session daemon whenever
+ * its service file is installed. Docker deployments have no native service
+ * files, so the Docker runtime marker expects both components. A machine with
+ * nothing installed expects nothing: doctor's manual-run guidance stays a
+ * passing outcome there.
+ */
+export function expectedRunningComponents(
+  installedServices: ReadonlySet<NativeServiceId>,
+  env: NodeJS.ProcessEnv,
+): RunningComponentId[] {
+  if (activeDockerMode(env) !== undefined) return ["web", "sessiond"];
+  const expected: RunningComponentId[] = [];
+  if (installedServices.has("web") || installedServices.has("uiDev")) expected.push("web");
+  if (installedServices.has("sessiond")) expected.push("sessiond");
+  return expected;
+}
+
 export function doctorExitCode(
   generalReadinessOk: boolean,
   nativeServicePlanOk: boolean,
   nodePtyRuntimeOk: boolean,
+  runningComponentsOk: boolean,
 ): 0 | 1 {
-  return generalReadinessOk && nativeServicePlanOk && nodePtyRuntimeOk ? 0 : 1;
+  return generalReadinessOk && nativeServicePlanOk && nodePtyRuntimeOk && runningComponentsOk ? 0 : 1;
 }
 
 async function doctor(): Promise<void> {
@@ -1054,7 +1075,16 @@ async function doctor(): Promise<void> {
     console.log(`- Native user service plan checks skipped on ${platformLabel()}; no native-service drift is reported.`);
   }
   console.log("");
-  await printPiWebVersionReport();
+  const runningVersionInfo = await printPiWebVersionReport();
+  const expectedComponents = expectedRunningComponents(
+    backend === undefined ? new Set<NativeServiceId>() : installedServiceIds(backend),
+    process.env,
+  );
+  const runningComponentsOk = runningComponentsReady(runningVersionInfo, expectedComponents);
+  if (!runningComponentsOk) {
+    console.log("\n✗ Installed PI WEB services are unavailable or stale (see \"Running services\" above).");
+    console.log("  Run `pi-web restart`, then check `pi-web status`.");
+  }
 
   console.log("\nGeneral login-shell readiness (separate from native-service requirements):");
   const generalReadinessOk = runChecks(generalDoctorChecks());
@@ -1101,7 +1131,7 @@ async function doctor(): Promise<void> {
     console.log(`\n${manualRunAdvice()}`);
   }
 
-  if (doctorExitCode(generalReadinessOk, nativeServicePlanOk, nodePtyNativeModuleOk && nodePtySpawnHelperOk) !== 0) process.exitCode = 1;
+  if (doctorExitCode(generalReadinessOk, nativeServicePlanOk, nodePtyNativeModuleOk && nodePtySpawnHelperOk, runningComponentsOk) !== 0) process.exitCode = 1;
 }
 
 function printNodePtyNativeModuleCheck(): boolean {

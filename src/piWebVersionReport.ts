@@ -18,7 +18,7 @@ interface PackageInfo {
   path: string;
 }
 
-interface RunningVersionInfo {
+export interface RunningVersionInfo {
   generatedAt?: string;
   web?: PiWebComponentStatus;
   sessiond?: PiWebComponentStatus;
@@ -26,14 +26,32 @@ interface RunningVersionInfo {
   sessiondError?: string;
 }
 
+export type RunningComponentId = PiWebComponentStatus["component"];
+
+/**
+ * Readiness rule for `pi-web doctor`: an expected running component is ready
+ * only when the report carries its status and that status is available and not
+ * stale. A component missing from the report (an error-only entry) is not
+ * ready. Components that are not expected stay informational regardless of
+ * state.
+ */
+export function runningComponentsReady(info: RunningVersionInfo, expected: readonly RunningComponentId[]): boolean {
+  return expected.every((id) => {
+    const status = info[id];
+    return status !== undefined && status.available && !status.stale;
+  });
+}
+
 export function packageVersion(): string {
   return readPackageInfo()?.version ?? DEFAULT_PACKAGE_VERSION;
 }
 
-export async function printPiWebVersionReport(): Promise<void> {
+export async function printPiWebVersionReport(): Promise<RunningVersionInfo> {
   console.log("PI WEB version");
   printInstalledPackageVersions();
-  printRunningVersionInfo(await collectRunningVersionInfo());
+  const runningInfo = await collectRunningVersionInfo();
+  printRunningVersionInfo(runningInfo);
+  return runningInfo;
 }
 
 function packageRootPath(): string {
