@@ -42,6 +42,35 @@ export function runningComponentsReady(info: RunningVersionInfo, expected: reado
   });
 }
 
+/**
+ * Readiness probe for service lifecycle waits: the web component is ready when
+ * the web/API version endpoint (or its legacy status fallback) serves a
+ * parseable response; the session daemon is ready when its health endpoint
+ * serves version information. Shares the version report's endpoints and
+ * parsing so lifecycle readiness matches what `pi-web version` reports.
+ */
+export async function probeRunningComponentReady(component: RunningComponentId): Promise<boolean> {
+  if (component === "sessiond") {
+    const sessiond = await collectRunningSessiondInfo();
+    return sessiond.component !== undefined;
+  }
+  const endpoint = webVersionEndpoint();
+  if (endpoint.endpoint === undefined) return false;
+  try {
+    await fetchPiWebVersionResponse(endpoint.endpoint);
+    return true;
+  } catch (error) {
+    const statusEndpoint = statusEndpointFor(endpoint.endpoint);
+    if (!isHttpNotFound(error) || statusEndpoint === endpoint.endpoint) return false;
+    try {
+      await fetchPiWebVersionResponse(statusEndpoint);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 export function packageVersion(): string {
   return readPackageInfo()?.version ?? DEFAULT_PACKAGE_VERSION;
 }
