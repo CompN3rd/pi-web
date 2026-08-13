@@ -110,31 +110,49 @@ ${config}\t\tXPC_SERVICE_NAME => com.pi-web.web
 `;
 }
 
+interface CommandResultFixture {
+  status: number;
+  stdout: string | Uint8Array;
+  stderr: string | Uint8Array;
+  spawnError?: string;
+}
+
+function commandResult(fixture: CommandResultFixture): InstalledNativeServiceDefinitionCommandResult {
+  return {
+    status: fixture.status,
+    stdout: typeof fixture.stdout === "string" ? new TextEncoder().encode(fixture.stdout) : fixture.stdout,
+    stderr: typeof fixture.stderr === "string" ? new TextEncoder().encode(fixture.stderr) : fixture.stderr,
+    spawnError: fixture.spawnError ?? "",
+  };
+}
+
 function dependencies(
   contents: Uint8Array = new TextEncoder().encode(systemdDefinition()),
-  result: InstalledNativeServiceDefinitionCommandResult = { status: 0, stdout: managerOutput(), stderr: "" },
+  result: CommandResultFixture = { status: 0, stdout: managerOutput(), stderr: "" },
 ): InstalledNativeServiceDefinitionDependencies {
+  const captured = commandResult(result);
   return {
     readFile: vi.fn(() => contents),
     realpath: vi.fn((path: string) => path),
-    capture: vi.fn(() => result),
+    capture: vi.fn(() => captured),
   };
 }
 
 function legacySystemdDependencies(
   contents: string,
-  busctlResult: InstalledNativeServiceDefinitionCommandResult,
+  busctlResult: CommandResultFixture,
   systemctlEnvironment = "[unprintable]",
 ): InstalledNativeServiceDefinitionDependencies {
-  const systemctlResult = {
+  const systemctlResult = commandResult({
     status: 0,
     stdout: managerOutput({ Environment: systemctlEnvironment }),
     stderr: "",
-  } as const;
+  });
+  const capturedBusctlResult = commandResult(busctlResult);
   const deps = dependencies(new TextEncoder().encode(contents), systemctlResult);
   vi.mocked(deps.capture).mockImplementation((command) => {
     if (command === "systemctl") return systemctlResult;
-    if (command === "busctl") return busctlResult;
+    if (command === "busctl") return capturedBusctlResult;
     throw new Error(`Unexpected command ${command}`);
   });
   return deps;
@@ -457,11 +475,11 @@ describe("installed native-service definition boundary", () => {
     });
     vi.mocked(deps.capture).mockImplementation(() => {
       expect(snapshotRead).toBe(true);
-      return {
+      return commandResult({
         status: 0,
         stdout: managerOutput({ Environment: "PI_WEB_CONFIG=/config/b.json" }),
         stderr: "",
-      };
+      });
     });
 
     const result = inspectInstalledNativeServiceDefinitions(
@@ -496,7 +514,11 @@ describe("installed native-service definition boundary", () => {
 
   it("surfaces a failed systemd manager inspection after taking a strict fragment snapshot", () => {
     const deps = dependencies();
-    vi.mocked(deps.capture).mockReturnValue({ status: 1, stdout: "", stderr: "Failed to connect to bus" });
+    vi.mocked(deps.capture).mockReturnValue(commandResult({
+      status: 1,
+      stdout: "",
+      stderr: "Failed to connect to bus",
+    }));
 
     const result = inspectInstalledNativeServiceDefinitions(
       { kind: "systemd", label: "systemd" },
@@ -580,6 +602,51 @@ describe("installed native-service definition boundary", () => {
       )).toEqual({ ok: true, value: [{ id: "web", contents }] });
     },
   );
+
+  it.each([
+    ["group-opening marker", " = {"],
+    ["literal U+FFFD", "\uFFFD"],
+  ])(
+    "preserves a %s at the end of matching loaded LaunchAgent scalar values",
+    (_name, suffix) => {
+      const path = `/Users/user/Library/LaunchAgents/com.pi-web.web.plist${suffix}`;
+      const configPath = `/managed/config.json${suffix}`;
+      const contents = launchdDefinition(configPath);
+
+      expect(inspectInstalledNativeServiceDefinitions(
+        { kind: "launchd", label: "launchd" },
+        [{ ...source, path }],
+        dependencies(
+          new TextEncoder().encode(contents),
+          { status: 0, stdout: launchdPrint(path, configPath), stderr: "" },
+        ),
+        "doctor",
+      )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+    },
+  );
+
+  it("rejects malformed UTF-8 bytes in launchctl output", () => {
+    const configPath = "/managed/config.json";
+    const printed = launchdPrint(launchdPath, configPath);
+    const malformedOutput = new TextEncoder().encode(printed);
+    const configOffset = printed.indexOf(configPath);
+    if (configOffset < 0) throw new Error("Expected config path in launchctl fixture");
+    malformedOutput[configOffset] = 0xff;
+
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      dependencies(
+        new TextEncoder().encode(launchdDefinition(configPath)),
+        { status: 0, stdout: malformedOutput, stderr: "" },
+      ),
+      "start",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected malformed launchctl UTF-8 to fail");
+    expect(result.message).toContain("launchctl output is not valid UTF-8");
+  });
 
   it.each(["plist path", "managed environment", "document trailer"] as const)(
     "rejects an ambiguous carriage return in the launchctl %s",

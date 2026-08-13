@@ -19,6 +19,13 @@ export interface InstalledNativeServiceDefinitionSource {
 
 export interface InstalledNativeServiceDefinitionCommandResult {
   status: number;
+  stdout: Uint8Array;
+  stderr: Uint8Array;
+  spawnError: string;
+}
+
+interface DecodedInstalledNativeServiceDefinitionCommandResult {
+  status: number;
   stdout: string;
   stderr: string;
 }
@@ -111,7 +118,14 @@ function inspectEffectiveSystemdDefinition(
     "--all",
     ...systemdInspectionProperties.map((property) => `--property=${property}`),
   ];
-  const result = dependencies.capture("systemctl", args);
+  const captured = dependencies.capture("systemctl", args);
+  const result = decodeCommandResult(captured);
+  if (result === undefined) {
+    return {
+      ok: false,
+      message: `Could not inspect effective systemd unit ${source.systemdName}: systemctl output is not valid UTF-8.`,
+    };
+  }
   if (result.status !== 0) {
     const detail = firstOutputLine(result.stderr, result.stdout);
     return {
@@ -213,7 +227,14 @@ function inspectLoadedLaunchdDefinition(
   expectedEnvironment: Readonly<Record<string, string>>,
   dependencies: InstalledNativeServiceDefinitionDependencies,
 ): InstalledNativeServiceInspection<null> {
-  const result = dependencies.capture("launchctl", ["print", source.launchdTarget]);
+  const captured = dependencies.capture("launchctl", ["print", source.launchdTarget]);
+  const result = decodeCommandResult(captured);
+  if (result === undefined) {
+    return {
+      ok: false,
+      message: `Could not inspect loaded LaunchAgent ${source.launchdTarget}: launchctl output is not valid UTF-8.`,
+    };
+  }
   if (result.status !== 0) {
     if (launchdServiceIsMissing(result)) return { ok: true, value: null };
     const detail = firstOutputLine(result.stderr, result.stdout);
@@ -336,7 +357,7 @@ function inspectEffectiveSystemdEnvironment(
   // A carriage return immediately before the record's line feed is ambiguous
   // with CRLF framing. busctl reads the same manager property in a counted,
   // C-escaped form without any of these ambiguities.
-  const result = dependencies.capture("busctl", [
+  const captured = dependencies.capture("busctl", [
     "--user",
     "get-property",
     systemdBusDestination,
@@ -344,6 +365,13 @@ function inspectEffectiveSystemdEnvironment(
     `${systemdBusDestination}.Service`,
     "Environment",
   ]);
+  const result = decodeCommandResult(captured);
+  if (result === undefined) {
+    return {
+      ok: false,
+      message: `Could not inspect effective systemd unit ${source.systemdName} losslessly: busctl output is not valid UTF-8.`,
+    };
+  }
   if (result.status !== 0) {
     const detail = firstOutputLine(result.stderr, result.stdout);
     const systemctlDetail = serialized?.words.includes(legacySystemdUnprintableValue) === true
@@ -554,7 +582,7 @@ function parseLaunchdPrintDefinition(
  * rather than silently changing a path or environment value.
  */
 function parseLaunchdPrintDocument(output: string, expectedTarget: string): LaunchdPrintGroup | undefined {
-  if (output.includes("\r") || output.includes("\u0000") || output.includes("\uFFFD")) return undefined;
+  if (output.includes("\r") || output.includes("\u0000")) return undefined;
   const lines = output.split("\n");
   if (lines.at(-1) === "") lines.pop();
   if (lines[0] !== `${expectedTarget} = {`) return undefined;
@@ -580,8 +608,8 @@ function parseLaunchdPrintDocument(output: string, expectedTarget: string): Laun
     const current = stack.at(-1);
     if (current === undefined) return undefined;
     const groupName = launchdPrintGroupName(value);
-    if (groupName === undefined) {
-      if (value === "}" || value.endsWith(" = {")) return undefined;
+    if (groupName === undefined || !launchdPrintRecordHasGroupBody(lines, index, depth)) {
+      if (value === "}") return undefined;
       current.records.push({ kind: "scalar", value });
       continue;
     }
@@ -598,6 +626,29 @@ function launchdPrintGroupName(value: string): string | undefined {
   if (!value.endsWith(suffix)) return undefined;
   const name = value.slice(0, -suffix.length);
   return name === "" || name.includes("\t") ? undefined : name;
+}
+
+/**
+ * launchctl does not quote scalar values, so a scalar may itself end in the
+ * group-opening marker. A real group is distinguishable by the next nonblank
+ * record: it is either a child one indentation level deeper or that group's
+ * closing brace. The enclosing group's sibling or closing brace instead makes
+ * the marker part of the scalar value.
+ */
+function launchdPrintRecordHasGroupBody(
+  lines: readonly string[],
+  recordIndex: number,
+  depth: number,
+): boolean {
+  let nextIndex = recordIndex + 1;
+  while (lines[nextIndex] === "") nextIndex += 1;
+  const nextLine = lines[nextIndex];
+  if (nextLine === undefined) return false;
+
+  const groupIndent = "\t".repeat(depth);
+  if (nextLine === `${groupIndent}}`) return true;
+  const childIndent = `${groupIndent}\t`;
+  return nextLine.startsWith(childIndent) && !nextLine.startsWith(`${childIndent}\t`);
 }
 
 function parseLaunchdPrintEnvironment(
@@ -619,7 +670,25 @@ function parseLaunchdPrintEnvironment(
   return Object.fromEntries(environment);
 }
 
-function launchdServiceIsMissing(result: InstalledNativeServiceDefinitionCommandResult): boolean {
+function decodeCommandResult(
+  result: InstalledNativeServiceDefinitionCommandResult,
+): DecodedInstalledNativeServiceDefinitionCommandResult | undefined {
+  let stdout: string;
+  let stderr: string;
+  try {
+    stdout = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.stdout);
+    stderr = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.stderr);
+  } catch {
+    return undefined;
+  }
+  return {
+    status: result.status,
+    stdout,
+    stderr: stderr === "" ? result.spawnError : stderr,
+  };
+}
+
+function launchdServiceIsMissing(result: DecodedInstalledNativeServiceDefinitionCommandResult): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
   return /could not find (?:specified )?service|service (?:was )?not found/iu.test(output);
 }

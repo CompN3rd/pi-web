@@ -53,6 +53,7 @@ import {
 } from "./nativeServices/servicePlan.js";
 import {
   inspectInstalledNativeServiceDefinitions,
+  type InstalledNativeServiceDefinitionCommandResult,
   type InstalledNativeServiceDefinitionPurpose,
   type InstalledNativeServiceDefinitionSource,
 } from "./nativeServices/installedServiceDefinitions.js";
@@ -170,6 +171,19 @@ function capture(command: string, args: string[]): { status: number; stdout: str
   const errorMessage = result.error instanceof Error ? result.error.message : "";
   const stderr = outputText(result.stderr);
   return { status: result.status ?? 1, stdout: outputText(result.stdout), stderr: stderr === "" ? errorMessage : stderr };
+}
+
+function captureInstalledServiceDefinitionCommand(
+  command: string,
+  args: string[],
+): InstalledNativeServiceDefinitionCommandResult {
+  const result = spawnSync(command, args);
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    spawnError: result.error instanceof Error ? result.error.message : "",
+  };
 }
 
 function runQuiet(command: string, args: string[]): number {
@@ -939,7 +953,7 @@ function installedServiceDefinitions(
   return inspectInstalledNativeServiceDefinitions(backend, sources, {
     readFile: (path) => readFileSync(path),
     realpath: realpathSync,
-    capture,
+    capture: captureInstalledServiceDefinitionCommand,
   }, purpose);
 }
 
