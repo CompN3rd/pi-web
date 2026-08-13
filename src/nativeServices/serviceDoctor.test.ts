@@ -649,6 +649,41 @@ describe("installed native-service mode and definition inspection", () => {
     });
   });
 
+  it.each(["bash", "zsh", "fish"] as const)(
+    "accepts raw dollars emitted by the pre-hardening %s systemd renderer",
+    (shellName) => {
+      const inspection = inspectInstalledNativeServiceDefinitionEnvironment(
+        { kind: "systemd", label: "systemd" },
+        {
+          id: "web",
+          contents: [
+            "[Service]",
+            'Environment="PI_WEB_CONFIG=/managed.json"',
+            `ExecStart=/usr/bin/env /bin/${shellName} -lc 'exec echo $HOME %%h'`,
+          ].join("\n"),
+        },
+      );
+
+      expect(inspection).toEqual({
+        ok: true,
+        value: { PI_WEB_CONFIG: "/managed.json" },
+      });
+    },
+  );
+
+  it("continues to require doubled dollars in current double-quoted systemd commands", () => {
+    const inspectCommand = (command: string) => inspectInstalledNativeServiceDefinitionEnvironment(
+      { kind: "systemd", label: "systemd" },
+      { id: "web", contents: ["[Service]", `ExecStart=/usr/bin/env "/bin/zsh" -lc ${command}`].join("\n") },
+    );
+
+    expect(inspectCommand('"exec echo $$HOME"')).toEqual({ ok: true, value: {} });
+    const rawDollar = inspectCommand('"exec echo $HOME"');
+    expect(rawDollar.ok).toBe(false);
+    if (rawDollar.ok) throw new Error("Expected a raw dollar in a current ExecStart to fail");
+    expect(rawDollar.message).toContain("unrecognized shell command");
+  });
+
   it.each([
     [
       "unterminated command quote",
@@ -668,6 +703,11 @@ describe("installed native-service mode and definition inspection", () => {
     [
       "noncanonical legacy command syntax",
       "ExecStart=/usr/bin/env /bin/zsh -lc 'exec true''ignored'",
+      "unrecognized shell command",
+    ],
+    [
+      "trailing syntax after a legacy raw-dollar command",
+      "ExecStart=/usr/bin/env /bin/zsh -lc 'exec echo $HOME' trailing",
       "unrecognized shell command",
     ],
   ])("rejects %s in a systemd ExecStart", (_label, execStart, expectedMessage) => {

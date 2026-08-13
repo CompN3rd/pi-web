@@ -685,7 +685,9 @@ function parseSystemdShellCommand(shell: NativeServiceShell["name"], value: stri
   const inner = value.slice(1, -1);
   const unquoted = shell === "fish" ? fishSingleQuoteUnescape(inner) : inner.replaceAll("'\\''", "'");
   if (legacySystemdShellQuote(shell, unquoted) !== value) return undefined;
-  return decodeSystemdSubstitutions(unquoted, true);
+  // The pre-hardening renderer doubled percent specifiers, but its
+  // replacement-string "$$" left dollar characters unchanged.
+  return decodeSystemdSubstitutions(unquoted, false);
 }
 
 function legacySystemdShellQuote(shell: NativeServiceShell["name"], value: string): string {
