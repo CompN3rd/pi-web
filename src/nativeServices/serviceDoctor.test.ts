@@ -3,6 +3,7 @@ import {
   formatNativeServiceDoctorResult,
   inferInstalledNativeServiceMode,
   inspectInstalledDevelopmentServiceInput,
+  inspectInstalledNativeServiceDefinitionEnvironment,
   inspectInstalledProductionServiceContext,
   runNativeServiceDoctor,
   selectManagedNativeServiceConfig,
@@ -355,6 +356,48 @@ describe("installed native-service mode and definition inspection", () => {
         packageJsonPath: "/checkout %h\nnext/package.json",
       },
     });
+  });
+
+  it("stores a prototype-collision systemd environment name as an own data property", () => {
+    const inspection = inspectInstalledNativeServiceDefinitionEnvironment(
+      { kind: "systemd", label: "systemd" },
+      {
+        id: "web",
+        contents: [
+          "[Service]",
+          'Environment="__proto__=installed"',
+          'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+        ].join("\n"),
+      },
+    );
+
+    expect(inspection.ok).toBe(true);
+    if (!inspection.ok) throw new Error("Expected prototype-collision environment name to parse");
+    expect(Object.getOwnPropertyDescriptor(inspection.value, "__proto__")).toEqual({
+      configurable: true,
+      enumerable: true,
+      value: "installed",
+      writable: true,
+    });
+  });
+
+  it("rejects a duplicate prototype-collision systemd environment name", () => {
+    const inspection = inspectInstalledNativeServiceDefinitionEnvironment(
+      { kind: "systemd", label: "systemd" },
+      {
+        id: "web",
+        contents: [
+          "[Service]",
+          'Environment="__proto__=first"',
+          'Environment="__proto__=second"',
+          'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+        ].join("\n"),
+      },
+    );
+
+    expect(inspection.ok).toBe(false);
+    if (inspection.ok) throw new Error("Expected duplicate prototype-collision environment name to fail");
+    expect(inspection.message).toContain("malformed environment entry");
   });
 
   it("decodes systemd hexadecimal escapes as UTF-8 bytes", () => {

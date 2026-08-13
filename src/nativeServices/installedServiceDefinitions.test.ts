@@ -53,6 +53,14 @@ function systemdDefinition(configPath?: string): string {
   return `[Service]\n${environment}ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"\n`;
 }
 
+function systemdDefinitionWithEnvironment(
+  configPath: string | undefined,
+  assignments: readonly string[],
+): string {
+  const directives = assignments.map((assignment) => `Environment="${assignment}"\n`).join("");
+  return systemdDefinition(configPath).replace("[Service]\n", `[Service]\n${directives}`);
+}
+
 function busctlStringArray(values: readonly string[]): string {
   const serialized = values.map((value) => JSON.stringify(value)).join(" ");
   return `as ${String(values.length)}${serialized === "" ? "" : ` ${serialized}`}\n`;
@@ -138,6 +146,84 @@ describe("installed native-service definition boundary", () => {
       "--property=EnvironmentFiles",
       "--property=Environment",
     ]);
+  });
+
+  it("matches a prototype-collision environment assignment across disk and manager snapshots", () => {
+    const contents = systemdDefinitionWithEnvironment("/managed/config.json", ["__proto__=matching"]);
+    const deps = dependencies(
+      new TextEncoder().encode(contents),
+      {
+        status: 0,
+        stdout: managerOutput({ Environment: "PI_WEB_CONFIG=/managed/config.json __proto__=matching" }),
+        stderr: "",
+      },
+    );
+
+    expect(inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "start",
+    )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+  });
+
+  it.each([
+    {
+      name: "only on disk",
+      diskAssignments: ["__proto__=disk"],
+      managerEnvironment: "PI_WEB_CONFIG=/managed/config.json",
+    },
+    {
+      name: "only in the manager",
+      diskAssignments: [],
+      managerEnvironment: "PI_WEB_CONFIG=/managed/config.json __proto__=manager",
+    },
+    {
+      name: "with conflicting values",
+      diskAssignments: ["__proto__=disk"],
+      managerEnvironment: "PI_WEB_CONFIG=/managed/config.json __proto__=manager",
+    },
+  ])("fails closed when a prototype-collision environment assignment exists $name", ({
+    diskAssignments,
+    managerEnvironment,
+  }) => {
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      dependencies(
+        new TextEncoder().encode(systemdDefinitionWithEnvironment("/managed/config.json", diskAssignments)),
+        { status: 0, stdout: managerOutput({ Environment: managerEnvironment }), stderr: "" },
+      ),
+      "doctor",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected prototype-collision environment mismatch to fail");
+    expect(result.message).toContain("effective environment");
+    expect(result.message).toContain("differs");
+  });
+
+  it("rejects a duplicate prototype-collision assignment in the effective manager environment", () => {
+    const contents = systemdDefinitionWithEnvironment("/managed/config.json", ["__proto__=matching"]);
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      dependencies(
+        new TextEncoder().encode(contents),
+        {
+          status: 0,
+          stdout: managerOutput({
+            Environment: "PI_WEB_CONFIG=/managed/config.json __proto__=matching __proto__=matching",
+          }),
+          stderr: "",
+        },
+      ),
+      "restart",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected duplicate manager environment assignment to fail");
+    expect(result.message).toContain("unrecognized Environment");
   });
 
   it("recovers a legacy systemd [unprintable] environment losslessly from D-Bus", () => {

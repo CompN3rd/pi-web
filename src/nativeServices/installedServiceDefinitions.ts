@@ -373,18 +373,18 @@ function unrecognizedSystemdEnvironment(
 }
 
 function environmentFromAssignments(assignments: readonly string[]): Readonly<Record<string, string>> | undefined {
-  const environment: Record<string, string> = {};
+  const environment = new Map<string, string>();
   for (const assignment of assignments) {
     const separator = assignment.indexOf("=");
     const key = assignment.slice(0, separator);
     if (
       separator <= 0
       || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)
-      || Object.hasOwn(environment, key)
+      || environment.has(key)
     ) return undefined;
-    environment[key] = assignment.slice(separator + 1);
+    environment.set(key, assignment.slice(separator + 1));
   }
-  return environment;
+  return Object.fromEntries(environment);
 }
 
 function parseBusctlStringArray(output: string): string[] | undefined {
@@ -553,7 +553,7 @@ function recordsEqual(
   const firstEntries = Object.entries(first);
   const secondEntries = Object.entries(second);
   return firstEntries.length === secondEntries.length
-    && firstEntries.every(([key, value]) => second[key] === value);
+    && firstEntries.every(([key, value]) => Object.hasOwn(second, key) && second[key] === value);
 }
 
 function definitionLabel(backend: NativeServiceBackend, id: NativeServiceId): string {

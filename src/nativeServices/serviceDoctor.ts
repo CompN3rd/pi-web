@@ -409,7 +409,7 @@ function parseSystemdDefinition(
     return { ok: false, message: `Installed ${definition.id} systemd unit has an unrecognized shell command.` };
   }
 
-  const environment: Record<string, string> = {};
+  const environment = new Map<string, string>();
   for (const directive of directives.filter((item) => item.name === "Environment")) {
     const rawValue = directive.value;
     if (!/^"(?:\\.|[^"])*"$/u.test(rawValue)) {
@@ -418,10 +418,10 @@ function parseSystemdDefinition(
     const assignment = parseSystemdDirectiveValue(rawValue);
     const separator = assignment?.indexOf("=") ?? -1;
     const key = assignment?.slice(0, separator) ?? "";
-    if (separator <= 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || Object.hasOwn(environment, key)) {
+    if (separator <= 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || environment.has(key)) {
       return { ok: false, message: `Installed ${definition.id} systemd unit has a malformed environment entry.` };
     }
-    environment[key] = assignment?.slice(separator + 1) ?? "";
+    environment.set(key, assignment?.slice(separator + 1) ?? "");
   }
 
   const workingDirectories = directives.filter((directive) => directive.name === "WorkingDirectory");
@@ -441,7 +441,13 @@ function parseSystemdDefinition(
 
   return {
     ok: true,
-    value: { id: definition.id, shell: shell.value, environment, workingDirectory: workingDirectory ?? null, shellCommand },
+    value: {
+      id: definition.id,
+      shell: shell.value,
+      environment: Object.fromEntries(environment),
+      workingDirectory: workingDirectory ?? null,
+      shellCommand,
+    },
   };
 }
 
@@ -811,7 +817,7 @@ function xmlUnescapeStrict(value: string): string | undefined {
 function recordsEqual(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
   const leftEntries = Object.entries(left);
   return leftEntries.length === Object.keys(right).length
-    && leftEntries.every(([key, value]) => right[key] === value);
+    && leftEntries.every(([key, value]) => Object.hasOwn(right, key) && right[key] === value);
 }
 
 function impossibleMissingDefinition(): never {
