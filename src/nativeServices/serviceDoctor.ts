@@ -362,11 +362,11 @@ function systemdServiceDirectives(contents: string): ParsedSystemdDirective[] | 
       continue;
     }
     if (!inServiceSection || trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
-    const match = /^[ \t]*([A-Za-z][A-Za-z0-9]*)=(.*)$/u.exec(line);
+    // Slice after the recognized prefix so JavaScript-only line separators remain directive data.
+    const match = /^[ \t]*([A-Za-z][A-Za-z0-9]*)=/u.exec(line);
     const name = match?.[1];
-    const value = match?.[2];
-    if (name === undefined || value === undefined || !allowed.has(name)) return undefined;
-    directives.push({ name, value });
+    if (match === null || name === undefined || !allowed.has(name)) return undefined;
+    directives.push({ name, value: line.slice(match[0].length) });
   }
   return foundServiceSection ? directives : undefined;
 }
@@ -375,6 +375,20 @@ function hasSystemdPhysicalLineContinuation(line: string): boolean {
   let trailingBackslashes = 0;
   for (let index = line.length - 1; index >= 0 && line[index] === "\\"; index -= 1) trailingBackslashes += 1;
   return trailingBackslashes % 2 === 1;
+}
+
+// Keep malformed installed input linear; overlapping escaped/raw regex alternatives can backtrack exponentially.
+function isSingleSystemdQuotedValue(value: string): boolean {
+  if (value.length < 2 || !value.startsWith('"') || !value.endsWith('"')) return false;
+  const closingQuoteIndex = value.length - 1;
+  for (let index = 1; index < closingQuoteIndex; index += 1) {
+    const character = value[index];
+    if (character === '"') return false;
+    if (character !== "\\") continue;
+    index += 1;
+    if (index >= closingQuoteIndex) return false;
+  }
+  return true;
 }
 
 function parseSystemdDefinition(
@@ -412,7 +426,7 @@ function parseSystemdDefinition(
   const environment = new Map<string, string>();
   for (const directive of directives.filter((item) => item.name === "Environment")) {
     const rawValue = directive.value;
-    if (!/^"(?:\\.|[^"])*"$/u.test(rawValue)) {
+    if (!isSingleSystemdQuotedValue(rawValue)) {
       return { ok: false, message: `Installed ${definition.id} systemd unit has an unrecognized environment entry.` };
     }
     const assignment = parseSystemdDirectiveValue(rawValue);

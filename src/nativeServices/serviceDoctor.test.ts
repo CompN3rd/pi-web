@@ -332,6 +332,40 @@ describe("installed native-service mode and definition inspection", () => {
     });
   });
 
+  it("rejects a truncated quoted systemd environment within bounded parser time", () => {
+    // This finite payload took seconds with the ambiguous escaped/raw regex alternatives.
+    const contents = [
+      "[Service]",
+      `Environment="${"\\".repeat(40)}`,
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+    ].join("\n");
+
+    const startedAt = performance.now();
+    const inspection = inspectInstalledNativeServiceDefinitionEnvironment(
+      { kind: "systemd", label: "systemd" },
+      { id: "web", contents },
+    );
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(inspection.ok).toBe(false);
+    if (inspection.ok) throw new Error("Expected truncated environment inspection to fail");
+    expect(inspection.message).toContain("unrecognized environment entry");
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it.each([
+    ["line separator", "\u2028"],
+    ["paragraph separator", "\u2029"],
+  ] as const)("round-trips rendered systemd config paths containing a %s", (_label, separator) => {
+    const configPath = `/home/user/config${separator}name.json`;
+    const plan = developmentPlan("systemd", configPath);
+
+    expect(selectManagedNativeServiceConfig(plan.backend, renderedDefinitions(plan), undefined)).toEqual({
+      ok: true,
+      value: { source: "installed", configPath },
+    });
+  });
+
   it("reconstructs escaped systemd paths, substitutions, and line controls exactly", () => {
     const plan = createDevelopmentNativeServicePlan({
       backend: { kind: "systemd", label: "systemd" },
