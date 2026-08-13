@@ -1,4 +1,5 @@
 import { posix as posixPath } from "node:path";
+import { TextDecoder, TextEncoder } from "node:util";
 import {
   createDevelopmentNativeServicePlan,
   nativeServiceManagerRefs,
@@ -358,10 +359,16 @@ function systemdServiceDirectives(contents: string): ParsedSystemdDirective[] | 
   return foundServiceSection ? directives : undefined;
 }
 
+function hasSystemdPhysicalLineContinuation(line: string): boolean {
+  let trailingBackslashes = 0;
+  for (let index = line.length - 1; index >= 0 && line[index] === "\\"; index -= 1) trailingBackslashes += 1;
+  return trailingBackslashes % 2 === 1;
+}
+
 function parseSystemdDefinition(
   definition: InstalledNativeServiceDefinition,
 ): InstalledNativeServiceInspection<ParsedServiceDefinition> {
-  if (definition.contents.split(/\r?\n/u).some((line) => line.endsWith("\\"))) {
+  if (definition.contents.split(/\r?\n/u).some(hasSystemdPhysicalLineContinuation)) {
     return {
       ok: false,
       message: `Installed ${definition.id} systemd unit uses physical-line continuation, which cannot be inspected safely.`,
@@ -505,11 +512,15 @@ function parseSystemdEscapedValue(value: string): string | undefined {
 }
 
 function systemdUnescape(value: string): string | undefined {
-  let result = "";
+  const bytes: number[] = [];
+  const encoder = new TextEncoder();
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index];
     if (character !== "\\") {
-      result += character ?? "";
+      const codePoint = value.codePointAt(index);
+      if (codePoint === undefined || codePoint === 0 || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return undefined;
+      bytes.push(...encoder.encode(String.fromCodePoint(codePoint)));
+      if (codePoint > 0xffff) index += 1;
       continue;
     }
 
@@ -531,7 +542,7 @@ function systemdUnescape(value: string): string | undefined {
     };
     const simple = simpleEscapes[escape];
     if (simple !== undefined) {
-      result += simple;
+      bytes.push(...encoder.encode(simple));
       index += 1;
       continue;
     }
@@ -540,12 +551,18 @@ function systemdUnescape(value: string): string | undefined {
     if (length === 0) return undefined;
     const encoded = value.slice(index + 2, index + 2 + length);
     if (encoded.length !== length || !new RegExp(`^[0-9a-fA-F]{${String(length)}}$`, "u").test(encoded)) return undefined;
-    const codePoint = Number.parseInt(encoded, 16);
-    if (codePoint === 0 || codePoint > 0x10ffff) return undefined;
-    result += String.fromCodePoint(codePoint);
+    const decoded = Number.parseInt(encoded, 16);
+    if (decoded === 0 || decoded > 0x10ffff || (decoded >= 0xd800 && decoded <= 0xdfff)) return undefined;
+    if (escape === "x") bytes.push(decoded);
+    else bytes.push(...encoder.encode(String.fromCodePoint(decoded)));
     index += length + 1;
   }
-  return result;
+
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
+  } catch {
+    return undefined;
+  }
 }
 
 function decodeSystemdSubstitutions(value: string, decodeDollars: boolean): string | undefined {

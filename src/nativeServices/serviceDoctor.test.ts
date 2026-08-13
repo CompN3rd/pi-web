@@ -357,6 +357,56 @@ describe("installed native-service mode and definition inspection", () => {
     });
   });
 
+  it("decodes systemd hexadecimal escapes as UTF-8 bytes", () => {
+    const contents = [
+      "[Service]",
+      'Environment="PI_WEB_CONFIG=/tmp/\\xC3\\xA9.json"',
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+    ].join("\n");
+
+    expect(selectManagedNativeServiceConfig(
+      { kind: "systemd", label: "systemd" },
+      [{ id: "web", contents }],
+      undefined,
+    )).toEqual({
+      ok: true,
+      value: { source: "installed", configPath: "/tmp/é.json" },
+    });
+  });
+
+  it("rejects systemd hexadecimal escapes that do not form valid UTF-8", () => {
+    const contents = [
+      "[Service]",
+      'Environment="PI_WEB_CONFIG=/tmp/\\xC3\\x28.json"',
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+    ].join("\n");
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "systemd", label: "systemd" },
+      [{ id: "web", contents }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected invalid escaped UTF-8 to fail");
+    expect(selection.message).toContain("environment entry");
+  });
+
+  it("round-trips a rendered development working directory ending in a literal backslash", () => {
+    const workingDirectory = "/checkout\\";
+    const plan = createDevelopmentNativeServicePlan({
+      backend: { kind: "systemd", label: "systemd" },
+      shell,
+      environment: { PI_WEB_CONFIG: "/home/user/config.json" },
+      workingDirectory,
+      packageJsonPath: `${workingDirectory}/package.json`,
+    });
+
+    expect(inspectInstalledDevelopmentServiceInput(plan.backend, renderedDefinitions(plan))).toMatchObject({
+      ok: true,
+      value: { workingDirectory, packageJsonPath: `${workingDirectory}/package.json` },
+    });
+  });
+
   it("interprets installed shell executable paths with POSIX semantics", () => {
     const plan = developmentPlan("systemd");
     const definitions = renderedDefinitions(plan).map((definition) => ({

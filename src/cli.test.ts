@@ -12,8 +12,10 @@ import {
   managedServiceProbeEnvironment,
   nodeVersionCheck,
   regularFileExists,
+  runReadinessCliCommand,
   serviceBackendForPlatform,
   sessionDaemonRestartPlan,
+  type ReadinessCliCommandDependencies,
 } from "./cli.js";
 import type { InstalledNativeServiceDefinition } from "./nativeServices/serviceDoctor.js";
 import type { NativeServiceId } from "./nativeServices/servicePlan.js";
@@ -161,6 +163,138 @@ describe("managedServiceProbeEnvironment", () => {
       ok: true,
       value: callerEnvironment,
     });
+  });
+});
+
+describe("readiness CLI command orchestration", () => {
+  const backend = { kind: "systemd", label: "systemd user services" } as const;
+  const definitions: InstalledNativeServiceDefinition[] = [{
+    id: "web",
+    contents: [
+      "[Service]",
+      'Environment="PI_WEB_CONFIG=/managed/config.json"',
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+    ].join("\n"),
+  }];
+
+  function dependencies(environment: NodeJS.ProcessEnv = {}): ReadinessCliCommandDependencies {
+    return {
+      environment,
+      currentBackend: vi.fn(() => backend),
+      requireBackend: vi.fn(() => backend),
+      installedServiceIds: vi.fn(() => new Set<NativeServiceId>(["web"])),
+      inspectDefinitions: vi.fn(() => ({ ok: true, value: definitions } as const)),
+      runLifecycle: vi.fn(() => Promise.resolve()),
+      runDoctor: vi.fn(() => Promise.resolve()),
+      printVersion: vi.fn(() => Promise.resolve()),
+    };
+  }
+
+  it.each(["start", "restart"] as const)("passes installed config through actual %s readiness wiring", async (command) => {
+    const environment: NodeJS.ProcessEnv = { PI_WEB_CONFIG: "", PI_WEB_PORT: "9000" };
+    const deps = dependencies(environment);
+
+    await runReadinessCliCommand(command, deps);
+
+    expect(deps.inspectDefinitions).toHaveBeenCalledWith(backend, ["web"]);
+    expect(deps.runLifecycle).toHaveBeenCalledWith(backend, command, {
+      PI_WEB_CONFIG: "/managed/config.json",
+      PI_WEB_PORT: "9000",
+    });
+    expect(environment).toEqual({ PI_WEB_CONFIG: "", PI_WEB_PORT: "9000" });
+  });
+
+  it("short-circuits installed inspection for an explicit lifecycle override", async () => {
+    const environment: NodeJS.ProcessEnv = { PI_WEB_CONFIG: "/caller/config.json" };
+    const deps = dependencies(environment);
+
+    await runReadinessCliCommand("restart", deps);
+
+    expect(deps.inspectDefinitions).not.toHaveBeenCalled();
+    expect(deps.runLifecycle).toHaveBeenCalledWith(backend, "restart", environment);
+  });
+
+  it("stops lifecycle mutation when managed definition inspection fails", async () => {
+    const deps = dependencies({});
+    vi.mocked(deps.inspectDefinitions).mockReturnValue({ ok: false, message: "effective drop-ins are active" });
+
+    await expect(runReadinessCliCommand("start", deps)).rejects.toThrow("effective drop-ins are active");
+
+    expect(deps.runLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("retains ambient lifecycle behavior when no native service is installed", async () => {
+    const environment: NodeJS.ProcessEnv = { PI_WEB_PORT: "9000" };
+    const deps = dependencies(environment);
+    vi.mocked(deps.installedServiceIds).mockReturnValue(new Set());
+
+    await runReadinessCliCommand("start", deps);
+
+    expect(deps.inspectDefinitions).not.toHaveBeenCalled();
+    expect(deps.runLifecycle).toHaveBeenCalledWith(backend, "start", environment);
+  });
+
+  it("passes managed config into doctor's running-version probe", async () => {
+    const deps = dependencies({});
+
+    await runReadinessCliCommand("doctor", deps);
+
+    expect(deps.runDoctor).toHaveBeenCalledWith(expect.objectContaining({
+      backend,
+      versionReportOptions: { configEnv: { PI_WEB_CONFIG: "/managed/config.json" } },
+    }));
+  });
+
+  it("propagates managed inspection failures into doctor's web probe", async () => {
+    const deps = dependencies({});
+    vi.mocked(deps.inspectDefinitions).mockReturnValue({ ok: false, message: "effective drop-ins are active" });
+
+    await runReadinessCliCommand("doctor", deps);
+
+    expect(deps.runDoctor).toHaveBeenCalledOnce();
+    const context = vi.mocked(deps.runDoctor).mock.calls[0]?.[0];
+    expect(context?.versionReportOptions.webEndpointError).toContain("effective drop-ins are active");
+    expect(context?.managedInspectionFailed).toBe(true);
+  });
+
+  it("keeps manual and Docker doctor probes on ambient config semantics", async () => {
+    const manualEnvironment: NodeJS.ProcessEnv = { PI_WEB_CONFIG: "/manual/config.json" };
+    const manual = dependencies(manualEnvironment);
+    vi.mocked(manual.currentBackend).mockReturnValue(undefined);
+
+    await runReadinessCliCommand("doctor", manual);
+
+    expect(manual.installedServiceIds).not.toHaveBeenCalled();
+    expect(manual.inspectDefinitions).not.toHaveBeenCalled();
+    expect(manual.runDoctor).toHaveBeenCalledWith(expect.objectContaining({
+      backend: undefined,
+      versionReportOptions: { configEnv: manualEnvironment },
+    }));
+
+    const dockerEnvironment: NodeJS.ProcessEnv = { PI_WEB_DOCKER_RUNTIME: "1", PI_WEB_CONFIG: "/docker/config.json" };
+    const docker = dependencies(dockerEnvironment);
+
+    await runReadinessCliCommand("doctor", docker);
+
+    expect(docker.inspectDefinitions).not.toHaveBeenCalled();
+    expect(docker.runDoctor).toHaveBeenCalledWith(expect.objectContaining({
+      backend,
+      versionReportOptions: { configEnv: dockerEnvironment },
+    }));
+  });
+
+  it("dispatches standalone version with no managed selection or config options", async () => {
+    const deps = dependencies({ PI_WEB_CONFIG: "/ambient/config.json" });
+
+    await runReadinessCliCommand("version", deps);
+
+    expect(deps.printVersion).toHaveBeenCalledWith();
+    expect(deps.currentBackend).not.toHaveBeenCalled();
+    expect(deps.requireBackend).not.toHaveBeenCalled();
+    expect(deps.installedServiceIds).not.toHaveBeenCalled();
+    expect(deps.inspectDefinitions).not.toHaveBeenCalled();
+    expect(deps.runDoctor).not.toHaveBeenCalled();
+    expect(deps.runLifecycle).not.toHaveBeenCalled();
   });
 });
 
