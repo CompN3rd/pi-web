@@ -78,7 +78,36 @@ function launchdPrint(
   configPath?: string,
 ): string {
   const config = configPath === undefined ? "" : `\t\tPI_WEB_CONFIG => ${configPath}\n`;
-  return `${launchdTarget} = {\n\tpath = ${path}\n\tstate = running\n\n\tenvironment = {\n${config}\t\tXPC_SERVICE_NAME => com.pi-web.web\n\t}\n}\n`;
+  return `${launchdTarget} = {
+\tactive count = 1
+\tpath = ${path}
+\ttype = LaunchAgent
+\tstate = running
+
+\tprogram = /usr/bin/env
+\targuments = {
+\t\t/usr/bin/env
+\t\t/bin/zsh
+\t\t-lc
+\t\texec true
+\t}
+
+\tenvironment = {
+${config}\t\tXPC_SERVICE_NAME => com.pi-web.web
+\t}
+
+\tdomain = gui/501 [100004]
+\tresource coalition = {
+\t\tID = 123
+\t\ttype = resource
+\t\tstate = active
+\t\tactive count = 1
+\t\tname = com.pi-web.web
+\t}
+
+\tproperties = runatload | inferred program
+}
+`;
 }
 
 function dependencies(
@@ -515,7 +544,7 @@ describe("installed native-service definition boundary", () => {
     expect(deps.capture).toHaveBeenCalledWith("launchctl", ["print", launchdTarget]);
   });
 
-  it("binds an already-loaded LaunchAgent to its plist origin and managed config", () => {
+  it("consumes an ordinary loaded LaunchAgent representation and binds its plist and config", () => {
     const contents = launchdDefinition("/managed/config with space.json");
     const deps = dependencies(
       new TextEncoder().encode(contents),
@@ -528,6 +557,97 @@ describe("installed native-service definition boundary", () => {
       deps,
       "doctor",
     )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+  });
+
+  it.each([
+    ["2028", "\u2028"],
+    ["2029", "\u2029"],
+  ])(
+    "preserves U+%s in matching loaded LaunchAgent paths and config values",
+    (_codePoint, separator) => {
+      const path = `/Users/user/Library/LaunchAgents/com.pi-web${separator}web.plist`;
+      const configPath = `/managed/config${separator}value.json`;
+      const contents = launchdDefinition(configPath);
+
+      expect(inspectInstalledNativeServiceDefinitions(
+        { kind: "launchd", label: "launchd" },
+        [{ ...source, path }],
+        dependencies(
+          new TextEncoder().encode(contents),
+          { status: 0, stdout: launchdPrint(path, configPath), stderr: "" },
+        ),
+        "doctor",
+      )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+    },
+  );
+
+  it.each(["plist path", "managed environment", "document trailer"] as const)(
+    "rejects an ambiguous carriage return in the launchctl %s",
+    (location) => {
+      const configPath = "/managed/config.json";
+      let stdout = launchdPrint(launchdPath, configPath);
+      if (location === "plist path") {
+        stdout = stdout.replace(`\tpath = ${launchdPath}\n`, `\tpath = ${launchdPath}\r\n`);
+      } else if (location === "managed environment") {
+        stdout = stdout.replace(
+          `\t\tPI_WEB_CONFIG => ${configPath}\n`,
+          `\t\tPI_WEB_CONFIG => ${configPath}\r\n`,
+        );
+      } else {
+        stdout = `${stdout.slice(0, -1)}\r`;
+      }
+
+      const result = inspectInstalledNativeServiceDefinitions(
+        { kind: "launchd", label: "launchd" },
+        [{ ...source, path: launchdPath }],
+        dependencies(
+          new TextEncoder().encode(launchdDefinition(configPath)),
+          { status: 0, stdout, stderr: "" },
+        ),
+        "doctor",
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("Expected ambiguous launchctl framing to fail");
+      expect(result.message).toContain("unrecognized service definition");
+    },
+  );
+
+  it.each([
+    {
+      name: "truncated after the environment dictionary",
+      output: (complete: string): string => {
+        const remainingStateOffset = complete.indexOf("\n\n\tdomain =");
+        if (remainingStateOffset < 0) throw new Error("Expected ordinary launchctl state after environment");
+        return complete.slice(0, remainingStateOffset);
+      },
+    },
+    {
+      name: "closed before conflicting remaining environment state",
+      output: (complete: string): string => complete.replace(
+        "\t}\n\n\tdomain =",
+        "\t}\n}\n\t\tPI_WEB_CONFIG => /managed/conflicting.json\n\t}\n\n\tdomain =",
+      ),
+    },
+    {
+      name: "followed by unconsumed trailing state",
+      output: (complete: string): string => `${complete}\tPI_WEB_CONFIG => /managed/conflicting.json\n}\n`,
+    },
+  ])("rejects launchctl output $name", ({ output }) => {
+    const configPath = "/managed/config.json";
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      dependencies(
+        new TextEncoder().encode(launchdDefinition(configPath)),
+        { status: 0, stdout: output(launchdPrint(launchdPath, configPath)), stderr: "" },
+      ),
+      "start",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected incomplete launchctl representation to fail");
+    expect(result.message).toContain("unrecognized service definition");
   });
 
   it("requires the loaded LaunchAgent config to be an own environment entry", () => {

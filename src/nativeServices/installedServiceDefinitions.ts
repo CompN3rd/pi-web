@@ -223,7 +223,7 @@ function inspectLoadedLaunchdDefinition(
     };
   }
 
-  const loaded = parseLaunchdPrintDefinition(result.stdout);
+  const loaded = parseLaunchdPrintDefinition(result.stdout, source.launchdTarget);
   if (loaded === undefined) {
     return {
       ok: false,
@@ -512,34 +512,111 @@ interface LaunchdPrintDefinition {
   environment: Readonly<Record<string, string>>;
 }
 
-function parseLaunchdPrintDefinition(output: string): LaunchdPrintDefinition | undefined {
-  const lines = output.split(/\r?\n/u);
-  const paths = lines.flatMap((line) => {
-    const match = /^[ \t]*path = (.+)$/u.exec(line);
-    return match?.[1] === undefined ? [] : [match[1]];
-  });
-  const environmentStarts = lines.flatMap((line, index) => (
-    /^[ \t]*environment = \{[ \t]*$/u.test(line) ? [index] : []
-  ));
-  if (paths.length !== 1 || environmentStarts.length !== 1) return undefined;
+interface LaunchdPrintGroup {
+  name: string;
+  records: LaunchdPrintRecord[];
+}
 
-  const environment = new Map<string, string>();
-  let closed = false;
-  for (let index = (environmentStarts[0] ?? 0) + 1; index < lines.length; index += 1) {
+type LaunchdPrintRecord =
+  | { kind: "scalar"; value: string }
+  | { kind: "group"; value: LaunchdPrintGroup };
+
+function parseLaunchdPrintDefinition(
+  output: string,
+  expectedTarget: string,
+): LaunchdPrintDefinition | undefined {
+  const root = parseLaunchdPrintDocument(output, expectedTarget);
+  if (root === undefined) return undefined;
+
+  const pathPrefix = "path = ";
+  const paths = root.records.flatMap((record) => (
+    record.kind === "scalar" && record.value.startsWith(pathPrefix)
+      ? [record.value.slice(pathPrefix.length)]
+      : []
+  ));
+  const environments = root.records.flatMap((record) => (
+    record.kind === "group" && record.value.name === "environment"
+      ? [record.value]
+      : []
+  ));
+  if (paths.length !== 1 || paths[0] === "" || environments.length !== 1) return undefined;
+
+  const environment = parseLaunchdPrintEnvironment(environments[0]?.records ?? []);
+  return environment === undefined
+    ? undefined
+    : { path: paths[0] ?? "", environment };
+}
+
+/**
+ * Parse launchctl's complete, tab-indented service representation. Its scalar
+ * records are LF-framed, so a carriage return is indistinguishable from
+ * transport framing when it follows a scalar value; reject any such output
+ * rather than silently changing a path or environment value.
+ */
+function parseLaunchdPrintDocument(output: string, expectedTarget: string): LaunchdPrintGroup | undefined {
+  if (output.includes("\r") || output.includes("\u0000") || output.includes("\uFFFD")) return undefined;
+  const lines = output.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines[0] !== `${expectedTarget} = {`) return undefined;
+
+  const root: LaunchdPrintGroup = { name: expectedTarget, records: [] };
+  const stack: LaunchdPrintGroup[] = [root];
+  for (let index = 1; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
-    if (/^[ \t]*\}[ \t]*$/u.test(line)) {
-      closed = true;
-      break;
+    const depth = stack.length;
+    const closingIndent = "\t".repeat(depth - 1);
+    if (line === `${closingIndent}}`) {
+      stack.pop();
+      if (stack.length === 0) return index === lines.length - 1 ? root : undefined;
+      continue;
     }
-    if (/^[ \t]*$/u.test(line)) continue;
-    const match = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*) => (.*)$/u.exec(line);
-    const key = match?.[1];
-    const value = match?.[2];
-    if (key === undefined || value === undefined || environment.has(key)) return undefined;
-    environment.set(key, value);
+    if (line === "") continue;
+
+    const recordIndent = "\t".repeat(depth);
+    if (!line.startsWith(recordIndent) || line.startsWith(`${recordIndent}\t`)) return undefined;
+    const value = line.slice(recordIndent.length);
+    if (value === "") return undefined;
+
+    const current = stack.at(-1);
+    if (current === undefined) return undefined;
+    const groupName = launchdPrintGroupName(value);
+    if (groupName === undefined) {
+      if (value === "}" || value.endsWith(" = {")) return undefined;
+      current.records.push({ kind: "scalar", value });
+      continue;
+    }
+
+    const group: LaunchdPrintGroup = { name: groupName, records: [] };
+    current.records.push({ kind: "group", value: group });
+    stack.push(group);
   }
-  if (!closed) return undefined;
-  return { path: paths[0] ?? "", environment: Object.fromEntries(environment) };
+  return undefined;
+}
+
+function launchdPrintGroupName(value: string): string | undefined {
+  const suffix = " = {";
+  if (!value.endsWith(suffix)) return undefined;
+  const name = value.slice(0, -suffix.length);
+  return name === "" || name.includes("\t") ? undefined : name;
+}
+
+function parseLaunchdPrintEnvironment(
+  records: readonly LaunchdPrintRecord[],
+): Readonly<Record<string, string>> | undefined {
+  const environment = new Map<string, string>();
+  const separator = " => ";
+  for (const record of records) {
+    if (record.kind !== "scalar") return undefined;
+    const separatorOffset = record.value.indexOf(separator);
+    const key = record.value.slice(0, separatorOffset);
+    if (
+      separatorOffset <= 0
+      || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)
+      || environment.has(key)
+    ) return undefined;
+    environment.set(key, record.value.slice(separatorOffset + separator.length));
+  }
+  return Object.fromEntries(environment);
 }
 
 function launchdServiceIsMissing(result: InstalledNativeServiceDefinitionCommandResult): boolean {
