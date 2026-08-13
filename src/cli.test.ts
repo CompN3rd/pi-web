@@ -17,6 +17,7 @@ import {
   sessionDaemonRestartPlan,
   type ReadinessCliCommandDependencies,
 } from "./cli.js";
+import { piWebConfigPath } from "./config.js";
 import type { InstalledNativeServiceDefinition } from "./nativeServices/serviceDoctor.js";
 import type { NativeServiceId } from "./nativeServices/servicePlan.js";
 
@@ -169,13 +170,37 @@ describe("managedServiceProbeEnvironment", () => {
     expect(Object.hasOwn(callerEnvironment, "PI_WEB_CONFIG")).toBe(false);
   });
 
+  it("shadows an inherited caller config when installed definitions select the default", () => {
+    const callerEnvironment: NodeJS.ProcessEnv = { XDG_CONFIG_HOME: "/managed-default" };
+    Object.setPrototypeOf(callerEnvironment, { PI_WEB_CONFIG: "/inherited/config.json" });
+
+    const result = managedServiceProbeEnvironment(backend, [{
+      id: "web",
+      contents: [
+        "[Service]",
+        'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+      ].join("\n"),
+    }], callerEnvironment);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.value).not.toBe(callerEnvironment);
+    expect(Object.hasOwn(result.value, "PI_WEB_CONFIG")).toBe(true);
+    expect(result.value["PI_WEB_CONFIG"]).toBe("");
+    expect(piWebConfigPath(result.value)).toBe("/managed-default/pi-web/config.json");
+    expect(piWebConfigPath(callerEnvironment)).toBe("/inherited/config.json");
+    expect(Object.hasOwn(callerEnvironment, "PI_WEB_CONFIG")).toBe(false);
+  });
+
   it("retains ambient/default semantics when there are no installed definitions", () => {
     const callerEnvironment: NodeJS.ProcessEnv = { PI_WEB_HOST: "127.0.0.1" };
+    Object.setPrototypeOf(callerEnvironment, { PI_WEB_CONFIG: "/ambient/config.json" });
 
     expect(managedServiceProbeEnvironment(backend, [], callerEnvironment)).toEqual({
       ok: true,
       value: callerEnvironment,
     });
+    expect(piWebConfigPath(callerEnvironment)).toBe("/ambient/config.json");
   });
 });
 
@@ -186,6 +211,13 @@ describe("readiness CLI command orchestration", () => {
     contents: [
       "[Service]",
       'Environment="PI_WEB_CONFIG=/managed/config.json"',
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+    ].join("\n"),
+  }];
+  const defaultConfigDefinitions: InstalledNativeServiceDefinition[] = [{
+    id: "web",
+    contents: [
+      "[Service]",
       'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
     ].join("\n"),
   }];
@@ -240,6 +272,24 @@ describe("readiness CLI command orchestration", () => {
       PI_WEB_PORT: "9000",
     });
   });
+
+  it.each(["start", "restart"] as const)(
+    "resolves the managed default instead of an inherited config through %s readiness wiring",
+    async (command) => {
+      const environment: NodeJS.ProcessEnv = { XDG_CONFIG_HOME: "/managed-default" };
+      Object.setPrototypeOf(environment, { PI_WEB_CONFIG: "/inherited/config.json" });
+      const deps = dependencies(environment);
+      vi.mocked(deps.inspectDefinitions).mockReturnValue({ ok: true, value: defaultConfigDefinitions });
+
+      await runReadinessCliCommand(command, deps);
+
+      const probeEnvironment = vi.mocked(deps.runLifecycle).mock.calls[0]?.[2];
+      if (probeEnvironment === undefined) throw new Error("lifecycle probe environment was not provided");
+      expect(piWebConfigPath(probeEnvironment)).toBe("/managed-default/pi-web/config.json");
+      expect(piWebConfigPath(environment)).toBe("/inherited/config.json");
+      expect(Object.hasOwn(environment, "PI_WEB_CONFIG")).toBe(false);
+    },
+  );
 
   it("makes launchd inspection action-aware so restart can repair stale loaded state", async () => {
     const launchdBackend = { kind: "launchd", label: "LaunchAgents" } as const;
@@ -300,6 +350,22 @@ describe("readiness CLI command orchestration", () => {
       backend,
       versionReportOptions: { configEnv: { PI_WEB_CONFIG: "/managed/config.json" } },
     }));
+  });
+
+  it("resolves the managed default instead of an inherited config through doctor wiring", async () => {
+    const environment: NodeJS.ProcessEnv = { XDG_CONFIG_HOME: "/managed-default" };
+    Object.setPrototypeOf(environment, { PI_WEB_CONFIG: "/inherited/config.json" });
+    const deps = dependencies(environment);
+    vi.mocked(deps.inspectDefinitions).mockReturnValue({ ok: true, value: defaultConfigDefinitions });
+
+    await runReadinessCliCommand("doctor", deps);
+
+    const context = vi.mocked(deps.runDoctor).mock.calls[0]?.[0];
+    const probeEnvironment = context?.versionReportOptions.configEnv;
+    if (probeEnvironment === undefined) throw new Error("doctor probe environment was not provided");
+    expect(piWebConfigPath(probeEnvironment)).toBe("/managed-default/pi-web/config.json");
+    expect(piWebConfigPath(environment)).toBe("/inherited/config.json");
+    expect(Object.hasOwn(environment, "PI_WEB_CONFIG")).toBe(false);
   });
 
   it("propagates managed inspection failures into doctor's web probe", async () => {

@@ -969,11 +969,18 @@ export function managedServiceProbeEnvironment(
     ownEnvironmentValue(callerEnvironment, "PI_WEB_CONFIG"),
   );
   if (!selection.ok) return selection;
-  if (selection.value.source !== "installed") return { ok: true, value: callerEnvironment };
-  return {
-    ok: true,
-    value: { ...callerEnvironment, PI_WEB_CONFIG: selection.value.configPath },
-  };
+  if (selection.value.source === "installed") {
+    return {
+      ok: true,
+      value: { ...callerEnvironment, PI_WEB_CONFIG: selection.value.configPath },
+    };
+  }
+  if (selection.value.source === "default" && definitions.length > 0) {
+    // An own empty value preserves default resolution while masking any
+    // prototype-inherited PI_WEB_CONFIG from downstream environment lookups.
+    return { ok: true, value: { ...callerEnvironment, PI_WEB_CONFIG: "" } };
+  }
+  return { ok: true, value: callerEnvironment };
 }
 
 function installedServiceProbeEnvironment(
