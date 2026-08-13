@@ -5,11 +5,13 @@ import {
   inspectInstalledDevelopmentServiceInput,
   inspectInstalledProductionServiceContext,
   runNativeServiceDoctor,
+  selectManagedNativeServiceConfig,
   type InstalledNativeServiceDefinition,
   type NativeServiceDoctorTarget,
 } from "./serviceDoctor.js";
 import {
   createDevelopmentNativeServicePlan,
+  resolveProductionNativeServicePlan,
   type NativeServiceAuthoritativeProbe,
   type NativeServicePlan,
   type ProductionNativeServicePlanInput,
@@ -56,14 +58,29 @@ function probeWithStatus(status: "satisfied" | "unsatisfied"): NativeServiceAuth
   };
 }
 
-function developmentPlan(kind: "systemd" | "launchd"): NativeServicePlan {
+function developmentPlan(
+  kind: "systemd" | "launchd",
+  configPath: string | null = "/home/user/config & dev.json",
+): NativeServicePlan {
   return createDevelopmentNativeServicePlan({
     backend: { kind, label: kind },
     shell,
-    environment: { PI_WEB_CONFIG: "/home/user/config & dev.json" },
+    environment: configPath === null ? {} : { PI_WEB_CONFIG: configPath },
     workingDirectory: "/checkout with space",
     packageJsonPath: "/checkout with space/package.json",
   });
+}
+
+async function productionPlan(kind: "systemd" | "launchd"): Promise<NativeServicePlan> {
+  const resolution = await resolveProductionNativeServicePlan(
+    {
+      ...productionInput(true),
+      backend: { kind, label: kind },
+    },
+    { probe: probeWithStatus("satisfied"), fileExists: () => true },
+  );
+  if (!resolution.ok) throw new Error("Expected configured production plan to resolve");
+  return resolution.plan;
 }
 
 function renderedDefinitions(plan: NativeServicePlan): InstalledNativeServiceDefinition[] {
@@ -82,6 +99,73 @@ describe("installed native-service mode and definition inspection", () => {
     expect(inferInstalledNativeServiceMode(new Set(["sessiond", "uiDev"]))).toBe("development");
     expect(inferInstalledNativeServiceMode(new Set(["web", "uiDev"]))).toBe("ambiguous");
     expect(inferInstalledNativeServiceMode(new Set(["sessiond"]))).toBe("ambiguous");
+  });
+
+  it.each(["systemd", "launchd"] as const)("selects persisted config from %s production definitions", async (kind) => {
+    const plan = await productionPlan(kind);
+
+    expect(selectManagedNativeServiceConfig(plan.backend, renderedDefinitions(plan), undefined)).toEqual({
+      ok: true,
+      value: { source: "installed", configPath: "/home/user/config.json" },
+    });
+  });
+
+  it.each(["systemd", "launchd"] as const)("selects persisted config from %s development definitions", (kind) => {
+    const plan = developmentPlan(kind);
+
+    expect(selectManagedNativeServiceConfig(plan.backend, renderedDefinitions(plan), "")).toEqual({
+      ok: true,
+      value: { source: "installed", configPath: "/home/user/config & dev.json" },
+    });
+  });
+
+  it.each(["systemd", "launchd"] as const)("lets a nonempty caller config override malformed %s definitions", (kind) => {
+    const backend = { kind, label: kind };
+    const malformed: InstalledNativeServiceDefinition[] = [{ id: "web", contents: "not a service definition" }];
+
+    expect(selectManagedNativeServiceConfig(backend, malformed, "/caller/config.json")).toEqual({
+      ok: true,
+      value: { source: "caller", configPath: "/caller/config.json" },
+    });
+  });
+
+  it.each(["systemd", "launchd"] as const)("keeps default config semantics when %s definitions persist no path", (kind) => {
+    const plan = developmentPlan(kind, null);
+
+    expect(selectManagedNativeServiceConfig(plan.backend, renderedDefinitions(plan), undefined)).toEqual({
+      ok: true,
+      value: { source: "default" },
+    });
+    expect(selectManagedNativeServiceConfig(plan.backend, [], undefined)).toEqual({
+      ok: true,
+      value: { source: "default" },
+    });
+  });
+
+  it.each(["systemd", "launchd"] as const)("rejects conflicting config in %s definitions", (kind) => {
+    const first = renderedDefinitions(developmentPlan(kind, "/config/one.json"))[0];
+    const second = renderedDefinitions(developmentPlan(kind, "/config/two.json"))[1];
+    if (first === undefined || second === undefined) throw new Error("Expected two rendered definitions");
+
+    const selection = selectManagedNativeServiceConfig(
+      { kind, label: kind },
+      [first, second],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected inconsistent definitions to fail selection");
+    expect(selection.message).toContain("different environments");
+  });
+
+  it.each(["systemd", "launchd"] as const)("rejects malformed %s definitions when no caller override exists", (kind) => {
+    const selection = selectManagedNativeServiceConfig(
+      { kind, label: kind },
+      [{ id: "web", contents: "not a service definition" }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
   });
 
   it.each(["systemd", "launchd"] as const)("reconstructs POSIX development paths from %s definitions on every host", (kind) => {

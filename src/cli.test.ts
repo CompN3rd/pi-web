@@ -9,11 +9,13 @@ import {
   generalDoctorChecks,
   isCliEntrypoint,
   launchdRuntimeDetails,
+  managedServiceProbeEnvironment,
   nodeVersionCheck,
   regularFileExists,
   serviceBackendForPlatform,
   sessionDaemonRestartPlan,
 } from "./cli.js";
+import type { InstalledNativeServiceDefinition } from "./nativeServices/serviceDoctor.js";
 import type { NativeServiceId } from "./nativeServices/servicePlan.js";
 
 const originalShell = process.env["SHELL"];
@@ -113,6 +115,51 @@ describe("native-service doctor CLI contracts", () => {
       state: "exited",
       detail: "exited (last exit code 127)",
       pid: undefined,
+    });
+  });
+});
+
+describe("managedServiceProbeEnvironment", () => {
+  const backend = { kind: "systemd", label: "systemd user services" } as const;
+  const installedDefinitions: InstalledNativeServiceDefinition[] = [{
+    id: "web",
+    contents: [
+      "[Service]",
+      'Environment="PI_WEB_CONFIG=/managed/config.json"',
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+    ].join("\n"),
+  }];
+
+  it("copies a persisted config into the probe environment without mutating caller state", () => {
+    const callerEnvironment: NodeJS.ProcessEnv = { PI_WEB_CONFIG: "", PI_WEB_PORT: "9000" };
+
+    const result = managedServiceProbeEnvironment(backend, installedDefinitions, callerEnvironment);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { PI_WEB_CONFIG: "/managed/config.json", PI_WEB_PORT: "9000" },
+    });
+    expect(callerEnvironment).toEqual({ PI_WEB_CONFIG: "", PI_WEB_PORT: "9000" });
+  });
+
+  it("keeps an explicit caller environment without parsing installed definitions", () => {
+    const callerEnvironment: NodeJS.ProcessEnv = { PI_WEB_CONFIG: "/caller/config.json" };
+
+    const result = managedServiceProbeEnvironment(
+      backend,
+      [{ id: "web", contents: "malformed" }],
+      callerEnvironment,
+    );
+
+    expect(result).toEqual({ ok: true, value: callerEnvironment });
+  });
+
+  it("retains ambient/default semantics when there are no installed definitions", () => {
+    const callerEnvironment: NodeJS.ProcessEnv = { PI_WEB_HOST: "127.0.0.1" };
+
+    expect(managedServiceProbeEnvironment(backend, [], callerEnvironment)).toEqual({
+      ok: true,
+      value: callerEnvironment,
     });
   });
 });

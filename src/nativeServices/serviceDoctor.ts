@@ -28,6 +28,10 @@ export interface InstalledNativeServiceContext {
   environment: Readonly<Record<string, string>>;
 }
 
+export type ManagedNativeServiceConfigSelection =
+  | { source: "caller" | "installed"; configPath: string }
+  | { source: "default" };
+
 export type InstalledNativeServiceInspection<T> =
   | { ok: true; value: T }
   | { ok: false; message: string };
@@ -95,6 +99,30 @@ export function inferInstalledNativeServiceMode(serviceIds: ReadonlySet<NativeSe
   if (hasProductionWeb && !hasDevelopmentUi) return "production";
   if (hasDevelopmentUi && !hasProductionWeb) return "development";
   return "ambiguous";
+}
+
+/**
+ * Select the config path for a caller that is about to probe managed native
+ * services. A nonempty caller value is an explicit override and deliberately
+ * avoids interpreting installed files. Otherwise every relevant definition
+ * must parse to one consistent environment before its persisted path is used.
+ */
+export function selectManagedNativeServiceConfig(
+  backend: NativeServiceBackend,
+  definitions: readonly InstalledNativeServiceDefinition[],
+  callerConfigPath: string | undefined,
+): InstalledNativeServiceInspection<ManagedNativeServiceConfigSelection> {
+  if (callerConfigPath !== undefined && callerConfigPath !== "") {
+    return { ok: true, value: { source: "caller", configPath: callerConfigPath } };
+  }
+  if (definitions.length === 0) return { ok: true, value: { source: "default" } };
+
+  const parsed = parseConsistentDefinitions(backend, definitions);
+  if (!parsed.ok) return parsed;
+  const installedConfigPath = parsed.value[0]?.environment["PI_WEB_CONFIG"];
+  return installedConfigPath === undefined || installedConfigPath === ""
+    ? { ok: true, value: { source: "default" } }
+    : { ok: true, value: { source: "installed", configPath: installedConfigPath } };
 }
 
 export function inspectInstalledProductionServiceContext(
