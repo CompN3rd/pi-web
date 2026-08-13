@@ -1,6 +1,7 @@
 import { posix as posixPath } from "node:path";
 import {
   createDevelopmentNativeServicePlan,
+  nativeServiceManagerRefs,
   nativeServicePrerequisiteNeedsPathAdvice,
   resolveProductionNativeServicePlan,
   validateNativeServicePlan,
@@ -414,40 +415,39 @@ function parseSystemdDefinition(
 function parseLaunchdDefinition(
   definition: InstalledNativeServiceDefinition,
 ): InstalledNativeServiceInspection<ParsedServiceDefinition> {
-  const argumentsMatches = [...definition.contents.matchAll(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/gu)];
-  const arguments_ = argumentsMatches.length === 1
-    ? parseXmlStringSequence(argumentsMatches[0]?.[1] ?? "")
-    : undefined;
+  const plist = parseLaunchdPlistDocument(definition.contents);
+  if (plist === undefined) {
+    return { ok: false, message: `Installed ${definition.id} LaunchAgent is not a structurally valid property list.` };
+  }
+
+  const label = plistStringValue(plist.get("Label"));
+  if (label === undefined) {
+    return { ok: false, message: `Installed ${definition.id} LaunchAgent has an unrecognized Label.` };
+  }
+  const expectedLabel = nativeServiceManagerRefs[definition.id].launchdLabel;
+  if (label !== expectedLabel) {
+    return {
+      ok: false,
+      message: `Installed ${definition.id} LaunchAgent declares Label ${JSON.stringify(label)} instead of ${JSON.stringify(expectedLabel)}.`,
+    };
+  }
+
+  const arguments_ = plistStringArray(plist.get("ProgramArguments"));
   if (arguments_?.length !== 4 || arguments_[0] !== "/usr/bin/env" || arguments_[2] !== "-lc") {
     return { ok: false, message: `Installed ${definition.id} LaunchAgent has unrecognized ProgramArguments.` };
   }
   const shell = installedShell(arguments_[1] ?? "");
   if (!shell.ok) return shell;
 
-  const environmentMatches = [...definition.contents.matchAll(/<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/gu)];
-  const environmentKeyCount = [...definition.contents.matchAll(/<key>EnvironmentVariables<\/key>/gu)].length;
-  if (environmentMatches.length > 1 || environmentKeyCount !== environmentMatches.length) {
-    return { ok: false, message: `Installed ${definition.id} LaunchAgent has a malformed environment dictionary.` };
-  }
-  const environment = environmentMatches.length === 0
-    ? {}
-    : parseXmlStringDictionary(environmentMatches[0]?.[1] ?? "");
+  const rawEnvironment = plist.get("EnvironmentVariables");
+  const environment = rawEnvironment === undefined ? {} : plistStringDictionary(rawEnvironment);
   if (environment === undefined) {
     return { ok: false, message: `Installed ${definition.id} LaunchAgent has a malformed environment dictionary.` };
   }
 
-  const contentsWithoutEnvironment = environmentMatches[0]?.[0] === undefined
-    ? definition.contents
-    : definition.contents.replace(environmentMatches[0][0], "");
-  const workingDirectoryMatches = [...contentsWithoutEnvironment.matchAll(/<key>WorkingDirectory<\/key>\s*<string>([\s\S]*?)<\/string>/gu)];
-  const workingDirectoryKeyCount = [...contentsWithoutEnvironment.matchAll(/<key>WorkingDirectory<\/key>/gu)].length;
-  if (workingDirectoryMatches.length > 1 || workingDirectoryKeyCount !== workingDirectoryMatches.length) {
-    return { ok: false, message: `Installed ${definition.id} LaunchAgent has a malformed working directory.` };
-  }
-  const workingDirectory = workingDirectoryMatches[0]?.[1] === undefined
-    ? null
-    : xmlUnescapeStrict(workingDirectoryMatches[0][1]);
-  if (workingDirectoryMatches.length === 1 && workingDirectory === undefined) {
+  const rawWorkingDirectory = plist.get("WorkingDirectory");
+  const workingDirectory = rawWorkingDirectory === undefined ? null : plistStringValue(rawWorkingDirectory);
+  if (rawWorkingDirectory !== undefined && workingDirectory === undefined) {
     return { ok: false, message: `Installed ${definition.id} LaunchAgent has a malformed working directory.` };
   }
 
@@ -571,31 +571,132 @@ function fishSingleQuoteUnescape(value: string): string {
   return result;
 }
 
-function parseXmlStringSequence(contents: string): string[] | undefined {
-  const values: string[] = [];
-  let cursor = 0;
-  for (const match of contents.matchAll(/<string>([\s\S]*?)<\/string>/gu)) {
-    if (contents.slice(cursor, match.index).trim() !== "") return undefined;
-    const value = xmlUnescapeStrict(match[1] ?? "");
-    if (value === undefined) return undefined;
-    values.push(value);
-    cursor = match.index + match[0].length;
-  }
-  return contents.slice(cursor).trim() === "" ? values : undefined;
+type ParsedPlistValue =
+  | { kind: "string"; value: string }
+  | { kind: "scalar"; value: string }
+  | { kind: "array"; value: readonly ParsedPlistValue[] }
+  | { kind: "dictionary"; value: ReadonlyMap<string, ParsedPlistValue> }
+  | { kind: "boolean"; value: boolean };
+
+type PlistTextTag = "key" | "string" | "data" | "date" | "integer" | "real";
+
+interface PlistXmlCursor {
+  readonly contents: string;
+  offset: number;
 }
 
-function parseXmlStringDictionary(contents: string): Record<string, string> | undefined {
-  const values: Record<string, string> = {};
-  let cursor = 0;
-  for (const match of contents.matchAll(/<key>([\s\S]*?)<\/key>\s*<string>([\s\S]*?)<\/string>/gu)) {
-    if (contents.slice(cursor, match.index).trim() !== "") return undefined;
-    const key = xmlUnescapeStrict(match[1] ?? "");
-    const value = xmlUnescapeStrict(match[2] ?? "");
-    if (key === undefined || value === undefined || Object.hasOwn(values, key)) return undefined;
-    values[key] = value;
-    cursor = match.index + match[0].length;
+const plistXmlDeclaration = '<?xml version="1.0" encoding="UTF-8"?>';
+const plistDoctype = '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">';
+const maximumPlistDepth = 32;
+
+/** Parse the complete XML plist subset emitted by PI WEB, rejecting fragments and duplicate dictionary keys. */
+function parseLaunchdPlistDocument(contents: string): ReadonlyMap<string, ParsedPlistValue> | undefined {
+  const cursor: PlistXmlCursor = { contents, offset: contents.startsWith("\uFEFF") ? 1 : 0 };
+  skipPlistWhitespace(cursor);
+  if (consumePlistToken(cursor, plistXmlDeclaration)) skipPlistWhitespace(cursor);
+  else if (contents.startsWith("<?xml", cursor.offset)) return undefined;
+  if (consumePlistToken(cursor, plistDoctype)) skipPlistWhitespace(cursor);
+  else if (contents.startsWith("<!DOCTYPE", cursor.offset)) return undefined;
+  if (!consumePlistToken(cursor, '<plist version="1.0">')) return undefined;
+
+  const root = parsePlistValue(cursor, 0);
+  if (root?.kind !== "dictionary") return undefined;
+  skipPlistWhitespace(cursor);
+  if (!consumePlistToken(cursor, "</plist>")) return undefined;
+  skipPlistWhitespace(cursor);
+  return cursor.offset === contents.length ? root.value : undefined;
+}
+
+function parsePlistValue(cursor: PlistXmlCursor, depth: number): ParsedPlistValue | undefined {
+  if (depth > maximumPlistDepth) return undefined;
+  skipPlistWhitespace(cursor);
+  if (cursor.contents.startsWith("<string>", cursor.offset)) {
+    const value = parsePlistTextElement(cursor, "string");
+    return value === undefined ? undefined : { kind: "string", value };
   }
-  return contents.slice(cursor).trim() === "" ? values : undefined;
+  for (const tag of ["data", "date", "integer", "real"] as const) {
+    if (!cursor.contents.startsWith(`<${tag}>`, cursor.offset)) continue;
+    const value = parsePlistTextElement(cursor, tag);
+    return value === undefined ? undefined : { kind: "scalar", value };
+  }
+  if (cursor.contents.startsWith("<array", cursor.offset)) return parsePlistArray(cursor, depth);
+  if (cursor.contents.startsWith("<dict", cursor.offset)) return parsePlistDictionary(cursor, depth);
+  if (consumePlistToken(cursor, "<true/>")) return { kind: "boolean", value: true };
+  if (consumePlistToken(cursor, "<false/>")) return { kind: "boolean", value: false };
+  return undefined;
+}
+
+function parsePlistArray(cursor: PlistXmlCursor, depth: number): ParsedPlistValue | undefined {
+  if (consumePlistToken(cursor, "<array/>")) return { kind: "array", value: [] };
+  if (!consumePlistToken(cursor, "<array>")) return undefined;
+  const values: ParsedPlistValue[] = [];
+  for (;;) {
+    skipPlistWhitespace(cursor);
+    if (consumePlistToken(cursor, "</array>")) return { kind: "array", value: values };
+    const value = parsePlistValue(cursor, depth + 1);
+    if (value === undefined) return undefined;
+    values.push(value);
+  }
+}
+
+function parsePlistDictionary(cursor: PlistXmlCursor, depth: number): ParsedPlistValue | undefined {
+  if (consumePlistToken(cursor, "<dict/>")) return { kind: "dictionary", value: new Map() };
+  if (!consumePlistToken(cursor, "<dict>")) return undefined;
+  const values = new Map<string, ParsedPlistValue>();
+  for (;;) {
+    skipPlistWhitespace(cursor);
+    if (consumePlistToken(cursor, "</dict>")) return { kind: "dictionary", value: values };
+    const key = parsePlistTextElement(cursor, "key");
+    if (key === undefined || values.has(key)) return undefined;
+    const value = parsePlistValue(cursor, depth + 1);
+    if (value === undefined) return undefined;
+    values.set(key, value);
+  }
+}
+
+function parsePlistTextElement(cursor: PlistXmlCursor, tag: PlistTextTag): string | undefined {
+  const openingTag = `<${tag}>`;
+  const closingTag = `</${tag}>`;
+  if (!consumePlistToken(cursor, openingTag)) return undefined;
+  const closingOffset = cursor.contents.indexOf(closingTag, cursor.offset);
+  if (closingOffset < 0) return undefined;
+  const encoded = cursor.contents.slice(cursor.offset, closingOffset);
+  cursor.offset = closingOffset + closingTag.length;
+  return xmlUnescapeStrict(encoded);
+}
+
+function skipPlistWhitespace(cursor: PlistXmlCursor): void {
+  while (/[\t\n\r ]/u.test(cursor.contents[cursor.offset] ?? "")) cursor.offset += 1;
+}
+
+function consumePlistToken(cursor: PlistXmlCursor, token: string): boolean {
+  if (!cursor.contents.startsWith(token, cursor.offset)) return false;
+  cursor.offset += token.length;
+  return true;
+}
+
+function plistStringValue(value: ParsedPlistValue | undefined): string | undefined {
+  return value?.kind === "string" ? value.value : undefined;
+}
+
+function plistStringArray(value: ParsedPlistValue | undefined): string[] | undefined {
+  if (value?.kind !== "array") return undefined;
+  const strings: string[] = [];
+  for (const item of value.value) {
+    if (item.kind !== "string") return undefined;
+    strings.push(item.value);
+  }
+  return strings;
+}
+
+function plistStringDictionary(value: ParsedPlistValue): Record<string, string> | undefined {
+  if (value.kind !== "dictionary") return undefined;
+  const entries: [string, string][] = [];
+  for (const [key, item] of value.value) {
+    if (item.kind !== "string") return undefined;
+    entries.push([key, item.value]);
+  }
+  return Object.fromEntries(entries);
 }
 
 function xmlUnescapeStrict(value: string): string | undefined {

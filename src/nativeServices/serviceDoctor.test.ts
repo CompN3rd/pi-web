@@ -92,6 +92,30 @@ function renderedDefinitions(plan: NativeServicePlan): InstalledNativeServiceDef
   }));
 }
 
+const launchdProgramArgumentsEntry = `  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>exec pi-web-sessiond</string>
+  </array>
+`;
+const launchdEnvironmentEntry = `  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PI_WEB_CONFIG</key>
+    <string>/foreign.json</string>
+  </dict>
+`;
+
+function launchdManagedConfigEntries(label: string | null, programArguments = launchdProgramArgumentsEntry): string {
+  const labelEntry = label === null ? "" : `  <key>Label</key>\n  <string>${label}</string>\n`;
+  return `${labelEntry}${programArguments}${launchdEnvironmentEntry}`;
+}
+
+function launchdPlistDocument(entries: string): string {
+  return `<plist version="1.0">\n<dict>\n${entries}</dict>\n</plist>\n`;
+}
+
 describe("installed native-service mode and definition inspection", () => {
   it("infers production, development, absent, and ambiguous service sets", () => {
     expect(inferInstalledNativeServiceMode(new Set())).toBe("none");
@@ -166,6 +190,55 @@ describe("installed native-service mode and definition inspection", () => {
     );
 
     expect(selection.ok).toBe(false);
+  });
+
+  it.each([
+    ["bare regex-shaped fragment", launchdManagedConfigEntries("com.pi-web.sessiond")],
+    [
+      "truncated plist",
+      `<plist version="1.0">\n<dict>\n${launchdManagedConfigEntries("com.pi-web.sessiond")}`,
+    ],
+  ])("rejects a %s before it can supply managed config", (_name, contents) => {
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "launchd", label: "launchd" },
+      [{ id: "sessiond", contents }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected malformed LaunchAgent selection to fail");
+    expect(selection.message).toContain("structurally valid property list");
+  });
+
+  it.each([
+    ["missing", null, "unrecognized Label"],
+    ["mismatched", "com.pi-web.web", "declares Label"],
+  ])("rejects a %s LaunchAgent service label", (_name, label, expectedMessage) => {
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "launchd", label: "launchd" },
+      [{ id: "sessiond", contents: launchdPlistDocument(launchdManagedConfigEntries(label)) }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected misidentified LaunchAgent selection to fail");
+    expect(selection.message).toContain(expectedMessage);
+  });
+
+  it("rejects duplicate LaunchAgent ProgramArguments keys", () => {
+    const entries = launchdManagedConfigEntries(
+      "com.pi-web.sessiond",
+      `${launchdProgramArgumentsEntry}${launchdProgramArgumentsEntry}`,
+    );
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "launchd", label: "launchd" },
+      [{ id: "sessiond", contents: launchdPlistDocument(entries) }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected duplicate LaunchAgent key selection to fail");
+    expect(selection.message).toContain("structurally valid property list");
   });
 
   it.each(["systemd", "launchd"] as const)("reconstructs POSIX development paths from %s definitions on every host", (kind) => {
