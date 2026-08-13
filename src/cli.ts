@@ -52,6 +52,7 @@ import {
 } from "./nativeServices/servicePlan.js";
 import {
   inspectInstalledNativeServiceDefinitions,
+  type InstalledNativeServiceDefinitionPurpose,
   type InstalledNativeServiceDefinitionSource,
 } from "./nativeServices/installedServiceDefinitions.js";
 import {
@@ -926,17 +927,19 @@ function printOptionalDoctorChecks(): void {
 function installedServiceDefinitions(
   backend: ServiceBackend,
   ids: readonly ServiceId[],
+  purpose: InstalledNativeServiceDefinitionPurpose,
 ): InstalledNativeServiceInspection<readonly InstalledNativeServiceDefinition[]> {
   const sources: InstalledNativeServiceDefinitionSource[] = ids.map((id) => ({
     id,
     path: serviceFilePath(backend, serviceRefs[id]),
     systemdName: serviceRefs[id].systemdName,
+    launchdTarget: currentLaunchdServiceTarget(serviceRefs[id]),
   }));
   return inspectInstalledNativeServiceDefinitions(backend, sources, {
     readFile: (path) => readFileSync(path),
     realpath: realpathSync,
     capture,
-  });
+  }, purpose);
 }
 
 /** Build an isolated probe environment without mutating the caller or process. */
@@ -962,9 +965,11 @@ function installedServiceProbeEnvironment(
   backend: ServiceBackend,
   ids: ReadonlySet<ServiceId>,
   callerEnvironment: NodeJS.ProcessEnv,
+  purpose: InstalledNativeServiceDefinitionPurpose,
   inspectDefinitions: (
     backend: ServiceBackend,
     ids: readonly ServiceId[],
+    purpose: InstalledNativeServiceDefinitionPurpose,
   ) => InstalledNativeServiceInspection<readonly InstalledNativeServiceDefinition[]>,
 ): InstalledNativeServiceInspection<NodeJS.ProcessEnv> {
   // The explicit caller override wins without requiring installed definitions
@@ -974,7 +979,7 @@ function installedServiceProbeEnvironment(
   }
   if (ids.size === 0) return { ok: true, value: callerEnvironment };
 
-  const definitions = inspectDefinitions(backend, [...ids]);
+  const definitions = inspectDefinitions(backend, [...ids], purpose);
   if (!definitions.ok) return definitions;
   return managedServiceProbeEnvironment(backend, definitions.value, callerEnvironment);
 }
@@ -1004,6 +1009,7 @@ export interface ReadinessCliCommandDependencies {
   inspectDefinitions: (
     backend: ServiceBackend,
     ids: readonly ServiceId[],
+    purpose: InstalledNativeServiceDefinitionPurpose,
   ) => InstalledNativeServiceInspection<readonly InstalledNativeServiceDefinition[]>;
   runLifecycle: (
     backend: ServiceBackend,
@@ -1037,6 +1043,7 @@ export async function runReadinessCliCommand(
       backend,
       installedIds,
       environment,
+      command,
       dependencies.inspectDefinitions,
     );
     if (!probeEnvironment.ok) throw new Error(managedServiceProbeFailure(backend, probeEnvironment.message));
@@ -1055,6 +1062,7 @@ export async function runReadinessCliCommand(
       backend,
       installedIds,
       environment,
+      "doctor",
       dependencies.inspectDefinitions,
     );
     if (probeEnvironment.ok) {
@@ -1115,7 +1123,7 @@ function nativeServiceDoctorTarget(
     };
   }
 
-  const definitions = installedServiceDefinitions(backend, expectedIds);
+  const definitions = installedServiceDefinitions(backend, expectedIds, "doctor");
   if (!definitions.ok) return { kind: "inspection-failure", message: definitions.message };
 
   if (mode === "development") {

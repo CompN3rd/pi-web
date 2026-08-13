@@ -391,6 +391,47 @@ describe("installed native-service mode and definition inspection", () => {
     expect(selection.message).toContain("environment entry");
   });
 
+  it("preserves an escaped UTF-8 BOM so it cannot turn into the PI_WEB_CONFIG key", () => {
+    const contents = [
+      "[Service]",
+      'Environment="\\xEF\\xBB\\xBFPI_WEB_CONFIG=/foreign.json"',
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+    ].join("\n");
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "systemd", label: "systemd" },
+      [{ id: "web", contents }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected a BOM-prefixed environment key to fail");
+    expect(selection.message).toContain("malformed environment entry");
+  });
+
+  it("uses systemd ASCII whitespace rules before service directives", () => {
+    const asciiIndented = [
+      "[Service]",
+      '\tEnvironment="PI_WEB_CONFIG=/managed.json"',
+      '\tExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"',
+    ].join("\n");
+    expect(selectManagedNativeServiceConfig(
+      { kind: "systemd", label: "systemd" },
+      [{ id: "web", contents: asciiIndented }],
+      undefined,
+    )).toEqual({ ok: true, value: { source: "installed", configPath: "/managed.json" } });
+
+    const unicodeIndented = asciiIndented.replace("\tEnvironment", "\u00a0Environment");
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "systemd", label: "systemd" },
+      [{ id: "web", contents: unicodeIndented }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected Unicode-indented directive to fail");
+    expect(selection.message).toContain("unrecognized service directives");
+  });
+
   it("round-trips a rendered development working directory ending in a literal backslash", () => {
     const workingDirectory = "/checkout\\";
     const plan = createDevelopmentNativeServicePlan({

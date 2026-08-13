@@ -1,14 +1,19 @@
 import { TextDecoder } from "node:util";
-import type {
-  InstalledNativeServiceDefinition,
-  InstalledNativeServiceInspection,
+import {
+  decodeSystemdEscapes,
+  inspectInstalledNativeServiceDefinitionEnvironment,
+  type InstalledNativeServiceDefinition,
+  type InstalledNativeServiceInspection,
 } from "./serviceDoctor.js";
 import type { NativeServiceBackend, NativeServiceId } from "./servicePlan.js";
+
+export type InstalledNativeServiceDefinitionPurpose = "start" | "restart" | "doctor";
 
 export interface InstalledNativeServiceDefinitionSource {
   id: NativeServiceId;
   path: string;
   systemdName: string;
+  launchdTarget: string;
 }
 
 export interface InstalledNativeServiceDefinitionCommandResult {
@@ -29,22 +34,25 @@ const systemdInspectionProperties = [
   "DropInPaths",
   "NeedDaemonReload",
   "EnvironmentFiles",
+  "Environment",
 ] as const;
 
 type SystemdInspectionProperty = typeof systemdInspectionProperties[number];
 
 /**
- * Read installed definitions through a strict UTF-8 boundary. For systemd,
- * ask the running user manager which fragment and overrides are effective only
- * after taking that snapshot. A subsequent no-reload-needed response ties the
- * snapshot to manager state rather than to a later disk edit. PI WEB only
- * interprets its canonical main fragment; loaded drop-ins and EnvironmentFile
- * inputs fail closed rather than being ignored.
+ * Read installed definitions through a strict UTF-8 boundary, parse the
+ * manager-relevant environment, and then bind that byte snapshot to the
+ * service manager's effective context. Systemd must report the canonical
+ * fragment, no unmodeled environment inputs, and the same effective
+ * environment. A loaded LaunchAgent must report the canonical plist and the
+ * same PI_WEB_CONFIG. Launchd restart is the exception: its existing
+ * bootout/bootstrap path deliberately replaces loaded state before probing.
  */
 export function inspectInstalledNativeServiceDefinitions(
   backend: NativeServiceBackend,
   sources: readonly InstalledNativeServiceDefinitionSource[],
   dependencies: InstalledNativeServiceDefinitionDependencies,
+  purpose: InstalledNativeServiceDefinitionPurpose,
 ): InstalledNativeServiceInspection<readonly InstalledNativeServiceDefinition[]> {
   const definitions: InstalledNativeServiceDefinition[] = [];
   for (const source of sources) {
@@ -68,17 +76,25 @@ export function inspectInstalledNativeServiceDefinitions(
       };
     }
 
+    const definition = { id: source.id, contents } as const;
+    const environment = inspectInstalledNativeServiceDefinitionEnvironment(backend, definition);
+    if (!environment.ok) return environment;
+
     if (backend.kind === "systemd") {
-      const managerInspection = inspectEffectiveSystemdDefinition(source, dependencies);
+      const managerInspection = inspectEffectiveSystemdDefinition(source, environment.value, dependencies);
+      if (!managerInspection.ok) return managerInspection;
+    } else if (purpose !== "restart") {
+      const managerInspection = inspectLoadedLaunchdDefinition(source, environment.value, dependencies);
       if (!managerInspection.ok) return managerInspection;
     }
-    definitions.push({ id: source.id, contents });
+    definitions.push(definition);
   }
   return { ok: true, value: definitions };
 }
 
 function inspectEffectiveSystemdDefinition(
   source: InstalledNativeServiceDefinitionSource,
+  expectedEnvironment: Readonly<Record<string, string>>,
   dependencies: InstalledNativeServiceDefinitionDependencies,
 ): InstalledNativeServiceInspection<null> {
   const args = [
@@ -110,7 +126,14 @@ function inspectEffectiveSystemdDefinition(
   const fragmentPath = singleSystemdProperty(parsed.value, "FragmentPath");
   const dropInPaths = singleSystemdProperty(parsed.value, "DropInPaths");
   const needDaemonReload = singleSystemdProperty(parsed.value, "NeedDaemonReload");
-  if (loadState === undefined || fragmentPath === undefined || dropInPaths === undefined || needDaemonReload === undefined) {
+  const effectiveEnvironmentValue = singleSystemdProperty(parsed.value, "Environment");
+  if (
+    loadState === undefined
+    || fragmentPath === undefined
+    || dropInPaths === undefined
+    || needDaemonReload === undefined
+    || effectiveEnvironmentValue === undefined
+  ) {
     return {
       ok: false,
       message: `Could not inspect effective systemd unit ${source.systemdName}: systemctl returned incomplete or duplicate unit metadata.`,
@@ -162,6 +185,72 @@ function inspectEffectiveSystemdDefinition(
       message: `Systemd loaded ${source.systemdName} from ${fragmentPath} instead of the installed PI WEB definition ${source.path}.`,
     };
   }
+
+  const effectiveEnvironment = parseSystemdEnvironmentProperty(effectiveEnvironmentValue);
+  if (effectiveEnvironment === undefined) {
+    return {
+      ok: false,
+      message: `Could not inspect effective systemd unit ${source.systemdName}: systemctl returned an unrecognized Environment value.`,
+    };
+  }
+  if (!recordsEqual(effectiveEnvironment, expectedEnvironment)) {
+    return {
+      ok: false,
+      message: `Systemd unit ${source.systemdName} has an effective environment that differs from installed definition ${source.path}; run \`systemctl --user daemon-reload\` or reinstall the managed services before probing it.`,
+    };
+  }
+  return { ok: true, value: null };
+}
+
+function inspectLoadedLaunchdDefinition(
+  source: InstalledNativeServiceDefinitionSource,
+  expectedEnvironment: Readonly<Record<string, string>>,
+  dependencies: InstalledNativeServiceDefinitionDependencies,
+): InstalledNativeServiceInspection<null> {
+  const result = dependencies.capture("launchctl", ["print", source.launchdTarget]);
+  if (result.status !== 0) {
+    if (launchdServiceIsMissing(result)) return { ok: true, value: null };
+    const detail = firstOutputLine(result.stderr, result.stdout);
+    return {
+      ok: false,
+      message: `Could not inspect loaded LaunchAgent ${source.launchdTarget}: launchctl exited with status ${String(result.status)}${detail === undefined ? "" : ` (${detail})`}.`,
+    };
+  }
+
+  const loaded = parseLaunchdPrintDefinition(result.stdout);
+  if (loaded === undefined) {
+    return {
+      ok: false,
+      message: `Could not inspect loaded LaunchAgent ${source.launchdTarget}: launchctl returned an unrecognized service definition.`,
+    };
+  }
+
+  let actualPlistPath: string;
+  let expectedPlistPath: string;
+  try {
+    actualPlistPath = dependencies.realpath(loaded.path);
+    expectedPlistPath = dependencies.realpath(source.path);
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      message: `Could not compare loaded LaunchAgent plist ${loaded.path} with installed definition ${source.path}: ${errorMessage(error)}`,
+    };
+  }
+  if (actualPlistPath !== expectedPlistPath) {
+    return {
+      ok: false,
+      message: `Launchd loaded ${source.launchdTarget} from ${loaded.path} instead of the installed PI WEB definition ${source.path}; run \`pi-web restart\` to reload the managed LaunchAgents.`,
+    };
+  }
+
+  const expectedConfigPath = expectedEnvironment["PI_WEB_CONFIG"];
+  const loadedConfigPath = loaded.environment["PI_WEB_CONFIG"];
+  if (loadedConfigPath !== expectedConfigPath) {
+    return {
+      ok: false,
+      message: `Loaded LaunchAgent ${source.launchdTarget} has PI_WEB_CONFIG ${JSON.stringify(loadedConfigPath)} instead of installed value ${JSON.stringify(expectedConfigPath)}; run \`pi-web restart\` to reload the managed LaunchAgents.`,
+    };
+  }
   return { ok: true, value: null };
 }
 
@@ -199,6 +288,140 @@ function singleSystemdProperty(
 
 function isSystemdInspectionProperty(value: string): value is SystemdInspectionProperty {
   return systemdInspectionProperties.some((property) => property === value);
+}
+
+function parseSystemdEnvironmentProperty(value: string): Readonly<Record<string, string>> | undefined {
+  const assignments = parseSystemdSerializedWords(value);
+  if (assignments === undefined) return undefined;
+  const environment: Record<string, string> = {};
+  for (const assignment of assignments) {
+    const separator = assignment.indexOf("=");
+    const key = assignment.slice(0, separator);
+    if (
+      separator <= 0
+      || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)
+      || Object.hasOwn(environment, key)
+    ) return undefined;
+    environment[key] = assignment.slice(separator + 1);
+  }
+  return environment;
+}
+
+function parseSystemdSerializedWords(value: string): string[] | undefined {
+  const words: string[] = [];
+  let offset = 0;
+  while (offset < value.length) {
+    while (value[offset] === " " || value[offset] === "\t") offset += 1;
+    if (offset >= value.length) break;
+
+    let raw: string;
+    let decodeEscapes = true;
+    const first = value[offset];
+    if (first === '"' || first === "'") {
+      const parsed = systemdQuotedWord(value, offset, first);
+      if (parsed === undefined) return undefined;
+      raw = parsed.raw;
+      offset = parsed.nextOffset;
+      decodeEscapes = first === '"';
+    } else if (first === "$" && value[offset + 1] === "'") {
+      const parsed = systemdQuotedWord(value, offset + 1, "'");
+      if (parsed === undefined) return undefined;
+      raw = parsed.raw;
+      offset = parsed.nextOffset;
+    } else {
+      const start = offset;
+      while (offset < value.length && value[offset] !== " " && value[offset] !== "\t") offset += 1;
+      raw = value.slice(start, offset);
+      if (raw.includes('"') || raw.includes("'")) return undefined;
+    }
+
+    if (offset < value.length && value[offset] !== " " && value[offset] !== "\t") return undefined;
+    const decoded = decodeEscapes ? decodeSystemdPrintedEscapes(raw) : raw;
+    if (decoded === undefined || decoded.includes("\u0000")) return undefined;
+    words.push(decoded);
+  }
+  return words;
+}
+
+function decodeSystemdPrintedEscapes(value: string): string | undefined {
+  // systemctl serializes string arrays with shell_maybe_quote(), whose
+  // double-quoted form additionally escapes shell-significant $ and `.
+  return decodeSystemdEscapes(value.replaceAll("\\$", "$").replaceAll("\\`", "`"));
+}
+
+function systemdQuotedWord(
+  value: string,
+  quoteOffset: number,
+  quote: '"' | "'",
+): { raw: string; nextOffset: number } | undefined {
+  let escaped = false;
+  for (let offset = quoteOffset + 1; offset < value.length; offset += 1) {
+    const character = value[offset];
+    if (quote === '"' || value[quoteOffset - 1] === "$") {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character === "\\") {
+        escaped = true;
+        continue;
+      }
+    }
+    if (character === quote) {
+      return { raw: value.slice(quoteOffset + 1, offset), nextOffset: offset + 1 };
+    }
+  }
+  return undefined;
+}
+
+interface LaunchdPrintDefinition {
+  path: string;
+  environment: Readonly<Record<string, string>>;
+}
+
+function parseLaunchdPrintDefinition(output: string): LaunchdPrintDefinition | undefined {
+  const lines = output.split(/\r?\n/u);
+  const paths = lines.flatMap((line) => {
+    const match = /^[ \t]*path = (.+)$/u.exec(line);
+    return match?.[1] === undefined ? [] : [match[1]];
+  });
+  const environmentStarts = lines.flatMap((line, index) => (
+    /^[ \t]*environment = \{[ \t]*$/u.test(line) ? [index] : []
+  ));
+  if (paths.length !== 1 || environmentStarts.length !== 1) return undefined;
+
+  const environment: Record<string, string> = {};
+  let closed = false;
+  for (let index = (environmentStarts[0] ?? 0) + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (/^[ \t]*\}[ \t]*$/u.test(line)) {
+      closed = true;
+      break;
+    }
+    if (/^[ \t]*$/u.test(line)) continue;
+    const match = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*) => (.*)$/u.exec(line);
+    const key = match?.[1];
+    const value = match?.[2];
+    if (key === undefined || value === undefined || Object.hasOwn(environment, key)) return undefined;
+    environment[key] = value;
+  }
+  if (!closed) return undefined;
+  return { path: paths[0] ?? "", environment };
+}
+
+function launchdServiceIsMissing(result: InstalledNativeServiceDefinitionCommandResult): boolean {
+  const output = `${result.stderr}\n${result.stdout}`;
+  return /could not find (?:specified )?service|service (?:was )?not found/iu.test(output);
+}
+
+function recordsEqual(
+  first: Readonly<Record<string, string>>,
+  second: Readonly<Record<string, string>>,
+): boolean {
+  const firstEntries = Object.entries(first);
+  const secondEntries = Object.entries(second);
+  return firstEntries.length === secondEntries.length
+    && firstEntries.every(([key, value]) => second[key] === value);
 }
 
 function definitionLabel(backend: NativeServiceBackend, id: NativeServiceId): string {

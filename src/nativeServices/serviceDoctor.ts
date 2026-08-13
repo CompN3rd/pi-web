@@ -134,6 +134,16 @@ export function selectManagedNativeServiceConfig(
   return { ok: true, value: { source: "installed", configPath: installedConfigPath } };
 }
 
+export function inspectInstalledNativeServiceDefinitionEnvironment(
+  backend: NativeServiceBackend,
+  definition: InstalledNativeServiceDefinition,
+): InstalledNativeServiceInspection<Readonly<Record<string, string>>> {
+  const parsed = backend.kind === "systemd"
+    ? parseSystemdDefinition(definition)
+    : parseLaunchdDefinition(definition);
+  return parsed.ok ? { ok: true, value: parsed.value.environment } : parsed;
+}
+
 export function inspectInstalledProductionServiceContext(
   backend: NativeServiceBackend,
   definitions: readonly InstalledNativeServiceDefinition[],
@@ -343,14 +353,16 @@ function systemdServiceDirectives(contents: string): ParsedSystemdDirective[] | 
   let inServiceSection = false;
   let foundServiceSection = false;
   for (const line of contents.split(/\r?\n/u)) {
-    const trimmed = line.trim();
+    // systemd syntax trims ASCII spaces and tabs here; JavaScript's trim/\s
+    // would also consume Unicode whitespace that systemd treats as key text.
+    const trimmed = line.replace(/^[ \t]+|[ \t]+$/gu, "");
     if (/^\[[^\]]+\]$/u.test(trimmed)) {
       inServiceSection = trimmed === "[Service]";
       foundServiceSection ||= inServiceSection;
       continue;
     }
     if (!inServiceSection || trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
-    const match = /^\s*([A-Za-z][A-Za-z0-9]*)=(.*)$/u.exec(line);
+    const match = /^[ \t]*([A-Za-z][A-Za-z0-9]*)=(.*)$/u.exec(line);
     const name = match?.[1];
     const value = match?.[2];
     if (name === undefined || value === undefined || !allowed.has(name)) return undefined;
@@ -406,7 +418,7 @@ function parseSystemdDefinition(
     const assignment = parseSystemdDirectiveValue(rawValue);
     const separator = assignment?.indexOf("=") ?? -1;
     const key = assignment?.slice(0, separator) ?? "";
-    if (separator <= 0 || Object.hasOwn(environment, key)) {
+    if (separator <= 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || Object.hasOwn(environment, key)) {
       return { ok: false, message: `Installed ${definition.id} systemd unit has a malformed environment entry.` };
     }
     environment[key] = assignment?.slice(separator + 1) ?? "";
@@ -508,10 +520,10 @@ function parseSystemdDirectiveValue(value: string): string | undefined {
 function parseSystemdEscapedValue(value: string): string | undefined {
   const quoted = value.startsWith('"') || value.endsWith('"');
   if (quoted && (!value.startsWith('"') || !value.endsWith('"'))) return undefined;
-  return systemdUnescape(quoted ? value.slice(1, -1) : value);
+  return decodeSystemdEscapes(quoted ? value.slice(1, -1) : value);
 }
 
-function systemdUnescape(value: string): string | undefined {
+export function decodeSystemdEscapes(value: string): string | undefined {
   const bytes: number[] = [];
   const encoder = new TextEncoder();
   for (let index = 0; index < value.length; index += 1) {
@@ -547,6 +559,16 @@ function systemdUnescape(value: string): string | undefined {
       continue;
     }
 
+    if (/^[0-7]$/u.test(escape)) {
+      const encoded = value.slice(index + 1, index + 4);
+      if (!/^[0-7]{3}$/u.test(encoded)) return undefined;
+      const decoded = Number.parseInt(encoded, 8);
+      if (decoded === 0 || decoded > 0xff) return undefined;
+      bytes.push(decoded);
+      index += 3;
+      continue;
+    }
+
     const length = escape === "x" ? 2 : escape === "u" ? 4 : escape === "U" ? 8 : 0;
     if (length === 0) return undefined;
     const encoded = value.slice(index + 2, index + 2 + length);
@@ -559,7 +581,10 @@ function systemdUnescape(value: string): string | undefined {
   }
 
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
+    // Keep a BOM produced by an escape sequence as U+FEFF. The default
+    // decoder behavior strips leading UTF-8 BOM bytes, which could turn an
+    // invalid BOM-prefixed environment key into PI_WEB_CONFIG.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Uint8Array.from(bytes));
   } catch {
     return undefined;
   }

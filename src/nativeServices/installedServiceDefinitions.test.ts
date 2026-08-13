@@ -2,51 +2,94 @@ import { TextEncoder } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   inspectInstalledNativeServiceDefinitions,
+  type InstalledNativeServiceDefinitionCommandResult,
   type InstalledNativeServiceDefinitionDependencies,
   type InstalledNativeServiceDefinitionSource,
 } from "./installedServiceDefinitions.js";
 
 const servicePath = "/home/user/.config/systemd/user/pi-web-web.service";
+const launchdPath = "/Users/user/Library/LaunchAgents/com.pi-web.web.plist";
+const launchdTarget = "gui/501/com.pi-web.web";
 const source: InstalledNativeServiceDefinitionSource = {
   id: "web",
   path: servicePath,
   systemdName: "pi-web-web.service",
+  launchdTarget,
 };
 
-function managerOutput(overrides: Partial<Record<"LoadState" | "FragmentPath" | "DropInPaths" | "NeedDaemonReload" | "EnvironmentFiles", string>> = {}): string {
+interface SystemdManagerOverrides {
+  LoadState: string;
+  FragmentPath: string;
+  DropInPaths: string;
+  NeedDaemonReload: string;
+  EnvironmentFiles: string;
+  Environment: string;
+}
+
+function managerOutput(overrides: Partial<SystemdManagerOverrides> = {}): string {
   const lines = [
     `LoadState=${overrides.LoadState ?? "loaded"}`,
     `FragmentPath=${overrides.FragmentPath ?? servicePath}`,
     `DropInPaths=${overrides.DropInPaths ?? ""}`,
     `NeedDaemonReload=${overrides.NeedDaemonReload ?? "no"}`,
+    `Environment=${overrides.Environment ?? ""}`,
   ];
   // systemctl omits EnvironmentFiles entirely when the effective array is empty.
   if (overrides.EnvironmentFiles !== undefined) lines.push(`EnvironmentFiles=${overrides.EnvironmentFiles}`);
   return lines.join("\n");
 }
 
+function systemdDefinition(configPath?: string): string {
+  const environment = configPath === undefined ? "" : `Environment="PI_WEB_CONFIG=${configPath}"\n`;
+  return `[Service]\n${environment}ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"\n`;
+}
+
+function launchdDefinition(configPath?: string): string {
+  const environment = configPath === undefined
+    ? ""
+    : `  <key>EnvironmentVariables</key>\n  <dict>\n    <key>PI_WEB_CONFIG</key>\n    <string>${configPath}</string>\n  </dict>\n`;
+  return `<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>com.pi-web.web</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/usr/bin/env</string>\n    <string>/bin/zsh</string>\n    <string>-lc</string>\n    <string>exec true</string>\n  </array>\n${environment}</dict>\n</plist>\n`;
+}
+
+function launchdPrint(
+  path = launchdPath,
+  configPath?: string,
+): string {
+  const config = configPath === undefined ? "" : `\t\tPI_WEB_CONFIG => ${configPath}\n`;
+  return `${launchdTarget} = {\n\tpath = ${path}\n\tstate = running\n\n\tenvironment = {\n${config}\t\tXPC_SERVICE_NAME => com.pi-web.web\n\t}\n}\n`;
+}
+
 function dependencies(
-  contents: Uint8Array = new TextEncoder().encode("[Service]\n"),
-  output = managerOutput(),
+  contents: Uint8Array = new TextEncoder().encode(systemdDefinition()),
+  result: InstalledNativeServiceDefinitionCommandResult = { status: 0, stdout: managerOutput(), stderr: "" },
 ): InstalledNativeServiceDefinitionDependencies {
   return {
     readFile: vi.fn(() => contents),
     realpath: vi.fn((path: string) => path),
-    capture: vi.fn(() => ({ status: 0, stdout: output, stderr: "" })),
+    capture: vi.fn(() => result),
   };
 }
 
 describe("installed native-service definition boundary", () => {
-  it("reads the PI WEB fragment only after systemd confirms its effective context", () => {
-    const deps = dependencies(new TextEncoder().encode("[Service]\nDescription=é\n"));
+  it("binds a strict systemd fragment snapshot to the manager's effective environment", () => {
+    const contents = `[Unit]\nDescription=é\n${systemdDefinition("/managed/$HOME/config with space.json")}`;
+    const deps = dependencies(
+      new TextEncoder().encode(contents),
+      {
+        status: 0,
+        stdout: managerOutput({ Environment: '"PI_WEB_CONFIG=/managed/\\$HOME/config with space.json"' }),
+        stderr: "",
+      },
+    );
 
     expect(inspectInstalledNativeServiceDefinitions(
       { kind: "systemd", label: "systemd" },
       [source],
       deps,
+      "start",
     )).toEqual({
       ok: true,
-      value: [{ id: "web", contents: "[Service]\nDescription=é\n" }],
+      value: [{ id: "web", contents }],
     });
     expect(deps.capture).toHaveBeenCalledWith("systemctl", [
       "--user",
@@ -59,6 +102,7 @@ describe("installed native-service definition boundary", () => {
       "--property=DropInPaths",
       "--property=NeedDaemonReload",
       "--property=EnvironmentFiles",
+      "--property=Environment",
     ]);
   });
 
@@ -79,12 +123,59 @@ describe("installed native-service definition boundary", () => {
     const result = inspectInstalledNativeServiceDefinitions(
       { kind: "systemd", label: "systemd" },
       [source],
-      dependencies(undefined, output),
+      dependencies(undefined, { status: 0, stdout: output, stderr: "" }),
+      "doctor",
     );
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("Expected effective systemd inspection to fail");
     expect(result.message).toContain(expectedMessage);
+  });
+
+  it("rejects a read/reload interleaving whose manager environment belongs to another snapshot", () => {
+    let snapshotRead = false;
+    const deps = dependencies(new TextEncoder().encode(systemdDefinition("/config/a.json")));
+    vi.mocked(deps.readFile).mockImplementation(() => {
+      snapshotRead = true;
+      return new TextEncoder().encode(systemdDefinition("/config/a.json"));
+    });
+    vi.mocked(deps.capture).mockImplementation(() => {
+      expect(snapshotRead).toBe(true);
+      return {
+        status: 0,
+        stdout: managerOutput({ Environment: "PI_WEB_CONFIG=/config/b.json" }),
+        stderr: "",
+      };
+    });
+
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "start",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected interleaved systemd snapshots to fail");
+    expect(result.message).toContain("effective environment");
+    expect(result.message).toContain("differs");
+  });
+
+  it("rejects malformed systemctl environment serialization", () => {
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      dependencies(undefined, {
+        status: 0,
+        stdout: managerOutput({ Environment: '"PI_WEB_CONFIG=/unterminated' }),
+        stderr: "",
+      }),
+      "doctor",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected malformed manager environment to fail");
+    expect(result.message).toContain("unrecognized Environment");
   });
 
   it("surfaces a failed systemd manager inspection after taking a strict fragment snapshot", () => {
@@ -95,6 +186,7 @@ describe("installed native-service definition boundary", () => {
       { kind: "systemd", label: "systemd" },
       [source],
       deps,
+      "start",
     );
 
     expect(result.ok).toBe(false);
@@ -107,7 +199,8 @@ describe("installed native-service definition boundary", () => {
     const result = inspectInstalledNativeServiceDefinitions(
       { kind, label: kind },
       [source],
-      dependencies(Uint8Array.from([0x5b, 0x53, 0xff, 0x5d]), managerOutput()),
+      dependencies(Uint8Array.from([0x5b, 0x53, 0xff, 0x5d])),
+      "doctor",
     );
 
     expect(result.ok).toBe(false);
@@ -115,14 +208,108 @@ describe("installed native-service definition boundary", () => {
     expect(result.message).toContain("not valid UTF-8");
   });
 
-  it("does not query systemd while reading a LaunchAgent", () => {
-    const deps = dependencies(new TextEncoder().encode("<plist/>"));
+  it("accepts an unloaded LaunchAgent that start can bootstrap from the inspected plist", () => {
+    const launchdSource = { ...source, path: launchdPath };
+    const deps = dependencies(
+      new TextEncoder().encode(launchdDefinition("/managed/config.json")),
+      {
+        status: 113,
+        stdout: "",
+        stderr: `Could not find service "com.pi-web.web" in domain for user gui: 501`,
+      },
+    );
 
     expect(inspectInstalledNativeServiceDefinitions(
       { kind: "launchd", label: "launchd" },
-      [{ id: "web", path: "/home/user/Library/LaunchAgents/com.pi-web.web.plist", systemdName: "pi-web-web.service" }],
+      [launchdSource],
       deps,
-    )).toEqual({ ok: true, value: [{ id: "web", contents: "<plist/>" }] });
+      "start",
+    )).toMatchObject({ ok: true });
+    expect(deps.capture).toHaveBeenCalledWith("launchctl", ["print", launchdTarget]);
+  });
+
+  it("binds an already-loaded LaunchAgent to its plist origin and managed config", () => {
+    const contents = launchdDefinition("/managed/config with space.json");
+    const deps = dependencies(
+      new TextEncoder().encode(contents),
+      { status: 0, stdout: launchdPrint(launchdPath, "/managed/config with space.json"), stderr: "" },
+    );
+
+    expect(inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      deps,
+      "doctor",
+    )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+  });
+
+  it("rejects a LaunchAgent loaded from another plist", () => {
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      dependencies(
+        new TextEncoder().encode(launchdDefinition("/managed/config.json")),
+        {
+          status: 0,
+          stdout: launchdPrint("/Library/LaunchAgents/com.pi-web.web.plist", "/managed/config.json"),
+          stderr: "",
+        },
+      ),
+      "start",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected a foreign loaded plist to fail");
+    expect(result.message).toContain("instead of the installed PI WEB definition");
+    expect(result.message).toContain("pi-web restart");
+  });
+
+  it("rejects stale loaded LaunchAgent config even when the plist path still matches", () => {
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      dependencies(
+        new TextEncoder().encode(launchdDefinition("/config/new.json")),
+        { status: 0, stdout: launchdPrint(launchdPath, "/config/old.json"), stderr: "" },
+      ),
+      "doctor",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected stale loaded config to fail");
+    expect(result.message).toContain("PI_WEB_CONFIG");
+    expect(result.message).toContain("/config/old.json");
+    expect(result.message).toContain("/config/new.json");
+  });
+
+  it("lets launchd restart inspect disk while its bootout/bootstrap path repairs stale loaded state", () => {
+    const deps = dependencies(
+      new TextEncoder().encode(launchdDefinition("/config/new.json")),
+      { status: 0, stdout: launchdPrint("/another/path.plist", "/config/old.json"), stderr: "" },
+    );
+
+    expect(inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      deps,
+      "restart",
+    )).toMatchObject({ ok: true });
     expect(deps.capture).not.toHaveBeenCalled();
+  });
+
+  it("surfaces launchctl inspection errors instead of treating every failure as unloaded", () => {
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      dependencies(
+        new TextEncoder().encode(launchdDefinition()),
+        { status: 1, stdout: "", stderr: "Operation not permitted" },
+      ),
+      "doctor",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected launchctl inspection error");
+    expect(result.message).toContain("Operation not permitted");
   });
 });

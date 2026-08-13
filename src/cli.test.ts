@@ -196,7 +196,7 @@ describe("readiness CLI command orchestration", () => {
 
     await runReadinessCliCommand(command, deps);
 
-    expect(deps.inspectDefinitions).toHaveBeenCalledWith(backend, ["web"]);
+    expect(deps.inspectDefinitions).toHaveBeenCalledWith(backend, ["web"], command);
     expect(deps.runLifecycle).toHaveBeenCalledWith(backend, command, {
       PI_WEB_CONFIG: "/managed/config.json",
       PI_WEB_PORT: "9000",
@@ -212,6 +212,35 @@ describe("readiness CLI command orchestration", () => {
 
     expect(deps.inspectDefinitions).not.toHaveBeenCalled();
     expect(deps.runLifecycle).toHaveBeenCalledWith(backend, "restart", environment);
+  });
+
+  it("makes launchd inspection action-aware so restart can repair stale loaded state", async () => {
+    const launchdBackend = { kind: "launchd", label: "LaunchAgents" } as const;
+    const launchdDefinitions: InstalledNativeServiceDefinition[] = [{
+      id: "web",
+      contents: `<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>com.pi-web.web</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/usr/bin/env</string>\n    <string>/bin/zsh</string>\n    <string>-lc</string>\n    <string>exec true</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>PI_WEB_CONFIG</key>\n    <string>/managed/config.json</string>\n  </dict>\n</dict>\n</plist>\n`,
+    }];
+    const inspect = vi.fn<ReadinessCliCommandDependencies["inspectDefinitions"]>(
+      (_backend, _ids, purpose) => purpose === "restart"
+        ? { ok: true as const, value: launchdDefinitions }
+        : { ok: false as const, message: "loaded LaunchAgent config is stale" },
+    );
+
+    const start = dependencies({});
+    vi.mocked(start.requireBackend).mockReturnValue(launchdBackend);
+    start.inspectDefinitions = inspect;
+    await expect(runReadinessCliCommand("start", start)).rejects.toThrow("loaded LaunchAgent config is stale");
+    expect(inspect).toHaveBeenLastCalledWith(launchdBackend, ["web"], "start");
+    expect(start.runLifecycle).not.toHaveBeenCalled();
+
+    const restart = dependencies({});
+    vi.mocked(restart.requireBackend).mockReturnValue(launchdBackend);
+    restart.inspectDefinitions = inspect;
+    await runReadinessCliCommand("restart", restart);
+    expect(inspect).toHaveBeenLastCalledWith(launchdBackend, ["web"], "restart");
+    expect(restart.runLifecycle).toHaveBeenCalledWith(launchdBackend, "restart", {
+      PI_WEB_CONFIG: "/managed/config.json",
+    });
   });
 
   it("stops lifecycle mutation when managed definition inspection fails", async () => {
@@ -239,6 +268,7 @@ describe("readiness CLI command orchestration", () => {
 
     await runReadinessCliCommand("doctor", deps);
 
+    expect(deps.inspectDefinitions).toHaveBeenCalledWith(backend, ["web"], "doctor");
     expect(deps.runDoctor).toHaveBeenCalledWith(expect.objectContaining({
       backend,
       versionReportOptions: { configEnv: { PI_WEB_CONFIG: "/managed/config.json" } },
