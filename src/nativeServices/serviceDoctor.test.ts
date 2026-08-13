@@ -389,6 +389,60 @@ describe("installed native-service mode and definition inspection", () => {
     });
   });
 
+  it("round-trips a rendered systemd shell path containing the login-shell delimiter", () => {
+    const delimiterShell = {
+      ...shell,
+      executable: "/opt/contains -lc /zsh",
+      detectedExecutable: "/opt/contains -lc /zsh",
+    };
+    const plan = createDevelopmentNativeServicePlan({
+      backend: { kind: "systemd", label: "systemd" },
+      shell: delimiterShell,
+      environment: { PI_WEB_CONFIG: "/home/user/config.json" },
+      workingDirectory: "/checkout",
+      packageJsonPath: "/checkout/package.json",
+    });
+
+    expect(inspectInstalledDevelopmentServiceInput(plan.backend, renderedDefinitions(plan))).toEqual({
+      ok: true,
+      value: {
+        backend: plan.backend,
+        shell: delimiterShell,
+        environment: { PI_WEB_CONFIG: "/home/user/config.json" },
+        workingDirectory: "/checkout",
+        packageJsonPath: "/checkout/package.json",
+      },
+    });
+  });
+
+  it.each([
+    ["line separator", "\u2028"],
+    ["paragraph separator", "\u2029"],
+  ] as const)("round-trips rendered systemd shell and command values containing a %s", async (_label, separator) => {
+    const original = await productionPlan("systemd");
+    const separatorShell = {
+      ...shell,
+      executable: `/opt/shell${separator}directory/zsh`,
+      detectedExecutable: `/opt/shell${separator}directory/zsh`,
+    };
+    const plan: NativeServicePlan = {
+      ...original,
+      shell: separatorShell,
+      services: original.services.map((service) => ({
+        ...service,
+        shellCommand: `${service.shellCommand}${separator}tail`,
+      })),
+    };
+
+    expect(inspectInstalledProductionServiceContext(plan.backend, renderedDefinitions(plan))).toEqual({
+      ok: true,
+      value: {
+        shell: separatorShell,
+        environment: { PI_WEB_CONFIG: "/home/user/config.json" },
+      },
+    });
+  });
+
   it("reconstructs escaped systemd paths, substitutions, and line controls exactly", () => {
     const plan = createDevelopmentNativeServicePlan({
       backend: { kind: "systemd", label: "systemd" },
@@ -574,6 +628,57 @@ describe("installed native-service mode and definition inspection", () => {
       ok: true,
       value: { workingDirectory: "/checkout with space" },
     });
+  });
+
+  it("continues to inspect legacy unquoted shells and shell-quoted commands", () => {
+    const inspection = inspectInstalledNativeServiceDefinitionEnvironment(
+      { kind: "systemd", label: "systemd" },
+      {
+        id: "web",
+        contents: [
+          "[Service]",
+          'Environment="PI_WEB_CONFIG=/managed.json"',
+          "ExecStart=/usr/bin/env /bin/zsh -lc 'exec true'",
+        ].join("\n"),
+      },
+    );
+
+    expect(inspection).toEqual({
+      ok: true,
+      value: { PI_WEB_CONFIG: "/managed.json" },
+    });
+  });
+
+  it.each([
+    [
+      "unterminated command quote",
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true',
+      "unrecognized shell command",
+    ],
+    [
+      "trailing argument",
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true" trailing',
+      "unrecognized shell command",
+    ],
+    [
+      "concatenated command syntax",
+      'ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true""ignored"',
+      "unrecognized shell command",
+    ],
+    [
+      "noncanonical legacy command syntax",
+      "ExecStart=/usr/bin/env /bin/zsh -lc 'exec true''ignored'",
+      "unrecognized shell command",
+    ],
+  ])("rejects %s in a systemd ExecStart", (_label, execStart, expectedMessage) => {
+    const inspection = inspectInstalledNativeServiceDefinitionEnvironment(
+      { kind: "systemd", label: "systemd" },
+      { id: "web", contents: ["[Service]", execStart].join("\n") },
+    );
+
+    expect(inspection.ok).toBe(false);
+    if (inspection.ok) throw new Error("Expected malformed ExecStart inspection to fail");
+    expect(inspection.message).toContain(expectedMessage);
   });
 
   it("rejects quoted systemd working directories that the manager treats as non-absolute", () => {

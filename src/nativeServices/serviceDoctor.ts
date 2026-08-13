@@ -351,6 +351,16 @@ interface ParsedSystemdDirective {
   value: string;
 }
 
+interface ParsedSystemdExecStart {
+  shellArgument: string;
+  shellCommandArgument: string;
+}
+
+interface ParsedSystemdExecArgument {
+  value: string;
+  endOffset: number;
+}
+
 function systemdServiceDirectives(contents: string): ParsedSystemdDirective[] | undefined {
   const allowed = new Set(["Type", "WorkingDirectory", "Environment", "ExecStart", "Restart", "RestartSec"]);
   const directives: ParsedSystemdDirective[] = [];
@@ -379,6 +389,44 @@ function hasSystemdPhysicalLineContinuation(line: string): boolean {
   let trailingBackslashes = 0;
   for (let index = line.length - 1; index >= 0 && line[index] === "\\"; index -= 1) trailingBackslashes += 1;
   return trailingBackslashes % 2 === 1;
+}
+
+/** Parse PI WEB's bounded ExecStart argument structure, including persisted legacy encodings. */
+function parseSystemdExecStart(value: string): ParsedSystemdExecStart | undefined {
+  const environmentPrefix = "/usr/bin/env ";
+  const shellOffset = value.startsWith(environmentPrefix) ? environmentPrefix.length : 0;
+  const shell = parseSystemdExecStartArgument(value, shellOffset);
+  if (shell === undefined) return undefined;
+  const loginShellSeparator = " -lc ";
+  if (!value.startsWith(loginShellSeparator, shell.endOffset)) return undefined;
+
+  const shellCommandOffset = shell.endOffset + loginShellSeparator.length;
+  if (shellCommandOffset >= value.length) return undefined;
+  return {
+    shellArgument: shell.value,
+    shellCommandArgument: value.slice(shellCommandOffset),
+  };
+}
+
+/** Scan one systemd argument linearly so delimiters inside quoted values remain data. */
+function parseSystemdExecStartArgument(value: string, offset: number): ParsedSystemdExecArgument | undefined {
+  if (offset >= value.length || value[offset] === " " || value[offset] === "\t") return undefined;
+  let quote: "\"" | "'" | null = null;
+  for (let index = offset; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "\\") {
+      index += 1;
+      if (index >= value.length) return undefined;
+      continue;
+    }
+    if (quote === null && (character === " " || character === "\t")) {
+      return { value: value.slice(offset, index), endOffset: index };
+    }
+    if (character !== "\"" && character !== "'") continue;
+    if (quote === null) quote = character;
+    else if (character === quote) quote = null;
+  }
+  return quote === null ? { value: value.slice(offset), endOffset: value.length } : undefined;
 }
 
 // Keep malformed installed input linear; overlapping escaped/raw regex alternatives can backtrack exponentially.
@@ -411,18 +459,18 @@ function parseSystemdDefinition(
   }
   const execStarts = directives.filter((directive) => directive.name === "ExecStart");
   const execStart = execStarts.length === 1
-    ? /^(?:\/usr\/bin\/env )?(.+?) -lc (.+)$/u.exec(execStarts[0]?.value ?? "")
-    : null;
-  if (execStart?.[1] === undefined || execStart[2] === undefined) {
+    ? parseSystemdExecStart(execStarts[0]?.value ?? "")
+    : undefined;
+  if (execStart === undefined) {
     return { ok: false, message: `Installed ${definition.id} systemd unit must have exactly one recognized ExecStart.` };
   }
-  const shellExecutable = parseSystemdExecArgument(execStart[1]);
+  const shellExecutable = parseSystemdExecArgument(execStart.shellArgument);
   if (shellExecutable === undefined) {
     return { ok: false, message: `Installed ${definition.id} systemd unit has an unrecognized login shell argument.` };
   }
   const shell = installedShell(shellExecutable);
   if (!shell.ok) return shell;
-  const shellCommand = parseSystemdShellCommand(shell.value.name, execStart[2]);
+  const shellCommand = parseSystemdShellCommand(shell.value.name, execStart.shellCommandArgument);
   if (shellCommand === undefined) {
     return { ok: false, message: `Installed ${definition.id} systemd unit has an unrecognized shell command.` };
   }
@@ -532,7 +580,9 @@ function installedShell(executable: string): InstalledNativeServiceInspection<Na
 }
 
 function parseSystemdExecArgument(value: string): string | undefined {
-  const decoded = parseSystemdEscapedValue(value);
+  const quoted = value.startsWith('"') || value.endsWith('"');
+  if (quoted ? !isSingleSystemdQuotedValue(value) : /["']/u.test(value)) return undefined;
+  const decoded = decodeSystemdEscapes(quoted ? value.slice(1, -1) : value);
   return decoded === undefined ? undefined : decodeSystemdSubstitutions(decoded, true);
 }
 
@@ -634,7 +684,15 @@ function parseSystemdShellCommand(shell: NativeServiceShell["name"], value: stri
   if (!value.startsWith("'") || !value.endsWith("'")) return undefined;
   const inner = value.slice(1, -1);
   const unquoted = shell === "fish" ? fishSingleQuoteUnescape(inner) : inner.replaceAll("'\\''", "'");
+  if (legacySystemdShellQuote(shell, unquoted) !== value) return undefined;
   return decodeSystemdSubstitutions(unquoted, true);
+}
+
+function legacySystemdShellQuote(shell: NativeServiceShell["name"], value: string): string {
+  const escaped = shell === "fish"
+    ? value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")
+    : value.replaceAll("'", "'\\''");
+  return `'${escaped}'`;
 }
 
 function fishSingleQuoteUnescape(value: string): string {
