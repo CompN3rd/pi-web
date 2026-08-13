@@ -1,5 +1,6 @@
 import { posix as posixPath } from "node:path";
 import { TextDecoder, TextEncoder } from "node:util";
+import { ownEnvironmentValue } from "../environment.js";
 import {
   createDevelopmentNativeServicePlan,
   nativeServiceManagerRefs,
@@ -121,7 +122,10 @@ export function selectManagedNativeServiceConfig(
 
   const parsed = parseConsistentDefinitions(backend, definitions);
   if (!parsed.ok) return parsed;
-  const installedConfigPath = parsed.value[0]?.environment["PI_WEB_CONFIG"];
+  const firstEnvironment = parsed.value[0]?.environment;
+  const installedConfigPath = firstEnvironment === undefined
+    ? undefined
+    : ownEnvironmentValue(firstEnvironment, "PI_WEB_CONFIG");
   if (installedConfigPath === undefined || installedConfigPath === "") {
     return { ok: true, value: { source: "default" } };
   }

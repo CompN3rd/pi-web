@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultPiWebConfigPath, defaultPiWebDataDir, examplePiWebConfig } from "./config.js";
 import { piWebDockerCommand, type PiWebDockerMode } from "./docker/piWebDockerCommandPlan.js";
+import { ownEnvironmentValue } from "./environment.js";
 import { runPluginRecoveryCli, type SessionDaemonRestartPlan } from "./pluginRecoveryCli.js";
 import {
   packageVersion,
@@ -823,8 +824,8 @@ export function sessionDaemonRestartPlan(options: SessionDaemonRestartPlanOption
 }
 
 function activeDockerMode(env: NodeJS.ProcessEnv): PiWebDockerMode | undefined {
-  if (!truthyEnvValue(env["PI_WEB_DOCKER_RUNTIME"])) return undefined;
-  if (env["PI_WEB_DOCKER_MODE"] === "dev") return "dev";
+  if (!truthyEnvValue(ownEnvironmentValue(env, "PI_WEB_DOCKER_RUNTIME"))) return undefined;
+  if (ownEnvironmentValue(env, "PI_WEB_DOCKER_MODE") === "dev") return "dev";
   return "runtime";
 }
 
@@ -951,7 +952,7 @@ export function managedServiceProbeEnvironment(
   const selection = selectManagedNativeServiceConfig(
     backend,
     definitions,
-    callerEnvironment["PI_WEB_CONFIG"],
+    ownEnvironmentValue(callerEnvironment, "PI_WEB_CONFIG"),
   );
   if (!selection.ok) return selection;
   if (selection.value.source !== "installed") return { ok: true, value: callerEnvironment };
@@ -974,7 +975,8 @@ function installedServiceProbeEnvironment(
 ): InstalledNativeServiceInspection<NodeJS.ProcessEnv> {
   // The explicit caller override wins without requiring installed definitions
   // to be readable or canonical.
-  if (callerEnvironment["PI_WEB_CONFIG"] !== undefined && callerEnvironment["PI_WEB_CONFIG"] !== "") {
+  const callerConfigPath = ownEnvironmentValue(callerEnvironment, "PI_WEB_CONFIG");
+  if (callerConfigPath !== undefined && callerConfigPath !== "") {
     return { ok: true, value: callerEnvironment };
   }
   if (ids.size === 0) return { ok: true, value: callerEnvironment };

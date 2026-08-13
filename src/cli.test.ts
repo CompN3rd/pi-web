@@ -156,6 +156,19 @@ describe("managedServiceProbeEnvironment", () => {
     expect(result).toEqual({ ok: true, value: callerEnvironment });
   });
 
+  it("ignores an inherited caller config while selecting the installed config", () => {
+    const callerEnvironment: NodeJS.ProcessEnv = { PI_WEB_PORT: "9000" };
+    Object.setPrototypeOf(callerEnvironment, { PI_WEB_CONFIG: "/inherited/config.json" });
+
+    const result = managedServiceProbeEnvironment(backend, installedDefinitions, callerEnvironment);
+
+    expect(result).toEqual({
+      ok: true,
+      value: { PI_WEB_CONFIG: "/managed/config.json", PI_WEB_PORT: "9000" },
+    });
+    expect(Object.hasOwn(callerEnvironment, "PI_WEB_CONFIG")).toBe(false);
+  });
+
   it("retains ambient/default semantics when there are no installed definitions", () => {
     const callerEnvironment: NodeJS.ProcessEnv = { PI_WEB_HOST: "127.0.0.1" };
 
@@ -212,6 +225,20 @@ describe("readiness CLI command orchestration", () => {
 
     expect(deps.inspectDefinitions).not.toHaveBeenCalled();
     expect(deps.runLifecycle).toHaveBeenCalledWith(backend, "restart", environment);
+  });
+
+  it("does not treat an inherited lifecycle config as an explicit override", async () => {
+    const environment: NodeJS.ProcessEnv = { PI_WEB_PORT: "9000" };
+    Object.setPrototypeOf(environment, { PI_WEB_CONFIG: "/inherited/config.json" });
+    const deps = dependencies(environment);
+
+    await runReadinessCliCommand("restart", deps);
+
+    expect(deps.inspectDefinitions).toHaveBeenCalledWith(backend, ["web"], "restart");
+    expect(deps.runLifecycle).toHaveBeenCalledWith(backend, "restart", {
+      PI_WEB_CONFIG: "/managed/config.json",
+      PI_WEB_PORT: "9000",
+    });
   });
 
   it("makes launchd inspection action-aware so restart can repair stale loaded state", async () => {
@@ -310,6 +337,20 @@ describe("readiness CLI command orchestration", () => {
     expect(docker.runDoctor).toHaveBeenCalledWith(expect.objectContaining({
       backend,
       versionReportOptions: { configEnv: dockerEnvironment },
+    }));
+  });
+
+  it("does not let an inherited Docker marker bypass managed doctor inspection", async () => {
+    const environment: NodeJS.ProcessEnv = {};
+    Object.setPrototypeOf(environment, { PI_WEB_DOCKER_RUNTIME: "1" });
+    const deps = dependencies(environment);
+
+    await runReadinessCliCommand("doctor", deps);
+
+    expect(deps.inspectDefinitions).toHaveBeenCalledWith(backend, ["web"], "doctor");
+    expect(deps.runDoctor).toHaveBeenCalledWith(expect.objectContaining({
+      backend,
+      versionReportOptions: { configEnv: { PI_WEB_CONFIG: "/managed/config.json" } },
     }));
   });
 

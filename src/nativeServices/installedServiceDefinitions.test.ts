@@ -530,6 +530,76 @@ describe("installed native-service definition boundary", () => {
     )).toEqual({ ok: true, value: [{ id: "web", contents }] });
   });
 
+  it("requires the loaded LaunchAgent config to be an own environment entry", () => {
+    const contents = launchdDefinition("/managed/config.json");
+    const deps = dependencies(
+      new TextEncoder().encode(contents),
+      { status: 0, stdout: launchdPrint(launchdPath), stderr: "" },
+    );
+    const previousDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, "PI_WEB_CONFIG");
+    Object.defineProperty(Object.prototype, "PI_WEB_CONFIG", {
+      configurable: true,
+      value: "/managed/config.json",
+    });
+
+    try {
+      const result = inspectInstalledNativeServiceDefinitions(
+        { kind: "launchd", label: "launchd" },
+        [{ ...source, path: launchdPath }],
+        deps,
+        "doctor",
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("Expected inherited loaded config to fail");
+      expect(result.message).toContain("PI_WEB_CONFIG undefined");
+      expect(result.message).toContain("/managed/config.json");
+    } finally {
+      if (previousDescriptor === undefined) {
+        Reflect.deleteProperty(Object.prototype, "PI_WEB_CONFIG");
+      } else {
+        Object.defineProperty(Object.prototype, "PI_WEB_CONFIG", previousDescriptor);
+      }
+    }
+  });
+
+  it("accepts one prototype-collision launchd entry but rejects duplicates", () => {
+    const contents = launchdDefinition("/managed/config.json");
+    const xpcEntry = "\t\tXPC_SERVICE_NAME => com.pi-web.web\n";
+    const withPrototypeEntries = (entries: string): string => launchdPrint(
+      launchdPath,
+      "/managed/config.json",
+    ).replace(xpcEntry, `${entries}${xpcEntry}`);
+
+    expect(inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      dependencies(
+        new TextEncoder().encode(contents),
+        { status: 0, stdout: withPrototypeEntries("\t\t__proto__ => once\n"), stderr: "" },
+      ),
+      "doctor",
+    )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+
+    const duplicate = inspectInstalledNativeServiceDefinitions(
+      { kind: "launchd", label: "launchd" },
+      [{ ...source, path: launchdPath }],
+      dependencies(
+        new TextEncoder().encode(contents),
+        {
+          status: 0,
+          stdout: withPrototypeEntries("\t\t__proto__ => first\n\t\t__proto__ => second\n"),
+          stderr: "",
+        },
+      ),
+      "doctor",
+    );
+
+    expect(duplicate.ok).toBe(false);
+    if (duplicate.ok) throw new Error("Expected duplicate prototype-collision launchd entries to fail");
+    expect(duplicate.message).toContain("unrecognized service definition");
+  });
+
   it("rejects a LaunchAgent loaded from another plist", () => {
     const result = inspectInstalledNativeServiceDefinitions(
       { kind: "launchd", label: "launchd" },

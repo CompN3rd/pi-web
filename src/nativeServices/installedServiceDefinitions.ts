@@ -1,4 +1,5 @@
 import { TextDecoder, TextEncoder } from "node:util";
+import { ownEnvironmentValue } from "../environment.js";
 import {
   decodeSystemdEscapes,
   inspectInstalledNativeServiceDefinitionEnvironment,
@@ -248,8 +249,8 @@ function inspectLoadedLaunchdDefinition(
     };
   }
 
-  const expectedConfigPath = expectedEnvironment["PI_WEB_CONFIG"];
-  const loadedConfigPath = loaded.environment["PI_WEB_CONFIG"];
+  const expectedConfigPath = ownEnvironmentValue(expectedEnvironment, "PI_WEB_CONFIG");
+  const loadedConfigPath = ownEnvironmentValue(loaded.environment, "PI_WEB_CONFIG");
   if (loadedConfigPath !== expectedConfigPath) {
     return {
       ok: false,
@@ -522,7 +523,7 @@ function parseLaunchdPrintDefinition(output: string): LaunchdPrintDefinition | u
   ));
   if (paths.length !== 1 || environmentStarts.length !== 1) return undefined;
 
-  const environment: Record<string, string> = {};
+  const environment = new Map<string, string>();
   let closed = false;
   for (let index = (environmentStarts[0] ?? 0) + 1; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
@@ -534,11 +535,11 @@ function parseLaunchdPrintDefinition(output: string): LaunchdPrintDefinition | u
     const match = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*) => (.*)$/u.exec(line);
     const key = match?.[1];
     const value = match?.[2];
-    if (key === undefined || value === undefined || Object.hasOwn(environment, key)) return undefined;
-    environment[key] = value;
+    if (key === undefined || value === undefined || environment.has(key)) return undefined;
+    environment.set(key, value);
   }
   if (!closed) return undefined;
-  return { path: paths[0] ?? "", environment };
+  return { path: paths[0] ?? "", environment: Object.fromEntries(environment) };
 }
 
 function launchdServiceIsMissing(result: InstalledNativeServiceDefinitionCommandResult): boolean {

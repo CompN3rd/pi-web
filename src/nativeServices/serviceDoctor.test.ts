@@ -184,6 +184,29 @@ describe("installed native-service mode and definition inspection", () => {
     });
   });
 
+  it.each(["systemd", "launchd"] as const)("ignores inherited config while selecting from %s definitions", (kind) => {
+    const plan = developmentPlan(kind, null);
+    const definitions = renderedDefinitions(plan);
+    const previousDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, "PI_WEB_CONFIG");
+    Object.defineProperty(Object.prototype, "PI_WEB_CONFIG", {
+      configurable: true,
+      value: "/inherited/config.json",
+    });
+
+    try {
+      expect(selectManagedNativeServiceConfig(plan.backend, definitions, undefined)).toEqual({
+        ok: true,
+        value: { source: "default" },
+      });
+    } finally {
+      if (previousDescriptor === undefined) {
+        Reflect.deleteProperty(Object.prototype, "PI_WEB_CONFIG");
+      } else {
+        Object.defineProperty(Object.prototype, "PI_WEB_CONFIG", previousDescriptor);
+      }
+    }
+  });
+
   it.each(["systemd", "launchd"] as const)("rejects a relative config recovered from %s definitions", (kind) => {
     const plan = developmentPlan(kind, "config/managed.json");
     const selection = selectManagedNativeServiceConfig(plan.backend, renderedDefinitions(plan), undefined);
