@@ -127,11 +127,11 @@ function inspectEffectiveSystemdDefinition(
     };
   }
 
-  const loadState = singleSystemdProperty(parsed.value, "LoadState");
-  const fragmentPath = singleSystemdProperty(parsed.value, "FragmentPath");
-  const dropInPaths = singleSystemdProperty(parsed.value, "DropInPaths");
-  const needDaemonReload = singleSystemdProperty(parsed.value, "NeedDaemonReload");
-  const effectiveEnvironmentValue = singleSystemdProperty(parsed.value, "Environment");
+  const loadState = singleSystemdProperty(parsed.value.properties, "LoadState");
+  const fragmentPath = singleSystemdProperty(parsed.value.properties, "FragmentPath");
+  const dropInPaths = singleSystemdProperty(parsed.value.properties, "DropInPaths");
+  const needDaemonReload = singleSystemdProperty(parsed.value.properties, "NeedDaemonReload");
+  const effectiveEnvironmentValue = singleSystemdProperty(parsed.value.properties, "Environment");
   if (
     loadState === undefined
     || fragmentPath === undefined
@@ -164,7 +164,7 @@ function inspectEffectiveSystemdDefinition(
       message: `Systemd unit ${source.systemdName} uses effective drop-ins (${dropInPaths}); PI WEB cannot safely inspect managed config through systemd drop-ins.`,
     };
   }
-  const environmentFiles = parsed.value.get("EnvironmentFiles") ?? [];
+  const environmentFiles = parsed.value.properties.get("EnvironmentFiles") ?? [];
   const configuredEnvironmentFiles = environmentFiles.filter((value) => value !== "");
   if (configuredEnvironmentFiles.length > 0) {
     return {
@@ -194,6 +194,7 @@ function inspectEffectiveSystemdDefinition(
   const effectiveEnvironment = inspectEffectiveSystemdEnvironment(
     source,
     effectiveEnvironmentValue,
+    parsed.value.propertiesWithAmbiguousTrailingCarriageReturn.has("Environment"),
     dependencies,
   );
   if (!effectiveEnvironment.ok) return effectiveEnvironment;
@@ -258,13 +259,23 @@ function inspectLoadedLaunchdDefinition(
   return { ok: true, value: null };
 }
 
+interface ParsedSystemdInspectionProperties {
+  properties: ReadonlyMap<SystemdInspectionProperty, readonly string[]>;
+  propertiesWithAmbiguousTrailingCarriageReturn: ReadonlySet<SystemdInspectionProperty>;
+}
+
 function parseSystemdInspectionProperties(
   output: string,
-): InstalledNativeServiceInspection<ReadonlyMap<SystemdInspectionProperty, readonly string[]>> {
+): InstalledNativeServiceInspection<ParsedSystemdInspectionProperties> {
   const properties = new Map<SystemdInspectionProperty, string[]>();
+  const propertiesWithAmbiguousTrailingCarriageReturn = new Set<SystemdInspectionProperty>();
   for (const property of systemdInspectionProperties) properties.set(property, []);
 
-  for (const line of output.split(/\r?\n/u)) {
+  const records = output.split("\n");
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] ?? "";
+    const hasAmbiguousTrailingCarriageReturn = index < records.length - 1 && record.endsWith("\r");
+    const line = hasAmbiguousTrailingCarriageReturn ? record.slice(0, -1) : record;
     if (line === "") continue;
     const separator = line.indexOf("=");
     const name = line.slice(0, separator);
@@ -272,6 +283,7 @@ function parseSystemdInspectionProperties(
       return { ok: false, message: "systemctl returned unrecognized unit metadata." };
     }
     properties.get(name)?.push(line.slice(separator + 1));
+    if (hasAmbiguousTrailingCarriageReturn) propertiesWithAmbiguousTrailingCarriageReturn.add(name);
   }
   // systemctl's EnvironmentFiles formatter emits no line for an empty array,
   // even with --all. The other scalar/array properties must always be present.
@@ -279,7 +291,10 @@ function parseSystemdInspectionProperties(
   if (requiredProperties.some((property) => (properties.get(property)?.length ?? 0) === 0)) {
     return { ok: false, message: "systemctl omitted required unit metadata." };
   }
-  return { ok: true, value: properties };
+  return {
+    ok: true,
+    value: { properties, propertiesWithAmbiguousTrailingCarriageReturn },
+  };
 }
 
 function singleSystemdProperty(
@@ -297,6 +312,7 @@ function isSystemdInspectionProperty(value: string): value is SystemdInspectionP
 function inspectEffectiveSystemdEnvironment(
   source: InstalledNativeServiceDefinitionSource,
   systemctlValue: string,
+  systemctlValueHasAmbiguousTrailingCarriageReturn: boolean,
   dependencies: InstalledNativeServiceDefinitionDependencies,
 ): InstalledNativeServiceInspection<Readonly<Record<string, string>>> {
   const serialized = parseSystemdSerializedWords(systemctlValue);
@@ -306,6 +322,7 @@ function inspectEffectiveSystemdEnvironment(
   if (
     serialized !== undefined
     && serialized.demonstrablyLossless
+    && !systemctlValueHasAmbiguousTrailingCarriageReturn
     && !serialized.words.includes(legacySystemdUnprintableValue)
     && systemctlEnvironment !== undefined
   ) {
@@ -315,7 +332,9 @@ function inspectEffectiveSystemdEnvironment(
   // systemctl 239-245 redacts entries containing spaces or newlines, but can
   // emit other shell-significant bytes raw. A raw quote can make parsing fail,
   // while a raw backslash or tab can parse as a different set of assignments.
-  // busctl reads the same manager property in a counted, C-escaped form.
+  // A carriage return immediately before the record's line feed is ambiguous
+  // with CRLF framing. busctl reads the same manager property in a counted,
+  // C-escaped form without any of these ambiguities.
   const result = dependencies.capture("busctl", [
     "--user",
     "get-property",

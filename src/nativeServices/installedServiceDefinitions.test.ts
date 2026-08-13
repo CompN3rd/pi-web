@@ -36,7 +36,7 @@ function managerOutput(overrides: Partial<SystemdManagerOverrides> = {}): string
   ];
   // systemctl omits EnvironmentFiles entirely when the effective array is empty.
   if (overrides.EnvironmentFiles !== undefined) lines.push(`EnvironmentFiles=${overrides.EnvironmentFiles}`);
-  return lines.join("\n");
+  return `${lines.join("\n")}\n`;
 }
 
 function systemdDefinition(configPath?: string): string {
@@ -202,6 +202,49 @@ describe("installed native-service definition boundary", () => {
       "restart",
     )).toEqual({ ok: true, value: [{ id: "web", contents }] });
     expect(deps.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers a matching legacy systemd environment ending in a raw carriage return", () => {
+    const configPath = "/config/managed.json\r";
+    const contents = systemdDefinition(configPath);
+    const deps = legacySystemdDependencies(
+      contents,
+      { status: 0, stdout: busctlStringArray([`PI_WEB_CONFIG=${configPath}`]), stderr: "" },
+      `PI_WEB_CONFIG=${configPath}`,
+    );
+
+    expect(inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "start",
+    )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+    expect(deps.capture).toHaveBeenCalledTimes(2);
+    expect(deps.capture).toHaveBeenNthCalledWith(2, "busctl", expect.any(Array));
+  });
+
+  it("fails closed when a legacy systemd environment ending in a raw carriage return differs from disk", () => {
+    const diskConfigPath = "/config/managed.json";
+    const managerConfigPath = `${diskConfigPath}\r`;
+    const deps = legacySystemdDependencies(
+      systemdDefinition(diskConfigPath),
+      { status: 0, stdout: busctlStringArray([`PI_WEB_CONFIG=${managerConfigPath}`]), stderr: "" },
+      `PI_WEB_CONFIG=${managerConfigPath}`,
+    );
+
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "doctor",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected trailing-carriage-return manager mismatch to fail");
+    expect(result.message).toContain("effective environment");
+    expect(result.message).toContain("differs");
+    expect(deps.capture).toHaveBeenCalledTimes(2);
+    expect(deps.capture).toHaveBeenNthCalledWith(2, "busctl", expect.any(Array));
   });
 
   it("fails closed when legacy systemd's lossless environment differs from disk", () => {
