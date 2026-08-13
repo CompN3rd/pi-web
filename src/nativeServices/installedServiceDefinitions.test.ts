@@ -40,8 +40,22 @@ function managerOutput(overrides: Partial<SystemdManagerOverrides> = {}): string
 }
 
 function systemdDefinition(configPath?: string): string {
-  const environment = configPath === undefined ? "" : `Environment="PI_WEB_CONFIG=${configPath}"\n`;
+  const escapedConfigPath = configPath
+    ?.replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("%", "%%")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\t", "\\t");
+  const environment = escapedConfigPath === undefined
+    ? ""
+    : `Environment="PI_WEB_CONFIG=${escapedConfigPath}"\n`;
   return `[Service]\n${environment}ExecStart=/usr/bin/env "/bin/zsh" -lc "exec true"\n`;
+}
+
+function busctlStringArray(values: readonly string[]): string {
+  const serialized = values.map((value) => JSON.stringify(value)).join(" ");
+  return `as ${String(values.length)}${serialized === "" ? "" : ` ${serialized}`}\n`;
 }
 
 function launchdDefinition(configPath?: string): string {
@@ -73,10 +87,11 @@ function dependencies(
 function legacySystemdDependencies(
   contents: string,
   busctlResult: InstalledNativeServiceDefinitionCommandResult,
+  systemctlEnvironment = "[unprintable]",
 ): InstalledNativeServiceDefinitionDependencies {
   const systemctlResult = {
     status: 0,
-    stdout: managerOutput({ Environment: "[unprintable]" }),
+    stdout: managerOutput({ Environment: systemctlEnvironment }),
     stderr: "",
   } as const;
   const deps = dependencies(new TextEncoder().encode(contents), systemctlResult);
@@ -149,6 +164,44 @@ describe("installed native-service definition boundary", () => {
       "org.freedesktop.systemd1.Service",
       "Environment",
     ]);
+  });
+
+  it.each([
+    {
+      name: "apostrophe",
+      configPath: "/managed/o'brien/config.json",
+      systemctlEnvironment: "PI_WEB_CONFIG=/managed/o'brien/config.json",
+    },
+    {
+      name: "double quote",
+      configPath: '/managed/"quoted"/config.json',
+      systemctlEnvironment: 'PI_WEB_CONFIG=/managed/"quoted"/config.json',
+    },
+    {
+      name: "backslash",
+      configPath: String.raw`/managed/back\slash/config.json`,
+      systemctlEnvironment: String.raw`PI_WEB_CONFIG=/managed/back\slash/config.json`,
+    },
+    {
+      name: "tab",
+      configPath: "/managed/with\ttab/config.json",
+      systemctlEnvironment: "PI_WEB_CONFIG=/managed/with\ttab/config.json",
+    },
+  ])("recovers a legacy systemd environment containing a raw $name", ({ configPath, systemctlEnvironment }) => {
+    const contents = systemdDefinition(configPath);
+    const deps = legacySystemdDependencies(
+      contents,
+      { status: 0, stdout: busctlStringArray([`PI_WEB_CONFIG=${configPath}`]), stderr: "" },
+      systemctlEnvironment,
+    );
+
+    expect(inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "restart",
+    )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+    expect(deps.capture).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed when legacy systemd's lossless environment differs from disk", () => {

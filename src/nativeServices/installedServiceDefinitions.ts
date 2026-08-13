@@ -299,36 +299,47 @@ function inspectEffectiveSystemdEnvironment(
   systemctlValue: string,
   dependencies: InstalledNativeServiceDefinitionDependencies,
 ): InstalledNativeServiceInspection<Readonly<Record<string, string>>> {
-  let assignments = parseSystemdSerializedWords(systemctlValue);
-  if (assignments === undefined) return unrecognizedSystemdEnvironment(source, "systemctl");
-  let environmentSource: "systemctl" | "busctl" = "systemctl";
-
-  if (assignments.includes(legacySystemdUnprintableValue)) {
-    // systemctl 239-245 redacts individual string-array entries containing
-    // spaces. busctl reads the same manager property and C-escapes it losslessly.
-    const result = dependencies.capture("busctl", [
-      "--user",
-      "get-property",
-      systemdBusDestination,
-      systemdUnitObjectPath(source.systemdName),
-      `${systemdBusDestination}.Service`,
-      "Environment",
-    ]);
-    if (result.status !== 0) {
-      const detail = firstOutputLine(result.stderr, result.stdout);
-      return {
-        ok: false,
-        message: `Could not inspect effective systemd unit ${source.systemdName} losslessly: systemctl returned ${legacySystemdUnprintableValue}, and busctl exited with status ${String(result.status)}${detail === undefined ? "" : ` (${detail})`}.`,
-      };
-    }
-    assignments = parseBusctlStringArray(result.stdout);
-    if (assignments === undefined) return unrecognizedSystemdEnvironment(source, "busctl");
-    environmentSource = "busctl";
+  const serialized = parseSystemdSerializedWords(systemctlValue);
+  const systemctlEnvironment = serialized === undefined
+    ? undefined
+    : environmentFromAssignments(serialized.words);
+  if (
+    serialized !== undefined
+    && serialized.demonstrablyLossless
+    && !serialized.words.includes(legacySystemdUnprintableValue)
+    && systemctlEnvironment !== undefined
+  ) {
+    return { ok: true, value: systemctlEnvironment };
   }
 
+  // systemctl 239-245 redacts entries containing spaces or newlines, but can
+  // emit other shell-significant bytes raw. A raw quote can make parsing fail,
+  // while a raw backslash or tab can parse as a different set of assignments.
+  // busctl reads the same manager property in a counted, C-escaped form.
+  const result = dependencies.capture("busctl", [
+    "--user",
+    "get-property",
+    systemdBusDestination,
+    systemdUnitObjectPath(source.systemdName),
+    `${systemdBusDestination}.Service`,
+    "Environment",
+  ]);
+  if (result.status !== 0) {
+    const detail = firstOutputLine(result.stderr, result.stdout);
+    const systemctlDetail = serialized?.words.includes(legacySystemdUnprintableValue) === true
+      ? `systemctl returned ${legacySystemdUnprintableValue}`
+      : "systemctl returned an Environment value that was not demonstrably lossless";
+    return {
+      ok: false,
+      message: `Could not inspect effective systemd unit ${source.systemdName} losslessly: ${systemctlDetail}, and busctl exited with status ${String(result.status)}${detail === undefined ? "" : ` (${detail})`}.`,
+    };
+  }
+
+  const assignments = parseBusctlStringArray(result.stdout);
+  if (assignments === undefined) return unrecognizedSystemdEnvironment(source, "busctl");
   const environment = environmentFromAssignments(assignments);
   return environment === undefined
-    ? unrecognizedSystemdEnvironment(source, environmentSource)
+    ? unrecognizedSystemdEnvironment(source, "busctl")
     : { ok: true, value: environment };
 }
 
@@ -399,11 +410,20 @@ function systemdUnitObjectPath(unitName: string): string {
   return `${systemdUnitObjectPathPrefix}${label === "" ? "_" : label}`;
 }
 
-function parseSystemdSerializedWords(value: string): string[] | undefined {
+interface ParsedSystemdSerializedWords {
+  words: readonly string[];
+  demonstrablyLossless: boolean;
+}
+
+function parseSystemdSerializedWords(value: string): ParsedSystemdSerializedWords | undefined {
   const words: string[] = [];
+  let demonstrablyLossless = true;
   let offset = 0;
   while (offset < value.length) {
-    while (value[offset] === " " || value[offset] === "\t") offset += 1;
+    while (value[offset] === " " || value[offset] === "\t") {
+      if (value[offset] === "\t") demonstrablyLossless = false;
+      offset += 1;
+    }
     if (offset >= value.length) break;
 
     let raw: string;
@@ -425,6 +445,7 @@ function parseSystemdSerializedWords(value: string): string[] | undefined {
       while (offset < value.length && value[offset] !== " " && value[offset] !== "\t") offset += 1;
       raw = value.slice(start, offset);
       if (raw.includes('"') || raw.includes("'")) return undefined;
+      if (raw.includes("\\")) demonstrablyLossless = false;
     }
 
     if (offset < value.length && value[offset] !== " " && value[offset] !== "\t") return undefined;
@@ -432,7 +453,7 @@ function parseSystemdSerializedWords(value: string): string[] | undefined {
     if (decoded === undefined || decoded.includes("\u0000")) return undefined;
     words.push(decoded);
   }
-  return words;
+  return { words, demonstrablyLossless };
 }
 
 function decodeSystemdPrintedEscapes(value: string): string | undefined {
