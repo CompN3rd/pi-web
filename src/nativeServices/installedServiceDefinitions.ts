@@ -1,4 +1,4 @@
-import { TextDecoder } from "node:util";
+import { TextDecoder, TextEncoder } from "node:util";
 import {
   decodeSystemdEscapes,
   inspectInstalledNativeServiceDefinitionEnvironment,
@@ -37,6 +37,10 @@ const systemdInspectionProperties = [
   "Environment",
 ] as const;
 
+const systemdBusDestination = "org.freedesktop.systemd1";
+const systemdUnitObjectPathPrefix = "/org/freedesktop/systemd1/unit/";
+const legacySystemdUnprintableValue = "[unprintable]";
+
 type SystemdInspectionProperty = typeof systemdInspectionProperties[number];
 
 /**
@@ -44,8 +48,9 @@ type SystemdInspectionProperty = typeof systemdInspectionProperties[number];
  * manager-relevant environment, and then bind that byte snapshot to the
  * service manager's effective context. Systemd must report the canonical
  * fragment, no unmodeled environment inputs, and the same effective
- * environment. A loaded LaunchAgent must report the canonical plist and the
- * same PI_WEB_CONFIG. Launchd restart is the exception: its existing
+ * environment; legacy systemctl output is recovered losslessly from the
+ * manager's D-Bus property. A loaded LaunchAgent must report the canonical
+ * plist and the same PI_WEB_CONFIG. Launchd restart is the exception: its existing
  * bootout/bootstrap path deliberately replaces loaded state before probing.
  */
 export function inspectInstalledNativeServiceDefinitions(
@@ -186,14 +191,13 @@ function inspectEffectiveSystemdDefinition(
     };
   }
 
-  const effectiveEnvironment = parseSystemdEnvironmentProperty(effectiveEnvironmentValue);
-  if (effectiveEnvironment === undefined) {
-    return {
-      ok: false,
-      message: `Could not inspect effective systemd unit ${source.systemdName}: systemctl returned an unrecognized Environment value.`,
-    };
-  }
-  if (!recordsEqual(effectiveEnvironment, expectedEnvironment)) {
+  const effectiveEnvironment = inspectEffectiveSystemdEnvironment(
+    source,
+    effectiveEnvironmentValue,
+    dependencies,
+  );
+  if (!effectiveEnvironment.ok) return effectiveEnvironment;
+  if (!recordsEqual(effectiveEnvironment.value, expectedEnvironment)) {
     return {
       ok: false,
       message: `Systemd unit ${source.systemdName} has an effective environment that differs from installed definition ${source.path}; run \`systemctl --user daemon-reload\` or reinstall the managed services before probing it.`,
@@ -290,9 +294,55 @@ function isSystemdInspectionProperty(value: string): value is SystemdInspectionP
   return systemdInspectionProperties.some((property) => property === value);
 }
 
-function parseSystemdEnvironmentProperty(value: string): Readonly<Record<string, string>> | undefined {
-  const assignments = parseSystemdSerializedWords(value);
-  if (assignments === undefined) return undefined;
+function inspectEffectiveSystemdEnvironment(
+  source: InstalledNativeServiceDefinitionSource,
+  systemctlValue: string,
+  dependencies: InstalledNativeServiceDefinitionDependencies,
+): InstalledNativeServiceInspection<Readonly<Record<string, string>>> {
+  let assignments = parseSystemdSerializedWords(systemctlValue);
+  if (assignments === undefined) return unrecognizedSystemdEnvironment(source, "systemctl");
+  let environmentSource: "systemctl" | "busctl" = "systemctl";
+
+  if (assignments.includes(legacySystemdUnprintableValue)) {
+    // systemctl 239-245 redacts individual string-array entries containing
+    // spaces. busctl reads the same manager property and C-escapes it losslessly.
+    const result = dependencies.capture("busctl", [
+      "--user",
+      "get-property",
+      systemdBusDestination,
+      systemdUnitObjectPath(source.systemdName),
+      `${systemdBusDestination}.Service`,
+      "Environment",
+    ]);
+    if (result.status !== 0) {
+      const detail = firstOutputLine(result.stderr, result.stdout);
+      return {
+        ok: false,
+        message: `Could not inspect effective systemd unit ${source.systemdName} losslessly: systemctl returned ${legacySystemdUnprintableValue}, and busctl exited with status ${String(result.status)}${detail === undefined ? "" : ` (${detail})`}.`,
+      };
+    }
+    assignments = parseBusctlStringArray(result.stdout);
+    if (assignments === undefined) return unrecognizedSystemdEnvironment(source, "busctl");
+    environmentSource = "busctl";
+  }
+
+  const environment = environmentFromAssignments(assignments);
+  return environment === undefined
+    ? unrecognizedSystemdEnvironment(source, environmentSource)
+    : { ok: true, value: environment };
+}
+
+function unrecognizedSystemdEnvironment(
+  source: InstalledNativeServiceDefinitionSource,
+  command: "systemctl" | "busctl",
+): InstalledNativeServiceInspection<never> {
+  return {
+    ok: false,
+    message: `Could not inspect effective systemd unit ${source.systemdName}: ${command} returned an unrecognized Environment value.`,
+  };
+}
+
+function environmentFromAssignments(assignments: readonly string[]): Readonly<Record<string, string>> | undefined {
   const environment: Record<string, string> = {};
   for (const assignment of assignments) {
     const separator = assignment.indexOf("=");
@@ -305,6 +355,48 @@ function parseSystemdEnvironmentProperty(value: string): Readonly<Record<string,
     environment[key] = assignment.slice(separator + 1);
   }
   return environment;
+}
+
+function parseBusctlStringArray(output: string): string[] | undefined {
+  // busctl's terse array format is `as <count> "<C-escaped value>" ...`.
+  let line = output;
+  if (line.endsWith("\r\n")) line = line.slice(0, -2);
+  else if (line.endsWith("\n")) line = line.slice(0, -1);
+  if (line.includes("\r") || line.includes("\n")) return undefined;
+
+  const header = /^as (0|[1-9][0-9]*)(.*)$/u.exec(line);
+  if (header === null) return undefined;
+  const count = Number(header[1]);
+  if (!Number.isSafeInteger(count)) return undefined;
+
+  const serializedWords = header[2] ?? "";
+  const words: string[] = [];
+  let offset = 0;
+  while (offset < serializedWords.length) {
+    if (serializedWords[offset] !== " " || serializedWords[offset + 1] !== "\"") return undefined;
+    const parsed = systemdQuotedWord(serializedWords, offset + 1, "\"");
+    if (parsed === undefined) return undefined;
+    const decoded = decodeSystemdEscapes(parsed.raw);
+    if (decoded === undefined) return undefined;
+    words.push(decoded);
+    offset = parsed.nextOffset;
+  }
+  return words.length === count ? words : undefined;
+}
+
+function systemdUnitObjectPath(unitName: string): string {
+  // Mirror systemd's stable bus_label_escape() byte encoding for unit objects.
+  let label = "";
+  let index = 0;
+  for (const byte of new TextEncoder().encode(unitName)) {
+    const isAsciiLetter = (byte >= 0x41 && byte <= 0x5a) || (byte >= 0x61 && byte <= 0x7a);
+    const isNoninitialDigit = index > 0 && byte >= 0x30 && byte <= 0x39;
+    label += isAsciiLetter || isNoninitialDigit
+      ? String.fromCharCode(byte)
+      : `_${byte.toString(16).padStart(2, "0")}`;
+    index += 1;
+  }
+  return `${systemdUnitObjectPathPrefix}${label === "" ? "_" : label}`;
 }
 
 function parseSystemdSerializedWords(value: string): string[] | undefined {

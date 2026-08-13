@@ -70,8 +70,26 @@ function dependencies(
   };
 }
 
+function legacySystemdDependencies(
+  contents: string,
+  busctlResult: InstalledNativeServiceDefinitionCommandResult,
+): InstalledNativeServiceDefinitionDependencies {
+  const systemctlResult = {
+    status: 0,
+    stdout: managerOutput({ Environment: "[unprintable]" }),
+    stderr: "",
+  } as const;
+  const deps = dependencies(new TextEncoder().encode(contents), systemctlResult);
+  vi.mocked(deps.capture).mockImplementation((command) => {
+    if (command === "systemctl") return systemctlResult;
+    if (command === "busctl") return busctlResult;
+    throw new Error(`Unexpected command ${command}`);
+  });
+  return deps;
+}
+
 describe("installed native-service definition boundary", () => {
-  it("binds a strict systemd fragment snapshot to the manager's effective environment", () => {
+  it("binds a strict systemd fragment snapshot to modern quoted manager output", () => {
     const contents = `[Unit]\nDescription=é\n${systemdDefinition("/managed/$HOME/config with space.json")}`;
     const deps = dependencies(
       new TextEncoder().encode(contents),
@@ -91,6 +109,7 @@ describe("installed native-service definition boundary", () => {
       ok: true,
       value: [{ id: "web", contents }],
     });
+    expect(deps.capture).toHaveBeenCalledTimes(1);
     expect(deps.capture).toHaveBeenCalledWith("systemctl", [
       "--user",
       "--no-pager",
@@ -104,6 +123,92 @@ describe("installed native-service definition boundary", () => {
       "--property=EnvironmentFiles",
       "--property=Environment",
     ]);
+  });
+
+  it("recovers a legacy systemd [unprintable] environment losslessly from D-Bus", () => {
+    const configPath = "/managed/é config with space.json";
+    const contents = systemdDefinition(configPath);
+    const deps = legacySystemdDependencies(contents, {
+      status: 0,
+      stdout: 'as 1 "PI_WEB_CONFIG=/managed/\\303\\251 config with space.json"\n',
+      stderr: "",
+    });
+
+    expect(inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "doctor",
+    )).toEqual({ ok: true, value: [{ id: "web", contents }] });
+    expect(deps.capture).toHaveBeenCalledTimes(2);
+    expect(deps.capture).toHaveBeenNthCalledWith(2, "busctl", [
+      "--user",
+      "get-property",
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1/unit/pi_2dweb_2dweb_2eservice",
+      "org.freedesktop.systemd1.Service",
+      "Environment",
+    ]);
+  });
+
+  it("fails closed when legacy systemd's lossless environment differs from disk", () => {
+    const deps = legacySystemdDependencies(systemdDefinition("/config/a with space.json"), {
+      status: 0,
+      stdout: 'as 1 "PI_WEB_CONFIG=/config/b with space.json"\n',
+      stderr: "",
+    });
+
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "start",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected legacy systemd environment mismatch to fail");
+    expect(result.message).toContain("effective environment");
+    expect(result.message).toContain("differs");
+  });
+
+  it("surfaces a failed lossless legacy systemd environment query", () => {
+    const deps = legacySystemdDependencies(systemdDefinition("/config/with space.json"), {
+      status: 127,
+      stdout: "",
+      stderr: "busctl: command not found",
+    });
+
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "doctor",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected failed busctl inspection to fail");
+    expect(result.message).toContain("losslessly");
+    expect(result.message).toContain("[unprintable]");
+    expect(result.message).toContain("busctl: command not found");
+  });
+
+  it("rejects malformed lossless legacy systemd environment output", () => {
+    const deps = legacySystemdDependencies(systemdDefinition("/config/with space.json"), {
+      status: 0,
+      stdout: 'as 2 "PI_WEB_CONFIG=/config/with space.json"\n',
+      stderr: "",
+    });
+
+    const result = inspectInstalledNativeServiceDefinitions(
+      { kind: "systemd", label: "systemd" },
+      [source],
+      deps,
+      "doctor",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected malformed busctl environment to fail");
+    expect(result.message).toContain("busctl returned an unrecognized Environment");
   });
 
   it.each([
