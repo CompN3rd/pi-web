@@ -121,9 +121,16 @@ export function selectManagedNativeServiceConfig(
   const parsed = parseConsistentDefinitions(backend, definitions);
   if (!parsed.ok) return parsed;
   const installedConfigPath = parsed.value[0]?.environment["PI_WEB_CONFIG"];
-  return installedConfigPath === undefined || installedConfigPath === ""
-    ? { ok: true, value: { source: "default" } }
-    : { ok: true, value: { source: "installed", configPath: installedConfigPath } };
+  if (installedConfigPath === undefined || installedConfigPath === "") {
+    return { ok: true, value: { source: "default" } };
+  }
+  if (!posixPath.isAbsolute(installedConfigPath)) {
+    return {
+      ok: false,
+      message: `Installed service definitions declare relative PI_WEB_CONFIG ${JSON.stringify(installedConfigPath)}; managed config paths must be absolute.`,
+    };
+  }
+  return { ok: true, value: { source: "installed", configPath: installedConfigPath } };
 }
 
 export function inspectInstalledProductionServiceContext(
@@ -354,6 +361,13 @@ function systemdServiceDirectives(contents: string): ParsedSystemdDirective[] | 
 function parseSystemdDefinition(
   definition: InstalledNativeServiceDefinition,
 ): InstalledNativeServiceInspection<ParsedServiceDefinition> {
+  if (definition.contents.split(/\r?\n/u).some((line) => line.endsWith("\\"))) {
+    return {
+      ok: false,
+      message: `Installed ${definition.id} systemd unit uses physical-line continuation, which cannot be inspected safely.`,
+    };
+  }
+
   const directives = systemdServiceDirectives(definition.contents);
   if (directives === undefined) {
     return { ok: false, message: `Installed ${definition.id} systemd unit has unrecognized service directives.` };
@@ -578,7 +592,8 @@ type ParsedPlistValue =
   | { kind: "dictionary"; value: ReadonlyMap<string, ParsedPlistValue> }
   | { kind: "boolean"; value: boolean };
 
-type PlistTextTag = "key" | "string" | "data" | "date" | "integer" | "real";
+type PlistScalarTag = "data" | "date" | "integer" | "real";
+type PlistTextTag = "key" | "string" | PlistScalarTag;
 
 interface PlistXmlCursor {
   readonly contents: string;
@@ -591,12 +606,17 @@ const maximumPlistDepth = 32;
 
 /** Parse the complete XML plist subset emitted by PI WEB, rejecting fragments and duplicate dictionary keys. */
 function parseLaunchdPlistDocument(contents: string): ReadonlyMap<string, ParsedPlistValue> | undefined {
-  const cursor: PlistXmlCursor = { contents, offset: contents.startsWith("\uFEFF") ? 1 : 0 };
+  const normalizedContents = normalizePlistXml(contents);
+  if (normalizedContents === undefined) return undefined;
+  const cursor: PlistXmlCursor = {
+    contents: normalizedContents,
+    offset: normalizedContents.startsWith("\uFEFF") ? 1 : 0,
+  };
   skipPlistWhitespace(cursor);
   if (consumePlistToken(cursor, plistXmlDeclaration)) skipPlistWhitespace(cursor);
-  else if (contents.startsWith("<?xml", cursor.offset)) return undefined;
+  else if (cursor.contents.startsWith("<?xml", cursor.offset)) return undefined;
   if (consumePlistToken(cursor, plistDoctype)) skipPlistWhitespace(cursor);
-  else if (contents.startsWith("<!DOCTYPE", cursor.offset)) return undefined;
+  else if (cursor.contents.startsWith("<!DOCTYPE", cursor.offset)) return undefined;
   if (!consumePlistToken(cursor, '<plist version="1.0">')) return undefined;
 
   const root = parsePlistValue(cursor, 0);
@@ -604,7 +624,7 @@ function parseLaunchdPlistDocument(contents: string): ReadonlyMap<string, Parsed
   skipPlistWhitespace(cursor);
   if (!consumePlistToken(cursor, "</plist>")) return undefined;
   skipPlistWhitespace(cursor);
-  return cursor.offset === contents.length ? root.value : undefined;
+  return cursor.offset === cursor.contents.length ? root.value : undefined;
 }
 
 function parsePlistValue(cursor: PlistXmlCursor, depth: number): ParsedPlistValue | undefined {
@@ -617,7 +637,9 @@ function parsePlistValue(cursor: PlistXmlCursor, depth: number): ParsedPlistValu
   for (const tag of ["data", "date", "integer", "real"] as const) {
     if (!cursor.contents.startsWith(`<${tag}>`, cursor.offset)) continue;
     const value = parsePlistTextElement(cursor, tag);
-    return value === undefined ? undefined : { kind: "scalar", value };
+    return value === undefined || !isValidPlistScalarValue(tag, value)
+      ? undefined
+      : { kind: "scalar", value };
   }
   if (cursor.contents.startsWith("<array", cursor.offset)) return parsePlistArray(cursor, depth);
   if (cursor.contents.startsWith("<dict", cursor.offset)) return parsePlistDictionary(cursor, depth);
@@ -663,6 +685,41 @@ function parsePlistTextElement(cursor: PlistXmlCursor, tag: PlistTextTag): strin
   const encoded = cursor.contents.slice(cursor.offset, closingOffset);
   cursor.offset = closingOffset + closingTag.length;
   return xmlUnescapeStrict(encoded);
+}
+
+function normalizePlistXml(contents: string): string | undefined {
+  for (const character of contents) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isXmlCharacter = codePoint === 0x09
+      || codePoint === 0x0a
+      || codePoint === 0x0d
+      || (codePoint >= 0x20 && codePoint <= 0xd7ff)
+      || (codePoint >= 0xe000 && codePoint <= 0xfffd)
+      || (codePoint >= 0x10000 && codePoint <= 0x10ffff);
+    if (!isXmlCharacter) return undefined;
+  }
+  return contents.replace(/\r\n?/gu, "\n");
+}
+
+function isValidPlistScalarValue(tag: PlistScalarTag, value: string): boolean {
+  if (tag === "data") {
+    const compact = value.replace(/[\t\n\r ]/gu, "");
+    return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(compact);
+  }
+  if (tag === "date") {
+    const match = /^(\d{4})-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u.exec(value);
+    if (match?.[1] === undefined || Number(match[1]) === 0) return false;
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp)
+      && new Date(timestamp).toISOString() === `${value.slice(0, -1)}.000Z`;
+  }
+  if (tag === "integer") {
+    if (!/^[+-]?(?:0|[1-9][0-9]*)$/u.test(value)) return false;
+    const parsed = BigInt(value);
+    return parsed >= -(2n ** 63n) && parsed <= (2n ** 63n) - 1n;
+  }
+  return /^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/u.test(value)
+    && Number.isFinite(Number(value));
 }
 
 function skipPlistWhitespace(cursor: PlistXmlCursor): void {

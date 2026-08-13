@@ -143,6 +143,19 @@ describe("installed native-service mode and definition inspection", () => {
     });
   });
 
+  it("normalizes LaunchAgent XML line endings before selecting persisted config", () => {
+    const plan = developmentPlan("launchd");
+    const definitions = renderedDefinitions(plan).map((definition) => ({
+      ...definition,
+      contents: definition.contents.replaceAll("\n", "\r\n"),
+    }));
+
+    expect(selectManagedNativeServiceConfig(plan.backend, definitions, undefined)).toEqual({
+      ok: true,
+      value: { source: "installed", configPath: "/home/user/config & dev.json" },
+    });
+  });
+
   it.each(["systemd", "launchd"] as const)("lets a nonempty caller config override malformed %s definitions", (kind) => {
     const backend = { kind, label: kind };
     const malformed: InstalledNativeServiceDefinition[] = [{ id: "web", contents: "not a service definition" }];
@@ -150,6 +163,10 @@ describe("installed native-service mode and definition inspection", () => {
     expect(selectManagedNativeServiceConfig(backend, malformed, "/caller/config.json")).toEqual({
       ok: true,
       value: { source: "caller", configPath: "/caller/config.json" },
+    });
+    expect(selectManagedNativeServiceConfig(backend, malformed, "caller/config.json")).toEqual({
+      ok: true,
+      value: { source: "caller", configPath: "caller/config.json" },
     });
   });
 
@@ -164,6 +181,16 @@ describe("installed native-service mode and definition inspection", () => {
       ok: true,
       value: { source: "default" },
     });
+  });
+
+  it.each(["systemd", "launchd"] as const)("rejects a relative config recovered from %s definitions", (kind) => {
+    const plan = developmentPlan(kind, "config/managed.json");
+    const selection = selectManagedNativeServiceConfig(plan.backend, renderedDefinitions(plan), undefined);
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected relative managed config selection to fail");
+    expect(selection.message).toContain("relative PI_WEB_CONFIG");
+    expect(selection.message).toContain("must be absolute");
   });
 
   it.each(["systemd", "launchd"] as const)("rejects conflicting config in %s definitions", (kind) => {
@@ -190,6 +217,19 @@ describe("installed native-service mode and definition inspection", () => {
     );
 
     expect(selection.ok).toBe(false);
+  });
+
+  it("rejects systemd physical-line continuation before selecting its apparent environment", () => {
+    const contents = `[Service]\nType=simple\\\nEnvironment="PI_WEB_CONFIG=/foreign.json"\nExecStart=/usr/bin/env "/bin/zsh" -lc "exec pi-web-sessiond"\nRestart=no\n`;
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "systemd", label: "systemd" },
+      [{ id: "sessiond", contents }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected continued systemd definition selection to fail");
+    expect(selection.message).toContain("physical-line continuation");
   });
 
   it.each([
@@ -238,6 +278,42 @@ describe("installed native-service mode and definition inspection", () => {
 
     expect(selection.ok).toBe(false);
     if (selection.ok) throw new Error("Expected duplicate LaunchAgent key selection to fail");
+    expect(selection.message).toContain("structurally valid property list");
+  });
+
+  it.each([
+    ["NUL", "\u0000"],
+    ["U+0001", "\u0001"],
+  ])("rejects XML-illegal %s content in a LaunchAgent", (_name, control) => {
+    const entries = launchdManagedConfigEntries("com.pi-web.sessiond")
+      .replace("/foreign.json", `/foreign${control}.json`);
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "launchd", label: "launchd" },
+      [{ id: "sessiond", contents: launchdPlistDocument(entries) }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected XML-illegal LaunchAgent selection to fail");
+    expect(selection.message).toContain("structurally valid property list");
+  });
+
+  it.each([
+    ["data", "not-base64"],
+    ["date", "2026-13-01T00:00:00Z"],
+    ["integer", "not-an-integer"],
+    ["real", "not-a-real"],
+  ] as const)("rejects malformed LaunchAgent <%s> scalar content", (tag, value) => {
+    const malformedScalar = `  <key>IgnoredMalformedValue</key>\n  <${tag}>${value}</${tag}>\n`;
+    const entries = `${launchdManagedConfigEntries("com.pi-web.sessiond")}${malformedScalar}`;
+    const selection = selectManagedNativeServiceConfig(
+      { kind: "launchd", label: "launchd" },
+      [{ id: "sessiond", contents: launchdPlistDocument(entries) }],
+      undefined,
+    );
+
+    expect(selection.ok).toBe(false);
+    if (selection.ok) throw new Error("Expected malformed scalar LaunchAgent selection to fail");
     expect(selection.message).toContain("structurally valid property list");
   });
 
