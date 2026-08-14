@@ -38,6 +38,7 @@ export class PluginBackgroundSessionRegistry {
     private readonly projects: BackgroundProjectReader,
     private readonly workspaces: BackgroundWorkspaceAuthority,
     private readonly sessions: BackgroundSessionHost,
+    private readonly pendingCreateDrainMs = 10_000,
   ) {}
 
   forPlugin(pluginId: string): BackgroundSessionService {
@@ -49,15 +50,12 @@ export class PluginBackgroundSessionRegistry {
 
   async quiescePlugin(pluginId: string): Promise<void> {
     this.quiescedPlugins.add(pluginId);
-    await this.awaitPendingCreates(pluginId);
-    await this.forceStopLeases(pluginId, this.leases.get(pluginId) ?? []);
+    await this.quiesceOwned(pluginId, pluginId, () => this.leases.get(pluginId) ?? []);
   }
 
   async quiesceAll(): Promise<void> {
     this.quiescing = true;
-    await this.awaitPendingCreates();
-    const leases = [...this.leases.values()].flatMap((owned) => [...owned]);
-    await this.forceStopLeases("all plugins", leases);
+    await this.quiesceOwned("all plugins", undefined, () => [...this.leases.values()].flatMap((owned) => [...owned]));
   }
 
   private create(pluginId: string, request: BackgroundSessionCreateRequest): Promise<BackgroundSessionLease> {
@@ -94,16 +92,57 @@ export class PluginBackgroundSessionRegistry {
     owned.add(lease);
     this.leases.set(pluginId, owned);
     if (this.quiescing || this.quiescedPlugins.has(pluginId)) {
+      try {
+        await lease.forceStop();
+      } catch (error) {
+        throw new AggregateError(
+          [error],
+          `Failed to clean up a late background session create for plugin ${pluginId}`,
+          { cause: error },
+        );
+      }
       throw new Error(`Background sessions are quiescing for plugin ${pluginId}`);
     }
     return lease.publicHandle();
+  }
+
+  private async quiesceOwned(
+    owner: string,
+    pluginId: string | undefined,
+    leases: () => Iterable<HostBackgroundSessionLease>,
+  ): Promise<void> {
+    const failures: unknown[] = [];
+    try {
+      await this.awaitPendingCreates(pluginId);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await this.forceStopLeases(owner, leases());
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, `Background session cleanup failed for ${owner}`);
   }
 
   private async awaitPendingCreates(pluginId?: string): Promise<void> {
     const pending = pluginId === undefined
       ? [...this.pendingCreates.values()].flatMap((owned) => [...owned])
       : [...(this.pendingCreates.get(pluginId) ?? [])];
-    await Promise.allSettled(pending);
+    if (pending.length === 0) return;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(`Timed out after ${String(this.pendingCreateDrainMs)}ms waiting for pending background session creates`));
+      }, this.pendingCreateDrainMs);
+      timeout.unref();
+    });
+    try {
+      await Promise.race([Promise.allSettled(pending), timedOut]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   }
 
   private async forceStopLeases(owner: string, leases: Iterable<HostBackgroundSessionLease>): Promise<void> {
@@ -201,20 +240,26 @@ class HostBackgroundSessionLease {
   private async abort(): Promise<void> {
     if (this.released) return;
     const prompt = this.activePrompt;
-    await this.sessions.abortBackgroundSession(this.pluginId, this.ref);
-    if (prompt !== undefined && this.activePrompt?.generation === prompt.generation) prompt.aborted = true;
+    if (prompt !== undefined) prompt.aborted = true;
+    try {
+      await this.sessions.abortBackgroundSession(this.pluginId, this.ref);
+    } catch (error) {
+      if (prompt !== undefined && this.activePrompt?.generation === prompt.generation) prompt.aborted = false;
+      throw error;
+    }
   }
 
   async forceStop(): Promise<void> {
     if (this.released) return;
     if (this.forceStopOperation !== undefined) return this.forceStopOperation;
     const prompt = this.activePrompt;
+    if (prompt !== undefined) prompt.aborted = true;
     const operation = this.sessions.forceStopBackgroundSession(this.pluginId, this.ref).then(
       () => {
-        if (prompt !== undefined && this.activePrompt?.generation === prompt.generation) prompt.aborted = true;
         this.markReleased();
       },
       (error: unknown) => {
+        if (prompt !== undefined && this.activePrompt?.generation === prompt.generation) prompt.aborted = false;
         this.forceStopOperation = undefined;
         throw error;
       },
@@ -224,6 +269,7 @@ class HostBackgroundSessionLease {
   }
 
   private async release(): Promise<void> {
+    if (this.released) return;
     const completion = this.promptCompletion;
     if (completion !== undefined) await completion;
     await this.releaseNow();

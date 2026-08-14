@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceBackendRequestContext } from "@jmfederico/pi-web/server-plugin-api";
 import { AUTOMATIONS_OPERATIONS } from "./browser/contracts.js";
 import { AutomationBackend } from "./server/automation-backend.js";
@@ -62,6 +62,16 @@ describe("AutomationBackend", () => {
     const run = await backend.request(context(AUTOMATIONS_OPERATIONS.runNow, { contractVersion: 1, automationId, expectedRevision: revision }));
     expect(run).toMatchObject({ ok: true, value: { automationRevision: 1 } });
     expect(runner.createInputs).toEqual([{ projectId: "project-1", workspaceId: "workspace-1", model: { mode: "fixed", provider: "test", id: "model", name: "Test" }, thinking: { mode: "fixed", level: "medium" } }]);
+    store.close();
+  });
+
+  it("surfaces unexpected store failures instead of mislabeling them as conflicts", () => {
+    const store = new AutomationStore(":memory:");
+    vi.spyOn(store, "insertDefinition").mockImplementation(() => { throw new Error("disk I/O failed"); });
+    const service = new AutomationService(store, new PendingRunner());
+    const backend = new AutomationBackend(() => service);
+
+    expect(() => backend.request(context(AUTOMATIONS_OPERATIONS.create, { contractVersion: 1, draft: draft() }))).toThrow("disk I/O failed");
     store.close();
   });
 

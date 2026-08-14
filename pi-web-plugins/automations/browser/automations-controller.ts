@@ -132,7 +132,7 @@ export class AutomationsController {
     const snapshot = state.snapshot;
     state.editor = {
       name: "", description: "", prompt: "", trigger: { type: "manual" }, model: { mode: "default" }, thinking: { mode: "default" },
-      timeoutMs: snapshot?.defaultTimeoutMs ?? 600_000,
+      timeoutMs: snapshot?.defaultTimeoutMs ?? 3_600_000,
     };
     state.error = undefined;
     this.render(state);
@@ -179,7 +179,7 @@ export class AutomationsController {
       const draft: AutomationDraft = editorDraft(editor);
       await this.mutate(context, AUTOMATIONS_OPERATIONS.create, { contractVersion: AUTOMATIONS_CONTRACT_VERSION, draft: json(draft) }, parseAutomationDefinition, "Automation draft created");
     } else {
-      const patch: AutomationPatch = editorDraft(editor);
+      const patch: AutomationPatch = { ...editorDraft(editor), description: editor.description };
       await this.mutate(context, AUTOMATIONS_OPERATIONS.update, {
         contractVersion: AUTOMATIONS_CONTRACT_VERSION,
         automationId: editor.automationId,
@@ -224,6 +224,8 @@ export class AutomationsController {
       await this.request(context, operation, input, parser);
       if (this.connectedKey !== contextKey(context)) return;
       state.notice = notice;
+      this.clearTimer();
+      this.detachRequest(state);
       await this.refresh(context);
     } catch (error) {
       if (this.connectedKey === contextKey(context)) state.error = errorMessage(error);
@@ -257,7 +259,12 @@ export class AutomationsController {
   private invalidateConnectedRequest(): void {
     if (this.connectedKey === undefined) return;
     const state = this.states.get(this.connectedKey);
-    if (state !== undefined) state.requestSequence += 1;
+    if (state !== undefined) this.detachRequest(state);
+  }
+
+  private detachRequest(state: AutomationPanelState): void {
+    state.requestSequence += 1;
+    state.request = undefined;
   }
 
   private stateFor(context: WorkspacePanelContext): AutomationPanelState {

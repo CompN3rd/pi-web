@@ -87,6 +87,28 @@ describe("AutomationsController", () => {
     expect(backend.mock.calls.length).toBeGreaterThan(before);
   });
 
+  it("starts a fresh snapshot and resumes polling when reconnecting during a stale request", async () => {
+    const responses: ((value: JsonValue) => void)[] = [];
+    const backend = vi.fn(() => new Promise<JsonValue>((resolve) => { responses.push(resolve); }));
+    const target = context(backend);
+    const timers = timerFixture();
+    const controller = new AutomationsController(timers.api);
+
+    controller.connect(target.value);
+    controller.disconnect(target.value);
+    controller.connect(target.value);
+    expect(backend).toHaveBeenCalledTimes(2);
+
+    responses[1]?.(success(snapshot()));
+    await flushMicrotasks();
+    expect(controller.state(target.value)).toMatchObject({ loading: false, snapshot: { runs: [] } });
+    expect(timers.scheduled.at(-1)).toBe(IDLE_POLL_INTERVAL_MS);
+
+    responses[0]?.(success(snapshot([run])));
+    await flushMicrotasks();
+    expect(controller.state(target.value).snapshot?.runs).toEqual([]);
+  });
+
   it("fences an old machine response after the target changes", async () => {
     let resolveOld: ((value: JsonValue) => void) | undefined;
     const oldBackend = vi.fn(() => new Promise<JsonValue>((resolve) => { resolveOld = resolve; }));
@@ -133,11 +155,44 @@ describe("AutomationsController", () => {
     const mutations = calls.filter(([operation]) => operation !== AUTOMATIONS_OPERATIONS.snapshot);
     expect(mutations.map(([operation]) => operation)).toEqual(["create", "update", "run-now", "update", "delete", "cancel-run"]);
     expect(mutations[0]?.[1]).toEqual({ contractVersion: 1, draft: { name: "New", prompt: "Do it", trigger: { type: "manual" }, model: { mode: "default" }, thinking: { mode: "default" }, timeoutMs: 600_000 } });
-    expect(mutations[1]?.[1]).toMatchObject({ contractVersion: 1, automationId: "automation-1", expectedRevision: 1, patch: { prompt: "Changed" } });
+    expect(mutations[1]?.[1]).toMatchObject({ contractVersion: 1, automationId: "automation-1", expectedRevision: 1, patch: { description: "", prompt: "Changed" } });
     for (const [, input] of mutations) {
       expect(JSON.stringify(input)).not.toMatch(/projectId|workspaceId|workspacePath|machine|cwd/u);
     }
     expect(target.requestRender).toHaveBeenCalled();
+  });
+
+  it("invalidates an older snapshot before refreshing after a mutation", async () => {
+    let resolveStale: ((value: JsonValue) => void) | undefined;
+    let snapshotCalls = 0;
+    const updated = { ...definition, name: "Updated" };
+    const backend = vi.fn((operation: string): Promise<JsonValue> => {
+      if (operation === AUTOMATIONS_OPERATIONS.runNow) return Promise.resolve(success(run));
+      snapshotCalls += 1;
+      if (snapshotCalls === 1) return Promise.resolve(success(snapshot()));
+      if (snapshotCalls === 2) return new Promise((resolve) => { resolveStale = resolve; });
+      return Promise.resolve(success({ ...snapshot(), definitions: [updated] }));
+    });
+    const target = context(backend);
+    const controller = new AutomationsController(timerFixture().api);
+    controller.connect(target.value);
+    await controller.refresh(target.value);
+
+    void controller.refresh(target.value);
+    await controller.runNow(target.value, definition);
+    expect(controller.state(target.value).snapshot?.definitions[0]?.name).toBe("Updated");
+
+    resolveStale?.(success(snapshot()));
+    await flushMicrotasks();
+    expect(controller.state(target.value).snapshot?.definitions[0]?.name).toBe("Updated");
+  });
+
+  it("uses the server default timeout fallback before the first snapshot loads", () => {
+    const target = context(() => new Promise(() => undefined));
+    const controller = new AutomationsController(timerFixture().api);
+    controller.connect(target.value);
+    controller.beginCreate(target.value);
+    expect(controller.state(target.value).editor?.timeoutMs).toBe(3_600_000);
   });
 
   it("surfaces domain and malformed response errors", async () => {
@@ -161,15 +216,23 @@ describe("AutomationsController", () => {
   });
 });
 
-function timerFixture(): { api: TimerApi; cleared: number } {
+function timerFixture(): { api: TimerApi; cleared: number; scheduled: number[] } {
   const fixture = {
     cleared: 0,
+    scheduled: new Array<number>(),
     api: {
-      setTimeout: (callback: () => void, delay: number) => longTimer(callback, 60_000 + delay),
+      setTimeout: (callback: () => void, delay: number) => {
+        fixture.scheduled.push(delay);
+        return longTimer(callback, 60_000 + delay);
+      },
       clearTimeout: (handle: ReturnType<typeof setTimeout>) => { fixture.cleared += 1; clearTimeout(handle); },
     },
   };
   return fixture;
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
 function longTimer(callback: () => void, delay: number): ReturnType<typeof setTimeout> {

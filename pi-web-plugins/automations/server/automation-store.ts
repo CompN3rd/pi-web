@@ -86,6 +86,12 @@ export interface AutomationRunListOptions {
   limit?: number;
 }
 
+export class AutomationStoreConflictError extends Error {
+  constructor(readonly kind: "duplicate-name" | "revision" | "active-run", message: string) {
+    super(message);
+  }
+}
+
 export class AutomationStore {
   private readonly db: Database.Database;
 
@@ -186,7 +192,7 @@ export class AutomationStore {
         definition.workspaceId,
         expectedRevision,
       );
-      if (result.changes !== 1) throw new Error("Automation was changed by another client");
+      if (result.changes !== 1) throw new AutomationStoreConflictError("revision", "Automation was changed by another client");
     } catch (error) {
       throw translateConstraint(error, `An automation named "${definition.name}" already exists`);
     }
@@ -195,7 +201,7 @@ export class AutomationStore {
 
   archiveDefinition(id: string, projectId: string, workspaceId: string, at: string): boolean {
     return this.db.transaction(() => {
-      if (this.hasActiveRun(id)) throw new Error("Cannot delete an automation while it has an active run");
+      if (this.hasActiveRun(id)) throw new AutomationStoreConflictError("active-run", "Cannot delete an automation while it has an active run");
       const result = this.db.prepare(`
         UPDATE automations SET enabled = 0, deleted_at = ?, updated_at = ?
         WHERE id = ? AND project_id = ? AND workspace_id = ? AND deleted_at IS NULL
@@ -239,7 +245,7 @@ export class AutomationStore {
 
   createManualRun(definition: AutomationDefinition, runId: string, now: string): AutomationRun {
     return this.db.transaction(() => {
-      if (this.hasActiveRun(definition.id)) throw new Error("Automation already has an active run");
+      if (this.hasActiveRun(definition.id)) throw new AutomationStoreConflictError("active-run", "Automation already has an active run");
       const run = runFromDefinition(definition, { id: runId, source: "manual", scheduledFor: now, queuedAt: now, status: "queued" });
       this.insertRun(run);
       return run;
@@ -788,6 +794,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function translateConstraint(error: unknown, message: string): Error {
-  if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) return new Error(message);
+  if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
+    return new AutomationStoreConflictError("duplicate-name", message);
+  }
   return error instanceof Error ? error : new Error(String(error));
 }

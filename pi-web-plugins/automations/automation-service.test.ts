@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackgroundSessionLease } from "@jmfederico/pi-web/server-plugin-api";
 import type { AutomationDraft, AutomationModel, AutomationUsageSnapshot } from "./server/contracts.js";
-import { AutomationService } from "./server/automation-service.js";
+import { AutomationService, type AutomationServiceLogger } from "./server/automation-service.js";
 import type { CreatedAutomationSession } from "./server/automation-session-runner.js";
 import { AutomationStore } from "./server/automation-store.js";
 
 const scope = { projectId: "project-1", workspaceId: "workspace-1", workspacePath: "/repo" };
-const model: AutomationModel = { provider: "test", id: "model", name: "Test Model", thinkingLevels: ["medium"] };
+const model: AutomationModel = { provider: "test", id: "model", name: "Test Model", thinkingLevels: ["medium", "max"] };
 const usage: AutomationUsageSnapshot = {
   scope: "root_session",
   quality: "estimated",
@@ -66,11 +66,26 @@ function draft(patch: Partial<AutomationDraft> = {}): AutomationDraft {
 }
 
 const stores: AutomationStore[] = [];
-function fixture(runner = new FakeRunner()) {
+function fixture(runner = new FakeRunner(), logger?: AutomationServiceLogger) {
   const store = new AutomationStore(":memory:");
   stores.push(store);
-  const service = new AutomationService(store, runner, undefined, () => new Date(Date.now()));
+  const service = new AutomationService(store, runner, logger, () => new Date(Date.now()));
   return { store, runner, service };
+}
+
+function loggerFixture(): {
+  logger: AutomationServiceLogger;
+  errors: { details: Record<string, unknown>; message: string }[];
+} {
+  const errors: { details: Record<string, unknown>; message: string }[] = [];
+  return {
+    errors,
+    logger: {
+      info() { /* unused */ },
+      warn() { /* unused */ },
+      error(details, message) { errors.push({ details, message }); },
+    },
+  };
 }
 
 afterEach(() => {
@@ -96,6 +111,13 @@ describe("AutomationService", () => {
     expect(runner.createInputs).toEqual([{ projectId: scope.projectId, workspaceId: scope.workspaceId, model: automation.model, thinking: automation.thinking }]);
     expect(tested).toMatchObject({ revision: 1, testedRevision: 1, enabled: false });
     expect(service.update(automation.id, { ...scope, expectedRevision: 1, enabled: true })).toMatchObject({ enabled: true });
+  });
+
+  it("accepts max thinking and rejects levels unsupported by a fixed model", () => {
+    const { service } = fixture();
+    expect(service.models().thinkingLevels).toContain("max");
+    expect(service.create(scope, draft({ thinking: { mode: "fixed", level: "max" } }))).toMatchObject({ thinking: { mode: "fixed", level: "max" } });
+    expect(() => service.create(scope, draft({ name: "Unsupported", thinking: { mode: "fixed", level: "high" } }))).toThrow("unavailable for test/model");
   });
 
   it("guards stale delete and run-now revisions", () => {
@@ -165,6 +187,53 @@ describe("AutomationService", () => {
     runner.prompt.reject(new Error("provider failed"));
     await flushMicrotasks();
     expect(service.listRuns(scope)[0]).toMatchObject({ status: "failed", error: "provider failed", reason: "execution_error" });
+  });
+
+  it("logs whole-tick failures and continues polling", async () => {
+    vi.useFakeTimers();
+    const log = loggerFixture();
+    const { service, store } = fixture(new FakeRunner(), log.logger);
+    const listDue = vi.spyOn(store, "listDueDefinitions").mockImplementationOnce(() => { throw new Error("database unavailable"); });
+
+    service.start();
+    expect(log.errors).toMatchObject([{ details: { err: { message: "database unavailable" } }, message: "automation scheduler tick failed" }]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(listDue).toHaveBeenCalledTimes(2);
+    await service.stop(0);
+  });
+
+  it("logs execution launch and release failures without unhandled rejections", async () => {
+    const log = loggerFixture();
+    const runner = new FakeRunner();
+    runner.release = () => { runner.releaseCalls += 1; return Promise.reject(new Error("release failed")); };
+    const { service, store } = fixture(runner, log.logger);
+    const automation = service.create(scope, draft());
+    vi.spyOn(store, "markRunStarting").mockImplementationOnce(() => { throw new Error("claim failed"); });
+
+    service.runNow(automation.id, scope, automation.revision);
+    await flushMicrotasks();
+    expect(log.errors[0]?.message).toBe("automation execution launch failed");
+    expect(typeof log.errors[0]?.details["runId"]).toBe("string");
+    expect(log.errors[0]?.details["err"]).toEqual(new Error("claim failed"));
+
+    service.start();
+    runner.prompt.resolve(usage);
+    await flushMicrotasks();
+    expect(log.errors[1]?.message).toBe("automation session release failed");
+    expect(typeof log.errors[1]?.details["runId"]).toBe("string");
+    expect(log.errors[1]?.details["err"]).toEqual(new Error("release failed"));
+    await service.stop(0);
+  });
+
+  it("does not arm polling when scheduler recovery fails", () => {
+    vi.useFakeTimers();
+    const { service, store } = fixture();
+    const due = vi.spyOn(store, "listDueDefinitions");
+    vi.spyOn(store, "recoverInterruptedRuns").mockImplementationOnce(() => { throw new Error("recovery failed"); });
+
+    expect(() => { service.start(); }).toThrow("recovery failed");
+    vi.advanceTimersByTime(5_000);
+    expect(due).not.toHaveBeenCalled();
   });
 
   it("recovers ambiguous attempts when the scheduler starts", async () => {

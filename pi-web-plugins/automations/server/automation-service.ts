@@ -18,9 +18,9 @@ import {
   validateAutomationTrigger,
 } from "./automation-schedule.js";
 import { AutomationSessionRunner, type CreatedAutomationSession } from "./automation-session-runner.js";
-import { AutomationStore, isTerminalRunStatus } from "./automation-store.js";
+import { AutomationStore, AutomationStoreConflictError, isTerminalRunStatus } from "./automation-store.js";
 
-const KNOWN_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const KNOWN_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 const POLL_INTERVAL_MS = 1_000;
 const MAX_CONCURRENT_RUNS = 2;
@@ -84,9 +84,9 @@ export class AutomationService {
     for (const run of recovered) {
       this.logger.warn({ runId: run.id, sessionId: run.sessionId }, "automation run became unknown after session daemon restart");
     }
-    this.pollTimer = setInterval(() => { this.tick(); }, POLL_INTERVAL_MS);
+    this.tickSafely();
+    this.pollTimer = setInterval(() => { this.tickSafely(); }, POLL_INTERVAL_MS);
     this.pollTimer.unref();
-    this.tick();
   }
 
   async stop(waitMs = DEFAULT_AUTOMATION_ABORT_GRACE_MS + 250): Promise<void> {
@@ -105,7 +105,7 @@ export class AutomationService {
       } else {
         context.cancellationKind = "user";
       }
-      void this.beginAbort(context);
+      this.observe(this.beginAbort(context), { runId: context.runId }, "automation abort failed");
     }
     await this.waitForActiveDrain(waitMs);
     await Promise.allSettled([...this.active.values()].map((context) => this.forceStop(context)));
@@ -127,9 +127,12 @@ export class AutomationService {
   }
 
   models(): AutomationModels {
+    const models = this.runner.models();
+    const thinkingLevels = new Set<string>(KNOWN_THINKING_LEVELS);
+    for (const model of models) for (const level of model.thinkingLevels) thinkingLevels.add(level);
     return {
-      models: this.runner.models(),
-      thinkingLevels: [...KNOWN_THINKING_LEVELS],
+      models,
+      thinkingLevels: [...thinkingLevels],
       defaultTimeoutMs: DEFAULT_AUTOMATION_TIMEOUT_MS,
       minTimeoutMs: MIN_AUTOMATION_TIMEOUT_MS,
       maxTimeoutMs: MAX_AUTOMATION_TIMEOUT_MS,
@@ -141,6 +144,9 @@ export class AutomationService {
     const now = this.now();
     const trigger = validateAutomationTrigger(draft.trigger, now);
     const description = optionalText(draft.description, 500);
+    const availableModels = this.runner.models();
+    const model = this.validateModelPolicy(draft.model, availableModels);
+    const thinking = validateThinkingPolicy(draft.thinking, model, availableModels);
     const definition: AutomationDefinition = {
       id: randomUUID(),
       projectId: workspace.projectId,
@@ -152,8 +158,8 @@ export class AutomationService {
       enabled: false,
       revision: 1,
       trigger,
-      model: this.validateModelPolicy(draft.model),
-      thinking: validateThinkingPolicy(draft.thinking),
+      model,
+      thinking,
       timeoutMs: validateAutomationTimeoutMs(draft.timeoutMs),
       abortGraceMs: DEFAULT_AUTOMATION_ABORT_GRACE_MS,
       createdAt: now.toISOString(),
@@ -187,14 +193,21 @@ export class AutomationService {
     if (enabled) trigger = validateAutomationTrigger(trigger, now);
     if (enabled && current.testedRevision !== current.revision) throw new AutomationServiceError("Run this automation successfully before enabling it", 409);
     const revision = definitionChanged ? current.revision + 1 : current.revision;
+    let model = current.model;
+    let thinking = current.thinking;
+    if (request.model !== undefined || request.thinking !== undefined) {
+      const availableModels = this.runner.models();
+      model = this.validateModelPolicy(request.model ?? current.model, availableModels);
+      thinking = validateThinkingPolicy(request.thinking ?? current.thinking, model, availableModels);
+    }
     const updated: AutomationDefinition = {
       ...current,
       workspacePath: workspace.workspacePath,
       name: request.name === undefined ? current.name : requireText(request.name, "name", 120),
       prompt: request.prompt === undefined ? current.prompt : requireText(request.prompt, "prompt", 100_000),
       trigger,
-      model: request.model === undefined ? current.model : this.validateModelPolicy(request.model),
-      thinking: request.thinking === undefined ? current.thinking : validateThinkingPolicy(request.thinking),
+      model,
+      thinking,
       timeoutMs: request.timeoutMs === undefined ? current.timeoutMs : validateAutomationTimeoutMs(request.timeoutMs),
       enabled,
       revision,
@@ -253,9 +266,17 @@ export class AutomationService {
         clearTimeout(context.timeout);
         delete context.timeout;
       }
-      void this.beginAbort(context);
+      this.observe(this.beginAbort(context), { runId: context.runId }, "automation abort failed");
     }
     return run;
+  }
+
+  private tickSafely(): void {
+    try {
+      this.tick();
+    } catch (error) {
+      this.logger.error({ err: error }, "automation scheduler tick failed");
+    }
   }
 
   private tick(): void {
@@ -283,13 +304,21 @@ export class AutomationService {
       if (this.active.size >= MAX_CONCURRENT_RUNS) return;
       if (this.active.has(run.id)) continue;
       const context: ActiveAutomationRun = { runId: run.id, abortStarted: false };
+      let launchFailed = false;
       this.active.set(run.id, context);
-      context.promise = this.execute(context).finally(() => {
-        clearContextTimers(context);
-        if (context.session !== undefined) void this.runner.release(context.session);
-        this.active.delete(run.id);
-        if (!this.stopping) this.drainQueue();
-      });
+      context.promise = this.execute(context)
+        .catch((error: unknown) => {
+          launchFailed = true;
+          this.logger.error({ runId: context.runId, err: error }, "automation execution launch failed");
+        })
+        .finally(() => {
+          clearContextTimers(context);
+          if (context.session !== undefined) {
+            this.observe(this.runner.release(context.session), { runId: context.runId }, "automation session release failed");
+          }
+          this.active.delete(run.id);
+          if (!this.stopping && !launchFailed) this.tickSafely();
+        });
     }
   }
 
@@ -312,12 +341,20 @@ export class AutomationService {
       );
       context.session = session;
       if (this.isStoreClosed() || this.active.get(context.runId) !== context) {
-        await this.runner.forceStop(session).catch(() => undefined);
+        try {
+          await this.runner.forceStop(session);
+        } catch (error) {
+          this.logger.warn({ runId: context.runId, err: error }, "automation late session cleanup failed");
+        }
         return;
       }
       run = this.store.getRun(run.id) ?? run;
       if (isTerminalRunStatus(run.status)) {
-        await this.runner.forceStop(session).catch(() => undefined);
+        try {
+          await this.runner.forceStop(session);
+        } catch (error) {
+          this.logger.warn({ runId: context.runId, err: error }, "automation terminal session cleanup failed");
+        }
         return;
       }
       const startedAt = this.now();
@@ -328,7 +365,9 @@ export class AutomationService {
         startedAt: startedAt.toISOString(),
         deadlineAt: new Date(startedAt.getTime() + run.timeoutMs).toISOString(),
       });
-      context.timeout = setTimeout(() => { void this.timeoutRun(context); }, run.timeoutMs);
+      context.timeout = setTimeout(() => {
+        this.observe(this.timeoutRun(context), { runId: context.runId }, "automation timeout handling failed");
+      }, run.timeoutMs);
       context.timeout.unref();
       if (run.status === "cancelling") {
         context.cancellationKind = run.cancellationKind ?? "user";
@@ -381,10 +420,10 @@ export class AutomationService {
   private acceptCreatedSession(context: ActiveAutomationRun, session: CreatedAutomationSession): void {
     context.session = session;
     if (this.active.get(context.runId) !== context) {
-      void this.runner.forceStop(session).catch(() => undefined);
+      this.observe(this.runner.forceStop(session), { runId: context.runId }, "automation late session cleanup failed");
       return;
     }
-    if (context.abortStarted) void this.beginAbort(context);
+    if (context.abortStarted) this.observe(this.beginAbort(context), { runId: context.runId }, "automation abort failed");
   }
 
   private async beginAbort(context: ActiveAutomationRun): Promise<void> {
@@ -427,7 +466,13 @@ export class AutomationService {
     });
     clearContextTimers(context);
     if (this.active.get(context.runId) === context) this.active.delete(context.runId);
-    if (!this.stopping) this.drainQueue();
+    if (!this.stopping) this.tickSafely();
+  }
+
+  private observe(promise: Promise<unknown>, details: Record<string, unknown>, message: string): void {
+    void promise.catch((error: unknown) => {
+      this.logger.error({ ...details, err: error }, message);
+    });
   }
 
   private finishCancellation(runId: string, fallbackKind: "user" | "timeout", usage: Parameters<AutomationStore["finishRun"]>[1]["usage"]): void {
@@ -459,11 +504,11 @@ export class AutomationService {
     });
   }
 
-  private validateModelPolicy(model: AutomationDraft["model"]): AutomationDraft["model"] {
+  private validateModelPolicy(model: AutomationDraft["model"], models: readonly AutomationModel[]): AutomationDraft["model"] {
     if (model.mode === "default") return model;
     const provider = requireText(model.provider, "model provider", 120);
     const id = requireText(model.id, "model id", 240);
-    const available = this.runner.models().find((candidate) => candidate.provider === provider && candidate.id === id);
+    const available = models.find((candidate) => candidate.provider === provider && candidate.id === id);
     if (available === undefined) throw new AutomationServiceError(`Configured model is unavailable: ${provider}/${id}`, 409);
     return { mode: "fixed", provider, id, name: available.name };
   }
@@ -479,10 +524,22 @@ export class AutomationService {
   }
 }
 
-function validateThinkingPolicy(thinking: AutomationDraft["thinking"]): AutomationDraft["thinking"] {
+function validateThinkingPolicy(
+  thinking: AutomationDraft["thinking"],
+  model: AutomationDraft["model"],
+  models: readonly AutomationModel[],
+): AutomationDraft["thinking"] {
   if (thinking.mode === "default") return thinking;
   const level = requireText(thinking.level, "thinking level", 40);
-  if (!KNOWN_THINKING_LEVELS.some((candidate) => candidate === level)) throw new AutomationServiceError(`Invalid thinking level: ${level}`);
+  const aggregate = new Set<string>(KNOWN_THINKING_LEVELS);
+  for (const candidate of models) for (const available of candidate.thinkingLevels) aggregate.add(available);
+  if (!aggregate.has(level)) throw new AutomationServiceError(`Invalid thinking level: ${level}`);
+  if (model.mode === "fixed") {
+    const selected = models.find((candidate) => candidate.provider === model.provider && candidate.id === model.id);
+    if (selected?.thinkingLevels.includes(level) !== true) {
+      throw new AutomationServiceError(`Thinking level ${level} is unavailable for ${model.provider}/${model.id}`, 409);
+    }
+  }
   return { mode: "fixed", level };
 }
 
@@ -502,8 +559,8 @@ function optionalText(value: string | undefined, maxLength: number): string | un
 
 function conflictFrom(error: unknown): AutomationServiceError {
   if (error instanceof AutomationServiceError) return error;
-  const message = errorMessage(error);
-  return new AutomationServiceError(message, /not found/iu.test(message) ? 404 : 409);
+  if (error instanceof AutomationStoreConflictError) return new AutomationServiceError(error.message, 409);
+  throw error instanceof Error ? error : new Error(String(error));
 }
 
 function classifyFailure(error: unknown): string {
