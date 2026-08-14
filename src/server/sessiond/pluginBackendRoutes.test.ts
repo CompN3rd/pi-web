@@ -4,7 +4,7 @@ import type { WorkspaceProvider } from "../../server-plugin-api.js";
 import type { ServerPluginProviderContribution } from "../plugins/serverPluginRuntime.js";
 import type { Project } from "../types.js";
 import { WorkspaceProviderRegistry } from "../workspaces/workspaceProviderRegistry.js";
-import { registerPluginBackendRoutes } from "./pluginBackendRoutes.js";
+import { registerPluginBackendRoutes, type PluginBackendDispatcher } from "./pluginBackendRoutes.js";
 
 const project: Project = {
   id: "project one",
@@ -43,7 +43,7 @@ describe("session daemon plugin backend routes", () => {
     const workspaceId = (await registry.resolve(project)).workspaces[0]?.id;
     if (workspaceId === undefined) throw new Error("Expected workspace");
     const onWorkspacesMutated = vi.fn();
-    registerPluginBackendRoutes(app, { projects: projectReader(), backends: registry, onWorkspacesMutated });
+    registerPluginBackendRoutes(app, { projects: projectReader(), backends: ownerBackend(registry), onWorkspacesMutated });
 
     const response = await app.inject({
       method: "POST",
@@ -71,7 +71,7 @@ describe("session daemon plugin backend routes", () => {
     });
     const workspaceId = (await registry.resolve(project)).workspaces[0]?.id;
     if (workspaceId === undefined) throw new Error("Expected workspace");
-    registerPluginBackendRoutes(app, { projects: projectReader(), backends: registry, onWorkspacesMutated: vi.fn() });
+    registerPluginBackendRoutes(app, { projects: projectReader(), backends: ownerBackend(registry), onWorkspacesMutated: vi.fn() });
     const base = `/plugin-backends/board/projects/${encodeURIComponent(project.id)}/workspaces/${workspaceId}`;
 
     const invalid = await app.inject({ method: "POST", url: `${base}/Invalid`, payload: { revision: "server-r1", input: null } });
@@ -92,8 +92,27 @@ describe("session daemon plugin backend routes", () => {
     expect(failed.body).not.toContain("stack");
   });
 
+  it("does not invalidate workspace topology for an auxiliary backend response", async () => {
+    const onWorkspacesMutated = vi.fn();
+    registerPluginBackendRoutes(app, {
+      projects: projectReader(),
+      backends: { request: () => Promise.resolve({ value: { queued: true }, workspaceTopologyChanged: false }) },
+      onWorkspacesMutated,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/plugin-backends/automations/projects/${encodeURIComponent(project.id)}/workspaces/w1/runs.queue`,
+      payload: { revision: "server-r1", input: null },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ queued: true });
+    expect(onWorkspacesMutated).not.toHaveBeenCalled();
+  });
+
   it("rejects a missing project and malformed request envelope before dispatch", async () => {
-    const request = vi.fn<WorkspaceProviderRegistry["request"]>();
+    const request = vi.fn<PluginBackendDispatcher["request"]>();
     registerPluginBackendRoutes(app, { projects: projectReader(), backends: { request }, onWorkspacesMutated: vi.fn() });
     const path = "/plugin-backends/board/projects/missing/workspaces/w1/cards.summary";
 
@@ -122,6 +141,14 @@ function registryFor(provider: WorkspaceProvider): WorkspaceProviderRegistry {
     logger: { warn: vi.fn() },
     pathInspector: () => true,
   });
+}
+
+function ownerBackend(registry: WorkspaceProviderRegistry): PluginBackendDispatcher {
+  return {
+    async request(request) {
+      return { value: await registry.request(request), workspaceTopologyChanged: true };
+    },
+  };
 }
 
 function contribution(pluginId: string, provider: WorkspaceProvider): ServerPluginProviderContribution {
