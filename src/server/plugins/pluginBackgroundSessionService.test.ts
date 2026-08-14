@@ -90,18 +90,22 @@ describe("PluginBackgroundSessionRegistry", () => {
     await expect(lease.snapshot()).resolves.not.toHaveProperty("usage.estimatedCostUsd");
   });
 
-  it("reports cancellation and releases ownership after the awaited prompt settles", async () => {
+  it("reports cancellation when the prompt settles while the accepted abort is pending", async () => {
     const sessions = sessionHost();
     let settlePrompt: ((value: SessionStatus) => void) | undefined;
+    let acceptAbort: (() => void) | undefined;
     sessions.promptBackgroundSession.mockImplementation(() => new Promise((resolvePrompt) => { settlePrompt = resolvePrompt; }));
+    sessions.abortBackgroundSession.mockImplementation(() => new Promise<void>((resolveAbort) => { acceptAbort = resolveAbort; }));
     const registry = new PluginBackgroundSessionRegistry({ requireProject: () => Promise.resolve(project) }, authority(resolution()), sessions);
     const lease = await registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
 
     const prompt = lease.prompt("work");
-    await lease.abort();
+    const abort = lease.abort();
     settlePrompt?.(status());
 
     await expect(prompt).resolves.toMatchObject({ status: "aborted" });
+    acceptAbort?.();
+    await abort;
     expect(sessions.abortBackgroundSession).toHaveBeenCalledOnce();
     expect(sessions.releaseBackgroundSession).toHaveBeenCalledOnce();
   });
@@ -140,6 +144,18 @@ describe("PluginBackgroundSessionRegistry", () => {
     await expect(failedAbortLease.prompt("work")).resolves.toMatchObject({ status: "completed" });
   });
 
+  it("returns release immediately after force-stop even when the prompt never settles", async () => {
+    const sessions = sessionHost();
+    sessions.promptBackgroundSession.mockImplementation(() => new Promise(() => undefined));
+    const registry = new PluginBackgroundSessionRegistry({ requireProject: () => Promise.resolve(project) }, authority(resolution()), sessions);
+    const lease = await registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
+
+    void lease.prompt("work");
+    await lease.forceStop();
+    await expect(lease.release()).resolves.toBeUndefined();
+    expect(sessions.releaseBackgroundSession).not.toHaveBeenCalled();
+  });
+
   it("drains a pending create during quiesce and rejects later creates", async () => {
     const sessions = sessionHost();
     let settleCreate: ((value: Awaited<ReturnType<typeof sessions.startBackgroundSession>>) => void) | undefined;
@@ -160,6 +176,63 @@ describe("PluginBackgroundSessionRegistry", () => {
     await expect(create).rejects.toThrow("quiescing");
     await expect(quiesce).resolves.toBeUndefined();
     expect(sessions.forceStopBackgroundSession).toHaveBeenCalledOnce();
+  });
+
+  it("bounds a never-settling create while permanently fencing later creates", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessions = sessionHost();
+      sessions.startBackgroundSession.mockImplementation(() => new Promise(() => undefined));
+      const registry = new PluginBackgroundSessionRegistry(
+        { requireProject: () => Promise.resolve(project) },
+        authority(resolution()),
+        sessions,
+        25,
+      );
+      const service = registry.forPlugin("automations");
+      void service.create({ projectId: "p1", workspaceId: "w1" });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const quiesce = registry.quiesceAll();
+      const timedOut = expect(quiesce).rejects.toThrow("Timed out after 25ms");
+      await vi.advanceTimersByTimeAsync(25);
+      await timedOut;
+      await expect(service.create({ projectId: "p1", workspaceId: "w1" })).rejects.toThrow("quiescing");
+      expect(sessions.forceStopBackgroundSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-stops a create that succeeds after the quiesce drain deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessions = sessionHost();
+      let settleCreate: ((value: Awaited<ReturnType<typeof sessions.startBackgroundSession>>) => void) | undefined;
+      sessions.startBackgroundSession.mockImplementation(() => new Promise((resolveCreate) => { settleCreate = resolveCreate; }));
+      const registry = new PluginBackgroundSessionRegistry(
+        { requireProject: () => Promise.resolve(project) },
+        authority(resolution()),
+        sessions,
+        25,
+      );
+      const create = registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
+      const rejectedCreate = expect(create).rejects.toThrow("quiescing");
+      await vi.advanceTimersByTimeAsync(0);
+      const quiesce = registry.quiesceAll();
+      const timedOut = expect(quiesce).rejects.toThrow("Timed out after 25ms");
+      await vi.advanceTimersByTimeAsync(25);
+      await timedOut;
+
+      settleCreate?.({
+        session: { id: "s1", path: "/sessions/s1.jsonl", cwd: workspace.path, created: "2026-08-01T00:00:00.000Z", modified: "2026-08-01T00:00:00.000Z", messageCount: 0, firstMessage: "" },
+        status: status(),
+      });
+      await rejectedCreate;
+      expect(sessions.forceStopBackgroundSession).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retains failed force-stop cleanup for a later quiesce retry", async () => {
