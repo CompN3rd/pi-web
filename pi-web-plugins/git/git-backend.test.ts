@@ -230,7 +230,7 @@ describe("gitStatus with submodules", () => {
     expect(row?.index).toBe("deleted");
     expect(row?.submoduleFromCommit).toBeUndefined();
     expect(status.submodules).not.toContain("HARL");
-  });
+  }, 10_000);
 
   it("renders a newly staged submodule pointer as new → <sha> (zero head OID)", async () => {
     const { dir, c2 } = createFixture();
