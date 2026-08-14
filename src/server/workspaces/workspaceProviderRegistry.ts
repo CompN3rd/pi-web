@@ -50,8 +50,8 @@ export interface WorkspaceProviderRegistryLogger {
 export type WorkspacePathInspector = (path: string) => boolean | Promise<boolean>;
 
 export interface WorkspaceProviderRegistryOptions {
-  /** Active contributions from one immutable server-plugin runtime snapshot. */
-  contributions: readonly ServerPluginProviderContribution[];
+  /** Active contributions, optionally read live across late plugin readiness. */
+  contributions: readonly ServerPluginProviderContribution[] | (() => readonly ServerPluginProviderContribution[]);
   logger: WorkspaceProviderRegistryLogger;
   providerTimeoutMs?: number;
   /** End-to-end deadline for owner re-resolution plus one backend request. */
@@ -178,15 +178,17 @@ export function eligibleWorkspaceProviderContributions(
  * list never falls through to a lower-priority provider.
  */
 export class WorkspaceProviderRegistry {
-  private readonly contributions: readonly ServerPluginProviderContribution[];
+  private readonly contributionsProvider: () => readonly ServerPluginProviderContribution[];
   private readonly providerTimeoutMs: number;
   private readonly requestTimeoutMs: number;
   private readonly pathInspector: WorkspacePathInspector;
   private readonly pendingResolutions = new Map<string, Promise<WorkspaceProviderAuthorityResolution>>();
 
   constructor(private readonly options: WorkspaceProviderRegistryOptions) {
-    this.contributions = Object.freeze([...options.contributions]
-      .sort((left, right) => left.pluginId.localeCompare(right.pluginId)));
+    const contributions = options.contributions;
+    this.contributionsProvider = typeof contributions === "function"
+      ? contributions
+      : () => contributions;
     this.providerTimeoutMs = positiveInteger(options.providerTimeoutMs, DEFAULT_PROVIDER_TIMEOUT_MS, "providerTimeoutMs");
     this.requestTimeoutMs = positiveInteger(options.requestTimeoutMs, PLUGIN_BACKEND_DISPATCH_TIMEOUT_MS, "requestTimeoutMs");
     this.pathInspector = options.pathInspector ?? pathIsDirectory;
@@ -384,7 +386,7 @@ export class WorkspaceProviderRegistry {
 
     const operation = parseRequestOperation(request.operation);
     const moduleRevision = parseRequestRevision(request.moduleRevision, operation);
-    const activeContribution = this.contributions.find((contribution) => contribution.pluginId === pluginId);
+    const activeContribution = this.contributions().find((contribution) => contribution.pluginId === pluginId);
     if (activeContribution === undefined) {
       throw providerRequestError("inactive-plugin", 409, `Server plugin ${pluginId} is not active for workspace backend operation ${operation}`);
     }
@@ -532,7 +534,7 @@ export class WorkspaceProviderRegistry {
     diagnostics: WorkspaceProviderDiagnostic[],
     dispatchSignal?: AbortSignal,
   ): Promise<TierSelection> {
-    const candidates = this.contributions.filter(({ provider }) => (provider.fallback === true) === (tier === "fallback"));
+    const candidates = this.contributions().filter(({ provider }) => (provider.fallback === true) === (tier === "fallback"));
     const claimants: ServerPluginProviderContribution[] = [];
 
     for (const contribution of candidates) {
@@ -574,6 +576,11 @@ export class WorkspaceProviderRegistry {
       kind: "conflict",
       pluginIds: Object.freeze(claimants.map(({ pluginId }) => pluginId)),
     });
+  }
+
+  private contributions(): readonly ServerPluginProviderContribution[] {
+    return [...this.contributionsProvider()]
+      .sort((left, right) => left.pluginId.localeCompare(right.pluginId));
   }
 
   private async resolveWinner(

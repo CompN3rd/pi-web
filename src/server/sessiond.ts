@@ -195,8 +195,15 @@ async function createSessionDaemonRuntime() {
     auth.subscribe(() => { catalogRefresher.requestRefresh(); });
     const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
     const providerHealth = await serverPlugins.inspectHealth();
+    let eligibleProviderIds = new Set(
+      eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth)
+        .map(({ pluginId }) => pluginId),
+    );
     const workspaceProviders = new WorkspaceProviderRegistry({
-      contributions: eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth),
+      // Ready failures and post-ready health changes must take effect in the
+      // already-wired authority used by sessions, routes, and plugin leases.
+      contributions: () => serverPlugins.providerContributions()
+        .filter(({ pluginId }) => eligibleProviderIds.has(pluginId)),
       logger: app.log,
     });
     const statusAttribution = new CachedWorkspaceAttribution({
@@ -263,6 +270,10 @@ async function createSessionDaemonRuntime() {
       (pluginId) => backgroundSessions.quiescePlugin(pluginId),
     );
     const finalPluginHealth = await serverPlugins.inspectHealth();
+    eligibleProviderIds = new Set(
+      eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), finalPluginHealth)
+        .map(({ pluginId }) => pluginId),
+    );
     const pluginBackends = new PluginWorkspaceBackendRegistry({
       contributions: serverPlugins.workspaceBackendContributions(),
       authority: workspaceProviders,
