@@ -1,0 +1,20 @@
+{
+  "name": "@pi-web/automations-plugin",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "croner": "^10.0.1"
+  },
+  "piWeb": {
+    "plugins": [
+      {
+        "id": "automations",
+        "browserRoot": "browser",
+        "module": "browser/pi-web-plugin.js",
+        "serverModule": "server-plugin.js",
+        "machineSpecific": true
+      }
+    ]
+  }
+}
