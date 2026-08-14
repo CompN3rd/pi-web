@@ -10,7 +10,10 @@ Plugins can currently:
 - call browser APIs and documented PI WEB plugin context helpers;
 - read workspace files and start workspace terminal commands through documented helpers;
 - serve browser-public files from an explicitly declared `browserRoot`;
-- contribute one server-side workspace provider, with optional JSON backend requests and workspace-removal planning.
+- contribute one server-side workspace provider, with optional JSON backend requests and workspace-removal planning;
+- contribute a provider-neutral `workspaceBackend` for JSON operations on any current host-authorized workspace;
+- keep durable data in a canonical private `stateDirectory`;
+- start and quiesce background services through bounded lifecycle callbacks, including narrowly leased fresh Pi sessions.
 
 Browser entries run in the PI WEB page through browser plugin API v2. Declared server entries run in the session daemon through the separate server-plugin API v1. Plugins do not get raw Fastify access, arbitrary routes, concrete core services, a generic event bus, Pi model-provider registration, or a general server-hook API. Neither entry is sandboxed.
 
@@ -51,7 +54,7 @@ Treat every plugin package as trusted code:
 - browser entries can call browser APIs, read workspace files, start terminal commands through helpers, and render arbitrary UI;
 - server entries execute in-process inside sessiond with the PI WEB service user's filesystem, environment, and process permissions, and they share sessiond's event loop;
 - a CPU-bound, blocking, or deadlocked callback can stall sessions, terminals, and health endpoints; abort/deadline signals bound only cooperative asynchronous code and cannot preempt code that ignores them;
-- ordinary import, activation, start, health, and stop failures are attributed and quarantined where the host can catch them, but this is a stability boundary rather than a security boundary;
+- ordinary import, activation, start, ready, health, quiesce, and stop failures are attributed and quarantined where the host can catch them, but this is a stability boundary rather than a security boundary;
 - plugins should not be installed from untrusted sources.
 
 PI WEB's `/api/...` HTTP and WebSocket endpoints are internal implementation details. Browser code should use documented context helpers, including `context.backend.request()` for a paired server entry. Server code should use only `@jmfederico/pi-web/server-plugin-api`. Private routes, runtime objects, and source-internal imports are experimental and may change or disappear.
@@ -186,6 +189,20 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
 
 Git declares `machineSpecific: true`, contributes a fallback workspace provider, and implements its status/diff backend and removal plan through the public provider callbacks. It receives no raw routes or private PI WEB services. Use it to understand the demonstrated contract, not as a template for Git-specific fields: replacement providers define their own private data, public metadata, backend operations, and removal wording.
 
+## Canonical background service: bundled Automations
+
+The bundled `automations` plugin is the production example for an auxiliary workspace backend, durable plugin state, late readiness, quiescing, and background-session leases:
+
+```text
+pi-web-plugins/automations/package.json
+pi-web-plugins/automations/browser/pi-web-plugin.ts
+pi-web-plugins/automations/server-plugin.ts
+```
+
+It is paired and `machineSpecific: true`, but it does not claim workspace topology. Its browser panel calls its own `workspaceBackend` through `context.backend.request()`. In `ready()`, after workspace and session authorities exist, its scheduler receives the host's narrow `BackgroundSessionService`; during shutdown, `quiesce()` stops new work and drains/cancels plugin-owned leases before core sessions are disposed. Durable definitions and run history live beneath its host-created `stateDirectory`.
+
+See the [Automations guide](https://pi-web.dev/automations) for user workflows and operational behavior.
+
 ## Copyable standalone workspace-provider example
 
 The repository and published npm package include [`examples/workspace-provider-plugin/`](https://github.com/jmfederico/pi-web/tree/main/examples/workspace-provider-plugin), a small standalone package you can copy without PI WEB source imports. It includes package metadata, a strict NodeNext TypeScript configuration, browser and server source, and build/install instructions.
@@ -213,7 +230,7 @@ When [machine federation](https://pi-web.dev/machines) is enabled, PI WEB loads 
 
 - actions, workspace panels, and workspace labels appear only for the applicable selected machine;
 - file and terminal helpers run against that machine;
-- `context.backend.request()` is routed through the gateway to the current workspace owner on that machine;
+- `context.backend.request()` is routed through the gateway to that browser entry's paired server backend on the selected machine, whether it owns workspace topology or contributes an auxiliary backend;
 - a server-backed browser module is published only when its package source, scope, settings fingerprint, browser revision, and backend revision match the active sessiond snapshot and the backend is not unhealthy;
 - if gateway and remote packages share an original id, `machineSpecific` controls whether the portable gateway copy is reused or the selected machine's own copy is required;
 - remote theme contributions are ignored for now because themes are app-wide.
@@ -301,6 +318,23 @@ Ordinary plugin failures are normally quarantined, but safe start provides a rec
 PI WEB ships core, discoverable plugins in the main `@jmfederico/pi-web` npm package. No separate `pi install` step is required. After updating PI WEB, manually restart sessiond so bundled server entries use the installed revision, then reload the browser tab. Browser-only bundled entries need only the tab reload.
 
 Built-in plugins can be managed from **Settings → PI WEB plugins** or with the top-level `plugins` config key.
+
+### Automations
+
+**Plugin id:** `automations`
+**What it does:** adds a workspace panel for durable machine-local manual, one-time, interval, and cron-triggered Pi jobs, with model/thinking selection, test-before-enable revisions, cancellation, restart recovery, history, and root-session usage.
+
+Automations is enabled by default and declares `machineSpecific: true`. Its auxiliary backend works for Git, third-party-provider, and kernel folder workspaces without claiming their topology. The selected machine's session daemon owns the scheduler and private SQLite database. See the [Automations guide](https://pi-web.dev/automations) for workflows, persistence, federation, and restart behavior.
+
+To disable it after restarting the target session daemon:
+
+```json
+{
+  "plugins": {
+    "automations": { "enabled": false }
+  }
+}
+```
 
 ### Git
 
@@ -618,17 +652,50 @@ The default export has `apiVersion: 1`, a non-empty `name`, and `activate(contex
 ```ts
 interface ServerPluginActivation {
   workspaceProvider?: WorkspaceProvider;
+  workspaceBackend?: WorkspaceBackend;
   start?(signal: AbortSignal): void | Promise<void>;
+  ready?(context: ServerPluginReadyContext, signal: AbortSignal): void | Promise<void>;
+  quiesce?(signal: AbortSignal): void | Promise<void>;
   stop?(signal: AbortSignal): void | Promise<void>;
   health?(signal: AbortSignal): ServerPluginHealth | Promise<ServerPluginHealth>;
 }
 ```
 
-A server plugin may contribute at most one `workspaceProvider`. The host-owned frozen activation context contains its `pluginId`, `packageRoot`, JSON settings snapshot, scoped logger, activation `AbortSignal`, and an argv-based `execFile()` helper. `execFile()` has host-owned timeout/output bounds; pass the current callback's signal into every command request. The API exposes no shell parser, Fastify instance, route registration, concrete service, event bus, or service locator.
+A server plugin may contribute at most one `workspaceProvider`. The host-owned frozen activation context contains its `pluginId`, `packageRoot`, canonical private `stateDirectory`, JSON settings snapshot, scoped logger, activation `AbortSignal`, and an argv-based `execFile()` helper. `stateDirectory` is created under `$PI_WEB_DATA_DIR/plugin-state/<plugin-id>` and is the only host-assigned place for plugin-managed durable machine state. `execFile()` has host-owned timeout/output bounds; pass the current callback's signal into every command request. The API exposes no shell parser, Fastify instance, route registration, concrete service, event bus, or service locator.
 
 Every activation, lifecycle, provider, and request signal is scoped to that one invocation. The host aborts it when the invocation times out or settles. Do not retain a signal as a plugin-lifetime shutdown notification; release plugin-owned resources in the explicit `stop()` callback. Deadlines remain cooperative, so plugins must observe each supplied signal.
 
-Sessiond resolves the enabled catalog once per process start. It imports, validates, activates, and starts each server entry before publishing its contribution. A failed entry is attributed and skipped without aborting ordinary activation of other plugins; a failed `start` is rolled back with `stop` when available. Successful plugins stop in reverse activation order. Sessiond inspects each optional `health()` callback once while building the startup workspace authority; an unhealthy provider is excluded, a degraded provider remains eligible, and that inspection is not polled again during the process lifetime. Server entries are never hot-reloaded or unloaded after config/package edits.
+Sessiond resolves the enabled catalog once per process start. It imports, validates, activates, and calls `start()` before authoritative workspace and session services are assembled. Once those services exist, it calls `ready()` with the narrow background-session capability. `ready()` is the place to begin timers, schedulers, and other background ingress; `start()` is for resources that do not require live workspace/session authority. A failed entry is attributed and skipped without aborting ordinary activation of other plugins; a failed `start` is rolled back with `stop` when available. A failed `ready` is marked failed, its background leases are cleaned up, and its provider/backend contributions and paired browser module are withheld.
+
+During shutdown, sessiond calls `quiesce()` in reverse activation order before core sessions are disposed, then later calls `stop()` in reverse order to release remaining plugin-owned resources. All lifecycle calls are bounded and cooperative; code that blocks the shared event loop is still trusted code and cannot be preempted. Sessiond inspects each optional `health()` callback once while building the startup workspace authority; an unhealthy provider is excluded, a degraded provider remains eligible, and that inspection is not polled again during the process lifetime. Server entries are never hot-reloaded or unloaded after config/package edits.
+
+### Auxiliary workspace backend contract
+
+A plugin may contribute `workspaceBackend` instead of using the owning provider's optional `request()`. This does not claim, replace, or weaken workspace topology ownership:
+
+```ts
+interface WorkspaceBackend {
+  request(context: WorkspaceBackendRequestContext): Promise<JsonValue>;
+}
+
+interface WorkspaceBackendRequestContext {
+  readonly project: ProjectInput;
+  readonly workspace: WorkspaceSnapshot;
+  readonly operation: string;
+  readonly input: JsonValue;
+  readonly signal: AbortSignal;
+}
+```
+
+The host resolves the current project/workspace immediately before each request and supplies a provider-neutral frozen snapshot. Requests are revision-fenced, finite-JSON-only, size-bounded, time-bounded, and scoped to the calling plugin. Auxiliary calls never invalidate the workspace topology cache because they do not own that topology. A server plugin cannot expose both `workspaceBackend` and `workspaceProvider.request()`; choose the auxiliary contract or the owner-provider request contract.
+
+### Background session leases
+
+`ready()` receives a `ServerPluginReadyContext` containing only `backgroundSessions`. This service lists the current model catalog and creates a fresh session from authoritative `projectId` and `workspaceId`; plugins cannot supply an arbitrary working directory.
+
+A `BackgroundSessionLease` exposes the created `sessionId` plus one-prompt-at-a-time `prompt()`, `snapshot()`, `abort()`, `forceStop()`, and `release()` operations. Usage covers the leased root session and leaves estimated cost absent when it is unknown. The host attributes every lease to the plugin id and rejects interactive model/thinking/prompt mutations while the lease is active. `release()` waits for an in-flight prompt to settle; plugin quiescing and registry shutdown reject new leases and clean up pending or active ones.
+
+This is intentionally not a general session service. Plugins do not receive transcript internals, arbitrary session mutation, cwd selection, route access, or a realtime protocol. Keep plugin-owned durable job state in `stateDirectory`, and treat the leased Pi session as execution authority rather than a scheduler/database.
 
 ### Workspace provider contract
 
@@ -865,7 +932,7 @@ interface WorkspacePanelContext {
 
 `icon` is optional and is used in the compact mobile tab bar. Prefer an SVG rendered with the `svg` helper from `PluginActivationContext`; use `currentColor` so PI WEB themes can style it. If `icon` is omitted, mobile tabs fall back to initials from the panel title, or to the full title when initials collide.
 
-`machine`, `workspace`, `files`, optional `backend`, `prompt`, `terminal`, and `host` are documented as stable for panel callbacks. The `files` helper supports `readFile`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Listing workspace files](#listing-workspace-files), and [Writing, deleting, and moving workspace files](#writing-deleting-and-moving-workspace-files). A browser entry with a paired active provider uses `backend.request()` instead of constructing API routes — see [Calling paired workspace backends](#calling-paired-workspace-backends). The `prompt` helper supports panel interactions that insert workspace context into the current prompt — see [Prompt editor API](#prompt-editor-api). Use `terminal.open()` to switch to the built-in terminal panel; pass `{ terminalId }` to deep-link to a specific terminal. `routeAliases` is only for migrating former URL tool/view values. Implement `onInvalidate()` to refresh plugin-owned panel data when an action or host refresh calls `refreshWorkspacePanels()`; call `host.requestRender()` when async state changes should make PI WEB re-evaluate `badge`, `visible`, or `render`.
+`machine`, `workspace`, `files`, optional `backend`, `prompt`, `terminal`, and `host` are documented as stable for panel callbacks. The `files` helper supports `readFile`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Listing workspace files](#listing-workspace-files), and [Writing, deleting, and moving workspace files](#writing-deleting-and-moving-workspace-files). A browser entry with a paired active server backend uses `backend.request()` instead of constructing API routes — see [Calling paired workspace backends](#calling-paired-workspace-backends). The `prompt` helper supports panel interactions that insert workspace context into the current prompt — see [Prompt editor API](#prompt-editor-api). Use `terminal.open()` to switch to the built-in terminal panel; pass `{ terminalId }` to deep-link to a specific terminal. `routeAliases` is only for migrating former URL tool/view values. Implement `onInvalidate()` to refresh plugin-owned panel data when an action or host refresh calls `refreshWorkspacePanels()`; call `host.requestRender()` when async state changes should make PI WEB re-evaluate `badge`, `visible`, or `render`.
 
 Useful workspace and machine shapes:
 
@@ -948,7 +1015,7 @@ interface WorkspaceLabelContext {
 }
 ```
 
-`machine`, `workspace`, `files`, optional `backend`, and `host` are documented as stable for label callbacks. The `files` helper supports `readFile`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Listing workspace files](#listing-workspace-files), and [Writing, deleting, and moving workspace files](#writing-deleting-and-moving-workspace-files). A browser entry with a paired active provider can call `backend.request()` from a label-owned async cache after checking that the optional helper is present. Include `machine.id` in caches that depend on workspace data. Call `host.requestRender()` when async plugin-owned state changes should make PI WEB re-evaluate label `visible` or `items` callbacks.
+`machine`, `workspace`, `files`, optional `backend`, and `host` are documented as stable for label callbacks. The `files` helper supports `readFile`, `listFiles`, `writeFile`, `deleteFile`, and `moveFile` — see [Reading workspace files](#reading-workspace-files), [Listing workspace files](#listing-workspace-files), and [Writing, deleting, and moving workspace files](#writing-deleting-and-moving-workspace-files). A browser entry with a paired active server backend can call `backend.request()` from a label-owned async cache after checking that the optional helper is present. Include `machine.id` in caches that depend on workspace data. Call `host.requestRender()` when async plugin-owned state changes should make PI WEB re-evaluate label `visible` or `items` callbacks.
 
 Items are sorted by `order` and then id. Return an empty array to render nothing. Keep callbacks synchronous and lightweight; start async work from the callback, return cached items, then call `host.requestRender()` when the cache changes.
 
@@ -1010,7 +1077,7 @@ export default {
 
 ## Calling paired workspace backends
 
-Workspace panel and label contexts include an optional JSON-only backend helper. It is present only for a browser entry paired with an active server backend:
+Workspace panel and label contexts include an optional JSON-only backend helper. It is present only for a browser entry paired with an active server backend. That backend may be the current workspace owner's `WorkspaceProvider.request()` or the same plugin's provider-neutral `workspaceBackend`:
 
 ```js
 if (context.backend === undefined) throw new Error("Workspace backend unavailable");
@@ -1019,7 +1086,7 @@ const result = await context.backend.request("summary", {
 });
 ```
 
-PI WEB binds the request to the browser module's original package id and active backend revision, plus the callback's selected machine, project, and workspace. The host resolves the current workspace owner again before dispatch. The call succeeds only when that same active plugin still owns the workspace and implements `WorkspaceProvider.request()`.
+PI WEB binds the request to the browser module's original package id and active backend revision, plus the callback's selected machine, project, and workspace. The host resolves the current workspace again before dispatch. For `WorkspaceProvider.request()`, the call succeeds only when that plugin still owns the workspace. For `workspaceBackend`, the workspace only needs to remain current and host-authorized; the plugin does not gain ownership of its topology.
 
 Operation ids must match `^[a-z][a-z0-9.-]*$` and be at most 128 characters. Inputs and results must contain only finite JSON values; functions, classes, `undefined`, cycles, and non-finite numbers are rejected. Requests, responses, owner resolution, and provider callbacks are size- and time-bounded.
 
@@ -1265,13 +1332,14 @@ If you are an AI agent building or editing a PI WEB plugin, follow this checklis
 6. Add actions for command-palette operations, panels for larger workspace UI, and labels for compact inline metadata.
 7. Return arrays synchronously from workspace label `items()`; return an empty array to render nothing.
 8. Use documented browser helpers first: `files`, `terminal`, `backend`, `host.requestRender`, `workspace`, `machine`, `state`, and `prompt`. Never construct PI WEB backend, federation, or absolute asset URLs.
-9. In a server entry, return only the demonstrated lifecycle callbacks and at most one `workspaceProvider`; treat every supplied `AbortSignal` as operation-scoped and forward it to bounded work.
-10. Make provider claims conservative. Return exactly one main workspace, stable keys, absolute accessible directories, JSON data/metadata, and optional request/removal capabilities.
-11. Keep backend operations JSON-only, bounded, and provider-owned. Put no secrets in `publicMetadata`, browser responses, removal wording, or diagnostics.
-12. Keep the installed package at or below 4,096 entries and 16 MiB, and keep every browser-public file inside a narrow `browserRoot`.
-13. Treat both entries as trusted code. A server module shares sessiond's process and user permissions.
-14. For browser-only edits, reload or hard-reload the page. For a server-backed edit, restart sessiond and then reload the page.
-15. Warn that restarting `pi-web-sessiond.service` may interrupt active sessions/runtime ownership.
+9. In a server entry, return only the demonstrated lifecycle callbacks, at most one `workspaceProvider`, and at most one request style (`workspaceBackend` or `workspaceProvider.request()`); treat every supplied `AbortSignal` as operation-scoped and forward it to bounded work.
+10. Start background ingress in `ready()`, stop it in `quiesce()`, release resources in `stop()`, keep durable machine state in `stateDirectory`, and release every background-session lease.
+11. Make provider claims conservative. Return exactly one main workspace, stable keys, absolute accessible directories, JSON data/metadata, and optional request/removal capabilities.
+12. Keep backend operations JSON-only and bounded. Put no secrets in `publicMetadata`, browser responses, removal wording, or diagnostics.
+13. Keep the installed package at or below 4,096 entries and 16 MiB, and keep every browser-public file inside a narrow `browserRoot`.
+14. Treat both entries as trusted code. A server module shares sessiond's process and user permissions.
+15. For browser-only edits, reload or hard-reload the page. For a server-backed edit, restart sessiond and then reload the page.
+16. Warn that restarting `pi-web-sessiond.service` may interrupt active sessions/runtime ownership.
 
 ## Troubleshooting
 

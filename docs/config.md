@@ -65,6 +65,7 @@ Process restarts depend on the key:
   "askUser": true,
   "extensionDialogsTimeoutMs": 300000,
   "plugins": {
+    "automations": { "enabled": true },
     "workspace-tasks": { "enabled": true },
     "updates": { "enabled": true },
     "info": { "enabled": false }
@@ -181,7 +182,9 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 
 ### Managed data directory
 
-`PI_WEB_DATA_DIR` sets the root for PI WEB-managed runtime state and defaults to `~/.pi-web`. Unless a more specific path override is configured, PI WEB stores its project and machine registries, locally discovered plugins, default session-daemon socket, and session archives beneath this root.
+`PI_WEB_DATA_DIR` sets the root for PI WEB-managed runtime state and defaults to `~/.pi-web`. Unless a more specific path override is configured, PI WEB stores its project and machine registries, locally discovered plugins, default session-daemon socket, session archives, and private server-plugin state beneath this root.
+
+Each server plugin receives a canonical private directory at `$PI_WEB_DATA_DIR/plugin-state/<plugin-id>`. This is managed runtime data, not config. For example, bundled Automations stores its SQLite database at `$PI_WEB_DATA_DIR/plugin-state/automations/automations.sqlite`. Plugins do not create separate data-directory ownership markers; the single session daemon owns the whole data directory through `sessiond-owner.json`.
 
 Each data directory is independent: after pointing PI WEB at a new root, it starts there with empty registries and no session archives. To carry session archives over, stop PI WEB, then copy `archived-sessions.json` and the `archived-sessions/` directory from the old data directory into the new one before starting it again.
 
@@ -355,6 +358,7 @@ The `plugins` key controls desired enablement and JSON settings for PI WEB brows
 ```json
 {
   "plugins": {
+    "automations": { "enabled": true },
     "git": { "enabled": true, "settings": {} },
     "workspace-tasks": { "enabled": true },
     "updates": { "enabled": false }
@@ -363,6 +367,8 @@ The `plugins` key controls desired enablement and JSON settings for PI WEB brows
 ```
 
 Plugins are enabled by default. `plugins.<id>.enabled: false` hides a browser-only entry on the next page load. For a server-backed entry, desired disablement takes effect on the next sessiond start; its paired browser entry continues to follow the still-active backend until that restart. Server settings are copied into sessiond's startup snapshot, and diagnostics expose only a fingerprint, never the values.
+
+Bundled Automations uses only this standard plugin enablement entry—`plugins.automations.enabled`—and has no separate core config key. See the [Automations guide](https://pi-web.dev/automations) for schedules, storage, federation, and recovery behavior.
 
 #### Desired versus active plugin state
 

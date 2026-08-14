@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PI WEB Automations — durable scheduled Pi sessions</title>
+    <meta name="description" content="Create durable machine-local PI WEB automations with schedules, fixed models, timeouts, cancellation, recovery, run history, and root-session usage." />
+    <link rel="canonical" href="https://pi-web.dev/automations" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="PI WEB" />
+    <meta property="og:title" content="PI WEB Automations" />
+    <meta property="og:description" content="Schedule fresh Pi sessions on local or federated machines and supervise every run." />
+    <meta property="og:url" content="https://pi-web.dev/automations" />
+    <meta property="og:image" content="https://pi-web.dev/assets/pi-web-banner.png" />
+    <meta property="og:image:alt" content="PI WEB browser UI for persistent Pi Coding Agent sessions" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="PI WEB Automations" />
+    <meta name="twitter:description" content="Schedule fresh Pi sessions on local or federated machines and supervise every run." />
+    <meta name="twitter:image" content="https://pi-web.dev/assets/pi-web-banner.png" />
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+    <script>
+      (() => {
+        const theme = window.localStorage.getItem("pi-web-theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="container nav" aria-label="Main navigation">
+        <a class="brand" href="./" aria-label="PI WEB home">PI WEB</a>
+        <div class="nav-links">
+          <div class="nav-pages">
+            <a href="remote-first">Remote-first</a><a href="machines">Fleet</a><a href="automations" aria-current="page">Automations</a><a href="install">Install</a><a href="config">Config</a><a href="plugins">Plugins</a><a href="faq">FAQ</a>
+          </div>
+          <div class="nav-actions">
+            <a class="github-link" href="https://github.com/jmfederico/pi-web" aria-label="PI WEB on GitHub"><span>GitHub</span></a>
+            <button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle light and dark theme"><span data-theme-icon aria-hidden="true">◐</span><span data-theme-label>Theme</span></button>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main>
+      <section class="page-hero">
+        <div class="container">
+          <p class="eyebrow"><span class="pulse"></span> Durable agent work</p>
+          <h1>Schedule fresh Pi sessions. Keep control of every run.</h1>
+          <p>Automations is a bundled, machine-specific PI WEB plugin that schedules durable workspace jobs in the long-lived session daemon and exposes them through a public-API browser panel.</p>
+        </div>
+      </section>
+
+      <section class="section compact">
+        <div class="container doc-layout">
+          <aside class="toc" aria-label="Automations page contents">
+            <strong>On this page</strong>
+            <a href="#workflow">Create and test</a><a href="#triggers">Triggers and models</a><a href="#timeouts">Cancellation</a><a href="#history">History and usage</a><a href="#persistence">Persistence and recovery</a><a href="#federation">Machine federation</a><a href="#config">Enable or disable</a><a href="#security">Security</a>
+          </aside>
+
+          <div class="doc-content">
+            <section id="workflow">
+              <h2>Create, test, then enable</h2>
+              <p>Select a machine, project, and workspace, then open <strong>Automations</strong>. New definitions are saved disabled. Use <strong>Run now / test</strong> and wait for that exact revision to complete before enabling its schedule.</p>
+              <p>Editing the prompt, trigger, model, thinking policy, timeout, or other definition fields creates a new revision, pauses it, and requires another successful manual test. Every run receives a fresh Pi session without conversational context from another run. The current project and workspace are revalidated before the session starts.</p>
+              <div class="callout"><strong>Bundled plugin:</strong> plugin id <code>automations</code>, browser API v2, server API v1, and <code>machineSpecific: true</code>. It is included and enabled by default with PI WEB.</div>
+            </section>
+
+            <section id="triggers">
+              <h2>Triggers, models, and thinking</h2>
+              <ul>
+                <li><strong>Manual:</strong> run only on demand.</li>
+                <li><strong>One time:</strong> run once at a future timestamp.</li>
+                <li><strong>Interval:</strong> use a cadence of at least one minute.</li>
+                <li><strong>Cron:</strong> use a six-field expression and an explicit IANA time zone.</li>
+              </ul>
+              <p>The same definition never overlaps itself: a colliding scheduled occurrence is recorded as skipped. Choose the machine default or a fixed model, then a supported thinking level. Fixed models are validated again when the session is created and are never silently replaced. History preserves configured and actual model/thinking values.</p>
+            </section>
+
+            <section id="timeouts">
+              <h2>Timeouts, cancellation, and force-stop</h2>
+              <p>The default timeout is 60 minutes and can be set from 1 minute through 24 hours. Its deadline begins when the fresh session is ready and prompt execution starts, not while a run waits in the queue.</p>
+              <p>Cancellation intent is stored before PI WEB requests a cooperative abort. If the run does not settle within 15 seconds, the plugin force-stops its leased runtime. The outcome becomes <code>unknown</code> when termination cannot be proven. Cancellation cannot undo external effects that already completed.</p>
+            </section>
+
+            <section id="history">
+              <h2>Run history and root-session usage</h2>
+              <p>The panel shows recent status, source, revision, times, duration, model/thinking values, errors, cancellation reasons, and root-session token usage. Estimated cost appears only when available; unknown cost remains unknown rather than becoming zero. Root totals do not claim to include untracked subagents or external paid tools.</p>
+              <p>Session IDs are shown for diagnosis, but direct history links are omitted until PI WEB exposes a public plugin navigation helper. The plugin does not construct private session URLs. Deleting a definition retains its run history.</p>
+            </section>
+
+            <section id="persistence">
+              <h2>Daemon-owned persistence and recovery</h2>
+              <p>The long-lived session daemon owns the scheduler and stores definitions, revisions, occurrences, attempts, cancellation, and usage in:</p>
+              <pre><code>$PI_WEB_DATA_DIR/plugin-state/automations/automations.sqlite</code></pre>
+              <p>The data directory defaults to <code>~/.pi-web</code>. Its one ownership marker is the global <code>$PI_WEB_DATA_DIR/sessiond-owner.json</code>; Automations creates no separate owner file.</p>
+              <p>Browser disconnects, page reloads, and web/API restarts do not stop the scheduler or active runs. The panel polls the paired backend about every 2 seconds while work is active and every 15 seconds while idle; there is no Automations-specific realtime protocol.</p>
+              <p>After an unexpected daemon restart, queued work remains eligible, while starting, running, or cancelling attempts become <code>unknown</code> and are not blindly repeated. Definitions, history, and future schedule state remain durable.</p>
+              <p>Server-plugin/runtime changes require a manual target-daemon restart followed by a browser reload. For the systemd user service, run <code>systemctl --user restart pi-web-sessiond</code>. Restarting only the web/API process or using Pi's <code>/reload</code> does not activate changed server code.</p>
+            </section>
+
+            <section id="federation">
+              <h2>Local and remote machines</h2>
+              <p>Automations uses PI WEB's generic plugin federation. For a remote selection, the remote machine's compatible plugin supplies the panel through the gateway while its session daemon validates the workspace, stores the SQLite database, resolves models, schedules work, and runs sessions locally.</p>
+              <p>Definitions are not replicated and do not fail over. Recreate a definition on a destination machine so that machine can validate it. A gateway or browser disconnect does not stop work owned by a still-running remote daemon.</p>
+            </section>
+
+            <section id="config">
+              <h2>Enable, disable, and recover</h2>
+              <p>Use <strong>Settings → PI WEB plugins</strong> or the standard global plugin config. It has no separate core config key.</p>
+              <pre><code>{
+  "plugins": {
+    "automations": { "enabled": false }
+  }
+}</code></pre>
+              <p>Restart the target session daemon and reload the browser after changing this server-backed plugin. Disabling preserves its database. Standard offline recovery also applies, including <code>pi-web plugins disable automations --restart</code>.</p>
+            </section>
+
+            <section id="security">
+              <h2>Security boundary</h2>
+              <p>Plugins are trusted code. The browser entry runs in the PI WEB page, and the server entry runs in-process with sessiond. A fresh session isolates conversation context, not the host: prompts and tools retain the target machine's Pi and OS-user permissions. Review prompts, use least-privilege credentials, and protect PI WEB with authentication and network controls.</p>
+              <p>The panel uses public <code>context.backend.request()</code>, and the server uses PI WEB's public plugin lifecycle and background-session lease. It adds no Automations-specific core route.</p>
+              <div class="doc-actions"><a class="button primary" href="automations.md">Complete Markdown reference</a><a class="button" href="plugins">Plugin architecture</a><a class="button" href="config">Configuration</a></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <span>PI WEB docs</span>
+        <div class="footer-links"><a href="./">Home</a><a href="remote-first">Remote-first</a><a href="machines">Fleet</a><a href="automations">Automations</a><a href="install">Install</a><a href="config">Config</a><a href="plugins">Plugins</a><a href="faq">FAQ</a><a href="https://github.com/jmfederico/pi-web">GitHub</a></div>
+      </div>
+    </footer>
+    <script src="site.js"></script>
+  </body>
+</html>

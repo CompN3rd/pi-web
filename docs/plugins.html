@@ -3,27 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PI WEB plugins — extend the UI and workspace providers</title>
+    <title>PI WEB plugins — UI, workspace backends, and background services</title>
     <meta
       name="description"
-      content="Build trusted PI WEB browser-v2 plugins and server-v1 workspace providers through the public package contracts."
+      content="Build trusted PI WEB browser-v2 plugins and server-v1 workspace providers, auxiliary backends, and background services through public package contracts."
     />
     <link rel="canonical" href="https://pi-web.dev/plugins" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="PI WEB" />
-    <meta property="og:title" content="PI WEB plugins — extend the UI and workspace providers" />
+    <meta property="og:title" content="PI WEB plugins — UI, workspace backends, and background services" />
     <meta
       property="og:description"
-      content="Customize PI WEB with trusted browser modules and server-backed workspace providers."
+      content="Customize PI WEB with trusted browser modules, workspace backends, providers, and background services."
     />
     <meta property="og:url" content="https://pi-web.dev/plugins" />
     <meta property="og:image" content="https://pi-web.dev/assets/pi-web-banner.png" />
     <meta property="og:image:alt" content="PI WEB browser UI for persistent Pi Coding Agent sessions" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="PI WEB plugins — extend the UI and workspace providers" />
+    <meta name="twitter:title" content="PI WEB plugins — UI, workspace backends, and background services" />
     <meta
       name="twitter:description"
-      content="Customize PI WEB with trusted browser modules and server-backed workspace providers."
+      content="Customize PI WEB with trusted browser modules, workspace backends, providers, and background services."
     />
     <meta name="twitter:image" content="https://pi-web.dev/assets/pi-web-banner.png" />
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
@@ -49,6 +49,7 @@
           <div class="nav-pages">
             <a href="remote-first">Remote-first</a>
             <a href="machines">Fleet</a>
+            <a href="automations">Automations</a>
             <a href="install">Install</a>
             <a href="config">Config</a>
             <a href="plugins" aria-current="page">Plugins</a>
@@ -95,7 +96,7 @@
             <a href="#ask-ai">What to ask AI to build</a>
             <a href="#example">Canonical examples</a>
             <a href="#author-contract">Authoring contract</a>
-            <a href="#provider-contract">Workspace providers</a>
+            <a href="#provider-contract">Backends and workspace providers</a>
             <a href="#built-in-plugins">Built-in plugins</a>
             <a href="#manage-plugins">Manage PI WEB plugins</a>
             <a href="#lifecycle-recovery">Lifecycle and recovery</a>
@@ -117,10 +118,13 @@
                 <li><strong>Browser-public assets</strong> served only from an explicit <code>browserRoot</code>.</li>
                 <li><strong>Browser helpers</strong> for files, terminals, prompts, rendering, and paired backends.</li>
                 <li><strong>One workspace provider</strong> from an optional sessiond server entry.</li>
+                <li><strong>Provider-neutral workspace backends</strong> for bounded JSON operations without claiming topology.</li>
+                <li><strong>Durable background services</strong> with private state directories and narrow fresh-session leases.</li>
               </ul>
               <p>
-                The server API is deliberately narrow: lifecycle callbacks, scoped logging/settings, bounded argv
-                execution, one workspace provider, JSON backend requests, and removal planning. Plugins receive no raw
+                The server API is deliberately narrow: bounded lifecycle callbacks, scoped logging/settings, a canonical
+                private state directory, bounded argv execution, one workspace provider or auxiliary JSON backend,
+                removal planning, and host-authorized background-session leases. Plugins receive no raw
                 Fastify access, arbitrary routes, concrete services, generic event bus, Pi model-provider registration,
                 or general server hooks.
               </p>
@@ -326,19 +330,40 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
             </section>
 
             <section id="provider-contract">
-              <h2>Workspace provider contract</h2>
+              <h2>Auxiliary backends, background sessions, and providers</h2>
               <p>
-                Sessiond is the single workspace authority. An enabled server entry can contribute at most one provider.
+                A server entry receives a canonical private <code>stateDirectory</code> under
+                <code>$PI_WEB_DATA_DIR/plugin-state/&lt;plugin-id&gt;</code>. It may contribute a provider-neutral
+                <code>workspaceBackend</code> for JSON operations on any current host-authorized workspace without claiming
+                or changing workspace topology. The host revalidates the workspace before every bounded, revision-fenced
+                call and supplies a frozen provider-neutral snapshot. A plugin chooses either this auxiliary backend or
+                its owning <code>WorkspaceProvider.request()</code>, not both.
+              </p>
+              <p>
+                Sessiond calls <code>start()</code> for early resources, then <code>ready()</code> after workspace and
+                session authorities exist. <code>ready()</code> receives only a narrow background-session service: model
+                listing plus fresh session creation by authoritative project/workspace id. Each plugin-owned lease permits
+                one prompt at a time and exposes snapshot, abort, force-stop, and release. It does not expose arbitrary
+                cwd selection, transcript internals, generic session mutation, routes, or realtime events.
+              </p>
+              <p>
+                During shutdown, <code>quiesce()</code> stops background ingress and drains or cancels leases before core
+                sessions are disposed; <code>stop()</code> later releases remaining resources. Failed readiness is
+                attributed, its leases are cleaned up, and its backend/provider and paired browser entry are withheld.
+                Lifecycle deadlines are cooperative and cannot preempt blocking trusted code.
+              </p>
+              <p>
+                Sessiond remains the single workspace authority. An enabled server entry can contribute at most one provider.
                 Primary providers probe first; bundled Git probes only as a fallback. Exactly one claimant owns the whole
                 project's workspace semantics. Multiple claimants in the winning tier produce a visible conflict rather
                 than import-order selection. If nobody claims, the kernel project-folder workspace remains available.
               </p>
               <p>
                 A server module default-exports <code>{ apiVersion: 1, name, activate }</code>. Activation may return
-                cooperative <code>start</code>, <code>stop</code>, and <code>health</code> callbacks plus at most one
-                provider. Every activation, lifecycle, provider, and request signal is scoped to that one invocation and
-                is aborted when it times out or settles; it is not a plugin-lifetime shutdown signal. Release resources
-                in explicit <code>stop()</code>. Server code is never hot-reloaded.
+                cooperative <code>start</code>, <code>ready</code>, <code>quiesce</code>, <code>stop</code>, and
+                <code>health</code> callbacks plus at most one provider and one request style. Every activation, lifecycle,
+                provider, and request signal is scoped to that one invocation and is aborted when it times out or settles;
+                it is not a plugin-lifetime shutdown signal. Server code is never hot-reloaded.
               </p>
               <p>
                 A provider returns stable workspace keys, accessible absolute directories, labels, exactly one main
@@ -357,7 +382,9 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
                 Panels and labels receive optional <code>context.backend</code> only when their browser entry has a
                 paired active server backend. PI WEB binds <code>backend.request(operation, input)</code> to the original
                 plugin id, active backend revision, selected machine, project, and workspace, and carries it through
-                federation. Plugins should never construct PI WEB backend or machine API URLs. Panels can implement
+                federation. Owner-provider requests require that plugin still to own the workspace; auxiliary backend
+                requests require a current host-authorized workspace but do not confer ownership. Plugins should never
+                construct PI WEB backend or machine API URLs. Panels can implement
                 <code>onInvalidate</code> and actions can call <code>refreshWorkspacePanels()</code>; route aliases and
                 shortcut aliases exist only for browser-v1 migrations.
               </p>
@@ -380,6 +407,21 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
                 Built-in plugins can be managed from <strong>Settings → PI WEB plugins</strong> or with the top-level
                 <code>plugins</code> config key.
               </p>
+
+              <h3>Automations</h3>
+              <p>
+                <strong>Automations</strong> (<code>automations</code>) is enabled by default and adds durable machine-local
+                manual, one-time, interval, and cron-triggered Pi jobs. It uses a provider-neutral auxiliary backend,
+                private SQLite state, late readiness/quiescing, and fresh background-session leases without claiming a
+                workspace provider. Its <code>machineSpecific: true</code> panel follows the selected machine through
+                generic plugin federation. See the <a href="automations">Automations guide</a> for test-before-enable,
+                cancellation, history, usage, persistence, and restart recovery.
+              </p>
+              <div class="code-card"><div class="copy-row"><strong>Disable Automations</strong><button class="copy-button" data-copy="#automations-disable">Copy</button></div><pre id="automations-disable"><code>{
+  "plugins": {
+    "automations": { "enabled": false }
+  }
+}</code></pre></div>
 
               <h3>Git</h3>
               <p>
@@ -652,7 +694,7 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
                 event loop. Install only packages you trust.
               </p>
               <p>
-                Ordinary import/lifecycle/health failures are quarantined when PI WEB can catch them, but server plugins
+                Ordinary import, activation, start, ready, health, quiesce, and stop failures are quarantined when PI WEB can catch them, but server plugins
                 are not crash-isolated. A CPU-bound, blocking, or deadlocked callback can stall sessions, terminals, and
                 health endpoints. Abort signals and deadlines bound only cooperative asynchronous code and cannot preempt
                 code that ignores them. This is a stability boundary, not a security boundary; offline disable and both
@@ -671,6 +713,7 @@ import type { PiWebServerPlugin, WorkspaceProvider } from "@jmfederico/pi-web/se
           <a href="./">Home</a>
           <a href="remote-first">Remote-first</a>
           <a href="machines">Fleet</a>
+          <a href="automations">Automations</a>
           <a href="install">Install</a>
           <a href="config">Config</a>
           <a href="faq">FAQ</a>

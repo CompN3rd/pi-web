@@ -49,6 +49,7 @@
           <div class="nav-pages">
             <a href="remote-first">Remote-first</a>
             <a href="machines">Fleet</a>
+            <a href="automations">Automations</a>
             <a href="install">Install</a>
             <a href="config" aria-current="page">Config</a>
             <a href="plugins">Plugins</a>
@@ -213,6 +214,7 @@
   "askUser": true,
   "extensionDialogsTimeoutMs": 300000,
   "plugins": {
+    "automations": { "enabled": true },
     "workspace-tasks": { "enabled": true },
     "updates": { "enabled": true },
     "info": { "enabled": false }
@@ -572,6 +574,19 @@ worktree_path="$1"
                   </tbody>
                 </table>
               </div>
+              <h3 id="managed-data-directory">Managed data directory</h3>
+              <p>
+                <code>PI_WEB_DATA_DIR</code> defaults to <code>~/.pi-web</code> and contains PI WEB-managed runtime state,
+                including registries, local plugins, sockets, session archives, and private server-plugin state. Each
+                server plugin receives <code>$PI_WEB_DATA_DIR/plugin-state/&lt;plugin-id&gt;</code>; this is managed data, not
+                a user-editable config file. Bundled Automations stores its database at
+                <code>$PI_WEB_DATA_DIR/plugin-state/automations/automations.sqlite</code>.
+              </p>
+              <p>
+                One live session daemon owns the whole data directory through
+                <code>$PI_WEB_DATA_DIR/sessiond-owner.json</code>. Plugins do not create separate ownership markers.
+                Stop the daemon or use storage-aware backup tooling before copying a live plugin database.
+              </p>
               <p>
                 Agent shells, terminals, and spawned sessions inherit the session daemon's environment almost as-is:
                 at startup the daemon removes only <code>NODE_ENV</code> and <code>PORT</code> from the environment agent
@@ -940,6 +955,11 @@ PI_CODING_AGENT_SESSION_DIR=/opt/pi-profiles/lab-sessions</code></pre>
                 server-backed entry, desired disablement takes effect on the next sessiond start, and its paired browser
                 entry continues to follow the still-active backend until then.
               </p>
+              <p>
+                Bundled Automations uses only the standard <code>plugins.automations.enabled</code> entry and has no
+                separate core config key. See the <a href="automations">Automations guide</a> for schedules, storage,
+                federation, and recovery.
+              </p>
               <div class="code-card">
                 <div class="copy-row">
                   <strong>Plugin desired config</strong>
@@ -947,6 +967,7 @@ PI_CODING_AGENT_SESSION_DIR=/opt/pi-profiles/lab-sessions</code></pre>
                 </div>
                 <pre id="plugin-config-example"><code>{
   "plugins": {
+    "automations": { "enabled": true },
     "git": { "enabled": true, "settings": {} },
     "updates": { "enabled": false }
   }
@@ -1094,6 +1115,7 @@ PI_CODING_AGENT_SESSION_DIR=/opt/pi-profiles/lab-sessions</code></pre>
           <a href="./">Home</a>
           <a href="remote-first">Remote-first</a>
           <a href="machines">Fleet</a>
+          <a href="automations">Automations</a>
           <a href="install">Install</a>
           <a href="config">Config</a>
           <a href="plugins">Plugins</a>
