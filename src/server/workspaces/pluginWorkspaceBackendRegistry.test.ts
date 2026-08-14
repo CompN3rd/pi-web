@@ -25,9 +25,9 @@ function resolution(status: "provider" | "degraded" = "provider"): WorkspaceProv
 
 function contribution(request: (context: WorkspaceBackendRequestContext) => Promise<JsonValue>): ServerPluginWorkspaceBackendContribution {
   return {
-    pluginId: "automations",
-    pluginName: "Automations",
-    packageRoot: "/plugins/automations",
+    pluginId: "workspace-service",
+    pluginName: "Workspace Service",
+    packageRoot: "/plugins/workspace-service",
     source: "bundled",
     scope: "bundled",
     moduleRevision: "server-r1",
@@ -37,7 +37,7 @@ function contribution(request: (context: WorkspaceBackendRequestContext) => Prom
 
 function request(overrides: Partial<{ moduleRevision: string; workspaceId: string }> = {}) {
   return {
-    pluginId: "automations",
+    pluginId: "workspace-service",
     moduleRevision: overrides.moduleRevision ?? "server-r1",
     project,
     workspaceId: overrides.workspaceId ?? workspace.id,
@@ -61,7 +61,7 @@ describe("PluginWorkspaceBackendRegistry", () => {
 
     const result = await registry.request(request());
 
-    expect(registry.workspaceTopologyMayChange("automations")).toBe(false);
+    expect(registry.workspaceTopologyMayChange("workspace-service")).toBe(false);
     expect(result.workspaceTopologyChanged).toBe(false);
     expect(result.value).toEqual({
       workspace: { id: "w1", projectId: "p1", path: "/repo/worktree", label: "feature", isMain: false },

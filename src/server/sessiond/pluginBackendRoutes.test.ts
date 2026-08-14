@@ -134,13 +134,13 @@ describe("session daemon plugin backend routes", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: `/plugin-backends/automations/projects/${encodeURIComponent(project.id)}/workspaces/w1/runs.queue`,
+      url: `/plugin-backends/workspace-service/projects/${encodeURIComponent(project.id)}/workspaces/w1/runs.queue`,
       payload: { revision: "server-r1", input: null },
     });
 
     const failed = await app.inject({
       method: "POST",
-      url: `/plugin-backends/automations/projects/${encodeURIComponent(project.id)}/workspaces/w1/runs.fail`,
+      url: `/plugin-backends/workspace-service/projects/${encodeURIComponent(project.id)}/workspaces/w1/runs.fail`,
       payload: { revision: "server-r1", input: null },
     });
 
