@@ -12,6 +12,7 @@ import type {
   ServerPluginExecFileRequest,
   ServerPluginExecFileResult,
   ServerPluginLogger,
+  ServerPluginReadyContext,
   WorkspaceBackend,
   WorkspaceBackendRequestContext,
   WorkspaceProvider,
@@ -81,6 +82,8 @@ describe("public server plugin API", () => {
       activate: () => ({
         workspaceProvider: provider,
         start: (signal) => { observedSignals.push(signal); },
+        ready: (_context, signal) => { observedSignals.push(signal); },
+        quiesce: (signal) => { observedSignals.push(signal); },
         stop: (signal) => { observedSignals.push(signal); },
         health: (signal) => {
           observedSignals.push(signal);
@@ -94,6 +97,7 @@ describe("public server plugin API", () => {
       apiVersion: 1,
       pluginId: "neutral-fixture",
       packageRoot: "/plugins/neutral-fixture",
+      stateDirectory: "/state/neutral-fixture",
       settings,
       signal,
       logger: {
@@ -107,7 +111,7 @@ describe("public server plugin API", () => {
 
     await exerciseActivation(activation, project, signal);
 
-    expect(observedSignals).toHaveLength(7);
+    expect(observedSignals).toHaveLength(9);
     expect(observedSignals.every((observed) => observed === signal)).toBe(true);
   });
 
@@ -127,7 +131,7 @@ describe("public server plugin API", () => {
 
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
-      "apiVersion" | "pluginId" | "packageRoot" | "logger" | "settings" | "execFile" | "signal"
+      "apiVersion" | "pluginId" | "packageRoot" | "stateDirectory" | "logger" | "settings" | "execFile" | "signal"
     >();
     expectTypeOf<keyof WorkspaceProvider>().toEqualTypeOf<
       "fallback" | "probe" | "list" | "request" | "prepareRemove"
@@ -138,6 +142,7 @@ describe("public server plugin API", () => {
     >();
     expectTypeOf<ReadonlyKeys<ServerPluginActivationContext>>().toEqualTypeOf<keyof ServerPluginActivationContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginLogger>>().toEqualTypeOf<keyof ServerPluginLogger>();
+    expectTypeOf<ReadonlyKeys<ServerPluginReadyContext>>().toEqualTypeOf<keyof ServerPluginReadyContext>();
     expectTypeOf<ReadonlyKeys<ProjectInput>>().toEqualTypeOf<keyof ProjectInput>();
     expectTypeOf<ReadonlyKeys<ProviderRequestContext>>().toEqualTypeOf<keyof ProviderRequestContext>();
     expectTypeOf<ReadonlyKeys<ProviderRemoveContext>>().toEqualTypeOf<keyof ProviderRemoveContext>();
@@ -160,6 +165,7 @@ describe("public server plugin API", () => {
 
 async function exerciseActivation(activation: ServerPluginActivation, input: ProjectInput, signal: AbortSignal): Promise<void> {
   await activation.start?.(signal);
+  await activation.ready?.({ backgroundSessions: { listModels: () => [], create: () => Promise.reject(new Error("unused")) } }, signal);
   const provider = activation.workspaceProvider;
   if (provider === undefined) throw new Error("Expected fixture workspace provider");
   await provider.probe(input, signal);
@@ -169,5 +175,6 @@ async function exerciseActivation(activation: ServerPluginActivation, input: Pro
   await provider.request?.(request);
   await provider.prepareRemove?.({ project: input, workspace, signal });
   await activation.health?.(signal);
+  await activation.quiesce?.(signal);
   await activation.stop?.(signal);
 }

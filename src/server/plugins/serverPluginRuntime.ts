@@ -1,3 +1,6 @@
+import { lstat, mkdir, realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
   JsonObject,
@@ -8,6 +11,7 @@ import type {
   ProviderRequestContext,
   ServerPluginActivation,
   ServerPluginActivationContext,
+  ServerPluginReadyContext,
   ServerPluginExecFileRequest,
   ServerPluginExecFileResult,
   ServerPluginHealth,
@@ -27,7 +31,7 @@ import type {
 import { createServerPluginExecFile } from "./serverPluginExec.js";
 
 export type ServerPluginRuntimeState = "active" | "failed" | "incompatible" | "disabled";
-export type ServerPluginLifecyclePhase = "import" | "activate" | "validate" | "start" | "health" | "stop";
+export type ServerPluginLifecyclePhase = "import" | "activate" | "validate" | "storage" | "start" | "ready" | "health" | "quiesce" | "stop";
 
 export interface ServerPluginRuntimeRecord {
   pluginId: string;
@@ -87,6 +91,8 @@ export interface CreateServerPluginRuntimeOptions {
   importer?: ServerPluginModuleImporter;
   execFile?: ServerPluginExecFile;
   lifecycleTimeoutMs?: number;
+  /** Host-owned root containing one canonical directory per plugin id. */
+  pluginStateRoot?: string;
 }
 
 interface ActiveServerPlugin {
@@ -95,6 +101,7 @@ interface ActiveServerPlugin {
   activation: ServerPluginActivation;
   providerContribution?: ServerPluginProviderContribution;
   backendContribution?: ServerPluginWorkspaceBackendContribution;
+  ready: "not-required" | "pending" | "complete" | "failed";
 }
 
 const DEFAULT_LIFECYCLE_TIMEOUT_MS = 10_000;
@@ -118,6 +125,7 @@ export class ServerPluginRuntime {
   private readonly recordsById = new Map<string, ServerPluginRuntimeRecord>();
   private activePlugins: ActiveServerPlugin[] = [];
   private stopped = false;
+  private quiesced = false;
 
   private constructor(
     private readonly safeStart: ServerPluginSafeStart | undefined,
@@ -126,6 +134,7 @@ export class ServerPluginRuntime {
     private readonly importer: ServerPluginModuleImporter,
     private readonly execFile: ServerPluginExecFile,
     private readonly lifecycleTimeoutMs: number,
+    private readonly pluginStateRoot: string,
   ) {}
 
   static async activate(
@@ -139,6 +148,7 @@ export class ServerPluginRuntime {
       options.importer ?? importServerPluginModule,
       options.execFile ?? createServerPluginExecFile(),
       positiveInteger(options.lifecycleTimeoutMs, DEFAULT_LIFECYCLE_TIMEOUT_MS, "lifecycleTimeoutMs"),
+      resolve(options.pluginStateRoot ?? join(tmpdir(), "pi-web-plugin-state", String(process.pid))),
     );
     try {
       await runtime.start(snapshot.plugins);
@@ -168,7 +178,50 @@ export class ServerPluginRuntime {
   }
 
   workspaceBackendContributions(): readonly ServerPluginWorkspaceBackendContribution[] {
-    return Object.freeze(this.activePlugins.flatMap((active) => active.backendContribution === undefined ? [] : [active.backendContribution]));
+    return Object.freeze(this.activePlugins.flatMap((active) => active.backendContribution === undefined || active.ready === "pending" || active.ready === "failed" ? [] : [active.backendContribution]));
+  }
+
+  async ready(contextForPlugin: (pluginId: string) => ServerPluginReadyContext): Promise<void> {
+    for (const active of this.activePlugins) {
+      if (active.ready !== "pending") continue;
+      const callback = active.activation.ready?.bind(active.activation);
+      if (callback === undefined) continue;
+      try {
+        const supplied = contextForPlugin(active.entry.id);
+        const context: ServerPluginReadyContext = Object.freeze({ backgroundSessions: supplied.backgroundSessions });
+        await runBounded(active.entry.id, "ready", this.lifecycleTimeoutMs, (signal) => callback(context, signal));
+        active.ready = "complete";
+      } catch (error) {
+        active.ready = "failed";
+        this.recordsById.set(active.entry.id, recordFor(active.entry, {
+          state: "failed",
+          name: active.plugin.name,
+          phase: "ready",
+          message: errorMessage(error),
+        }));
+        this.logger.error({ err: error, pluginId: active.entry.id, phase: "ready" }, "server plugin ready failed");
+      }
+    }
+  }
+
+  async quiesce(): Promise<void> {
+    if (this.quiesced) return;
+    this.quiesced = true;
+    for (const active of [...this.activePlugins].reverse()) {
+      const callback = active.activation.quiesce?.bind(active.activation);
+      if (callback === undefined) continue;
+      try {
+        await runBounded(active.entry.id, "quiesce", this.lifecycleTimeoutMs, (signal) => callback(signal));
+      } catch (error) {
+        this.recordsById.set(active.entry.id, recordFor(active.entry, {
+          state: "failed",
+          name: active.plugin.name,
+          phase: "quiesce",
+          message: errorMessage(error),
+        }));
+        this.logger.error({ err: error, pluginId: active.entry.id, phase: "quiesce" }, "server plugin quiesce failed");
+      }
+    }
   }
 
   async inspectHealth(): Promise<readonly ServerPluginHealthInspection[]> {
@@ -249,6 +302,8 @@ export class ServerPluginRuntime {
     let activation: ServerPluginActivation | undefined;
     try {
       const settings = cloneJsonObject(entry.settings, `settings for server plugin ${entry.id}`);
+      phase = "storage";
+      const stateDirectory = await preparePluginStateDirectory(this.pluginStateRoot, entry.id);
       phase = "import";
       const moduleUrl = serverModuleUrl(entry);
       const imported = await runBounded(entry.id, phase, this.lifecycleTimeoutMs, (signal) => this.importer(moduleUrl, signal));
@@ -261,6 +316,7 @@ export class ServerPluginRuntime {
         apiVersion: 1,
         pluginId: entry.id,
         packageRoot: entry.packageRoot,
+        stateDirectory,
         logger: scopedLogger,
         settings,
         execFile: this.execFile,
@@ -289,13 +345,14 @@ export class ServerPluginRuntime {
       const backendContribution = loadedActivation.workspaceBackend === undefined
         ? undefined
         : Object.freeze({ ...contributionBase, backend: loadedActivation.workspaceBackend });
-      this.activePlugins.push(Object.freeze({
+      this.activePlugins.push({
         entry,
         plugin: loadedPlugin,
         activation: loadedActivation,
         ...(providerContribution === undefined ? {} : { providerContribution }),
         ...(backendContribution === undefined ? {} : { backendContribution }),
-      }));
+        ready: loadedActivation.ready === undefined ? "not-required" : "pending",
+      });
       this.recordsById.set(entry.id, recordFor(entry, { state: "active", name: loadedPlugin.name }));
       this.logger.info({ pluginId: entry.id, pluginName: loadedPlugin.name }, "server plugin activated");
     } catch (error) {
@@ -418,10 +475,12 @@ function parseActivation(value: unknown): ServerPluginActivation {
     workspaceProvider: workspaceProviderValue === undefined ? undefined : snapshotWorkspaceProvider(workspaceProviderValue),
     workspaceBackend: workspaceBackendValue === undefined ? undefined : snapshotWorkspaceBackend(workspaceBackendValue),
     start: value["start"],
+    ready: value["ready"],
+    quiesce: value["quiesce"],
     stop: value["stop"],
     health: value["health"],
   };
-  for (const callback of ["start", "stop", "health"] as const) {
+  for (const callback of ["start", "ready", "quiesce", "stop", "health"] as const) {
     const callbackValue = candidate[callback];
     if (callbackValue !== undefined && typeof callbackValue !== "function") {
       throw new IncompatibleServerPluginError(`Server plugin ${callback} must be a function`);
@@ -429,6 +488,8 @@ function parseActivation(value: unknown): ServerPluginActivation {
   }
   if (!isServerPluginActivation(candidate)) throw new IncompatibleServerPluginError("Server plugin activation is invalid");
   const start = candidate.start?.bind(value);
+  const ready = candidate.ready?.bind(value);
+  const quiesce = candidate.quiesce?.bind(value);
   const stop = candidate.stop?.bind(value);
   const health = candidate.health?.bind(value);
   if (candidate.workspaceBackend !== undefined && candidate.workspaceProvider?.request !== undefined) {
@@ -438,6 +499,8 @@ function parseActivation(value: unknown): ServerPluginActivation {
     ...(candidate.workspaceProvider === undefined ? {} : { workspaceProvider: candidate.workspaceProvider }),
     ...(candidate.workspaceBackend === undefined ? {} : { workspaceBackend: candidate.workspaceBackend }),
     ...(start === undefined ? {} : { start: (signal: AbortSignal) => start(signal) }),
+    ...(ready === undefined ? {} : { ready: (context: ServerPluginReadyContext, signal: AbortSignal) => ready(context, signal) }),
+    ...(quiesce === undefined ? {} : { quiesce: (signal: AbortSignal) => quiesce(signal) }),
     ...(stop === undefined ? {} : { stop: (signal: AbortSignal) => stop(signal) }),
     ...(health === undefined ? {} : { health: (signal: AbortSignal) => health(signal) }),
   });
@@ -448,11 +511,15 @@ function isServerPluginActivation(value: unknown): value is ServerPluginActivati
   const workspaceProvider = value["workspaceProvider"];
   const workspaceBackend = value["workspaceBackend"];
   const start = value["start"];
+  const ready = value["ready"];
+  const quiesce = value["quiesce"];
   const stop = value["stop"];
   const health = value["health"];
   return (workspaceProvider === undefined || isWorkspaceProvider(workspaceProvider))
     && (workspaceBackend === undefined || isWorkspaceBackend(workspaceBackend))
     && (start === undefined || typeof start === "function")
+    && (ready === undefined || typeof ready === "function")
+    && (quiesce === undefined || typeof quiesce === "function")
     && (stop === undefined || typeof stop === "function")
     && (health === undefined || typeof health === "function");
 }
@@ -591,6 +658,26 @@ function cloneJsonValue(value: unknown, ancestors: Set<object>, label: string): 
   }
   if (isRecord(value)) return cloneJsonRecord(value, ancestors, label);
   throw new IncompatibleServerPluginError(`${label} must contain only JSON values`);
+}
+
+export async function preparePluginStateDirectory(root: string, pluginId: string): Promise<string> {
+  if (!isAbsolute(root)) throw new Error("Plugin state root must be absolute");
+  const canonicalRootInput = resolve(root);
+  await mkdir(canonicalRootInput, { recursive: true });
+  const canonicalRoot = await realpath(canonicalRootInput);
+  const candidate = resolve(canonicalRoot, pluginId);
+  if (!isContainedPath(canonicalRoot, candidate)) throw new Error(`Plugin state directory escapes its root: ${pluginId}`);
+  await mkdir(candidate, { recursive: true });
+  const entry = await lstat(candidate);
+  if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`Plugin state path is not a directory: ${pluginId}`);
+  const canonicalCandidate = await realpath(candidate);
+  if (!isContainedPath(canonicalRoot, canonicalCandidate)) throw new Error(`Plugin state directory escapes its root: ${pluginId}`);
+  return canonicalCandidate;
+}
+
+function isContainedPath(root: string, candidate: string): boolean {
+  const child = relative(root, candidate);
+  return child !== "" && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
 function abortError(signal: AbortSignal): Error {

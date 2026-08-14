@@ -16,6 +16,9 @@ const plugin: PiWebServerPlugin = {
         isMain: true,
       }],
     },
+    ready: ({ backgroundSessions }) => {
+      backgroundSessions.listModels();
+    },
   }),
 };
 

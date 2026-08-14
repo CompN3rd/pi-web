@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import Fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { WorkspaceActivityService } from "./activity/workspaceActivityService.js";
@@ -30,7 +30,7 @@ import { TerminalService } from "./terminals/terminalService.js";
 import { registerTerminalRoutes } from "./terminals/terminalRoutes.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
-import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
+import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
 import { PiWebPluginCatalog } from "./piWebPluginCatalog.js";
@@ -49,6 +49,7 @@ import { registerWorkspaceRemovalRoutes } from "./sessiond/workspaceRemovalRoute
 import { createWorkspaceProviderRuntimeSnapshot } from "./workspaces/workspaceCatalog.js";
 import { WorkspaceRemovalService } from "./workspaces/workspaceRemovalService.js";
 import { PluginWorkspaceBackendRegistry } from "./workspaces/pluginWorkspaceBackendRegistry.js";
+import { PluginBackgroundSessionRegistry } from "./plugins/pluginBackgroundSessionService.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
 const serverPluginRecovery = loadServerPluginRecoveryConfig({ env: daemonEnvironment });
@@ -160,6 +161,7 @@ async function createSessionDaemonRuntime() {
     ...(serverPluginRecovery.safeStart === undefined ? {} : { safeStart: serverPluginRecovery.safeStart }),
     logger: app.log,
     execFile: createServerPluginExecFile({ env: daemonEnvironment }),
+    pluginStateRoot: join(piWebDataDir(daemonEnvironment), "plugin-state"),
   });
   try {
     const eventHub = new SessionEventHub();
@@ -197,17 +199,6 @@ async function createSessionDaemonRuntime() {
       contributions: eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth),
       logger: app.log,
     });
-    const pluginBackends = new PluginWorkspaceBackendRegistry({
-      contributions: serverPlugins.workspaceBackendContributions(),
-      authority: workspaceProviders,
-      providers: workspaceProviders,
-    });
-    const workspaceProviderRuntime = createWorkspaceProviderRuntimeSnapshot(
-      serverPlugins.healthRecords(),
-      providerHealth,
-      serverPlugins.safeStartLevel(),
-      serverPlugins.catalogDiagnostics(),
-    );
     const statusAttribution = new CachedWorkspaceAttribution({
       projects,
       workspaces: workspaceProviders,
@@ -266,6 +257,20 @@ async function createSessionDaemonRuntime() {
       }),
     }));
     auth.subscribe((change) => { sessions.applyAuthChange(change); });
+    const backgroundSessions = new PluginBackgroundSessionRegistry(projects, workspaceProviders, sessions);
+    await serverPlugins.ready((pluginId) => Object.freeze({ backgroundSessions: backgroundSessions.forPlugin(pluginId) }));
+    const finalPluginHealth = await serverPlugins.inspectHealth();
+    const pluginBackends = new PluginWorkspaceBackendRegistry({
+      contributions: serverPlugins.workspaceBackendContributions(),
+      authority: workspaceProviders,
+      providers: workspaceProviders,
+    });
+    const workspaceProviderRuntime = createWorkspaceProviderRuntimeSnapshot(
+      serverPlugins.healthRecords(),
+      finalPluginHealth,
+      serverPlugins.safeStartLevel(),
+      serverPlugins.catalogDiagnostics(),
+    );
     const terminals = new TerminalService(eventHub, workspaceActivity);
     const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals);
     const runtimeComponent = Object.freeze({
@@ -285,6 +290,7 @@ async function createSessionDaemonRuntime() {
         dependencies: {
           quiesceServer: () => { serverQuiescing = true; },
           serverPlugins,
+          backgroundSessions,
           terminals,
           catalogRefresher,
           auth,
