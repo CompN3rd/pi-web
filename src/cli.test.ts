@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   commandWithVersionCheck,
@@ -187,8 +187,8 @@ describe("managedServiceProbeEnvironment", () => {
     expect(result.value).not.toBe(callerEnvironment);
     expect(Object.hasOwn(result.value, "PI_WEB_CONFIG")).toBe(true);
     expect(result.value["PI_WEB_CONFIG"]).toBe("");
-    expect(piWebConfigPath(result.value)).toBe("/managed-default/pi-web/config.json");
-    expect(piWebConfigPath(callerEnvironment)).toBe("/inherited/config.json");
+    expect(piWebConfigPath(result.value)).toBe(join("/managed-default", "pi-web", "config.json"));
+    expect(piWebConfigPath(callerEnvironment)).toBe(resolve("/inherited/config.json"));
     expect(Object.hasOwn(callerEnvironment, "PI_WEB_CONFIG")).toBe(false);
   });
 
@@ -200,7 +200,7 @@ describe("managedServiceProbeEnvironment", () => {
       ok: true,
       value: callerEnvironment,
     });
-    expect(piWebConfigPath(callerEnvironment)).toBe("/ambient/config.json");
+    expect(piWebConfigPath(callerEnvironment)).toBe(resolve("/ambient/config.json"));
   });
 });
 
@@ -285,8 +285,8 @@ describe("readiness CLI command orchestration", () => {
 
       const probeEnvironment = vi.mocked(deps.runLifecycle).mock.calls[0]?.[2];
       if (probeEnvironment === undefined) throw new Error("lifecycle probe environment was not provided");
-      expect(piWebConfigPath(probeEnvironment)).toBe("/managed-default/pi-web/config.json");
-      expect(piWebConfigPath(environment)).toBe("/inherited/config.json");
+      expect(piWebConfigPath(probeEnvironment)).toBe(join("/managed-default", "pi-web", "config.json"));
+      expect(piWebConfigPath(environment)).toBe(resolve("/inherited/config.json"));
       expect(Object.hasOwn(environment, "PI_WEB_CONFIG")).toBe(false);
     },
   );
@@ -363,8 +363,8 @@ describe("readiness CLI command orchestration", () => {
     const context = vi.mocked(deps.runDoctor).mock.calls[0]?.[0];
     const probeEnvironment = context?.versionReportOptions.configEnv;
     if (probeEnvironment === undefined) throw new Error("doctor probe environment was not provided");
-    expect(piWebConfigPath(probeEnvironment)).toBe("/managed-default/pi-web/config.json");
-    expect(piWebConfigPath(environment)).toBe("/inherited/config.json");
+    expect(piWebConfigPath(probeEnvironment)).toBe(join("/managed-default", "pi-web", "config.json"));
+    expect(piWebConfigPath(environment)).toBe(resolve("/inherited/config.json"));
     expect(Object.hasOwn(environment, "PI_WEB_CONFIG")).toBe(false);
   });
 
