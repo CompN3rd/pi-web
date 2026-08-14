@@ -27,8 +27,11 @@ describe("bundled PI WEB plugins", () => {
     expect(violations).toEqual([]);
   });
 
-  it("keeps the bundled Git browser graph on the public API and package-local modules", async () => {
-    const root = resolve("pi-web-plugins/git/browser");
+  it.each([
+    { plugin: "git", expectedModule: "git-panel.ts" },
+    { plugin: "automations", expectedModule: "automations-panel.ts" },
+  ])("keeps the bundled $plugin browser graph on the public API and package-local modules", async ({ plugin, expectedModule }) => {
+    const root = resolve(`pi-web-plugins/${plugin}/browser`);
     const entry = resolve(root, "pi-web-plugin.ts");
     const pending = [entry];
     const visited = new Set<string>();
@@ -47,7 +50,7 @@ describe("bundled PI WEB plugins", () => {
         }
         const dependency = resolve(dirname(file), specifier.replace(/\.js$/u, ".ts"));
         if (dependency !== root && !dependency.startsWith(`${root}${sep}`)) {
-          violations.push(`${relative(process.cwd(), file)}: browser import escapes the Git package (${specifier})`);
+          violations.push(`${relative(process.cwd(), file)}: browser import escapes the ${plugin} package (${specifier})`);
           continue;
         }
         pending.push(dependency);
@@ -55,7 +58,7 @@ describe("bundled PI WEB plugins", () => {
     }
 
     expect(violations).toEqual([]);
-    expect([...visited].map((file) => relative(root, file)).sort()).toContain("git-panel.ts");
+    expect([...visited].map((file) => relative(root, file)).sort()).toContain(expectedModule);
   });
 });
 
