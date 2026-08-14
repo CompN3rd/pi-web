@@ -129,6 +129,24 @@ describe("WorkspaceProviderRegistry", () => {
     expect(list).toHaveBeenCalledTimes(3);
   });
 
+  it("reads provider contributions live after late readiness changes", async () => {
+    const owner = contribution("late-owner", provider({
+      probe: () => Promise.resolve("claim"),
+      list: () => Promise.resolve([workspace("root", hostPath("/repo"), true)]),
+    }));
+    let contributions: readonly ServerPluginProviderContribution[] = [owner];
+    const registry = new WorkspaceProviderRegistry({
+      contributions: () => contributions,
+      logger: { warn: vi.fn() },
+      pathInspector: () => true,
+    });
+
+    await expect(registry.resolve(project)).resolves.toMatchObject({ status: "provider", ownerPluginId: "late-owner" });
+
+    contributions = [];
+    await expect(registry.resolve(project)).resolves.toMatchObject({ status: "folder" });
+  });
+
   it("keeps removal resolution fresh and outside ordinary resolution coalescing", async () => {
     const blockedList = deferred<ProviderWorkspace[]>();
     const topology = [
