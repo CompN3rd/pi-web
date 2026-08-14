@@ -12,6 +12,8 @@ import type {
   ServerPluginExecFileResult,
   ServerPluginHealth,
   ServerPluginLogger,
+  WorkspaceBackend,
+  WorkspaceBackendRequestContext,
   WorkspaceProvider,
 } from "../../server-plugin-api.js";
 import type { PiWebPluginScope } from "../../shared/apiTypes.js";
@@ -51,6 +53,16 @@ export interface ServerPluginProviderContribution {
   provider: WorkspaceProvider;
 }
 
+export interface ServerPluginWorkspaceBackendContribution {
+  pluginId: string;
+  pluginName: string;
+  packageRoot: string;
+  source: string;
+  scope: PiWebPluginScope;
+  moduleRevision: string;
+  backend: WorkspaceBackend;
+}
+
 export interface ServerPluginHealthInspection {
   pluginId: string;
   health: ServerPluginHealth;
@@ -81,7 +93,8 @@ interface ActiveServerPlugin {
   entry: PiWebPluginCatalogEntry;
   plugin: PiWebServerPlugin;
   activation: ServerPluginActivation;
-  contribution?: ServerPluginProviderContribution;
+  providerContribution?: ServerPluginProviderContribution;
+  backendContribution?: ServerPluginWorkspaceBackendContribution;
 }
 
 const DEFAULT_LIFECYCLE_TIMEOUT_MS = 10_000;
@@ -151,7 +164,11 @@ export class ServerPluginRuntime {
   }
 
   providerContributions(): readonly ServerPluginProviderContribution[] {
-    return Object.freeze(this.activePlugins.flatMap((active) => active.contribution === undefined ? [] : [active.contribution]));
+    return Object.freeze(this.activePlugins.flatMap((active) => active.providerContribution === undefined ? [] : [active.providerContribution]));
+  }
+
+  workspaceBackendContributions(): readonly ServerPluginWorkspaceBackendContribution[] {
+    return Object.freeze(this.activePlugins.flatMap((active) => active.backendContribution === undefined ? [] : [active.backendContribution]));
   }
 
   async inspectHealth(): Promise<readonly ServerPluginHealthInspection[]> {
@@ -258,22 +275,26 @@ export class ServerPluginRuntime {
         await runBounded(entry.id, phase, this.lifecycleTimeoutMs, (signal) => start(signal));
       }
 
-      const contribution = loadedActivation.workspaceProvider === undefined
+      const contributionBase = {
+        pluginId: entry.id,
+        pluginName: loadedPlugin.name,
+        packageRoot: entry.packageRoot,
+        source: entry.source,
+        scope: entry.scope,
+        moduleRevision: requireServerModule(entry).revision,
+      };
+      const providerContribution = loadedActivation.workspaceProvider === undefined
         ? undefined
-        : Object.freeze({
-            pluginId: entry.id,
-            pluginName: loadedPlugin.name,
-            packageRoot: entry.packageRoot,
-            source: entry.source,
-            scope: entry.scope,
-            moduleRevision: requireServerModule(entry).revision,
-            provider: loadedActivation.workspaceProvider,
-          });
+        : Object.freeze({ ...contributionBase, provider: loadedActivation.workspaceProvider });
+      const backendContribution = loadedActivation.workspaceBackend === undefined
+        ? undefined
+        : Object.freeze({ ...contributionBase, backend: loadedActivation.workspaceBackend });
       this.activePlugins.push(Object.freeze({
         entry,
         plugin: loadedPlugin,
         activation: loadedActivation,
-        ...(contribution === undefined ? {} : { contribution }),
+        ...(providerContribution === undefined ? {} : { providerContribution }),
+        ...(backendContribution === undefined ? {} : { backendContribution }),
       }));
       this.recordsById.set(entry.id, recordFor(entry, { state: "active", name: loadedPlugin.name }));
       this.logger.info({ pluginId: entry.id, pluginName: loadedPlugin.name }, "server plugin activated");
@@ -392,8 +413,10 @@ function parseActivation(value: unknown): ServerPluginActivation {
     throw new IncompatibleServerPluginError("Server plugins may contribute only one workspaceProvider");
   }
   const workspaceProviderValue = value["workspaceProvider"];
+  const workspaceBackendValue = value["workspaceBackend"];
   const candidate = {
     workspaceProvider: workspaceProviderValue === undefined ? undefined : snapshotWorkspaceProvider(workspaceProviderValue),
+    workspaceBackend: workspaceBackendValue === undefined ? undefined : snapshotWorkspaceBackend(workspaceBackendValue),
     start: value["start"],
     stop: value["stop"],
     health: value["health"],
@@ -408,8 +431,12 @@ function parseActivation(value: unknown): ServerPluginActivation {
   const start = candidate.start?.bind(value);
   const stop = candidate.stop?.bind(value);
   const health = candidate.health?.bind(value);
+  if (candidate.workspaceBackend !== undefined && candidate.workspaceProvider?.request !== undefined) {
+    throw new IncompatibleServerPluginError("Server plugins must not expose both workspaceBackend and workspaceProvider.request");
+  }
   return Object.freeze({
     ...(candidate.workspaceProvider === undefined ? {} : { workspaceProvider: candidate.workspaceProvider }),
+    ...(candidate.workspaceBackend === undefined ? {} : { workspaceBackend: candidate.workspaceBackend }),
     ...(start === undefined ? {} : { start: (signal: AbortSignal) => start(signal) }),
     ...(stop === undefined ? {} : { stop: (signal: AbortSignal) => stop(signal) }),
     ...(health === undefined ? {} : { health: (signal: AbortSignal) => health(signal) }),
@@ -419,13 +446,25 @@ function parseActivation(value: unknown): ServerPluginActivation {
 function isServerPluginActivation(value: unknown): value is ServerPluginActivation {
   if (!isRecord(value)) return false;
   const workspaceProvider = value["workspaceProvider"];
+  const workspaceBackend = value["workspaceBackend"];
   const start = value["start"];
   const stop = value["stop"];
   const health = value["health"];
   return (workspaceProvider === undefined || isWorkspaceProvider(workspaceProvider))
+    && (workspaceBackend === undefined || isWorkspaceBackend(workspaceBackend))
     && (start === undefined || typeof start === "function")
     && (stop === undefined || typeof stop === "function")
     && (health === undefined || typeof health === "function");
+}
+
+function snapshotWorkspaceBackend(value: unknown): WorkspaceBackend {
+  if (!isWorkspaceBackend(value)) throw new IncompatibleServerPluginError("Server plugin workspaceBackend is invalid");
+  const request = value.request.bind(value);
+  return Object.freeze({ request: (context: WorkspaceBackendRequestContext) => request(context) });
+}
+
+function isWorkspaceBackend(value: unknown): value is WorkspaceBackend {
+  return isRecord(value) && typeof value["request"] === "function";
 }
 
 function snapshotWorkspaceProvider(value: unknown): WorkspaceProvider {

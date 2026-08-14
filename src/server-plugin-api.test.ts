@@ -12,8 +12,11 @@ import type {
   ServerPluginExecFileRequest,
   ServerPluginExecFileResult,
   ServerPluginLogger,
+  WorkspaceBackend,
+  WorkspaceBackendRequestContext,
   WorkspaceProvider,
   WorkspaceRemovalPresentation,
+  WorkspaceSnapshot,
   WorkspaceRemovePlan,
 } from "@jmfederico/pi-web/server-plugin-api";
 
@@ -108,6 +111,20 @@ describe("public server plugin API", () => {
     expect(observedSignals.every((observed) => observed === signal)).toBe(true);
   });
 
+  it("supports a provider-neutral auxiliary workspace backend", async () => {
+    const observed: WorkspaceBackendRequestContext[] = [];
+    const backend: WorkspaceBackend = {
+      request(context) {
+        observed.push(context);
+        return Promise.resolve({ operation: context.operation, workspaceId: context.workspace.id });
+      },
+    };
+    const signal = AbortSignal.timeout(1_000);
+    const workspace: WorkspaceSnapshot = { id: "w1", projectId: project.id, path: project.path, label: project.name, isMain: true };
+    await backend.request({ project, workspace, operation: "status", input: null, signal });
+    expect(observed).toHaveLength(1);
+  });
+
   it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
       "apiVersion" | "pluginId" | "packageRoot" | "logger" | "settings" | "execFile" | "signal"
@@ -115,6 +132,7 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof WorkspaceProvider>().toEqualTypeOf<
       "fallback" | "probe" | "list" | "request" | "prepareRemove"
     >();
+    expectTypeOf<keyof WorkspaceBackend>().toEqualTypeOf<"request">();
     expectTypeOf<keyof ServerPluginExecFileRequest>().toEqualTypeOf<
       "file" | "args" | "cwd" | "env" | "unsetEnv" | "timeoutMs" | "signal"
     >();
@@ -123,6 +141,8 @@ describe("public server plugin API", () => {
     expectTypeOf<ReadonlyKeys<ProjectInput>>().toEqualTypeOf<keyof ProjectInput>();
     expectTypeOf<ReadonlyKeys<ProviderRequestContext>>().toEqualTypeOf<keyof ProviderRequestContext>();
     expectTypeOf<ReadonlyKeys<ProviderRemoveContext>>().toEqualTypeOf<keyof ProviderRemoveContext>();
+    expectTypeOf<ReadonlyKeys<WorkspaceBackendRequestContext>>().toEqualTypeOf<keyof WorkspaceBackendRequestContext>();
+    expectTypeOf<ReadonlyKeys<WorkspaceSnapshot>>().toEqualTypeOf<keyof WorkspaceSnapshot>();
     expectTypeOf<ReadonlyKeys<ProviderRequestContext["workspace"]>>().toEqualTypeOf<keyof ProviderWorkspace>();
     expectTypeOf<ReadonlyKeys<WorkspaceRemovalPresentation>>().toEqualTypeOf<keyof WorkspaceRemovalPresentation>();
     expectTypeOf<keyof WorkspaceRemovalPresentation>().toEqualTypeOf<"actionLabel" | "confirmation">();

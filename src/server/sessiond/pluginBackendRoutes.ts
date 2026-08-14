@@ -9,6 +9,7 @@ import {
   type PluginBackendRequestEnvelope,
 } from "../../shared/pluginBackendProtocol.js";
 import type { Project } from "../types.js";
+import type { PluginWorkspaceBackendDispatchResult } from "../workspaces/pluginWorkspaceBackendRegistry.js";
 import {
   WorkspaceProviderRequestError,
   type WorkspaceProviderRequest,
@@ -26,7 +27,7 @@ export interface PluginBackendProjectReader {
 }
 
 export interface PluginBackendDispatcher {
-  request(request: WorkspaceProviderRequest): Promise<unknown>;
+  request(request: WorkspaceProviderRequest): Promise<PluginWorkspaceBackendDispatchResult>;
 }
 
 export interface PluginBackendRouteDependencies {
@@ -88,15 +89,14 @@ export function registerPluginBackendRoutes(
           input: envelope.input,
         });
         const serialized = serializeBoundedPluginBackendJson(
-          result,
+          result.value,
           `Server plugin ${pluginId} operation ${operation} result`,
           PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
         );
+        if (result.workspaceTopologyChanged) dependencies.onWorkspacesMutated();
         return await reply.type("application/json; charset=utf-8").send(serialized);
       } catch (error) {
         return await pluginBackendRequestFailed(reply, error, pluginId, operation);
-      } finally {
-        dependencies.onWorkspacesMutated();
       }
     },
   );

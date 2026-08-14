@@ -58,6 +58,11 @@ export interface ServerPluginExecFileResult {
  */
 export interface ServerPluginActivation {
     workspaceProvider?: WorkspaceProvider;
+    /**
+     * Handle JSON operations for any current host-authorized workspace without
+     * claiming ownership of its topology.
+     */
+    workspaceBackend?: WorkspaceBackend;
     /** Initialize resources within one host-bounded start invocation. */
     start?(signal: AbortSignal): MaybePromise<void>;
     /** Release resources within one host-bounded stop invocation. */
@@ -75,6 +80,24 @@ export interface ServerPluginHealth {
  * invocation. The host aborts it when the operation times out or settles; it
  * must not be retained as a plugin-lifetime shutdown signal.
  */
+export interface WorkspaceBackend {
+    request(context: WorkspaceBackendRequestContext): Promise<JsonValue>;
+}
+export interface WorkspaceBackendRequestContext {
+    readonly project: ProjectInput;
+    /** Provider-neutral, host-validated current workspace snapshot. */
+    readonly workspace: WorkspaceSnapshot;
+    readonly operation: string;
+    readonly input: JsonValue;
+    readonly signal: AbortSignal;
+}
+export interface WorkspaceSnapshot {
+    readonly id: string;
+    readonly projectId: string;
+    readonly path: string;
+    readonly label: string;
+    readonly isMain: boolean;
+}
 export interface WorkspaceProvider {
     /** Fallback providers are considered only after all primary providers pass. */
     fallback?: boolean;
