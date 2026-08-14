@@ -40,7 +40,7 @@ import { claimSessiondStateOwnership } from "./sessiond/sessiondStateOwnership.j
 import { dockerEnvironmentPromptSections } from "./sessions/dockerEnvironmentFacts.js";
 import { PI_WEB_SESSION_ENV, sessionEnvironmentPromptSections } from "./sessions/sessionEnvironmentFacts.js";
 import { createServerPluginExecFile } from "./plugins/serverPluginExec.js";
-import { createServerPluginRuntime } from "./plugins/serverPluginRuntime.js";
+import { createServerPluginRuntime, type ServerPluginProviderContribution } from "./plugins/serverPluginRuntime.js";
 import { runSessionDaemonShutdown } from "./sessiond/sessionDaemonShutdown.js";
 import { sessionServiceDependencies } from "./sessiond/sessionServiceDependencies.js";
 import { registerWorkspaceCatalogRoutes } from "./sessiond/workspaceCatalogRoutes.js";
@@ -195,15 +195,13 @@ async function createSessionDaemonRuntime() {
     auth.subscribe(() => { catalogRefresher.requestRefresh(); });
     const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
     const providerHealth = await serverPlugins.inspectHealth();
-    let eligibleProviderIds = new Set(
-      eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), providerHealth)
-        .map(({ pluginId }) => pluginId),
+    const eligibleProviderContributions = eligibleWorkspaceProviderContributions(
+      serverPlugins.providerContributions(),
+      providerHealth,
     );
+    const initiallyEligibleProviderIds = new Set(eligibleProviderContributions.map(({ pluginId }) => pluginId));
     const workspaceProviders = new WorkspaceProviderRegistry({
-      // Ready failures and post-ready health changes must take effect in the
-      // already-wired authority used by sessions, routes, and plugin leases.
-      contributions: () => serverPlugins.providerContributions()
-        .filter(({ pluginId }) => eligibleProviderIds.has(pluginId)),
+      contributions: eligibleProviderContributions,
       logger: app.log,
     });
     const statusAttribution = new CachedWorkspaceAttribution({
@@ -265,15 +263,30 @@ async function createSessionDaemonRuntime() {
     }));
     auth.subscribe((change) => { sessions.applyAuthChange(change); });
     const backgroundSessions = new PluginBackgroundSessionRegistry(projects, workspaceProviders, sessions);
+    const updateWorkspaceProviderAuthority = (contributions: readonly ServerPluginProviderContribution[]): void => {
+      if (!workspaceProviders.updateContributions(contributions)) return;
+      // A ready failure can remove a provider while status attribution or another
+      // authority resolution is in flight. Drop the cached topology and publish
+      // only a resolution revalidated against the new eligible contribution set.
+      statusAttribution.invalidate();
+      machineStatus.notifyChanged();
+    };
     await serverPlugins.ready(
       (pluginId) => Object.freeze({ backgroundSessions: backgroundSessions.forPlugin(pluginId) }),
-      (pluginId) => backgroundSessions.quiescePlugin(pluginId),
+      async (pluginId) => {
+        try {
+          await backgroundSessions.quiescePlugin(pluginId);
+        } finally {
+          updateWorkspaceProviderAuthority(serverPlugins.providerContributions()
+            .filter((contribution) => initiallyEligibleProviderIds.has(contribution.pluginId)));
+        }
+      },
     );
     const finalPluginHealth = await serverPlugins.inspectHealth();
-    eligibleProviderIds = new Set(
-      eligibleWorkspaceProviderContributions(serverPlugins.providerContributions(), finalPluginHealth)
-        .map(({ pluginId }) => pluginId),
-    );
+    updateWorkspaceProviderAuthority(eligibleWorkspaceProviderContributions(
+      serverPlugins.providerContributions(),
+      finalPluginHealth,
+    ));
     const pluginBackends = new PluginWorkspaceBackendRegistry({
       contributions: serverPlugins.workspaceBackendContributions(),
       authority: workspaceProviders,
