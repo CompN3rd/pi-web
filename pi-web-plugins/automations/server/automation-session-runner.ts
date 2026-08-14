@@ -100,11 +100,9 @@ function createdFromSnapshot(lease: BackgroundSessionLease, snapshot: Background
 }
 
 function usageFromHost(usage: BackgroundSessionUsage, capturedAt: string): AutomationUsageSnapshot {
-  // Zero is the host's compatibility sentinel when no provider cost is known;
-  // never present an unavailable estimate as an authoritative $0.
-  const estimatedCostMicros = usage.estimatedCostUsd > 0
-    ? Math.round(usage.estimatedCostUsd * 1_000_000)
-    : undefined;
+  const estimatedCostMicros = usage.estimatedCostUsd === undefined
+    ? undefined
+    : Math.round(usage.estimatedCostUsd * 1_000_000);
   return {
     scope: "root_session",
     quality: "estimated",

@@ -27,6 +27,7 @@ export interface PluginBackendProjectReader {
 }
 
 export interface PluginBackendDispatcher {
+  workspaceTopologyMayChange(pluginId: string): boolean;
   request(request: WorkspaceProviderRequest): Promise<PluginWorkspaceBackendDispatchResult>;
 }
 
@@ -34,9 +35,9 @@ export interface PluginBackendRouteDependencies {
   projects: PluginBackendProjectReader;
   backends: PluginBackendDispatcher;
   /**
-   * Reports that the project's workspaces may have changed. A provider
-   * operation is opaque here, so every completed request is reported rather
-   * than guessing which operations create or remove a workspace.
+   * Reports that the project's workspaces may have changed. An owner-provider
+   * operation is opaque here, so every dispatch attempt is reported even when
+   * its handler or result serialization fails.
    */
   onWorkspacesMutated: () => void;
 }
@@ -79,6 +80,7 @@ export function registerPluginBackendRoutes(
         );
       }
 
+      const workspaceTopologyMayChange = dependencies.backends.workspaceTopologyMayChange(pluginId);
       try {
         const result = await dependencies.backends.request({
           pluginId,
@@ -93,10 +95,11 @@ export function registerPluginBackendRoutes(
           `Server plugin ${pluginId} operation ${operation} result`,
           PLUGIN_BACKEND_RESPONSE_JSON_MAX_BYTES,
         );
-        if (result.workspaceTopologyChanged) dependencies.onWorkspacesMutated();
         return await reply.type("application/json; charset=utf-8").send(serialized);
       } catch (error) {
         return await pluginBackendRequestFailed(reply, error, pluginId, operation);
+      } finally {
+        if (workspaceTopologyMayChange) dependencies.onWorkspacesMutated();
       }
     },
   );

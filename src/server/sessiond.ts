@@ -258,7 +258,10 @@ async function createSessionDaemonRuntime() {
     }));
     auth.subscribe((change) => { sessions.applyAuthChange(change); });
     const backgroundSessions = new PluginBackgroundSessionRegistry(projects, workspaceProviders, sessions);
-    await serverPlugins.ready((pluginId) => Object.freeze({ backgroundSessions: backgroundSessions.forPlugin(pluginId) }));
+    await serverPlugins.ready(
+      (pluginId) => Object.freeze({ backgroundSessions: backgroundSessions.forPlugin(pluginId) }),
+      (pluginId) => backgroundSessions.quiescePlugin(pluginId),
+    );
     const finalPluginHealth = await serverPlugins.inspectHealth();
     const pluginBackends = new PluginWorkspaceBackendRegistry({
       contributions: serverPlugins.workspaceBackendContributions(),

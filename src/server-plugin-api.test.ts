@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
+  BackgroundSessionUsage,
   JsonObject,
   PiWebServerPlugin,
   ProjectInput,
@@ -143,6 +144,7 @@ describe("public server plugin API", () => {
     expectTypeOf<ReadonlyKeys<ServerPluginActivationContext>>().toEqualTypeOf<keyof ServerPluginActivationContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginLogger>>().toEqualTypeOf<keyof ServerPluginLogger>();
     expectTypeOf<ReadonlyKeys<ServerPluginReadyContext>>().toEqualTypeOf<keyof ServerPluginReadyContext>();
+    expectTypeOf<BackgroundSessionUsage["estimatedCostUsd"]>().toEqualTypeOf<number | undefined>();
     expectTypeOf<ReadonlyKeys<ProjectInput>>().toEqualTypeOf<keyof ProjectInput>();
     expectTypeOf<ReadonlyKeys<ProviderRequestContext>>().toEqualTypeOf<keyof ProviderRequestContext>();
     expectTypeOf<ReadonlyKeys<ProviderRemoveContext>>().toEqualTypeOf<keyof ProviderRemoveContext>();

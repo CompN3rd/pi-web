@@ -61,6 +61,7 @@ describe("PluginWorkspaceBackendRegistry", () => {
 
     const result = await registry.request(request());
 
+    expect(registry.workspaceTopologyMayChange("automations")).toBe(false);
     expect(result.workspaceTopologyChanged).toBe(false);
     expect(result.value).toEqual({
       workspace: { id: "w1", projectId: "p1", path: "/repo/worktree", label: "feature", isMain: false },
@@ -101,6 +102,7 @@ describe("PluginWorkspaceBackendRegistry", () => {
 
     const result = await registry.request({ ...request(), pluginId: "git" });
 
+    expect(registry.workspaceTopologyMayChange("git")).toBe(true);
     expect(result).toEqual({ value: { owner: true }, workspaceTopologyChanged: true });
     expect(providerRequest).toHaveBeenCalledOnce();
   });

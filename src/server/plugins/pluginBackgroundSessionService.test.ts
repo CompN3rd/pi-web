@@ -5,7 +5,7 @@ import { PluginBackgroundSessionRegistry } from "./pluginBackgroundSessionServic
 
 const project: Project = { id: "p1", name: "Project", path: "/repo", createdAt: "2026-08-01T00:00:00.000Z" };
 const workspace = { id: "w1", projectId: "p1", path: "/repo/worktree", label: "feature", isMain: false };
-function status(running = false): SessionStatus {
+function status(running = false, cost = 0.25): SessionStatus {
   return {
     sessionId: "s1",
     model: { provider: "anthropic", id: "model", name: "Model" },
@@ -16,7 +16,7 @@ function status(running = false): SessionStatus {
     pendingMessageCount: 0,
     queuedMessages: [],
     tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 },
-    cost: 0.25,
+    cost,
   };
 }
 function authority(current: WorkspaceProviderAuthorityResolution) {
@@ -77,6 +77,19 @@ describe("PluginBackgroundSessionRegistry", () => {
     expect(sessions.startBackgroundSession).not.toHaveBeenCalled();
   });
 
+  it("keeps unknown estimated cost absent", async () => {
+    const sessions = sessionHost();
+    sessions.startBackgroundSession.mockResolvedValue({
+      session: { id: "s1", path: "/sessions/s1.jsonl", cwd: workspace.path, created: "2026-08-01T00:00:00.000Z", modified: "2026-08-01T00:00:00.000Z", messageCount: 0, firstMessage: "" },
+      status: status(false, Number.NaN),
+    });
+    sessions.backgroundSessionStatus.mockResolvedValue(status(false, Number.NaN));
+    const registry = new PluginBackgroundSessionRegistry({ requireProject: () => Promise.resolve(project) }, authority(resolution()), sessions);
+    const lease = await registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
+
+    await expect(lease.snapshot()).resolves.not.toHaveProperty("usage.estimatedCostUsd");
+  });
+
   it("reports cancellation and releases ownership after the awaited prompt settles", async () => {
     const sessions = sessionHost();
     let settlePrompt: ((value: SessionStatus) => void) | undefined;
@@ -91,6 +104,85 @@ describe("PluginBackgroundSessionRegistry", () => {
     await expect(prompt).resolves.toMatchObject({ status: "aborted" });
     expect(sessions.abortBackgroundSession).toHaveBeenCalledOnce();
     expect(sessions.releaseBackgroundSession).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a concurrent prompt and defers public release until the active prompt settles", async () => {
+    const sessions = sessionHost();
+    let settlePrompt: ((value: SessionStatus) => void) | undefined;
+    sessions.promptBackgroundSession.mockImplementation(() => new Promise((resolvePrompt) => { settlePrompt = resolvePrompt; }));
+    const registry = new PluginBackgroundSessionRegistry({ requireProject: () => Promise.resolve(project) }, authority(resolution()), sessions);
+    const lease = await registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
+
+    const firstPrompt = lease.prompt("first");
+    await expect(lease.prompt("second")).rejects.toThrow("already has an active prompt");
+    const release = lease.release();
+    await Promise.resolve();
+    expect(sessions.releaseBackgroundSession).not.toHaveBeenCalled();
+
+    settlePrompt?.(status());
+    await expect(firstPrompt).resolves.toMatchObject({ status: "completed" });
+    await release;
+    expect(sessions.promptBackgroundSession).toHaveBeenCalledOnce();
+    expect(sessions.releaseBackgroundSession).toHaveBeenCalledOnce();
+  });
+
+  it("does not classify a later successful prompt as aborted after an idle or failed abort", async () => {
+    const sessions = sessionHost();
+    const registry = new PluginBackgroundSessionRegistry({ requireProject: () => Promise.resolve(project) }, authority(resolution()), sessions);
+    const idleAbortLease = await registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
+
+    await idleAbortLease.abort();
+    await expect(idleAbortLease.prompt("work")).resolves.toMatchObject({ status: "completed" });
+
+    const failedAbortLease = await registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
+    sessions.abortBackgroundSession.mockRejectedValueOnce(new Error("abort failed"));
+    await expect(failedAbortLease.abort()).rejects.toThrow("abort failed");
+    await expect(failedAbortLease.prompt("work")).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("drains a pending create during quiesce and rejects later creates", async () => {
+    const sessions = sessionHost();
+    let settleCreate: ((value: Awaited<ReturnType<typeof sessions.startBackgroundSession>>) => void) | undefined;
+    sessions.startBackgroundSession.mockImplementation(() => new Promise((resolveCreate) => { settleCreate = resolveCreate; }));
+    const registry = new PluginBackgroundSessionRegistry({ requireProject: () => Promise.resolve(project) }, authority(resolution()), sessions);
+    const service = registry.forPlugin("automations");
+    const create = service.create({ projectId: "p1", workspaceId: "w1" });
+    await vi.waitFor(() => { expect(sessions.startBackgroundSession).toHaveBeenCalledOnce(); });
+
+    const quiesce = registry.quiesceAll();
+    await expect(service.create({ projectId: "p1", workspaceId: "w1" })).rejects.toThrow("quiescing");
+    expect(sessions.forceStopBackgroundSession).not.toHaveBeenCalled();
+    settleCreate?.({
+      session: { id: "s1", path: "/sessions/s1.jsonl", cwd: workspace.path, created: "2026-08-01T00:00:00.000Z", modified: "2026-08-01T00:00:00.000Z", messageCount: 0, firstMessage: "" },
+      status: status(),
+    });
+
+    await expect(create).rejects.toThrow("quiescing");
+    await expect(quiesce).resolves.toBeUndefined();
+    expect(sessions.forceStopBackgroundSession).toHaveBeenCalledOnce();
+  });
+
+  it("retains failed force-stop cleanup for a later quiesce retry", async () => {
+    const sessions = sessionHost();
+    sessions.forceStopBackgroundSession.mockRejectedValueOnce(new Error("detach failed"));
+    const registry = new PluginBackgroundSessionRegistry({ requireProject: () => Promise.resolve(project) }, authority(resolution()), sessions);
+    await registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
+
+    await expect(registry.quiesceAll()).rejects.toThrow("Failed to force-stop 1 background session lease");
+    await expect(registry.quiesceAll()).resolves.toBeUndefined();
+    expect(sessions.forceStopBackgroundSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("cleans up only the failed plugin's leases before global quiesce", async () => {
+    const sessions = sessionHost();
+    const registry = new PluginBackgroundSessionRegistry({ requireProject: () => Promise.resolve(project) }, authority(resolution()), sessions);
+    await registry.forPlugin("automations").create({ projectId: "p1", workspaceId: "w1" });
+    await registry.forPlugin("other").create({ projectId: "p1", workspaceId: "w1" });
+
+    await registry.quiescePlugin("automations");
+    expect(sessions.forceStopBackgroundSession).toHaveBeenCalledExactlyOnceWith("automations", { id: "s1", cwd: workspace.path });
+    await registry.quiesceAll();
+    expect(sessions.forceStopBackgroundSession).toHaveBeenLastCalledWith("other", { id: "s1", cwd: workspace.path });
   });
 
   it("force-stops every outstanding lease during quiesce", async () => {
