@@ -114,7 +114,7 @@ export interface BackgroundSessionUsage {
   readonly cacheRead: number;
   readonly cacheWrite: number;
   readonly total: number;
-  readonly estimatedCostUsd: number;
+  readonly estimatedCostUsd?: number;
 }
 
 export interface BackgroundSessionSnapshot {

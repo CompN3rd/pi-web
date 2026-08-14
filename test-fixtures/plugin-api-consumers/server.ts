@@ -16,8 +16,13 @@ const plugin: PiWebServerPlugin = {
         isMain: true,
       }],
     },
-    ready: ({ backgroundSessions }) => {
+    ready: async ({ backgroundSessions }) => {
       backgroundSessions.listModels();
+      const lease = await backgroundSessions.create({ projectId: "project-1", workspaceId: "workspace-1" });
+      const snapshot = await lease.snapshot();
+      const estimatedCostUsd: number | undefined = snapshot.usage.estimatedCostUsd;
+      if (estimatedCostUsd !== undefined && estimatedCostUsd < 0) throw new Error("Invalid estimated cost");
+      await lease.release();
     },
   }),
 };

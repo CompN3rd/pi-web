@@ -41,6 +41,10 @@ describe("server plugin late lifecycle and storage", () => {
         activate(context) {
           contexts.set(id, context);
           return {
+            workspaceProvider: {
+              probe: () => Promise.resolve("claim"),
+              list: () => Promise.resolve([]),
+            },
             workspaceBackend: { request: () => Promise.resolve(null) },
             ready: (_readyContext, signal) => {
               events.push(`ready:${id}:${String(signal.aborted)}`);
@@ -64,9 +68,16 @@ describe("server plugin late lifecycle and storage", () => {
     });
 
     expect(runtime.workspaceBackendContributions()).toEqual([]);
-    await runtime.ready(() => Object.freeze({ backgroundSessions: Object.freeze({ listModels: () => [], create: () => Promise.reject(new Error("unused")) }) }));
+    expect(runtime.providerContributions().map(({ pluginId }) => pluginId)).toEqual(["bad", "good"]);
+    const cleanupFailedPlugin = vi.fn(() => Promise.resolve());
+    await runtime.ready(
+      () => Object.freeze({ backgroundSessions: Object.freeze({ listModels: () => [], create: () => Promise.reject(new Error("unused")) }) }),
+      cleanupFailedPlugin,
+    );
 
     expect(runtime.workspaceBackendContributions().map(({ pluginId }) => pluginId)).toEqual(["good"]);
+    expect(runtime.providerContributions().map(({ pluginId }) => pluginId)).toEqual(["good"]);
+    expect(cleanupFailedPlugin).toHaveBeenCalledExactlyOnceWith("bad");
     expect(runtime.healthRecords()).toContainEqual(expect.objectContaining({ pluginId: "bad", state: "failed", phase: "ready", message: "ready exploded" }));
     expect(contexts.get("good")?.stateDirectory).toBe(await realpath(join(root, "plugin-state", "good")));
     expect(Object.isFrozen(contexts.get("good"))).toBe(true);

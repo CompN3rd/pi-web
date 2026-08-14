@@ -174,14 +174,17 @@ export class ServerPluginRuntime {
   }
 
   providerContributions(): readonly ServerPluginProviderContribution[] {
-    return Object.freeze(this.activePlugins.flatMap((active) => active.providerContribution === undefined ? [] : [active.providerContribution]));
+    return Object.freeze(this.activePlugins.flatMap((active) => active.providerContribution === undefined || active.ready === "failed" ? [] : [active.providerContribution]));
   }
 
   workspaceBackendContributions(): readonly ServerPluginWorkspaceBackendContribution[] {
     return Object.freeze(this.activePlugins.flatMap((active) => active.backendContribution === undefined || active.ready === "pending" || active.ready === "failed" ? [] : [active.backendContribution]));
   }
 
-  async ready(contextForPlugin: (pluginId: string) => ServerPluginReadyContext): Promise<void> {
+  async ready(
+    contextForPlugin: (pluginId: string) => ServerPluginReadyContext,
+    cleanupFailedPlugin?: (pluginId: string) => void | Promise<void>,
+  ): Promise<void> {
     for (const active of this.activePlugins) {
       if (active.ready !== "pending") continue;
       const callback = active.activation.ready?.bind(active.activation);
@@ -193,11 +196,24 @@ export class ServerPluginRuntime {
         active.ready = "complete";
       } catch (error) {
         active.ready = "failed";
+        let cleanupError: unknown;
+        try {
+          await cleanupFailedPlugin?.(active.entry.id);
+        } catch (failedCleanup) {
+          cleanupError = failedCleanup;
+          this.logger.error(
+            { err: failedCleanup, pluginId: active.entry.id, phase: "ready" },
+            "server plugin ready failure cleanup failed",
+          );
+        }
+        const message = cleanupError === undefined
+          ? errorMessage(error)
+          : `${errorMessage(error)}; cleanup failed: ${errorMessage(cleanupError)}`;
         this.recordsById.set(active.entry.id, recordFor(active.entry, {
           state: "failed",
           name: active.plugin.name,
           phase: "ready",
-          message: errorMessage(error),
+          message,
         }));
         this.logger.error({ err: error, pluginId: active.entry.id, phase: "ready" }, "server plugin ready failed");
       }

@@ -30,6 +30,9 @@ type BackgroundSessionHost = Pick<PiSessionService,
 
 export class PluginBackgroundSessionRegistry {
   private readonly leases = new Map<string, Set<HostBackgroundSessionLease>>();
+  private readonly pendingCreates = new Map<string, Set<Promise<BackgroundSessionLease>>>();
+  private readonly quiescedPlugins = new Set<string>();
+  private quiescing = false;
 
   constructor(
     private readonly projects: BackgroundProjectReader,
@@ -44,13 +47,34 @@ export class PluginBackgroundSessionRegistry {
     });
   }
 
-  async quiesceAll(): Promise<void> {
-    const leases = [...this.leases.values()].flatMap((owned) => [...owned]);
-    await Promise.allSettled(leases.map((lease) => lease.forceStop()));
-    this.leases.clear();
+  async quiescePlugin(pluginId: string): Promise<void> {
+    this.quiescedPlugins.add(pluginId);
+    await this.awaitPendingCreates(pluginId);
+    await this.forceStopLeases(pluginId, this.leases.get(pluginId) ?? []);
   }
 
-  private async create(pluginId: string, request: BackgroundSessionCreateRequest): Promise<BackgroundSessionLease> {
+  async quiesceAll(): Promise<void> {
+    this.quiescing = true;
+    await this.awaitPendingCreates();
+    const leases = [...this.leases.values()].flatMap((owned) => [...owned]);
+    await this.forceStopLeases("all plugins", leases);
+  }
+
+  private create(pluginId: string, request: BackgroundSessionCreateRequest): Promise<BackgroundSessionLease> {
+    if (this.quiescing || this.quiescedPlugins.has(pluginId)) {
+      return Promise.reject(new Error(`Background sessions are quiescing for plugin ${pluginId}`));
+    }
+    const pending = this.createLease(pluginId, request);
+    const ownedPending = this.pendingCreates.get(pluginId) ?? new Set<Promise<BackgroundSessionLease>>();
+    ownedPending.add(pending);
+    this.pendingCreates.set(pluginId, ownedPending);
+    return pending.finally(() => {
+      ownedPending.delete(pending);
+      if (ownedPending.size === 0) this.pendingCreates.delete(pluginId);
+    });
+  }
+
+  private async createLease(pluginId: string, request: BackgroundSessionCreateRequest): Promise<BackgroundSessionLease> {
     const project = await this.projects.requireProject(requireId(request.projectId, "projectId"));
     const resolution = await this.workspaces.resolve(project);
     if (resolution.status === "degraded") throw new Error(`Workspace authority is degraded for project ${project.id}`);
@@ -69,13 +93,47 @@ export class PluginBackgroundSessionRegistry {
     const owned = this.leases.get(pluginId) ?? new Set<HostBackgroundSessionLease>();
     owned.add(lease);
     this.leases.set(pluginId, owned);
+    if (this.quiescing || this.quiescedPlugins.has(pluginId)) {
+      throw new Error(`Background sessions are quiescing for plugin ${pluginId}`);
+    }
     return lease.publicHandle();
   }
+
+  private async awaitPendingCreates(pluginId?: string): Promise<void> {
+    const pending = pluginId === undefined
+      ? [...this.pendingCreates.values()].flatMap((owned) => [...owned])
+      : [...(this.pendingCreates.get(pluginId) ?? [])];
+    await Promise.allSettled(pending);
+  }
+
+  private async forceStopLeases(owner: string, leases: Iterable<HostBackgroundSessionLease>): Promise<void> {
+    const results = await Promise.allSettled([...leases].map((lease) => lease.forceStop()));
+    const failures: unknown[] = [];
+    for (const result of results) {
+      if (result.status === "rejected") {
+        const failure: unknown = result.reason;
+        failures.push(failure);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `Failed to force-stop ${String(failures.length)} background session lease(s) for ${owner}`);
+    }
+  }
+}
+
+interface ActivePrompt {
+  readonly generation: number;
+  aborted: boolean;
 }
 
 class HostBackgroundSessionLease {
   private released = false;
-  private abortRequested = false;
+  private activePrompt: ActivePrompt | undefined;
+  private promptCompletion: Promise<void> | undefined;
+  private completePrompt: (() => void) | undefined;
+  private promptGeneration = 0;
+  private releaseOperation: Promise<void> | undefined;
+  private forceStopOperation: Promise<void> | undefined;
   private lastSnapshot: BackgroundSessionSnapshot;
 
   constructor(
@@ -101,19 +159,27 @@ class HostBackgroundSessionLease {
 
   private async prompt(text: string): Promise<BackgroundSessionPromptResult> {
     this.requireActive();
+    if (this.activePrompt !== undefined) throw new Error("Background session lease already has an active prompt");
+    const prompt = { generation: ++this.promptGeneration, aborted: false };
+    this.activePrompt = prompt;
+    this.promptCompletion = new Promise((resolve) => { this.completePrompt = resolve; });
     try {
       const status = await this.sessions.promptBackgroundSession(this.pluginId, this.ref, text);
       this.lastSnapshot = snapshotFromStatus(status);
-      return { status: this.abortRequested ? "aborted" : "completed", usage: this.lastSnapshot.usage };
+      return { status: prompt.aborted ? "aborted" : "completed", usage: this.lastSnapshot.usage };
     } catch (error) {
       const snapshot = await this.captureSnapshot();
       return {
-        status: this.abortRequested ? "aborted" : "failed",
+        status: prompt.aborted ? "aborted" : "failed",
         usage: snapshot.usage,
-        ...(this.abortRequested ? {} : { error: errorMessage(error) }),
+        ...(prompt.aborted ? {} : { error: errorMessage(error) }),
       };
     } finally {
-      await this.release();
+      if (this.activePrompt === prompt) this.activePrompt = undefined;
+      this.completePrompt?.();
+      this.completePrompt = undefined;
+      await this.releaseNow();
+      this.promptCompletion = undefined;
     }
   }
 
@@ -134,29 +200,49 @@ class HostBackgroundSessionLease {
 
   private async abort(): Promise<void> {
     if (this.released) return;
-    this.abortRequested = true;
+    const prompt = this.activePrompt;
     await this.sessions.abortBackgroundSession(this.pluginId, this.ref);
+    if (prompt !== undefined && this.activePrompt?.generation === prompt.generation) prompt.aborted = true;
   }
 
   async forceStop(): Promise<void> {
     if (this.released) return;
-    this.abortRequested = true;
-    try {
-      await this.sessions.forceStopBackgroundSession(this.pluginId, this.ref);
-    } finally {
-      this.markReleased();
-    }
+    if (this.forceStopOperation !== undefined) return this.forceStopOperation;
+    const prompt = this.activePrompt;
+    const operation = this.sessions.forceStopBackgroundSession(this.pluginId, this.ref).then(
+      () => {
+        if (prompt !== undefined && this.activePrompt?.generation === prompt.generation) prompt.aborted = true;
+        this.markReleased();
+      },
+      (error: unknown) => {
+        this.forceStopOperation = undefined;
+        throw error;
+      },
+    );
+    this.forceStopOperation = operation;
+    await operation;
   }
 
-  private release(): Promise<void> {
-    if (!this.released) {
-      try {
+  private async release(): Promise<void> {
+    const completion = this.promptCompletion;
+    if (completion !== undefined) await completion;
+    await this.releaseNow();
+  }
+
+  private async releaseNow(): Promise<void> {
+    if (this.released) return;
+    if (this.releaseOperation !== undefined) return this.releaseOperation;
+    const operation = Promise.resolve()
+      .then(() => {
         this.sessions.releaseBackgroundSession(this.pluginId, this.ref);
-      } finally {
         this.markReleased();
-      }
-    }
-    return Promise.resolve();
+      })
+      .catch((error: unknown) => {
+        this.releaseOperation = undefined;
+        throw error;
+      });
+    this.releaseOperation = operation;
+    await operation;
   }
 
   private markReleased(): void {
@@ -166,7 +252,9 @@ class HostBackgroundSessionLease {
   }
 
   private requireActive(): void {
-    if (this.released) throw new Error("Background session lease is released");
+    if (this.released || this.releaseOperation !== undefined || this.forceStopOperation !== undefined) {
+      throw new Error("Background session lease is released");
+    }
   }
 }
 
@@ -183,7 +271,10 @@ function snapshotFromStatus(status: Awaited<ReturnType<PiSessionService["status"
 }
 
 function usageFromStatus(status: Awaited<ReturnType<PiSessionService["status"]>>): BackgroundSessionUsage {
-  return Object.freeze({ ...status.tokens, estimatedCostUsd: Number.isFinite(status.cost) ? Math.max(0, status.cost) : 0 });
+  return Object.freeze({
+    ...status.tokens,
+    ...(Number.isFinite(status.cost) ? { estimatedCostUsd: Math.max(0, status.cost) } : {}),
+  });
 }
 
 function requireId(value: string, name: string): string {

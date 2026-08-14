@@ -42,6 +42,10 @@ export class PluginWorkspaceBackendRegistry {
     this.requestTimeoutMs = positiveInteger(options.requestTimeoutMs, PLUGIN_BACKEND_DISPATCH_TIMEOUT_MS, "requestTimeoutMs");
   }
 
+  workspaceTopologyMayChange(pluginId: string): boolean {
+    return !this.contributions.some((contribution) => contribution.pluginId === pluginId);
+  }
+
   async request(request: WorkspaceProviderRequest): Promise<PluginWorkspaceBackendDispatchResult> {
     const auxiliary = this.contributions.find(({ pluginId }) => pluginId === request.pluginId);
     if (auxiliary === undefined) {
