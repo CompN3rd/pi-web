@@ -41,6 +41,8 @@ export interface ServerPluginRuntimeRecord {
   browserRevision?: string;
   settingsRevision: string;
   machineSpecific: boolean;
+  /** Active browser-paired module may issue workspace backend requests. */
+  backendAvailable?: true;
   state: ServerPluginRuntimeState;
   name?: string;
   phase?: ServerPluginLifecyclePhase;
@@ -369,7 +371,13 @@ export class ServerPluginRuntime {
         ...(backendContribution === undefined ? {} : { backendContribution }),
         ready: loadedActivation.ready === undefined ? "not-required" : "pending",
       });
-      this.recordsById.set(entry.id, recordFor(entry, { state: "active", name: loadedPlugin.name }));
+      const backendAvailable = loadedActivation.workspaceBackend !== undefined
+        || loadedActivation.workspaceProvider?.request !== undefined;
+      this.recordsById.set(entry.id, recordFor(entry, {
+        state: "active",
+        name: loadedPlugin.name,
+        ...(backendAvailable ? { backendAvailable: true } : {}),
+      }));
       this.logger.info({ pluginId: entry.id, pluginName: loadedPlugin.name }, "server plugin activated");
     } catch (error) {
       const rollbackError = phase === "start" && activation?.stop !== undefined
@@ -415,7 +423,7 @@ function disabledReason(entry: PiWebPluginCatalogEntry, safeStart: ServerPluginS
 
 function recordFor(
   entry: PiWebPluginCatalogEntry,
-  status: Pick<ServerPluginRuntimeRecord, "state"> & Partial<Pick<ServerPluginRuntimeRecord, "name" | "phase" | "message">>,
+  status: Pick<ServerPluginRuntimeRecord, "state"> & Partial<Pick<ServerPluginRuntimeRecord, "name" | "phase" | "message" | "backendAvailable">>,
 ): ServerPluginRuntimeRecord {
   return Object.freeze({
     pluginId: entry.id,
@@ -425,6 +433,7 @@ function recordFor(
     ...(entry.browserModule === undefined ? {} : { browserRevision: entry.browserModule.revision }),
     settingsRevision: entry.settingsRevision,
     machineSpecific: entry.machineSpecific,
+    ...(status.backendAvailable === true ? { backendAvailable: true } : {}),
     state: status.state,
     ...(status.name === undefined ? {} : { name: status.name }),
     ...(status.phase === undefined ? {} : { phase: status.phase }),

@@ -97,6 +97,49 @@ describe("server plugin late lifecycle and storage", () => {
     ]);
   });
 
+  it("records backend request capability separately from active server pairing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-web-plugin-capability-"));
+    roots.push(root);
+    const importer = (url: string) => {
+      const id = new URL(url).pathname.split("/").at(-2) ?? "";
+      const workspaceProvider = {
+        probe: () => Promise.resolve<"pass">("pass"),
+        list: () => Promise.resolve([]),
+      };
+      const plugin: PiWebServerPlugin = {
+        apiVersion: 1,
+        name: id,
+        activate: () => id === "lifecycle-only"
+          ? { start: () => undefined }
+          : id === "provider-only"
+            ? { workspaceProvider }
+            : id === "provider-request"
+              ? { workspaceProvider: { ...workspaceProvider, request: () => Promise.resolve(null) } }
+              : { workspaceBackend: { request: () => Promise.resolve(null) } },
+      };
+      return Promise.resolve({ default: plugin });
+    };
+    const runtime = await createServerPluginRuntime({
+      catalog: {
+        snapshot: () => Promise.resolve({
+          plugins: [entry("lifecycle-only"), entry("provider-only"), entry("provider-request"), entry("auxiliary-backend")],
+          diagnostics: [],
+        }),
+      },
+      importer,
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      pluginStateRoot: join(root, "plugin-state"),
+    });
+
+    expect(runtime.healthRecords().map(({ pluginId, backendAvailable }) => ({ pluginId, backendAvailable }))).toEqual([
+      { pluginId: "auxiliary-backend", backendAvailable: true },
+      { pluginId: "lifecycle-only", backendAvailable: undefined },
+      { pluginId: "provider-only", backendAvailable: undefined },
+      { pluginId: "provider-request", backendAvailable: true },
+    ]);
+    await runtime.stop();
+  });
+
   it("rejects traversal and a symlinked plugin state directory", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-web-plugin-storage-"));
     const outside = await mkdtemp(join(tmpdir(), "pi-web-plugin-storage-outside-"));
