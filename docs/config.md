@@ -313,7 +313,8 @@ A project-local `.pi/extension` is arbitrary code that runs inside the agent pro
 Trust is resolved the way `pi` resolves it with no trust prompt to show:
 
 - A workspace with no trust-requiring `.pi/` resources is always loaded (there is nothing to gate).
-- A saved decision in the agent directory's `trust.json` (from the Pi CLI's trust prompt, or the workspace trust toggle) wins.
+- User/global extensions (loaded before the decision, exactly as `pi` does) may decide trust through the `project_trust` extension event, and may request `remember` to persist their decision to the agent directory's `trust.json`. When the event decides, it wins — the same order `pi` uses.
+- Otherwise a saved decision in the agent directory's `trust.json` (from the Pi CLI's trust prompt, the workspace trust toggle, or a `remember`-ing extension) wins.
 - Otherwise the agent's `defaultProjectTrust` setting decides: `always` loads the project resources, and `never` skips them. `ask` skips them too, because PI WEB has no browser trust prompt yet and a non-interactive `pi` also treats `ask` as untrusted.
 
 This mirrors the Pi CLI: with `defaultProjectTrust: "never"`, an opened workspace's `.pi/` extensions and packages are ignored rather than loaded silently.
