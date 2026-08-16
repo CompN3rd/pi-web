@@ -70,6 +70,8 @@ export const FEDERATED_HTTP_ROUTES = [
     propagateCancellation: true,
   },
   { method: "GET", path: "/projects/:projectId/workspaces/:workspaceId/files" },
+  { method: "GET", path: "/projects/:projectId/workspaces/:workspaceId/trust" },
+  { method: "PUT", path: "/projects/:projectId/workspaces/:workspaceId/trust" },
   { method: "GET", path: "/projects/:projectId/workspaces/:workspaceId/terminals" },
   { method: "POST", path: "/projects/:projectId/workspaces/:workspaceId/terminals" },
   { method: "DELETE", path: "/projects/:projectId/workspaces/:workspaceId/terminals" },
