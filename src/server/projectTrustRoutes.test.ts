@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -110,5 +110,51 @@ describe("project trust routes", () => {
     const response = await app.inject({ method: "GET", url: "/api/projects/p1/workspaces/nope/trust" });
 
     expect(response.statusCode).toBe(400);
+  });
+});
+
+describe("path-driven trust lookup (add-project dialog)", () => {
+  it("reports the existing decision for the entered path", async () => {
+    new ProjectTrustStore(agentDir).set(projectDir, true);
+
+    const response = await app.inject({ method: "GET", url: `/api/projects/trust?path=${encodeURIComponent(projectDir)}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<WorkspaceTrustResponse>()).toEqual({ path: projectDir, decision: true, trusted: true });
+  });
+
+  it("keeps an explicit untrusted decision distinct from unset", async () => {
+    new ProjectTrustStore(agentDir).set(projectDir, false);
+
+    const response = await app.inject({ method: "GET", url: `/api/projects/trust?path=${encodeURIComponent(projectDir)}` });
+
+    expect(response.json<WorkspaceTrustResponse>()).toEqual({ path: projectDir, decision: false, trusted: false });
+  });
+
+  it("resolves the entered path to its canonical form before reading the store", async () => {
+    const link = `${projectDir}-link`;
+    cleanup.push(link);
+    await symlink(projectDir, link);
+    new ProjectTrustStore(agentDir).set(projectDir, true);
+
+    const response = await app.inject({ method: "GET", url: `/api/projects/trust?path=${encodeURIComponent(link)}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<WorkspaceTrustResponse>()).toEqual({ path: projectDir, decision: true, trusted: true });
+  });
+
+  it("reports the unset default for a path that does not exist yet", async () => {
+    const missing = join(projectDir, "not-yet-created");
+
+    const response = await app.inject({ method: "GET", url: `/api/projects/trust?path=${encodeURIComponent(missing)}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<WorkspaceTrustResponse>()).toEqual({ path: missing, decision: null, trusted: false });
+  });
+
+  it("rejects a missing or empty path", async () => {
+    expect((await app.inject({ method: "GET", url: "/api/projects/trust" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/projects/trust?path=" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/projects/trust?path=%20" })).statusCode).toBe(400);
   });
 });

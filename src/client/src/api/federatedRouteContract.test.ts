@@ -109,7 +109,8 @@ describe("federated route contract", () => {
   });
 
   it("allowlists only workspace trust reads and writes without adding a trust WebSocket", () => {
-    expect(FEDERATED_HTTP_ROUTES.filter((route) => route.path.endsWith("/trust"))).toEqual([
+    expect(FEDERATED_HTTP_ROUTES.filter((route) => route.path.includes("trust"))).toEqual([
+      { method: "GET", path: "/projects/trust" },
       { method: "GET", path: "/projects/:projectId/workspaces/:workspaceId/trust" },
       { method: "PUT", path: "/projects/:projectId/workspaces/:workspaceId/trust" },
     ]);
@@ -144,6 +145,7 @@ describe("federated route contract", () => {
       ignoreParseFailure(workspacesApi.moveWorkspaceFile("p 1", "w 1", "README.md", "docs/README.md", { overwrite: false }, machineId)),
       ignoreParseFailure(trustApi.workspaceTrust("p 1", "w 1", machineId)),
       ignoreParseFailure(trustApi.setWorkspaceTrust("p 1", "w 1", true, machineId)),
+      ignoreParseFailure(trustApi.projectTrust("/repo", machineId)),
       ignoreParseFailure(requestPluginBackend({ pluginId: "board-tools", backendRevision: "server-r1", machineId, projectId: "p 1", workspaceId: "w 1" }, "cards.summary", { includeClosed: false })),
       ignoreParseFailure(filesApi.files("README", { kind: "tracked", mode: "file", projectId: "p 1", workspaceId: "w 1", machineId })),
       ignoreParseFailure(sessionsApi.sessions("/repo", machineId)),
