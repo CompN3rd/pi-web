@@ -63,7 +63,7 @@ async function projectCommandNames(options: { agentDir: string; respectProjectTr
   const service = new PiSessionService(new CapturingSessionEventHub(), {
     agentDir: options.agentDir,
     modelRuntime: runtime,
-    sessionManager: createPiSessionManagerGateway({ agentDir: options.agentDir, env: {}, sessionDirEnvKeys: [] }),
+    sessionManager: createPiSessionManagerGateway({ agentDir: options.agentDir, env: {} }),
     heartbeatIntervalMs: 60_000,
     respectProjectTrust: options.respectProjectTrust,
   });

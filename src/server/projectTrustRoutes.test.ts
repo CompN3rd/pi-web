@@ -8,7 +8,7 @@ import type { WorkspaceTrustResponse } from "../shared/apiTypes.js";
 import { ProjectService } from "./projects/projectService.js";
 import { ProjectStore } from "./storage/projectStore.js";
 import type { Project, WorkspaceListing } from "./types.js";
-import { WorkspaceService } from "./workspaces/workspaceService.js";
+import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
 import { registerProjectTrustRoutes } from "./projectTrustRoutes.js";
 
 let app: FastifyInstance;
@@ -34,13 +34,22 @@ class FakeProjectService extends ProjectService {
   }
 }
 
-class FakeWorkspaceService extends WorkspaceService {
-  constructor(private readonly workspaces: WorkspaceListing[]) {
-    super();
+class FakeWorkspaceCatalog implements WorkspaceCatalog {
+  constructor(private readonly workspaces: WorkspaceListing[]) {}
+
+  resolveProject(): never {
+    throw new Error("Workspace provider resolution is not used by the trust routes");
   }
 
-  override list(): Promise<WorkspaceListing[]> {
-    return Promise.resolve(this.workspaces);
+  list(projectId: string): Promise<WorkspaceListing[]> {
+    return Promise.resolve(this.workspaces.filter((workspace) => workspace.projectId === projectId));
+  }
+
+  resolve(projectId: string, workspaceId: string): Promise<WorkspaceListing> {
+    const workspace = this.workspaces.find((entry) => entry.projectId === projectId && entry.id === workspaceId);
+    return workspace === undefined
+      ? Promise.reject(new Error("Workspace not found"))
+      : Promise.resolve(workspace);
   }
 }
 
@@ -48,9 +57,9 @@ beforeEach(async () => {
   agentDir = await tempDir("pi-web-trust-route-agent-");
   projectDir = await tempDir("pi-web-trust-route-project-");
   const project: Project = { id: "p1", name: "proj", path: projectDir, createdAt: "2026-01-01T00:00:00.000Z" };
-  const workspace: WorkspaceListing = { id: "w1", projectId: project.id, path: projectDir, label: "main", isMain: true, isGitRepo: true, isGitWorktree: false };
+  const workspace: WorkspaceListing = { id: "w1", projectId: project.id, path: projectDir, label: "main", isMain: true };
   app = Fastify({ logger: false });
-  registerProjectTrustRoutes(app, new FakeProjectService(project), new FakeWorkspaceService([workspace]), {
+  registerProjectTrustRoutes(app, new FakeProjectService(project), new FakeWorkspaceCatalog([workspace]), {
     agentDir: () => Promise.resolve(agentDir),
     respectProjectTrust: () => Promise.resolve(true),
   });

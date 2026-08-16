@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { ProjectTrustStore, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { WorkspaceTrustResponse } from "../shared/apiTypes.js";
 import type { ProjectService } from "./projects/projectService.js";
-import type { WorkspaceService } from "./workspaces/workspaceService.js";
+import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
 import { resolveWorkspaceContext } from "./workspaces/workspaceContext.js";
 
 /**
@@ -23,7 +23,7 @@ export interface ProjectTrustRouteDeps {
 export function registerProjectTrustRoutes(
   app: FastifyInstance,
   projects: ProjectService,
-  workspaces: WorkspaceService,
+  workspaces: WorkspaceCatalog,
   deps: ProjectTrustRouteDeps,
   prefix = "/api",
 ): void {

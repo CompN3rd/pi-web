@@ -1,12 +1,12 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
-import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace, WorkspaceActivity } from "../../api";
+import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace } from "../../api";
+import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import type { WorkspaceLabelItem } from "../../plugins/types";
+import { selectedMachineId } from "../../controllers/types";
 import type { NavigationSection } from "../../appShell/navigationState";
 import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
-import { EMPTY_UNREAD_PRESENCE, type UnreadPresence } from "../../unreadPresence";
 import type { KeyboardNavigableSection } from "../navigationFocus";
-import type { ParentSessionLocation } from "../../parentSessionLocation";
 import "../MachineList";
 import "../MachineSwitcher";
 import "../ProjectList";
@@ -20,20 +20,17 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) machines: Machine[] = [];
   @property({ attribute: false }) selectedMachine?: Machine;
   @property({ attribute: false }) machineStatuses: Record<string, MachineHealth> = {};
-  @property({ attribute: false }) machineActivities: Record<string, Record<string, WorkspaceActivity>> = {};
+  @property({ attribute: false }) machineStatusSnapshots: Record<string, MachineStatusSnapshot> = {};
   @property({ attribute: false }) projects: Project[] = [];
   @property({ attribute: false }) selectedProject?: Project;
   @property({ attribute: false }) workspaces: Workspace[] = [];
   @property({ attribute: false }) selectedWorkspace?: Workspace;
   @property({ attribute: false }) sessions: SessionInfo[] = [];
   @property({ attribute: false }) selectedSession?: SessionInfo;
-  @property({ attribute: false }) workspaceActivities: Record<string, WorkspaceActivity> = {};
   @property({ attribute: false }) sessionActivities: Record<string, SessionActivity> = {};
   @property({ attribute: false }) sessionStatuses: Record<string, SessionStatus> = {};
   @property({ attribute: false }) sendingPrompts: Record<string, true> = {};
   @property({ attribute: false }) unreadSessionIds: ReadonlySet<string> = new Set();
-  @property({ attribute: false }) unreadPresence: UnreadPresence = EMPTY_UNREAD_PRESENCE;
-  @property({ attribute: false }) workspacesByProjectId: Record<string, Workspace[]> = {};
   @property({ attribute: false }) deletingWorkspaceIds: string[] = [];
   @property({ attribute: false }) workspaceLabelItems: (workspace: Workspace) => WorkspaceLabelItem[] = () => [];
   @property({ attribute: false }) refreshControl: unknown;
@@ -64,8 +61,6 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onDeleteArchivedSession?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onDeleteArchivedSessions?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onDetachParentSession?: (session: SessionInfo) => void | Promise<void>;
-  @property({ attribute: false }) parentSessionLocation?: (session: SessionInfo) => ParentSessionLocation;
-  @property({ attribute: false }) onGoToParentSession?: (session: SessionInfo, location: ParentSessionLocation) => void | Promise<void>;
   @property({ attribute: false }) onMarkSessionRead?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onMarkSessionsRead?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onReloadSession?: (session: SessionInfo) => void | Promise<void>;
@@ -101,8 +96,7 @@ export class AppNavigationPanel extends LitElement {
             .machines=${this.machines}
             .selected=${this.selectedMachine}
             .statuses=${this.machineStatuses}
-            .activities=${this.machineActivities}
-            .unreadMachineIds=${this.unreadPresence.machines}
+            .statusSnapshots=${this.machineStatusSnapshots}
             .onSelect=${(machine: Machine) => this.onSelectMachine?.(machine)}
             .onRemove=${(machine: Machine) => this.onRemoveMachine?.(machine)}
             .onFocusNextSection=${() => { this.focusNextFrom("machines"); }}
@@ -119,8 +113,7 @@ export class AppNavigationPanel extends LitElement {
           .machines=${this.machines}
           .selected=${this.selectedMachine}
           .statuses=${this.machineStatuses}
-          .activities=${this.machineActivities}
-          .unreadMachineIds=${this.unreadPresence.machines}
+          .statusSnapshots=${this.machineStatusSnapshots}
           .collapsible=${this.collapsible}
           .collapsed=${this.machinesCollapsed}
           .onToggleCollapsed=${() => { this.onToggleMachines?.(); }}
@@ -133,9 +126,7 @@ export class AppNavigationPanel extends LitElement {
       <project-list
         .projects=${this.projects}
         .selected=${this.selectedProject}
-        .activities=${this.workspaceActivities}
-        .workspacesByProjectId=${this.workspacesByProjectId}
-        .unreadProjectIds=${this.unreadPresence.projects}
+        .statusSnapshot=${this.selectedMachineStatusSnapshot()}
         .collapsible=${this.collapsible}
         .collapsed=${this.projectsCollapsed}
         .onToggleCollapsed=${() => { this.onToggleProjects?.(); }}
@@ -149,9 +140,8 @@ export class AppNavigationPanel extends LitElement {
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
         .machineId=${this.selectedMachine?.id ?? "local"}
-        .activities=${this.workspaceActivities}
+        .statusSnapshot=${this.selectedMachineStatusSnapshot()}
         .deletingWorkspaceIds=${this.deletingWorkspaceIds}
-        .unreadWorkspaceIds=${this.unreadPresence.workspaces}
         .collapsible=${this.collapsible}
         .collapsed=${this.workspacesCollapsed}
         .workspaceLabelItems=${this.workspaceLabelItems}
@@ -185,8 +175,6 @@ export class AppNavigationPanel extends LitElement {
         .onDeleteArchived=${(session: SessionInfo) => this.onDeleteArchivedSession?.(session)}
         .onDeleteArchivedMany=${(sessions: SessionInfo[]) => this.onDeleteArchivedSessions?.(sessions)}
         .onDetachParent=${(session: SessionInfo) => this.onDetachParentSession?.(session)}
-        .parentLocation=${this.parentSessionLocation ?? unknownParentSessionLocation}
-        .onGoToParent=${this.onGoToParentSession === undefined ? undefined : (session: SessionInfo, location: ParentSessionLocation) => this.onGoToParentSession?.(session, location)}
         .onMarkRead=${(session: SessionInfo) => this.onMarkSessionRead?.(session)}
         .onMarkReadMany=${(sessions: SessionInfo[]) => this.onMarkSessionsRead?.(sessions)}
         .onReload=${(session: SessionInfo) => this.onReloadSession?.(session)}
@@ -196,6 +184,17 @@ export class AppNavigationPanel extends LitElement {
         .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
       ></session-list>
     `;
+  }
+
+  /**
+   * Project and workspace rows always belong to the selected machine, resolved
+   * exactly as the rest of the app resolves it — including its local-machine
+   * default, which is the key snapshots arrive under before a machine has been
+   * selected. Diverging here would blank every row's indicator while a snapshot
+   * is in fact loaded.
+   */
+  private selectedMachineStatusSnapshot(): MachineStatusSnapshot | undefined {
+    return this.machineStatusSnapshots[selectedMachineId({ selectedMachine: this.selectedMachine })];
   }
 
   private async focusNavigableSection(section: KeyboardNavigableSection | undefined): Promise<boolean> {
@@ -235,9 +234,6 @@ export class AppNavigationPanel extends LitElement {
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
   `;
 }
-
-/** Stable default so the session list does not see a new resolver identity each render. */
-const unknownParentSessionLocation = (): ParentSessionLocation => ({ kind: "unknown" });
 
 export function shouldShowMachinesSection(machines: readonly Machine[]): boolean {
   return machines.length > 1;

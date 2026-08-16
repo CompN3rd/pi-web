@@ -16,16 +16,19 @@ const AGENT_DIR = "/tmp/pi-web-test-agent";
 function daemonCollaborators(patch: Partial<SessionServiceDependencyInput> = {}): SessionServiceDependencyInput {
   return {
     agentDir: AGENT_DIR,
+    archiveStore: emptyArchiveStore(),
     modelRuntime: testModelRuntime,
     sessionManager: sessionGateway([]),
     workspaceActivity: new WorkspaceActivityService(),
     logger: { info() { /* no-op */ } },
     notificationStore: new SessionNotificationStore(),
     unreadStore: new SessionUnreadStore(),
+    onUnreadChanged: () => { /* no-op */ },
     catalogRefreshStatus: { isRefreshInFlight: () => false },
     subsessionsEnabled: false,
     askUserEnabled: true,
     respectProjectTrust: false,
+    appendSystemPromptSections: [],
     extensionDialogsTimeoutMs: 300_000,
     ...patch,
   };
@@ -42,7 +45,6 @@ async function startupDetails(deps: PiSessionServiceDependencies): Promise<strin
   const fake = fakeRuntime();
   const service = new PiSessionService(hub, {
     ...deps,
-    archiveStore: emptyArchiveStore(),
     createAgentRuntime: () => Promise.resolve(fake.runtime),
     heartbeatIntervalMs: 60_000,
   });
@@ -103,5 +105,11 @@ describe("sessiond session service dependency assembly", () => {
   it("passes the project-trust preference through to the session service", () => {
     expect(sessionServiceDependencies(daemonCollaborators({ respectProjectTrust: true })).respectProjectTrust).toBe(true);
     expect(sessionServiceDependencies(daemonCollaborators({ respectProjectTrust: false })).respectProjectTrust).toBe(false);
+  });
+
+  it("passes deployment system-prompt sections through to the session service", () => {
+    const sections = ["<pi_web_docker_environment>\n- fact\n</pi_web_docker_environment>"];
+
+    expect(sessionServiceDependencies(daemonCollaborators({ appendSystemPromptSections: sections })).appendSystemPromptSections).toEqual(sections);
   });
 });
