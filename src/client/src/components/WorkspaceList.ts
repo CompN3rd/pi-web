@@ -192,6 +192,7 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
           />
           <span>Trusted${busy ? "…" : ""}</span>
         </label>
+        <small class="workspace-trust-hint">Trusting loads .pi settings, extensions, skills, and packages from this workspace.</small>
         ${trust?.error === undefined ? null : html`<small class="workspace-trust-error">${trust.error}</small>`}
       </div>
     `;
@@ -316,6 +317,7 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     .workspace-menu-trust { display: flex; flex-direction: column; gap: 3px; padding: 4px 2px; }
     .workspace-menu-trust label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
     .workspace-menu-trust input { cursor: pointer; }
+    .workspace-trust-hint { color: var(--pi-muted); line-height: 1.3; white-space: normal; overflow-wrap: anywhere; }
     .workspace-trust-error { color: var(--pi-danger, #c0392b); line-height: 1.3; }
   `];
 }

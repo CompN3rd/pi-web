@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { trustApi } from "../api";
 import type { Workspace } from "../api";
 import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
 import { machineStatusSnapshot } from "../machineStatus.testSupport";
@@ -9,6 +10,7 @@ import { WorkspaceList } from "./WorkspaceList";
 let restoreClipboardStub: () => void = () => undefined;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   restoreClipboardStub();
   restoreClipboardStub = () => undefined;
   document.body.replaceChildren();
@@ -148,6 +150,25 @@ describe("workspace detail copy buttons", () => {
 
     expect(detailCopyButton(list, "Copy path")).toBeDefined();
     expect(list.shadowRoot?.querySelector(".workspace-menu-panel .detail-copy[aria-label='Copied']")).toBeNull();
+  });
+});
+
+describe("workspace trust toggle helper text", () => {
+  it("explains what trusting allows in the TUI's spirit, without the removed config clause", async () => {
+    vi.spyOn(trustApi, "workspaceTrust").mockResolvedValue({ path: "/repo/ws-a", decision: true, trusted: true });
+    const list = await mountWorkspaceList([workspace("ws-a")]);
+    openMenu(list, "ws-a");
+    await list.updateComplete;
+
+    const hint = list.shadowRoot?.querySelector(".workspace-trust-hint");
+    expect(hint).not.toBeNull();
+    expect(hint?.textContent).toContain(".pi settings");
+    expect(hint?.textContent).toContain("extensions");
+    expect(hint?.textContent).toContain("skills");
+    expect(hint?.textContent).toContain("packages");
+    // The obsolete Pi CLI / respectProjectTrust clause must not survive in any wording.
+    expect(hint?.textContent).not.toMatch(/Pi CLI/i);
+    expect(hint?.textContent).not.toMatch(/respectProjectTrust/);
   });
 });
 
