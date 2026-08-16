@@ -187,15 +187,6 @@ export interface PiWebConfigValues {
    */
   askUser?: boolean;
   /**
-   * When true, PI WEB honors pi's project-trust settings before loading a
-   * workspace's project-local `.pi/` extensions, packages, and settings:
-   * `defaultProjectTrust` and saved decisions in the agent dir's `trust.json`
-   * apply, and (with no browser trust prompt) an untrusted project's resources
-   * are skipped — matching `pi` run without a UI. Off by default, which loads
-   * project-local resources unconditionally (backward compatible).
-   */
-  respectProjectTrust?: boolean;
-  /**
    * When true, PI WEB appends environment facts to session system prompts:
    * the pi-web session nesting every session runs in, plus container facts in
    * Docker deployments. On by default.
@@ -369,12 +360,6 @@ export interface WorkspaceTrustResponse {
   decision: boolean | null;
   /** Effective trust the toggle reflects: the stored decision, else `defaultProjectTrust === "always"`. */
   trusted: boolean;
-  /**
-   * Whether PI WEB honors this decision at session start. When `false`, the
-   * decision still applies to the Pi CLI but PI WEB loads project resources
-   * regardless. Lets the UI hint that the toggle has no PI WEB effect yet.
-   */
-  respectProjectTrust: boolean;
 }
 
 export interface WorkspaceRemovalRequest {

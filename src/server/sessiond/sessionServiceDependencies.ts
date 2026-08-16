@@ -27,8 +27,6 @@ export interface SessionServiceDependencyInput {
   subsessionsEnabled: boolean;
   /** Whether agents may post structured question sets to the browser. */
   askUserEnabled: boolean;
-  /** Whether to honor pi's project-trust settings before loading project-local `.pi/` resources. */
-  respectProjectTrust: boolean;
   /** Deployment facts appended to session system prompts; empty when there are none. */
   appendSystemPromptSections: readonly string[];
   /** Auto-cancel delay for extension dialogs whose extension set no timeout; `0` waits forever. */
@@ -57,7 +55,6 @@ export function sessionServiceDependencies(input: SessionServiceDependencyInput)
     // so they stay off unless spawning is configured too.
     subsessionsEnabled: input.spawnTargets !== undefined && input.subsessionsEnabled,
     askUserEnabled: input.askUserEnabled,
-    respectProjectTrust: input.respectProjectTrust,
     appendSystemPromptSections: input.appendSystemPromptSections,
     extensionDialogsTimeoutMs: input.extensionDialogsTimeoutMs,
     notificationStore: input.notificationStore,

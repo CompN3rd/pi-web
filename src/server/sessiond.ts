@@ -233,7 +233,6 @@ async function createSessionDaemonRuntime() {
       ...(spawnTargets === undefined ? {} : { spawnTargets }),
       subsessionsEnabled: config.subsessions,
       askUserEnabled: config.askUser,
-      respectProjectTrust: config.respectProjectTrust,
       appendSystemPromptSections: [
         // Sessions always run nested in this daemon, so they always get the
         // session environment facts; Docker deployments add their container

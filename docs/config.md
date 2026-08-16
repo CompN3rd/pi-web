@@ -33,13 +33,13 @@ defaults → global config file → environment overrides
 
 Supported project-local settings are then applied for that project's workspaces. For upload defaults, `<project>/.pi-web/config.json` overrides the global value.
 
-Environment overrides include `PI_WEB_HOST`, `PI_WEB_PORT` / `PORT`, `PI_WEB_ALLOWED_HOSTS`, `PI_WEB_MAX_UPLOAD_BYTES`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_WEB_SPAWN_SESSIONS`, `PI_WEB_SUBSESSIONS`, `PI_WEB_ASK_USER`, `PI_WEB_RESPECT_PROJECT_TRUST`, and `PI_WEB_ENVIRONMENT_FACTS`.
+Environment overrides include `PI_WEB_HOST`, `PI_WEB_PORT` / `PORT`, `PI_WEB_ALLOWED_HOSTS`, `PI_WEB_MAX_UPLOAD_BYTES`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_WEB_SPAWN_SESSIONS`, `PI_WEB_SUBSESSIONS`, `PI_WEB_ASK_USER`, and `PI_WEB_ENVIRONMENT_FACTS`.
 
 Process restarts depend on the key:
 
 - `host` / `port`: restart the gateway web/API service or process.
 - `maxUploadBytes`: restart both the web/API process and the session daemon on that machine.
-- `spawnSessions` / `subsessions` / `askUser` / `respectProjectTrust` / `extensionDialogsTimeoutMs` / `environmentFacts`: restart the session daemon on that machine.
+- `spawnSessions` / `subsessions` / `askUser` / `extensionDialogsTimeoutMs` / `environmentFacts`: restart the session daemon on that machine.
 - `pathAccess`: applies on the next request; existing file views may need a browser refresh.
 - `uploads.defaultFolder`: applies to newly opened Files upload dialogs and new direct drag/drop batches after config/workspace refresh.
 - `plugins`: browser-only changes apply after a browser-tab reload. Any enablement, settings, package-source, or package-revision change affecting a `serverModule` requires a manual session-daemon restart, then a browser reload for its paired UI.
@@ -63,7 +63,6 @@ Process restarts depend on the key:
   "spawnSessions": true,
   "subsessions": true,
   "askUser": true,
-  "respectProjectTrust": false,
   "extensionDialogsTimeoutMs": 300000,
   "plugins": {
     "workspace-tasks": { "enabled": true },
@@ -158,7 +157,6 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | Agent can spawn sessions | `spawnSessions` | `PI_WEB_SPAWN_SESSIONS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Tracked subsessions | `subsessions` | `PI_WEB_SUBSESSIONS` | Global/session daemon | Not supported locally; also requires `spawnSessions` | Restart session daemon on that machine |
 | Agent can post question forms | `askUser` | `PI_WEB_ASK_USER` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
-| Honor project trust for `.pi/` resources | `respectProjectTrust` | `PI_WEB_RESPECT_PROJECT_TRUST` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Extension dialog auto-cancel timeout | `extensionDialogsTimeoutMs` | — | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Session environment facts | `environmentFacts` | `PI_WEB_ENVIRONMENT_FACTS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | PI WEB plugin desired enablement/settings | `plugins.<id>.enabled`, `plugins.<id>.settings` | — | Global + sessiond startup snapshot for server entries | Not core local config; plugins may read their own project files | Browser-only: reload tab. Server-backed: manually restart sessiond, then reload tab |
@@ -308,17 +306,17 @@ To turn the background refresh off entirely, set `PI_WEB_OFFLINE` or `PI_OFFLINE
 
 ### Project trust for project-local resources
 
-`respectProjectTrust` controls whether PI WEB honors Pi's project-trust settings before loading a workspace's project-local `.pi/` resources — `.pi/extensions/*`, the `packages` declared in `.pi/settings.json`, and the other `.pi/` settings and resources. It defaults to `false`, which loads those resources unconditionally (the historical PI WEB behavior). Set it to `true`, or set `PI_WEB_RESPECT_PROJECT_TRUST=true`, to make trust apply. The environment override accepts `0|1|true|false` and takes precedence over the config file.
+PI WEB always honors Pi's project-trust settings before loading a workspace's project-local `.pi/` resources — `.pi/extensions/*`, the `packages` declared in `.pi/settings.json`, and the other `.pi/` settings and resources. There is no opt-out config key: trust applies at every session start, the way `pi` itself applies it.
 
-A project-local `.pi/extension` is arbitrary code that runs inside the agent process on every session for that workspace, so this is the control a hardened deployment reaches for when PI WEB opens content it does not fully control.
+A project-local `.pi/extension` is arbitrary code that runs inside the agent process on every session for that workspace, so an untrusted workspace must not load one.
 
-When enabled, trust is resolved the way `pi` resolves it with no trust prompt to show:
+Trust is resolved the way `pi` resolves it with no trust prompt to show:
 
 - A workspace with no trust-requiring `.pi/` resources is always loaded (there is nothing to gate).
-- A saved decision in the agent directory's `trust.json` (from the Pi CLI's trust prompt) wins.
+- A saved decision in the agent directory's `trust.json` (from the Pi CLI's trust prompt, or the workspace trust toggle) wins.
 - Otherwise the agent's `defaultProjectTrust` setting decides: `always` loads the project resources, and `never` skips them. `ask` skips them too, because PI WEB has no browser trust prompt yet and a non-interactive `pi` also treats `ask` as untrusted.
 
-This mirrors the Pi CLI: with `respectProjectTrust` on and `defaultProjectTrust: "never"`, an opened workspace's `.pi/` extensions and packages are ignored rather than loaded silently.
+This mirrors the Pi CLI: with `defaultProjectTrust: "never"`, an opened workspace's `.pi/` extensions and packages are ignored rather than loaded silently.
 
 ### Session daemon tools
 

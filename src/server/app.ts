@@ -238,7 +238,6 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerWorkspaceExplorerRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
   const projectTrustDeps = {
     agentDir: async () => (await requireActiveAgentProfile(agentProfileProvider)).dir,
-    respectProjectTrust: async () => (await readConfig()).respectProjectTrust ?? false,
   };
   registerProjectTrustRoutes(app, projects, workspaces, projectTrustDeps);
   registerProjectTrustRoutes(app, projects, workspaces, projectTrustDeps, "/api/machines/local");

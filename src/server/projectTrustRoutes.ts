@@ -7,12 +7,11 @@ import { resolveWorkspaceContext } from "./workspaces/workspaceContext.js";
 
 /**
  * Collaborators the trust routes read from the surrounding app: the active
- * agent directory (which owns `trust.json`) and whether PI WEB currently
- * honors project trust at session start.
+ * agent directory, which owns `trust.json`. PI WEB always honors pi's
+ * project-trust settings at session start, so the routes need no opt-in flag.
  */
 export interface ProjectTrustRouteDeps {
   agentDir: () => Promise<string>;
-  respectProjectTrust: () => Promise<boolean>;
 }
 
 /**
@@ -33,7 +32,7 @@ export function registerProjectTrustRoutes(
     const agentDir = await deps.agentDir();
     const decision = new ProjectTrustStore(agentDir).get(path);
     const trusted = decision ?? SettingsManager.create(path, agentDir).getDefaultProjectTrust() === "always";
-    return { path, decision, trusted, respectProjectTrust: await deps.respectProjectTrust() };
+    return { path, decision, trusted };
   }
 
   app.get<{ Params: { projectId: string; workspaceId: string } }>(route, async (request, reply) => {

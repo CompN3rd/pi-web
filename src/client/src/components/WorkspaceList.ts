@@ -17,7 +17,6 @@ interface WorkspaceTrustState {
   loading?: boolean;
   saving?: boolean;
   trusted?: boolean;
-  respectProjectTrust?: boolean;
   error?: string;
 }
 
@@ -193,7 +192,6 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
           />
           <span>Trusted${busy ? "…" : ""}</span>
         </label>
-        ${trust?.respectProjectTrust === false && trust.error === undefined ? html`<small class="workspace-trust-hint">Applies to the Pi CLI. PI WEB honors this only when respectProjectTrust is enabled.</small>` : null}
         ${trust?.error === undefined ? null : html`<small class="workspace-trust-error">${trust.error}</small>`}
       </div>
     `;
@@ -203,7 +201,6 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
   private trustBase(state: WorkspaceTrustState | undefined): WorkspaceTrustState {
     return {
       ...(state?.trusted === undefined ? {} : { trusted: state.trusted }),
-      ...(state?.respectProjectTrust === undefined ? {} : { respectProjectTrust: state.respectProjectTrust }),
     };
   }
 
@@ -217,7 +214,7 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     this.setTrustState(workspace.id, { ...this.trustBase(existing), loading: true });
     try {
       const result = await trustApi.workspaceTrust(workspace.projectId, workspace.id, this.machineId);
-      this.setTrustState(workspace.id, { trusted: result.trusted, respectProjectTrust: result.respectProjectTrust });
+      this.setTrustState(workspace.id, { trusted: result.trusted });
     } catch (error) {
       this.setTrustState(workspace.id, { error: error instanceof Error ? error.message : String(error) });
     }
@@ -228,7 +225,7 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     this.setTrustState(workspace.id, { ...this.trustBase(existing), saving: true });
     try {
       const result = await trustApi.setWorkspaceTrust(workspace.projectId, workspace.id, trusted, this.machineId);
-      this.setTrustState(workspace.id, { trusted: result.trusted, respectProjectTrust: result.respectProjectTrust });
+      this.setTrustState(workspace.id, { trusted: result.trusted });
     } catch (error) {
       // Keep the prior checkbox value (revert the optimistic flip) and surface why.
       this.setTrustState(workspace.id, { ...this.trustBase(existing), error: error instanceof Error ? error.message : String(error) });
@@ -319,7 +316,6 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     .workspace-menu-trust { display: flex; flex-direction: column; gap: 3px; padding: 4px 2px; }
     .workspace-menu-trust label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
     .workspace-menu-trust input { cursor: pointer; }
-    .workspace-trust-hint { color: var(--pi-text-muted, #6b7280); line-height: 1.3; }
     .workspace-trust-error { color: var(--pi-danger, #c0392b); line-height: 1.3; }
   `];
 }

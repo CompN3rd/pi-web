@@ -749,24 +749,22 @@ function createDefaultRuntimeFactory(
   spawn?: SpawnSessionFn,
   subsessions?: SubsessionToolDeps,
   askUser?: AskUserToolDeps,
-  respectProjectTrust = false,
   appendSystemPromptSections: readonly string[] = [],
 ): PiWebCreateAgentSessionRuntimeFactory {
   const resourceLoaderOptions = piWebResourceLoaderOptions(appendSystemPromptSections);
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, initialThinkingLevel, delegationToolsEnabled }) => {
-    // When enabled, resolve project trust and hand `createAgentSessionServices`
-    // a SettingsManager pre-set to that trust: the resource loader gates every
-    // project-local resource (extensions, packages, settings) on it. Off by
-    // default, the SDK's own SettingsManager trusts the project (historical
-    // behavior).
-    const settingsManager = respectProjectTrust
-      ? SettingsManager.create(cwd, agentDir, { projectTrusted: resolveWebProjectTrusted(cwd, agentDir) })
-      : undefined;
+    // PI WEB always honors pi's project-trust model: resolve trust and hand
+    // `createAgentSessionServices` a SettingsManager pre-set to it, so the
+    // resource loader gates every project-local resource (extensions,
+    // packages, settings, prompts) on the saved `trust.json` decision or
+    // `defaultProjectTrust`. With no browser trust prompt, an untrusted
+    // project's resources are skipped (matching `pi` run without a UI).
+    const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: resolveWebProjectTrusted(cwd, agentDir) });
     const services: AgentSessionServices = await createAgentSessionServices({
       cwd,
       agentDir,
       modelRuntime,
-      ...(settingsManager === undefined ? {} : { settingsManager }),
+      settingsManager,
       ...(resourceLoaderOptions === undefined ? {} : { resourceLoaderOptions }),
     });
     const resolvedDelegationToolsEnabled = delegationToolsEnabled
@@ -835,15 +833,6 @@ export interface PiSessionServiceDependencies {
    * questions reach the user of the asking session, not another session.
    */
   askUserEnabled?: boolean;
-  /**
-   * When true, PI WEB honors pi's project-trust settings (`defaultProjectTrust`
-   * and saved `trust.json` decisions) before loading a workspace's
-   * project-local `.pi/` extensions, packages, and settings. Defaults to
-   * `false`, loading project-local resources unconditionally (backward
-   * compatible). Only consulted for the default runtime factory; an injected
-   * `createRuntime` owns its own trust handling.
-   */
-  respectProjectTrust?: boolean;
   /**
    * Deployment facts appended to every session's system prompt, after the
    * operator's own pi prompt files. Empty in ordinary installs; sessiond fills
@@ -985,7 +974,6 @@ export class PiSessionService implements SessionRouteService {
         read: (parentSessionId, sessionId, query, parentSessionFile) => this.readSubsession(parentSessionId, sessionId, query, parentSessionFile),
       },
       deps.askUserEnabled === true ? { open: (input) => this.openAsk(input) } : undefined,
-      deps.respectProjectTrust === true,
       deps.appendSystemPromptSections ?? [],
     );
     this.createAgentRuntime = deps.createAgentRuntime ?? defaultCreateAgentRuntime;

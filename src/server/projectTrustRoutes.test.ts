@@ -61,7 +61,6 @@ beforeEach(async () => {
   app = Fastify({ logger: false });
   registerProjectTrustRoutes(app, new FakeProjectService(project), new FakeWorkspaceCatalog([workspace]), {
     agentDir: () => Promise.resolve(agentDir),
-    respectProjectTrust: () => Promise.resolve(true),
   });
   await app.ready();
 });
@@ -79,7 +78,6 @@ describe("project trust routes", () => {
     const body = response.json<WorkspaceTrustResponse>();
     expect(body.decision).toBe(null);
     expect(body.trusted).toBe(false);
-    expect(body.respectProjectTrust).toBe(true);
   });
 
   it("persists an explicit trust decision to the agent dir's trust.json", async () => {
