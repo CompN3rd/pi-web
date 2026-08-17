@@ -120,6 +120,10 @@ export class ProjectDialog extends LitElement {
         <input type="checkbox" .checked=${this.trust?.trusted ?? false} ?disabled=${unavailable} @change=${(event: InputEvent) => { if (event.target instanceof HTMLInputElement) this.onTrustChange(event.target.checked); }} />
         <span>Trust this project</span>
       </label>
+      <small class="trust-hint">
+        Trusting lets pi load this project's .pi settings, extensions, skills, and packages.
+        <a href="https://pi.dev/docs/latest/security" target="_blank" rel="noreferrer">Learn about project trust</a>
+      </small>
       ${this.trust?.error === undefined ? null : html`<small class="trust-error">Trust state unavailable: ${this.trust.error}</small>`}
     `;
   }
@@ -201,6 +205,8 @@ export class ProjectDialog extends LitElement {
     .suggestions button.selected, .suggestions button:hover { background: var(--pi-selection-bg); }
     .hint { padding: 12px; color: var(--pi-muted); }
     .trust-error { color: var(--pi-danger, #c0392b); }
+    .trust-hint { color: var(--pi-muted); line-height: 1.3; }
+    .trust-hint a { color: var(--pi-accent); }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
     header button { border: 0; background: transparent; color: var(--pi-muted); font-size: 22px; padding: 0 8px; }
     .primary { border-color: var(--pi-success-border); background: var(--pi-success-border); }

@@ -182,17 +182,19 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     const inputId = `${workspaceMenuId(workspace.id)}-trusted`;
     return html`
       <div class="workspace-menu-trust">
-        <label for=${inputId}>
-          <input
-            id=${inputId}
-            type="checkbox"
-            .checked=${trust?.trusted === true}
-            ?disabled=${busy || trust?.trusted === undefined}
-            @change=${(event: Event) => { if (event.target instanceof HTMLInputElement) void this.setTrust(workspace, event.target.checked); }}
-          />
-          <span>Trusted${busy ? "…" : ""}</span>
-        </label>
-        <small class="workspace-trust-hint">Trusting loads .pi settings, extensions, skills, and packages from this workspace.</small>
+        <div class="workspace-menu-trust-row">
+          <label for=${inputId}>
+            <input
+              id=${inputId}
+              type="checkbox"
+              .checked=${trust?.trusted === true}
+              ?disabled=${busy || trust?.trusted === undefined}
+              @change=${(event: Event) => { if (event.target instanceof HTMLInputElement) void this.setTrust(workspace, event.target.checked); }}
+            />
+            <span>Trusted${busy ? "…" : ""}</span>
+          </label>
+          <a class="workspace-trust-link" href="https://pi.dev/docs/latest/security" target="_blank" rel="noreferrer">Learn about project trust</a>
+        </div>
         ${trust?.error === undefined ? null : html`<small class="workspace-trust-error">${trust.error}</small>`}
       </div>
     `;
@@ -315,9 +317,10 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
 
   static override styles = [listStyles, css`
     .workspace-menu-trust { display: flex; flex-direction: column; gap: 3px; padding: 4px 2px; }
+    .workspace-menu-trust-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .workspace-menu-trust label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
     .workspace-menu-trust input { cursor: pointer; }
-    .workspace-trust-hint { color: var(--pi-muted); line-height: 1.3; white-space: normal; overflow-wrap: anywhere; }
+    .workspace-trust-link { color: var(--pi-accent); font-size: 12px; text-align: right; white-space: nowrap; }
     .workspace-trust-error { color: var(--pi-danger, #c0392b); line-height: 1.3; }
   `];
 }

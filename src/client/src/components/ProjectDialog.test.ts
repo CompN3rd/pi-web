@@ -92,6 +92,23 @@ describe("project-dialog modal surface", () => {
 
     expect(onSubmit).toHaveBeenCalledWith("/work/new-project", true, { trusted: true, changed: true });
   });
+
+  it("explains what trusting a project means and links to the project-trust documentation", async () => {
+    const dialog = await mountDialog();
+
+    const hint = dialog.shadowRoot?.querySelector<HTMLElement>(".trust-hint");
+    expect(hint).not.toBeNull();
+    expect(hint?.textContent).toContain(".pi settings");
+    expect(hint?.textContent).toContain("extensions");
+    expect(hint?.textContent).toContain("skills");
+    expect(hint?.textContent).toContain("packages");
+    // The explanation stays short and links to the docs instead of being verbose.
+    const link = hint?.querySelector<HTMLAnchorElement>("a");
+    expect(link?.getAttribute("href")).toBe("https://pi.dev/docs/latest/security");
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toBe("noreferrer");
+    expect(link?.textContent).toBe("Learn about project trust");
+  });
 });
 
 interface ProjectDialogProps {

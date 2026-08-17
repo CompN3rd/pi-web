@@ -153,22 +153,25 @@ describe("workspace detail copy buttons", () => {
   });
 });
 
-describe("workspace trust toggle helper text", () => {
-  it("explains what trusting allows in the TUI's spirit, without the removed config clause", async () => {
+describe("workspace trust toggle documentation link", () => {
+  it("links to the project-trust docs from the toggle's label row instead of verbose text", async () => {
     vi.spyOn(trustApi, "workspaceTrust").mockResolvedValue({ path: "/repo/ws-a", decision: true, trusted: true });
     const list = await mountWorkspaceList([workspace("ws-a")]);
     openMenu(list, "ws-a");
     await list.updateComplete;
 
-    const hint = list.shadowRoot?.querySelector(".workspace-trust-hint");
-    expect(hint).not.toBeNull();
-    expect(hint?.textContent).toContain(".pi settings");
-    expect(hint?.textContent).toContain("extensions");
-    expect(hint?.textContent).toContain("skills");
-    expect(hint?.textContent).toContain("packages");
+    const trust = list.shadowRoot?.querySelector(".workspace-menu-trust");
+    const link = trust?.querySelector<HTMLAnchorElement>("a");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("https://pi.dev/docs/latest/security");
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toBe("noreferrer");
+    expect(link?.textContent).toBe("Learn about project trust");
+    // The verbose sentence is gone: the toggle row only labels the checkbox and links out.
+    expect(trust?.textContent).not.toContain(".pi settings");
     // The obsolete Pi CLI / respectProjectTrust clause must not survive in any wording.
-    expect(hint?.textContent).not.toMatch(/Pi CLI/i);
-    expect(hint?.textContent).not.toMatch(/respectProjectTrust/);
+    expect(trust?.textContent).not.toMatch(/Pi CLI/i);
+    expect(trust?.textContent).not.toMatch(/respectProjectTrust/);
   });
 });
 
