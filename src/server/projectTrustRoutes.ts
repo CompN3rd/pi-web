@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { ProjectTrustStore, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { WorkspaceTrustResponse } from "../shared/apiTypes.js";
@@ -39,14 +39,18 @@ export function registerProjectTrustRoutes(
 
   /**
    * Resolve a raw path to the canonical directory a trust decision keys on:
-   * `~`/relative expansion plus symlink realpath, falling back to the expanded
-   * path when the directory does not exist yet. Mirrors `ProjectService.add`,
-   * so the add-project dialog shows the same decision the stored project uses.
+   * `~`/relative expansion plus symlink resolution, falling back to the
+   * expanded path when the directory does not exist yet. Uses the same
+   * tolerant sync resolution as the SDK's `ProjectTrustStore` when keying
+   * `trust.json`, so reads always hit decisions written by the store. (Async
+   * `realpath` uses the native Windows resolution, which expands 8.3 short
+   * names such as `RUNNER~1` to their long form and would miss keys stored
+   * under the short form.)
    */
-  async function resolveDecidedPath(raw: string): Promise<string> {
+  function resolveDecidedPath(raw: string): string {
     const expanded = expandUserPath(raw.trim());
     try {
-      return await realpath(expanded);
+      return realpathSync(expanded);
     } catch {
       return expanded;
     }
@@ -62,7 +66,7 @@ export function registerProjectTrustRoutes(
       return reply.code(400).send({ error: "path is required" });
     }
     try {
-      return await describe(await resolveDecidedPath(raw));
+      return await describe(resolveDecidedPath(raw));
     } catch (error) {
       return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
     }
