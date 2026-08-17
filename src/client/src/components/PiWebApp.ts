@@ -2064,7 +2064,7 @@ export class PiWebApp extends LitElement {
     // The fresh catalog's enabled rows are the session's Enabled list in
     // order, so rebuilding both data sets keeps the dialog's modes and pi's
     // persisted scope consistent without another round trip.
-    this.setState({ modelDialog: { ...dialog, catalog, options: this.modelDialogOptions(catalog) } });
+    this.setState({ modelDialog: { ...dialog, catalog, options: this.modelDialogOptions(catalog.filter((entry) => entry.enabled)) } });
   };
 
   private readonly handleSelectThinking = (): void => {

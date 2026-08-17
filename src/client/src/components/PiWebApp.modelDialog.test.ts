@@ -65,6 +65,7 @@ describe("PiWebApp model dialog", () => {
     const freshCatalog = [
       { provider: "openai", id: "gpt-5", enabled: true },
       { provider: "openai", id: "gpt-4o", enabled: true },
+      { provider: "anthropic", id: "claude-sonnet-4-5", enabled: false },
     ];
     const setModelEnabled = vi.spyOn(SessionController.prototype, "setModelEnabled").mockResolvedValue(freshCatalog);
 
@@ -73,6 +74,8 @@ describe("PiWebApp model dialog", () => {
     expect(setModelEnabled).toHaveBeenCalledWith("openai", "gpt-4o", true);
     const dialog = appModelDialog(app);
     expect(dialog?.catalog).toEqual(freshCatalog);
+    // Enabled-mode options hold the fresh catalog's enabled rows only;
+    // disabled rows (anthropic/claude-sonnet-4-5) stay out of the Enabled list.
     expect(dialog?.options).toEqual([
       { value: "openai/gpt-5", label: "gpt-5 ✓ current", description: "openai" },
       { value: "openai/gpt-4o", label: "gpt-4o", description: "openai" },
