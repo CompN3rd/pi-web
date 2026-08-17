@@ -5,13 +5,13 @@ import { promisify } from "node:util";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { ActiveAgentProfileDescriptor, PiWebCapability, PiWebComponentStatus, PiWebInstallationInfo, PiWebReleaseStatus, PiWebRuntimeComponent, PiWebRuntimeResponse, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebVersionResponse } from "../shared/apiTypes.js";
+import { DefaultPackageManager, SettingsManager, VERSION as PI_CODING_AGENT_VERSION } from "@earendil-works/pi-coding-agent";
+import type { ActiveAgentProfileDescriptor, PiWebCapability, PiWebComponentStatus, PiWebDeprecatedAgentInput, PiWebInstallationInfo, PiWebReleaseStatus, PiWebRuntimeComponent, PiWebRuntimeResponse, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebVersionResponse } from "../shared/apiTypes.js";
 import { effectivePiWebCapabilities, WEB_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
 import { piWebDockerCommand } from "../docker/piWebDockerCommandPlan.js";
 import { parsePiWebRuntimeComponent } from "../shared/piWebStatusParsing.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
-import { isHostAbsoluteAgentDir, isPiCompanionCommand, isSafeAgentCommandForHost, PI_CODING_AGENT_DIR_ENV } from "../config.js";
+import { isHostAbsoluteAgentDir, loadPiWebConfig, PI_CODING_AGENT_DIR_ENV, type LoadedPiWebConfig } from "../config.js";
 import { createPiWebReleaseLookupCache, type PiWebReleaseLookup } from "./piWebReleaseLookupCache.js";
 
 const PI_WEB_PACKAGE_NAME = "@jmfederico/pi-web";
@@ -84,18 +84,49 @@ export interface PiWebStatusOptions {
 const latestReleaseLookupCache = createPiWebReleaseLookupCache(fetchLatestNpmVersion);
 const runtimePackageInfo = readPackageInfoSync();
 
-export function getPiWebRuntimeComponent(component: PiWebServiceComponent, capabilities: readonly PiWebCapability[] = []): PiWebRuntimeComponent {
+export function getPiWebRuntimeComponent(component: PiWebServiceComponent, capabilities: readonly PiWebCapability[] = [], deprecatedAgentInputs: readonly PiWebDeprecatedAgentInput[] = []): PiWebRuntimeComponent {
   return {
     component,
     label: component === "web" ? "Web/UI" : "Session daemon",
     runtimeVersion: runtimePackageInfo?.version ?? DEFAULT_VERSION,
+    piVersion: PI_CODING_AGENT_VERSION,
     available: true,
     capabilities: [...capabilities],
+    ...(deprecatedAgentInputs.length === 0 ? {} : { deprecatedAgentInputs }),
   };
 }
 
-export async function getPiWebRuntime(daemon: PiWebStatusDaemon = new SessionDaemonClient()): Promise<PiWebRuntimeResponse> {
-  const web = getPiWebRuntimeComponent("web", WEB_RUNTIME_CAPABILITIES);
+export interface PiWebRuntimeOptions {
+  /**
+   * Config loader behind the web component's deprecated-input detection. The
+   * loader reads this process's environment and the config file, so a config
+   * edit clears the web-reported warning on the next runtime check.
+   */
+  loadConfig?: () => LoadedPiWebConfig;
+}
+
+/**
+ * The web component's runtime report with deprecated-input detection contained
+ * at the component boundary: a malformed config file must not blank the whole
+ * runtime report (the endpoint has no error handler, and federation peers
+ * would mark the machine failed). Version and capabilities stay intact and
+ * only the undetectable web-sourced deprecated inputs are omitted; the failure
+ * travels through the component error channel, the same channel
+ * `unavailableSessiondRuntime` uses for the daemon.
+ */
+function webRuntimeComponent(loadConfig: () => LoadedPiWebConfig): PiWebRuntimeComponent {
+  try {
+    return getPiWebRuntimeComponent("web", WEB_RUNTIME_CAPABILITIES, loadConfig().deprecatedAgentInputs);
+  } catch (error) {
+    return {
+      ...getPiWebRuntimeComponent("web", WEB_RUNTIME_CAPABILITIES),
+      error: `Could not check for deprecated agent configuration inputs: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export async function getPiWebRuntime(daemon: PiWebStatusDaemon = new SessionDaemonClient(), options: PiWebRuntimeOptions = {}): Promise<PiWebRuntimeResponse> {
+  const web = webRuntimeComponent(options.loadConfig ?? loadPiWebConfig);
   const sessiond = await getSessiondRuntimeComponent(daemon);
   return {
     packageName: PI_WEB_PACKAGE_NAME,
@@ -117,6 +148,7 @@ export async function getPiWebComponentStatus(component: PiWebServiceComponent, 
     label: component === "web" ? "Web/UI" : "Session daemon",
     runtimeVersion,
     ...(installedVersion === undefined ? {} : { installedVersion }),
+    piVersion: PI_CODING_AGENT_VERSION,
     stale: isInstalledVersionNewer(installedVersion, runtimeVersion),
     available: true,
     installation,
@@ -332,6 +364,11 @@ async function getSessiondComponentStatus(daemon: PiWebStatusDaemon, options: Pi
     return {
       ...status,
       ...(runtimeVersion === undefined ? {} : { runtimeVersion }),
+      // The daemon reports the Pi version it has loaded in its own process;
+      // the spread of `status` already carries this process's Pi version as
+      // the fallback for daemons that predate Pi version reporting, mirroring
+      // the runtimeVersion fallback.
+      ...(runtime.piVersion === undefined ? {} : { piVersion: runtime.piVersion }),
       stale: isInstalledVersionNewer(status.installedVersion, runtimeVersion),
       available: true,
     };
@@ -455,9 +492,9 @@ export async function updateCommandFor(installation: PiWebInstallationInfo | und
   if (restartCommand === undefined) return undefined;
   if (installation?.kind === "pi-package") {
     const profile = options.activeAgentProfile;
-    if (profile === undefined || !isSafeAgentCommandForHost(profile.command) || !isHostAbsoluteAgentDir(profile.dir) || !isPiCompanionCommand(profile.command)) return undefined;
-    if (!(await options.hasCommand(profile.command))) return undefined;
-    return `${PI_CODING_AGENT_DIR_ENV}=${shellQuote(profile.dir)} ${shellQuote(profile.command)} update ${shellQuote(installation.source ?? PI_WEB_NPM_SOURCE)} && ${restartCommand}`;
+    if (profile === undefined || !isHostAbsoluteAgentDir(profile.dir)) return undefined;
+    if (!(await options.hasCommand("pi"))) return undefined;
+    return `${PI_CODING_AGENT_DIR_ENV}=${shellQuote(profile.dir)} pi update ${shellQuote(installation.source ?? PI_WEB_NPM_SOURCE)} && ${restartCommand}`;
   }
   if (installation?.kind === "local" && installation.path !== undefined) {
     if (!(await hasCommand("npm")) || !(await isGitCheckoutWithUpstream(installation.path))) return undefined;
