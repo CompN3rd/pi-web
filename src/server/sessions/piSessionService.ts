@@ -109,6 +109,15 @@ const STARTUP_PHASE_EXTENSIONS = "Loading session extensions";
 const STARTUP_CONCURRENT_CATALOG_REFRESH = "provider model lists are refreshing";
 const MAX_UNREAD_PUBLICATION_RETRY_MS = 30_000;
 const MAX_PENDING_UNREAD_MUTATIONS = SESSION_UNREAD_LIMIT + 1;
+/**
+ * Upper bound on how often one idle runtime re-resolves its transcript file.
+ * A runtime created in memory and never persisted has no session file, so
+ * every poll would otherwise rescan the session directory; throttling keeps
+ * steady-state polling of such a session O(1). The window can only delay
+ * noticing a file the runtime did not write itself: once the runtime
+ * persists, `getSessionFile()` answers and this throttle is bypassed.
+ */
+const IDLE_SESSION_FILE_RESOLUTION_THROTTLE_MS = 30_000;
 
 function noop(): void {
   // Intentionally empty default unsubscribe callback.
@@ -904,6 +913,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly now: () => Date;
   private readonly notificationStore: SessionNotificationStore;
   private readonly notificationGenerationBySession = new WeakMap<PiAgentSession, SessionNotificationGeneration>();
+  /** Last idle-poll transcript file resolution per runtime, throttled; entries die with their runtime. */
+  private readonly idleSessionFileResolutions = new WeakMap<PiAgentSession, { at: number; path: string | undefined }>();
   private readonly unreadStore: SessionUnreadStore;
   private readonly pendingAskStore: PendingAskStore;
   private readonly pendingExtensionDialogStore: PendingExtensionDialogStore;
@@ -2759,9 +2770,9 @@ export class PiSessionService implements SessionRouteService {
   private async readableSessionBranch(ref: PiSessionRef, session: PiAgentSession): Promise<unknown[]> {
     if (this.hasActiveWork(session) || this.sessionManager.readBranch === undefined) return session.sessionManager.getBranch();
     const sessionFile = session.sessionFile ?? session.sessionManager.getSessionFile();
-    const match = sessionFile === undefined ? await this.sessionManager.resolveSessionFile(ref.cwd, ref.id) : undefined;
+    const resolvedPath = sessionFile === undefined ? await this.idleSessionFilePath(ref, session) : undefined;
     if (this.hasActiveWork(session)) return session.sessionManager.getBranch();
-    const path = sessionFile ?? match?.path;
+    const path = sessionFile ?? resolvedPath;
     if (path === undefined) return session.sessionManager.getBranch();
     const snapshot = await this.sessionManager.readBranch(path);
     // No snapshot exists when the transcript file is absent (a session known
@@ -2771,6 +2782,23 @@ export class PiSessionService implements SessionRouteService {
     // Reading also yields. A prompt that started meanwhile must still win over
     // the completed disk snapshot and its potentially older event watermark.
     return this.hasActiveWork(session) ? session.sessionManager.getBranch() : snapshot;
+  }
+
+  /**
+   * Resolve the transcript file for an idle runtime that does not know one,
+   * at most once per {@link IDLE_SESSION_FILE_RESOLUTION_THROTTLE_MS}. The
+   * negative result (no file yet) is the hot case: a never-persisted session
+   * is polled every few seconds, and re-scanning its directory each tick is
+   * pure waste. `getActive` never uses this path, so prompt routing always
+   * sees a fresh resolution.
+   */
+  private async idleSessionFilePath(ref: PiSessionRef, session: PiAgentSession): Promise<string | undefined> {
+    const cached = this.idleSessionFileResolutions.get(session);
+    const at = this.now().getTime();
+    if (cached !== undefined && at - cached.at < IDLE_SESSION_FILE_RESOLUTION_THROTTLE_MS) return cached.path;
+    const match = await this.sessionManager.resolveSessionFile(ref.cwd, ref.id);
+    this.idleSessionFileResolutions.set(session, { at, path: match?.path });
+    return match?.path;
   }
 
   private async getActive(ref: PiSessionRef, options: Pick<CreateSessionRuntimeOptions, "notificationGeneration"> = {}): Promise<ActiveSession<PiSessionRuntime>> {

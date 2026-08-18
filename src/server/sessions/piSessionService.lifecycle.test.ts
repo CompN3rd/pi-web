@@ -281,6 +281,127 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await service.dispose();
   });
 
+  it("resolves a file-less idle session's transcript file at most once per throttle window", async () => {
+    // A session created in memory and never persisted has no transcript file:
+    // each 5 s poll tick calls messages() and status(), and every call used to
+    // rescan the session directory. Resolution is throttled per runtime, so
+    // steady-state polling of a file-less session stays O(1).
+    const sessionId = "never-persisted-session";
+    const runtimeBranch = [{ type: "message", message: { role: "user", content: "in memory only" } }];
+    const fake = fakeRuntime(sessionId, {
+      sessionFile: undefined,
+      sessionManager: fakeSessionManager("/workspace", {
+        getSessionId: () => sessionId,
+        getSessionFile: () => undefined,
+        getBranch: () => runtimeBranch,
+      }),
+    });
+    const resolveSessionFile = vi.fn(() => Promise.resolve(undefined));
+    const readBranch = vi.fn(() => Promise.resolve(undefined));
+    const gateway: SessionGateway = {
+      create: () => fakeSessionManager(),
+      list: () => Promise.resolve([]),
+      listAll: () => Promise.resolve([]),
+      invalidateSessionFile: () => undefined,
+      resolveSessionFile,
+      readBranch,
+      open: () => fake.session.sessionManager,
+    };
+    let nowMs = 1_000_000;
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      archiveStore: emptyArchiveStore(),
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: gateway,
+      heartbeatIntervalMs: 60_000,
+      now: () => new Date(nowMs),
+    });
+    // Activate the runtime the way a UI-created session is: in memory, never persisted.
+    await service.start("/workspace");
+
+    // Two poll ticks, each a messages() plus a status() call: one resolution total.
+    await expect(service.messages(sessionRef(sessionId))).resolves.toMatchObject({ total: 1 });
+    await expect(service.status(sessionRef(sessionId))).resolves.toMatchObject({ sessionId, messageCount: 1 });
+    await service.messages(sessionRef(sessionId));
+    await service.status(sessionRef(sessionId));
+    expect(resolveSessionFile).toHaveBeenCalledTimes(1);
+    expect(readBranch).not.toHaveBeenCalled();
+
+    nowMs += 30_000;
+    await service.messages(sessionRef(sessionId));
+    expect(resolveSessionFile).toHaveBeenCalledTimes(2);
+
+    await service.dispose();
+  });
+
+  it("notices a transcript file that appears after a throttled file-less resolution", async () => {
+    // The throttle must not become a permanent negative cache: once the
+    // window lapses, polling re-resolves and serves the new disk snapshot.
+    const sessionId = "late-persisted-session";
+    const runtimeBranch = [{ type: "message", message: { role: "user", content: "in memory only" } }];
+    const diskBranch = [{ type: "message", message: { role: "user", content: "now on disk" } }];
+    const fake = fakeRuntime(sessionId, {
+      sessionFile: undefined,
+      sessionManager: fakeSessionManager("/workspace", {
+        getSessionId: () => sessionId,
+        getSessionFile: () => undefined,
+        getBranch: () => runtimeBranch,
+      }),
+    });
+    let resolvedPath: string | undefined = undefined;
+    const resolveSessionFile = vi.fn(() => Promise.resolve(
+      resolvedPath === undefined ? undefined : { id: sessionId, cwd: "/workspace", path: resolvedPath },
+    ));
+    const readBranch = vi.fn(() => Promise.resolve(diskBranch));
+    const gateway: SessionGateway = {
+      create: () => fakeSessionManager(),
+      list: () => Promise.resolve([]),
+      listAll: () => Promise.resolve([]),
+      invalidateSessionFile: () => undefined,
+      resolveSessionFile,
+      readBranch,
+      open: () => fake.session.sessionManager,
+    };
+    let nowMs = 1_000_000;
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      archiveStore: emptyArchiveStore(),
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: gateway,
+      heartbeatIntervalMs: 60_000,
+      now: () => new Date(nowMs),
+    });
+    await service.start("/workspace");
+
+    await expect(service.messages(sessionRef(sessionId))).resolves.toMatchObject({
+      messages: [{ role: "user", content: "in memory only" }],
+    });
+
+    // The file appears within the window: the throttled negative result still
+    // serves the runtime branch, and no new resolution runs.
+    resolvedPath = `/sessions/${sessionId}.jsonl`;
+    await expect(service.messages(sessionRef(sessionId))).resolves.toMatchObject({
+      messages: [{ role: "user", content: "in memory only" }],
+    });
+    expect(resolveSessionFile).toHaveBeenCalledTimes(1);
+    expect(readBranch).not.toHaveBeenCalled();
+
+    // After the window, polling re-resolves once and reads the disk snapshot;
+    // the positive resolution is throttled too, while reads stay live.
+    nowMs += 30_000;
+    await expect(service.messages(sessionRef(sessionId))).resolves.toMatchObject({
+      messages: [{ role: "user", content: "now on disk" }],
+    });
+    await service.messages(sessionRef(sessionId));
+    expect(resolveSessionFile).toHaveBeenCalledTimes(2);
+    expect(readBranch).toHaveBeenCalledTimes(2);
+    expect(readBranch).toHaveBeenCalledWith(resolvedPath);
+
+    await service.dispose();
+  });
+
   it("keeps the live runtime authoritative when work starts during disk resolution", async () => {
     const sessionId = "becomes-active-session";
     let streaming = false;
