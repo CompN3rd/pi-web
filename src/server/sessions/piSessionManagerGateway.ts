@@ -1,10 +1,11 @@
-import type { Dirent } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { AGENT_SESSION_DIR_ENV_KEYS } from "../../config.js";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
+import { isNodeErrorWithCode } from "../workspaces/pathSafety.js";
 import { readSessionHeaderSummary, type SessionHeaderReader } from "./sessionFileHeader.js";
 import { tryParseEntry } from "./sessionFileFormat.js";
 import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
@@ -86,7 +87,7 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
   // In-flight snapshot reads, deduplicated per path. Each entry removes itself
   // when its read settles, so this map only ever holds genuinely concurrent
   // reads and needs no bound of its own.
-  private readonly pendingTranscriptBranches = new Map<string, Promise<unknown[]>>();
+  private readonly pendingTranscriptBranches = new Map<string, Promise<unknown[] | undefined>>();
 
   constructor(private readonly resolver: SessionDirResolver) {}
 
@@ -120,8 +121,12 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
     return SessionManager.create(cwd, resolution.sessionDir, options?.parentSession === undefined ? undefined : { parentSession: options.parentSession });
   }
 
-  async readBranch(path: string): Promise<unknown[]> {
-    const file = await stat(path);
+  async readBranch(path: string): Promise<unknown[] | undefined> {
+    // A session whose path is known may still have no file on disk (created in
+    // memory, never persisted) or be removed externally at any moment. Absence
+    // is not a failure: it means there is no disk snapshot to serve.
+    const file = await statIfPresent(path);
+    if (file === undefined) return undefined;
     const signature = `${String(file.dev)}:${String(file.ino)}:${String(file.size)}:${String(file.mtimeMs)}`;
     const cached = this.transcriptBranches.get(path, signature);
     if (cached !== undefined) return cached;
@@ -131,6 +136,11 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
       .then((branch) => {
         this.transcriptBranches.set(path, signature, branch);
         return branch;
+      })
+      .catch((error: unknown) => {
+        // Deleted between the stat above and the read: again, no snapshot.
+        if (isNodeErrorWithCode(error, "ENOENT")) return undefined;
+        throw error;
       })
       .finally(() => { this.pendingTranscriptBranches.delete(path); });
     this.pendingTranscriptBranches.set(path, read);
@@ -148,6 +158,16 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
 
   open(path: string): PiSessionManager {
     return SessionManager.open(path, dirname(path));
+  }
+}
+
+/** Stat a transcript path that may be absent; any error other than absence stays a failure. */
+async function statIfPresent(path: string): Promise<Stats | undefined> {
+  try {
+    return await stat(path);
+  } catch (error: unknown) {
+    if (isNodeErrorWithCode(error, "ENOENT")) return undefined;
+    throw error;
   }
 }
 

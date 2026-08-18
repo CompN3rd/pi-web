@@ -236,6 +236,51 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await service.dispose();
   });
 
+  it("serves the live runtime branch when the known transcript file is absent on disk", async () => {
+    // A session created in memory and never persisted knows its future file
+    // path, but nothing exists on disk: messages/status must serve the runtime
+    // branch instead of failing on the missing disk snapshot.
+    const sessionId = "unpersisted-session";
+    const runtimeBranch = [{ type: "message", message: { role: "user", content: "in memory only" } }];
+    const fake = fakeRuntime(sessionId, {
+      sessionFile: `/sessions/${sessionId}.jsonl`,
+      sessionManager: fakeSessionManager("/workspace", {
+        getSessionId: () => sessionId,
+        getSessionFile: () => `/sessions/${sessionId}.jsonl`,
+        getBranch: () => runtimeBranch,
+      }),
+    });
+    const readBranch = vi.fn(() => Promise.resolve(undefined));
+    const gateway: SessionGateway = {
+      create: () => fakeSessionManager(),
+      list: () => Promise.resolve([sessionRecord(sessionId)]),
+      listAll: () => Promise.resolve([sessionRecord(sessionId)]),
+      invalidateSessionFile: () => undefined,
+      resolveSessionFile: () => Promise.resolve({ id: sessionId, cwd: "/workspace", path: `/sessions/${sessionId}.jsonl` }),
+      readBranch,
+      open: () => fake.session.sessionManager,
+    };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      archiveStore: emptyArchiveStore(),
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: gateway,
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await expect(service.messages(sessionRef(sessionId))).resolves.toMatchObject({
+      messages: [{ role: "user", content: "in memory only" }],
+      total: 1,
+    });
+    await expect(service.status(sessionRef(sessionId))).resolves.toMatchObject({ sessionId, messageCount: 1 });
+    expect(readBranch).toHaveBeenCalled();
+    expect(fake.calls.abort).toBe(0);
+    expect(fake.calls.dispose).toBe(0);
+
+    await service.dispose();
+  });
+
   it("keeps the live runtime authoritative when work starts during disk resolution", async () => {
     const sessionId = "becomes-active-session";
     let streaming = false;

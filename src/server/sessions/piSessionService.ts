@@ -352,8 +352,13 @@ export interface PiSessionManagerGateway {
    * told explicitly.
    */
   invalidateSessionFile(sessionFile: string): void;
-  /** Read the active transcript branch without creating a runtime or writing the file. */
-  readBranch?(path: string): Promise<unknown[]>;
+  /**
+   * Read the active transcript branch without creating a runtime or writing the file.
+   * Resolves `undefined` when the transcript file is absent (never persisted or
+   * externally removed): there is no disk snapshot, and the runtime branch
+   * stays authoritative.
+   */
+  readBranch?(path: string): Promise<unknown[] | undefined>;
   create(cwd: string, options?: { parentSession?: string }): PiSessionManager;
   /**
    * Cross-project listing of Pi's session stores (the default store plus any
@@ -2759,6 +2764,10 @@ export class PiSessionService implements SessionRouteService {
     const path = sessionFile ?? match?.path;
     if (path === undefined) return session.sessionManager.getBranch();
     const snapshot = await this.sessionManager.readBranch(path);
+    // No snapshot exists when the transcript file is absent (a session known
+    // by path but never persisted, or externally removed): the runtime branch
+    // is the only readable branch then.
+    if (snapshot === undefined) return session.sessionManager.getBranch();
     // Reading also yields. A prompt that started meanwhile must still win over
     // the completed disk snapshot and its potentially older event watermark.
     return this.hasActiveWork(session) ? session.sessionManager.getBranch() : snapshot;

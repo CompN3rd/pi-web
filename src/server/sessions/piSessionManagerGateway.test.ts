@@ -214,6 +214,23 @@ describe("Pi session manager gateway", () => {
     expect(await gateway.readBranch(path)).toBe(first);
   });
 
+  it("resolves no snapshot for a transcript path with no file on disk, without memoizing the miss", async () => {
+    // A session created in memory and never persisted knows its future path,
+    // but there is no file: absence must read as "no snapshot", not ENOENT.
+    const sharedSessionDir = join(tempDir, "absent-snapshots");
+    const path = join(sharedSessionDir, "absent.jsonl");
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+    if (gateway.readBranch === undefined) throw new Error("Expected transcript snapshot reader");
+
+    await expect(gateway.readBranch(path)).resolves.toBeUndefined();
+
+    // The miss is not memoized: once the file exists, the same path serves it.
+    await writeNamedSessionFile(sharedSessionDir, "absent.jsonl", { id: "absent-session", cwd });
+    await appendFile(path, `${JSON.stringify({ type: "message", id: "m1", parentId: "root", timestamp: "2026-01-01T00:01:00.000Z", message: { role: "user", content: [{ type: "text", text: "persisted later" }] } })}\n`, "utf8");
+
+    await expect(gateway.readBranch(path)).resolves.toHaveLength(1);
+  });
+
   it("bounds memoized snapshots, re-reading a file whose snapshot was evicted", async () => {
     // The daemon outlives any one session: polling many distinct sessions must
     // not accumulate their parsed transcripts without limit. Filling the memo
