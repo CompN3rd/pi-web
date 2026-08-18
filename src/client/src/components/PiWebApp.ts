@@ -435,7 +435,7 @@ export class PiWebApp extends LitElement {
     const status = this.state.status;
     if (session === undefined || session.archived === true || document.visibilityState !== "visible") return;
     if (status?.isStreaming === true || status?.isCompacting === true || status?.isBashRunning === true || (status?.pendingMessageCount ?? 0) > 0) return;
-    await this.sessions.refreshSelectedSession(session.id);
+    await this.sessions.refreshSelectedSession(session.id, { silent: true });
   }
 
   private schedulePiWebStatusRefresh(delayMs = PI_WEB_STATUS_DEFER_MS): void {

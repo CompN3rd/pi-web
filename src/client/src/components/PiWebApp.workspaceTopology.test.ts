@@ -23,7 +23,9 @@ describe("PiWebApp workspace topology refresh wiring", () => {
     await tick.call(app);
 
     expect(refresh).toHaveBeenCalledOnce();
-    expect(refresh).toHaveBeenCalledWith("session-1");
+    // The timer-driven poll is a best-effort background refresh: failures must
+    // not churn the global error state.
+    expect(refresh).toHaveBeenCalledWith("session-1", { silent: true });
   });
 
   it.each([
