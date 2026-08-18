@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiSessionManagerGateway, defaultPiSessionDir, defaultPiSessionsRoot, filterSessionsForCwd, resolveSessionFileInDir, SessionDirResolver } from "./piSessionManagerGateway.js";
+import { DEFAULT_TRANSCRIPT_BRANCH_CACHE_LIMIT } from "./transcriptBranchCache.js";
 import type { PiSessionListEntry } from "./piSessionService.js";
 import type { PiSessionManager } from "./piSessionService.js";
 import { readSessionHeaderSummary } from "./sessionFileHeader.js";
@@ -200,6 +201,40 @@ describe("Pi session manager gateway", () => {
     await appendFile(path, `${message("m2", "m1", "assistant", "after")}\n`, "utf8");
 
     await expect(gateway.readBranch(path)).resolves.toHaveLength(2);
+  });
+
+  it("serves repeated snapshots of an unchanged file from the memo", async () => {
+    const sharedSessionDir = join(tempDir, "memoized-snapshots");
+    const path = await writeNamedSessionFile(sharedSessionDir, "memoized.jsonl", { id: "memoized-session", cwd });
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+    if (gateway.readBranch === undefined) throw new Error("Expected transcript snapshot reader");
+
+    const first = await gateway.readBranch(path);
+    // Identity, not just equality: an unchanged file must not be re-parsed.
+    expect(await gateway.readBranch(path)).toBe(first);
+  });
+
+  it("bounds memoized snapshots, re-reading a file whose snapshot was evicted", async () => {
+    // The daemon outlives any one session: polling many distinct sessions must
+    // not accumulate their parsed transcripts without limit. Filling the memo
+    // past its bound evicts the least recently used snapshot, so the next read
+    // of that file parses it again (fresh instance, same content).
+    const sharedSessionDir = join(tempDir, "bounded-snapshots");
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+    if (gateway.readBranch === undefined) throw new Error("Expected transcript snapshot reader");
+    const firstPath = await writeNamedSessionFile(sharedSessionDir, "bounded-0.jsonl", { id: "bounded-0", cwd });
+    await appendFile(firstPath, `${JSON.stringify({ type: "message", id: "m1", parentId: "root", timestamp: "2026-01-01T00:01:00.000Z", message: { role: "user", content: [{ type: "text", text: "evicted and re-read" }] } })}\n`, "utf8");
+
+    const first = await gateway.readBranch(firstPath);
+    for (let i = 1; i < DEFAULT_TRANSCRIPT_BRANCH_CACHE_LIMIT; i += 1) {
+      await gateway.readBranch(await writeNamedSessionFile(sharedSessionDir, `bounded-${String(i)}.jsonl`, { id: `bounded-${String(i)}`, cwd }));
+    }
+    // One read beyond the bound evicts the oldest snapshot (firstPath's).
+    await gateway.readBranch(await writeNamedSessionFile(sharedSessionDir, "bounded-overflow.jsonl", { id: "bounded-overflow", cwd }));
+
+    const reread = await gateway.readBranch(firstPath);
+    expect(reread).not.toBe(first);
+    expect(reread).toEqual(first);
   });
 
   it("invalidateSessionFile drops the memo for a header rewritten in place", async () => {

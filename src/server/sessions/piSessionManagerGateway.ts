@@ -8,6 +8,7 @@ import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
 import { readSessionHeaderSummary, type SessionHeaderReader } from "./sessionFileHeader.js";
 import { tryParseEntry } from "./sessionFileFormat.js";
 import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
+import { TranscriptBranchCache } from "./transcriptBranchCache.js";
 import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
 
 type SessionDirSource = "env" | "settings" | "pi-default";
@@ -79,7 +80,12 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
    * in-place rewrites those checks cannot see.
    */
   private readonly summaryScanner = new SessionSummaryScanner();
-  private readonly transcriptBranches = new Map<string, { signature: string; branch: unknown[] }>();
+  // Idle-session transcript snapshots, memoized by file signature and bounded
+  // (LRU) so daemon-lifetime polling cannot retain every session ever read.
+  private readonly transcriptBranches = new TranscriptBranchCache();
+  // In-flight snapshot reads, deduplicated per path. Each entry removes itself
+  // when its read settles, so this map only ever holds genuinely concurrent
+  // reads and needs no bound of its own.
   private readonly pendingTranscriptBranches = new Map<string, Promise<unknown[]>>();
 
   constructor(private readonly resolver: SessionDirResolver) {}
@@ -117,13 +123,13 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
   async readBranch(path: string): Promise<unknown[]> {
     const file = await stat(path);
     const signature = `${String(file.dev)}:${String(file.ino)}:${String(file.size)}:${String(file.mtimeMs)}`;
-    const cached = this.transcriptBranches.get(path);
-    if (cached?.signature === signature) return cached.branch;
+    const cached = this.transcriptBranches.get(path, signature);
+    if (cached !== undefined) return cached;
     const pending = this.pendingTranscriptBranches.get(path);
     if (pending !== undefined) return pending;
     const read = readTranscriptBranch(path)
       .then((branch) => {
-        this.transcriptBranches.set(path, { signature, branch });
+        this.transcriptBranches.set(path, signature, branch);
         return branch;
       })
       .finally(() => { this.pendingTranscriptBranches.delete(path); });
