@@ -10,7 +10,8 @@ Plugins can currently:
 - call browser APIs and documented PI WEB plugin context helpers;
 - read workspace files and start workspace terminal commands through documented helpers;
 - serve browser-public files from an explicitly declared `browserRoot`;
-- contribute one server-side workspace provider, with optional JSON backend requests and workspace-removal planning.
+- contribute one server-side workspace provider, with optional JSON backend requests and workspace-removal planning;
+- ship Pi prompt templates and skills that sessions pick up while the plugin is enabled.
 
 Browser entries run in the PI WEB page through browser plugin API v2. Declared server entries run in the session daemon through the separate server-plugin API v1. Plugins do not get raw Fastify access, arbitrary routes, concrete core services, a generic event bus, Pi model-provider registration, or a general server-hook API. Neither entry is sandboxed.
 
@@ -272,6 +273,8 @@ Use this sequence:
 3. For a browser-only plugin, reload the browser tab.
 4. For a server-backed plugin, manually restart sessiond, wait for it to become available, then reload the browser tab.
 
+Pi prompt templates and skills shipped by a plugin follow the same daemon-startup snapshot even for browser-only plugins; see [Pi prompt templates and skills in plugins](#pi-prompt-templates-and-skills-in-plugins).
+
 > **Manual session-daemon restart:** for the native systemd user service, run `systemctl --user restart pi-web-sessiond` (the unit is `pi-web-sessiond.service`). Restarting sessiond may interrupt active sessions and runtime ownership. Web/UI autoreload, restarting only the web/API service, browser reload, and Pi's `/reload` command do not activate server-plugin changes.
 
 ### Offline disable and safe start
@@ -384,7 +387,7 @@ Review task configs before running them, especially in shared projects. Workspac
 ### Relays
 
 **Plugin id:** `relays`
-**What it does:** adds a read-only **Relays** workspace tab for browsing the workspace's relays, plus an **Open Workspace Relays** action for the selected workspace that opens the same tab.
+**What it does:** ships the generic Relay workflow — the `/relay` and `/relay-worktree` prompt templates and the `relay` skill, added to sessions while the plugin is enabled — and adds a read-only **Relays** workspace tab for browsing the workspace's relays, plus an **Open Workspace Relays** action for the selected workspace that opens the same tab.
 
 A relay is a directory of markdown notes under `.pi-web/relays/<name>/` in the workspace root — the convention used by the Relay method for chaining agent sessions. The tab lists each relay's documents with `status.md`, `charter.md`, and `log.md` first (in that order), followed by any other files alphabetically, and opens `status.md` by default. Markdown documents render as sanitized HTML; other files render as preformatted text, and binary files have no preview. Truncated documents show a notice, and **Refresh** re-scans the workspace and reloads the open document.
 
@@ -401,6 +404,8 @@ Relays is enabled by default. To hide it, disable `relays` in **Settings → PI 
   }
 }
 ```
+
+Disabling also removes its prompt templates and skill from sessions, effective at the next session-daemon start.
 
 ## Discovery and packaging
 
@@ -512,6 +517,19 @@ const iconUrl = new URL("./assets/icon.svg", import.meta.url);
 The final installed plugin package must contain `assets/icon.svg` at that path relative to the final built module and inside `browserRoot`. PI WEB serves files that already exist in the package; it does not copy a source `public/` directory or apply Vite-style public-directory semantics. Configure the plugin build and package contents to emit or copy the asset into its final module-relative location.
 
 PI WEB returns executable JavaScript MIME types for both `.js` and `.mjs`. JSON, CSS, HTML, and SVG receive their corresponding content types; unknown file types are served as octet-stream.
+
+## Pi prompt templates and skills in plugins
+
+A bundled or local plugin package can ship Pi prompt templates and skills that join sessions while the plugin is enabled, following pi's package conventions:
+
+- `prompts/<name>.md` — prompt templates, invoked as `/<name>`;
+- `skills/<name>/SKILL.md` — skills the agent loads on demand.
+
+Sessiond collects these directories once per startup from enabled bundled and local plugins and adds them to pi's resource loading for the sessions it hosts. Plugin resources are fallback defaults in pi's load order: a project (`.pi/prompts/`, `.agents/skills/`, …) or user (`~/.pi/agent/`, `~/.agents/skills/`, …) resource with the same name shadows the plugin's, so a project always keeps the final word over a shipped generic. Plugins delivered as Pi packages need nothing here — pi's own package resolution already loads their prompt templates and skills.
+
+Because the set is fixed at session-daemon startup together with the plugin lifecycle snapshot, changing a plugin's enablement moves its session resources at the next session-daemon start; Pi's `/reload` does not revisit it. Safe start withholds these resources exactly as it withholds server entries.
+
+The bundled `relays` plugin uses this to ship the generic Relay workflow: the `/relay` and `/relay-worktree` prompt templates and the `relay` skill. Disable `relays` to remove them from sessions, effective at the next session-daemon start.
 
 ## Browser module shape and v2 migration
 
