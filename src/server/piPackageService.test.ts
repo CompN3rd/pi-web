@@ -58,6 +58,108 @@ describe("ActiveProfilePiPackageService", () => {
     });
     expect(serviceForAgentDir).not.toHaveBeenCalled();
   });
+
+  it("dismisses a known auto-installable package for the active profile once its declared name matches and removal succeeds", async () => {
+    const getActiveAgentProfile = vi.fn<ActiveAgentProfileProvider["getActiveAgentProfile"]>(() => Promise.resolve(availableProfile("/state/profile")));
+    const packages = [{ source: "/opt/pi-packages/relays", scope: "user" as const, filtered: false, installedPath: "/opt/pi-packages/relays" }];
+    const underlyingService = {
+      list: vi.fn(() => Promise.resolve({ packages })),
+      install: vi.fn(),
+      remove: vi.fn(() => Promise.resolve({ action: "remove" as const, source: "/opt/pi-packages/relays", scope: "user" as const, removed: true, packages: [] })),
+      update: vi.fn(),
+    } satisfies PiPackageService;
+    const dismiss = vi.fn(() => Promise.resolve());
+    const resolveDeclaredName = vi.fn(() => Promise.resolve("@jmfederico/pi-relay"));
+    const service = new ActiveProfilePiPackageService(
+      { getActiveAgentProfile },
+      () => underlyingService,
+      { dismiss },
+      { resolveDeclaredName },
+    );
+
+    const response = await service.remove("/opt/pi-packages/relays");
+
+    expect(response).toMatchObject({ action: "remove", removed: true });
+    expect(resolveDeclaredName).toHaveBeenCalledWith("/opt/pi-packages/relays");
+    expect(dismiss).toHaveBeenCalledWith("/state/profile", "@jmfederico/pi-relay");
+  });
+
+  it("does not dismiss when the removed source's declared name is not a known auto-installable package", async () => {
+    const getActiveAgentProfile = vi.fn<ActiveAgentProfileProvider["getActiveAgentProfile"]>(() => Promise.resolve(availableProfile("/state/profile")));
+    const packages = [{ source: "npm:@acme/tools", scope: "user" as const, filtered: false, installedPath: "/home/test/.pi/packages/tools" }];
+    const underlyingService = {
+      list: vi.fn(() => Promise.resolve({ packages })),
+      install: vi.fn(),
+      remove: vi.fn(() => Promise.resolve({ action: "remove" as const, source: "npm:@acme/tools", scope: "user" as const, removed: true, packages: [] })),
+      update: vi.fn(),
+    } satisfies PiPackageService;
+    const dismiss = vi.fn(() => Promise.resolve());
+    const resolveDeclaredName = vi.fn(() => Promise.resolve("@acme/tools"));
+    const service = new ActiveProfilePiPackageService(
+      { getActiveAgentProfile },
+      () => underlyingService,
+      { dismiss },
+      { resolveDeclaredName },
+    );
+
+    await service.remove("npm:@acme/tools");
+
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it("does not dismiss when removal reports the source was not found", async () => {
+    const getActiveAgentProfile = vi.fn<ActiveAgentProfileProvider["getActiveAgentProfile"]>(() => Promise.resolve(availableProfile("/state/profile")));
+    const packages = [{ source: "/opt/pi-packages/relays", scope: "user" as const, filtered: false, installedPath: "/opt/pi-packages/relays" }];
+    const underlyingService = {
+      list: vi.fn(() => Promise.resolve({ packages })),
+      install: vi.fn(),
+      remove: vi.fn(() => Promise.resolve({ action: "remove" as const, source: "/opt/pi-packages/relays", scope: "user" as const, removed: false, packages })),
+      update: vi.fn(),
+    } satisfies PiPackageService;
+    const dismiss = vi.fn(() => Promise.resolve());
+    const resolveDeclaredName = vi.fn(() => Promise.resolve("@jmfederico/pi-relay"));
+    const service = new ActiveProfilePiPackageService(
+      { getActiveAgentProfile },
+      () => underlyingService,
+      { dismiss },
+      { resolveDeclaredName },
+    );
+
+    await service.remove("/opt/pi-packages/relays");
+
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve identity or dismiss when the removed source has no configured installedPath", async () => {
+    const getActiveAgentProfile = vi.fn<ActiveAgentProfileProvider["getActiveAgentProfile"]>(() => Promise.resolve(availableProfile("/state/profile")));
+    const underlyingService = {
+      list: vi.fn(() => Promise.resolve({ packages: [] })),
+      install: vi.fn(),
+      remove: vi.fn(() => Promise.resolve({ action: "remove" as const, source: "npm:@acme/gone", scope: "user" as const, removed: false, packages: [] })),
+      update: vi.fn(),
+    } satisfies PiPackageService;
+    const dismiss = vi.fn(() => Promise.resolve());
+    const resolveDeclaredName = vi.fn(() => Promise.resolve("@jmfederico/pi-relay"));
+    const service = new ActiveProfilePiPackageService(
+      { getActiveAgentProfile },
+      () => underlyingService,
+      { dismiss },
+      { resolveDeclaredName },
+    );
+
+    await service.remove("npm:@acme/gone");
+
+    expect(resolveDeclaredName).not.toHaveBeenCalled();
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it("defaults to a no-op dismissal tracker and identity resolver so existing callers are unaffected", async () => {
+    const getActiveAgentProfile = vi.fn<ActiveAgentProfileProvider["getActiveAgentProfile"]>(() => Promise.resolve(availableProfile("/state/profile")));
+    const underlyingService = fakePiPackageService("only");
+    const service = new ActiveProfilePiPackageService({ getActiveAgentProfile }, () => underlyingService);
+
+    await expect(service.remove("only")).resolves.toMatchObject({ action: "remove", removed: true });
+  });
 });
 
 describe("DefaultPiPackageService", () => {

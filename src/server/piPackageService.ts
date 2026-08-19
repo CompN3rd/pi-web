@@ -1,6 +1,9 @@
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse } from "../shared/apiTypes.js";
 import { requireActiveAgentProfile, type ActiveAgentProfileProvider } from "./activeAgentProfileProvider.js";
+import { isKnownAutoInstallablePiPackageId } from "./knownAutoInstallPiPackages.js";
+import { resolveDeclaredPiPackageName } from "./piPackageIdentity.js";
+import { PiPackageDismissalStore } from "./storage/piPackageDismissalStore.js";
 
 export interface PiPackageManagerPort {
   listConfiguredPackages(): PiPackageInfo[];
@@ -19,12 +22,32 @@ export interface PiPackageService {
 
 export type PiPackageServiceForAgentDir = (agentDir: string) => PiPackageService;
 
+/** Narrow seam for recording that a user dismissed (removed) a known auto-installable Pi package for a profile. */
+export interface PiPackageDismissalTracker {
+  dismiss(profileDir: string, packageId: string): Promise<void>;
+}
+
+/** Narrow seam for resolving an installed Pi package's declared identity from its installed path. */
+export interface PiPackageIdentityResolver {
+  resolveDeclaredName(installedPath: string): Promise<string | undefined>;
+}
+
+const noopDismissalTracker: PiPackageDismissalTracker = {
+  dismiss: () => Promise.resolve(),
+};
+
+const defaultIdentityResolver: PiPackageIdentityResolver = {
+  resolveDeclaredName: resolveDeclaredPiPackageName,
+};
+
 export class ActiveProfilePiPackageService implements PiPackageService {
   private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly activeAgentProfile: ActiveAgentProfileProvider,
     private readonly serviceForAgentDir: PiPackageServiceForAgentDir,
+    private readonly dismissalTracker: PiPackageDismissalTracker = noopDismissalTracker,
+    private readonly identityResolver: PiPackageIdentityResolver = defaultIdentityResolver,
   ) {}
 
   async list(): Promise<PiPackagesResponse> {
@@ -36,14 +59,38 @@ export class ActiveProfilePiPackageService implements PiPackageService {
   }
 
   remove(source: string, scope?: PiPackageScope): Promise<PiPackageMutationResponse> {
-    return this.enqueueMutation((service) => service.remove(source, scope));
+    return this.enqueueMutation(async (service, profileDir) => {
+      const dismissedPackageId = await this.resolveKnownAutoInstallablePackageId(service, source, scope);
+      const response = await service.remove(source, scope);
+      if (dismissedPackageId !== undefined && response.removed === true) {
+        await this.dismissalTracker.dismiss(profileDir, dismissedPackageId);
+      }
+      return response;
+    });
   }
 
   update(source?: string): Promise<PiPackageMutationResponse> {
     return this.enqueueMutation((service) => service.update(source));
   }
 
-  private enqueueMutation(operation: (service: PiPackageService) => Promise<PiPackageMutationResponse>): Promise<PiPackageMutationResponse> {
+  /** Resolves the removed package's declared identity, if any, before the removal makes it unavailable. */
+  private async resolveKnownAutoInstallablePackageId(
+    service: PiPackageService,
+    source: string,
+    scope: PiPackageScope | undefined,
+  ): Promise<string | undefined> {
+    const effectiveScope = scope ?? "user";
+    const { packages } = await service.list();
+    const configured = packages.find((candidate) => candidate.source === source && candidate.scope === effectiveScope);
+    if (configured?.installedPath === undefined) return undefined;
+
+    const declaredName = await this.identityResolver.resolveDeclaredName(configured.installedPath);
+    return declaredName !== undefined && isKnownAutoInstallablePiPackageId(declaredName) ? declaredName : undefined;
+  }
+
+  private enqueueMutation(
+    operation: (service: PiPackageService, profileDir: string) => Promise<PiPackageMutationResponse>,
+  ): Promise<PiPackageMutationResponse> {
     const queuedMutation = this.mutationQueue.then(() => this.withActiveService(operation));
     this.mutationQueue = queuedMutation.then(
       () => undefined,
@@ -52,9 +99,9 @@ export class ActiveProfilePiPackageService implements PiPackageService {
     return queuedMutation;
   }
 
-  private async withActiveService<T>(operation: (service: PiPackageService) => Promise<T>): Promise<T> {
+  private async withActiveService<T>(operation: (service: PiPackageService, profileDir: string) => Promise<T>): Promise<T> {
     const profile = await requireActiveAgentProfile(this.activeAgentProfile);
-    return await operation(this.serviceForAgentDir(profile.dir));
+    return await operation(this.serviceForAgentDir(profile.dir), profile.dir);
   }
 }
 
@@ -126,8 +173,12 @@ export class DefaultPiPackageService implements PiPackageService {
   }
 }
 
-export function createActiveProfilePiPackageService(activeAgentProfile: ActiveAgentProfileProvider, cwd = process.cwd()): PiPackageService {
-  return new ActiveProfilePiPackageService(activeAgentProfile, (agentDir) => createDefaultPiPackageService(cwd, agentDir));
+export function createActiveProfilePiPackageService(
+  activeAgentProfile: ActiveAgentProfileProvider,
+  cwd = process.cwd(),
+  dismissalTracker: PiPackageDismissalTracker = new PiPackageDismissalStore(),
+): PiPackageService {
+  return new ActiveProfilePiPackageService(activeAgentProfile, (agentDir) => createDefaultPiPackageService(cwd, agentDir), dismissalTracker);
 }
 
 export function createDefaultPiPackageService(cwd: string, agentDir: string): PiPackageService {
