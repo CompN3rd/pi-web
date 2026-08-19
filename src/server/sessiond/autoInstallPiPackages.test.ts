@@ -14,7 +14,7 @@ import {
 
 const KNOWN_PACKAGE_ID = "@jmfederico/pi-relay";
 const PACKAGE_ROOT = "/pi-web";
-const KNOWN_PACKAGES = [{ id: KNOWN_PACKAGE_ID, shippedPathSegments: ["dist", "pi-packages", "relays"] }];
+const KNOWN_PACKAGES = [{ id: KNOWN_PACKAGE_ID, label: "Relays", description: "Relay method prompts and skill.", shippedPathSegments: ["dist", "pi-packages", "relays"] }];
 
 function fakePackageProvider(packages: ConfiguredPiPackage[] = [], getInstalledPath: PiPackageProvider["getInstalledPath"] = () => undefined): PiPackageProvider {
   return { listPackages: () => packages, getInstalledPath };
@@ -169,7 +169,7 @@ describe("reconcileAutoInstallablePiPackages", () => {
       packageRoot: PACKAGE_ROOT,
       knownPackages: [
         ...KNOWN_PACKAGES,
-        { id: otherPackageId, shippedPathSegments: ["dist", "pi-packages", "other"] },
+        { id: otherPackageId, label: "Other", description: "Another known package.", shippedPathSegments: ["dist", "pi-packages", "other"] },
       ],
       logger,
     });

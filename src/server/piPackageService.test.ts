@@ -30,7 +30,7 @@ describe("ActiveProfilePiPackageService", () => {
     const firstService = fakePiPackageService("first");
     const secondService = fakePiPackageService("second");
     const serviceForAgentDir = vi.fn((agentDir: string): PiPackageService => agentDir === "/state/first" ? firstService : secondService);
-    const service = new ActiveProfilePiPackageService({ getActiveAgentProfile }, serviceForAgentDir);
+    const service = new ActiveProfilePiPackageService({ getActiveAgentProfile }, serviceForAgentDir, undefined, undefined, []);
 
     await expect(service.list()).resolves.toEqual({ packages: [{ source: "first", scope: "user", filtered: false }] });
     await expect(service.install("npm:@acme/tools")).resolves.toMatchObject({ action: "install", source: "npm:@acme/tools", packages: [{ source: "second" }] });
@@ -159,6 +159,75 @@ describe("ActiveProfilePiPackageService", () => {
     const service = new ActiveProfilePiPackageService({ getActiveAgentProfile }, () => underlyingService);
 
     await expect(service.remove("only")).resolves.toMatchObject({ action: "remove", removed: true });
+  });
+
+  it("lists a known auto-installable package as an installable suggestion when it is not configured", async () => {
+    const getActiveAgentProfile = vi.fn<ActiveAgentProfileProvider["getActiveAgentProfile"]>(() => Promise.resolve(availableProfile("/state/profile")));
+    const underlyingService = fakePiPackageService("npm:@acme/tools");
+    const resolveDeclaredName = vi.fn(() => Promise.resolve(undefined));
+    const service = new ActiveProfilePiPackageService(
+      { getActiveAgentProfile },
+      () => underlyingService,
+      undefined,
+      { resolveDeclaredName },
+      [{ id: "@acme/known", label: "Known package", description: "A known package.", shippedPathSegments: ["dist", "pi-packages", "known"] }],
+      "/pi-web",
+    );
+
+    await expect(service.list()).resolves.toEqual({
+      packages: [{ source: "npm:@acme/tools", scope: "user", filtered: false }],
+      installableKnownPackages: [{ id: "@acme/known", label: "Known package", description: "A known package.", source: "/pi-web/dist/pi-packages/known" }],
+    });
+  });
+
+  it("omits a known package from installable suggestions once a configured package's declared identity matches it", async () => {
+    const getActiveAgentProfile = vi.fn<ActiveAgentProfileProvider["getActiveAgentProfile"]>(() => Promise.resolve(availableProfile("/state/profile")));
+    const packages = [{ source: "/opt/pi-packages/known", scope: "user" as const, filtered: false, installedPath: "/opt/pi-packages/known" }];
+    const underlyingService = {
+      list: vi.fn(() => Promise.resolve({ packages })),
+      install: vi.fn(),
+      remove: vi.fn(),
+      update: vi.fn(),
+    } satisfies PiPackageService;
+    const resolveDeclaredName = vi.fn(() => Promise.resolve("@acme/known"));
+    const service = new ActiveProfilePiPackageService(
+      { getActiveAgentProfile },
+      () => underlyingService,
+      undefined,
+      { resolveDeclaredName },
+      [{ id: "@acme/known", label: "Known package", description: "A known package.", shippedPathSegments: ["dist", "pi-packages", "known"] }],
+      "/pi-web",
+    );
+
+    const response = await service.list();
+
+    expect(resolveDeclaredName).toHaveBeenCalledWith("/opt/pi-packages/known");
+    expect(response).toEqual({ packages });
+    expect(response.installableKnownPackages).toBeUndefined();
+  });
+
+  it("reflects a package installed through the one-click suggestion in the same install response", async () => {
+    const getActiveAgentProfile = vi.fn<ActiveAgentProfileProvider["getActiveAgentProfile"]>(() => Promise.resolve(availableProfile("/state/profile")));
+    const installedPackage = { source: "/pi-web/dist/pi-packages/known", scope: "user" as const, filtered: false, installedPath: "/pi-web/dist/pi-packages/known" };
+    const underlyingService = {
+      list: vi.fn(),
+      install: vi.fn(() => Promise.resolve({ action: "install" as const, source: installedPackage.source, packages: [installedPackage] })),
+      remove: vi.fn(),
+      update: vi.fn(),
+    } satisfies PiPackageService;
+    const resolveDeclaredName = vi.fn(() => Promise.resolve("@acme/known"));
+    const service = new ActiveProfilePiPackageService(
+      { getActiveAgentProfile },
+      () => underlyingService,
+      undefined,
+      { resolveDeclaredName },
+      [{ id: "@acme/known", label: "Known package", description: "A known package.", shippedPathSegments: ["dist", "pi-packages", "known"] }],
+      "/pi-web",
+    );
+
+    const response = await service.install(installedPackage.source);
+
+    expect(response.installableKnownPackages).toBeUndefined();
   });
 });
 

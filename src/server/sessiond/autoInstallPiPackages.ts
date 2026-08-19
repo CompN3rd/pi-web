@@ -20,10 +20,10 @@
  * It must never crash or block session daemon startup — callers should not
  * await this before the daemon starts serving requests.
  */
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
+  defaultPiWebPackageRoot,
   KNOWN_AUTO_INSTALLABLE_PI_PACKAGES,
+  resolveShippedPiPackagePath,
   type KnownAutoInstallablePiPackage,
 } from "../knownAutoInstallPiPackages.js";
 import { resolveDeclaredPiPackageName } from "../piPackageIdentity.js";
@@ -94,7 +94,7 @@ export async function reconcileAutoInstallablePiPackages(options: ReconcileAutoI
       if (await isAlreadyConfigured(knownPackage.id, packageProvider, identityResolver)) continue;
       if (await dismissalChecker.isDismissed(profileDir, knownPackage.id)) continue;
 
-      const source = join(packageRoot, ...knownPackage.shippedPathSegments);
+      const source = resolveShippedPiPackagePath(knownPackage, packageRoot);
       await installer.install(source);
       logger?.info?.({ packageId: knownPackage.id, profileDir, source }, "auto-installed known Pi package for the active agent profile");
     } catch (error) {
@@ -117,9 +117,4 @@ async function isAlreadyConfigured(
     if (await identityResolver.resolveDeclaredName(installedPath) === packageId) return true;
   }
   return false;
-}
-
-function defaultPiWebPackageRoot(): string {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  return join(moduleDir, "..", "..", "..");
 }
