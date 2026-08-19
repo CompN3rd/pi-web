@@ -407,6 +407,8 @@ Relays is enabled by default. To hide it, disable `relays` in **Settings → PI 
 
 Disabling also removes its prompt templates and skill from sessions, effective at the next session-daemon start.
 
+`pi-web-plugins/relays/` is also a standalone Pi package (`@jmfederico/pi-relay`) that a plain `pi` user can install independently of PI WEB with `pi install <path-to-the-directory>`; see [Dual-shaped plugin packages](#dual-shaped-plugin-packages).
+
 ## Discovery and packaging
 
 The web/API catalog and sessiond startup catalog use the same package sources. The browser manifest includes only compatible entries that declare `module`; sessiond considers enabled entries that declare `serverModule`:
@@ -530,6 +532,12 @@ Sessiond collects these directories once per startup from enabled bundled and lo
 Because the set is fixed at session-daemon startup together with the plugin lifecycle snapshot, changing a plugin's enablement moves its session resources at the next session-daemon start; Pi's `/reload` does not revisit it. Safe start withholds these resources exactly as it withholds server entries.
 
 The bundled `relays` plugin uses this to ship the generic Relay workflow: the `/relay` and `/relay-worktree` prompt templates and the `relay` skill. Disable `relays` to remove them from sessions, effective at the next session-daemon start.
+
+### Dual-shaped plugin packages
+
+A plugin directory can be *both* a PI WEB plugin discovered from a bundled/local source and a standalone Pi package with its own `name`/`version` identity, installable independently with a plain `pi install <path>` — no PI WEB process involved. `pi-web-plugins/relays/` is shaped this way: its `package.json` carries the real package identity `@jmfederico/pi-relay` alongside its `piWeb.plugins` entry, and its `prompts/` and `skills/` directories already follow pi's package conventions, so installing the directory as a Pi package makes `/relay`, `/relay-worktree`, and the `relay` skill available in any plain `pi` session, independent of PI WEB.
+
+This dual shape does not change how PI WEB discovers or ships the plugin: it stays a bundled plugin found via PI WEB's normal discovery (see [Discovery and packaging](#discovery-and-packaging)), with the same `id`, `browserRoot`, and `module`, available out of the box exactly as before. The standalone install path is a separate, manual option for `pi`-only users who have no PI WEB installed and want the generic Relay workflow on its own. Publishing the package to npm and automatically installing it into Pi's package registry when PI WEB is installed or starts are both deferred follow-up work, not implemented yet — today, standalone use requires a manual `pi install` of a local path or git checkout.
 
 ## Browser module shape and v2 migration
 
