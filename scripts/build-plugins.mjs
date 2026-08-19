@@ -2,6 +2,7 @@
 import { watch } from "node:fs";
 import { copyFile, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const rootDir = resolve("pi-web-plugins");
@@ -9,10 +10,12 @@ const outDir = resolve("dist/pi-web-plugins");
 const watchMode = process.argv.includes("--watch");
 const cwd = process.cwd();
 
-if (watchMode) {
-  await watchAndBuild();
-} else {
-  await buildAll();
+if (isDirectExecution()) {
+  if (watchMode) {
+    await watchAndBuild();
+  } else {
+    await buildAll();
+  }
 }
 
 async function buildAll() {
@@ -22,7 +25,16 @@ async function buildAll() {
   console.log(`[plugins] built ${String(result.transpiled)} TypeScript plugin ${suffix} into ${relative(cwd, outDir)}`);
 }
 
-async function buildDirectory(sourceDir, targetDir) {
+export async function buildDirectory(sourceDir, targetDir, visited = new Set()) {
+  // Mirrors findWatchDirs's visited-realpath guard below: a symlinked
+  // directory can point at one of its own ancestors, and recursing on the
+  // symlink's own (ever-lengthening) path would never terminate. Resolving
+  // each directory to its realpath before descending catches that cycle
+  // regardless of how many symlink hops produced it.
+  const realSourceDir = await realpath(sourceDir).catch(() => undefined);
+  if (realSourceDir === undefined || visited.has(realSourceDir)) return { copied: 0, transpiled: 0 };
+  visited.add(realSourceDir);
+
   const entries = await readDirectory(sourceDir);
   let copied = 0;
   let transpiled = 0;
@@ -40,7 +52,7 @@ async function buildDirectory(sourceDir, targetDir) {
 
     if (entry.isDirectory() || linked?.isDirectory() === true) {
       if (entry.name === "node_modules") continue;
-      const result = await buildDirectory(sourcePath, targetPath);
+      const result = await buildDirectory(sourcePath, targetPath, visited);
       copied += result.copied;
       transpiled += result.transpiled;
       continue;
@@ -221,4 +233,10 @@ function formatUnknownError(error) {
 
 function isNodeError(error) {
   return error instanceof Error && "code" in error;
+}
+
+function isDirectExecution() {
+  const entryPath = process.argv[1];
+  if (entryPath === undefined) return false;
+  return pathToFileURL(resolve(entryPath)).href === import.meta.url;
 }
