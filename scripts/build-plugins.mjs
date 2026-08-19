@@ -5,8 +5,16 @@ import { dirname, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
-const rootDir = resolve("pi-web-plugins");
-const outDir = resolve("dist/pi-web-plugins");
+// Two independent source trees ship inside the npm package: bundled PI WEB
+// plugins (discovered by directory scan, see PiWebPluginCatalog) and Pi
+// packages that ship alongside them without being discovered that way (for
+// example a Pi package that is installed rather than scanned). Both are
+// built the same way, just into separate output directories, so neither one
+// becomes a discovery root for the other.
+const buildTargets = [
+  { rootDir: resolve("pi-web-plugins"), outDir: resolve("dist/pi-web-plugins"), label: "plugin" },
+  { rootDir: resolve("pi-packages"), outDir: resolve("dist/pi-packages"), label: "package" },
+];
 const watchMode = process.argv.includes("--watch");
 const cwd = process.cwd();
 
@@ -19,10 +27,12 @@ if (isDirectExecution()) {
 }
 
 async function buildAll() {
-  await rm(outDir, { recursive: true, force: true });
-  const result = await buildDirectory(rootDir, outDir);
-  const suffix = result.transpiled === 1 ? "file" : "files";
-  console.log(`[plugins] built ${String(result.transpiled)} TypeScript plugin ${suffix} into ${relative(cwd, outDir)}`);
+  for (const target of buildTargets) {
+    await rm(target.outDir, { recursive: true, force: true });
+    const result = await buildDirectory(target.rootDir, target.outDir);
+    const suffix = result.transpiled === 1 ? "file" : "files";
+    console.log(`[plugins] built ${String(result.transpiled)} TypeScript ${target.label} ${suffix} into ${relative(cwd, target.outDir)}`);
+  }
 }
 
 export async function buildDirectory(sourceDir, targetDir, visited = new Set()) {
@@ -174,7 +184,7 @@ async function watchAndBuild() {
 
   const refreshWatchers = async () => {
     closeWatchers();
-    const dirs = await findWatchDirs(rootDir);
+    const dirs = (await Promise.all(buildTargets.map((target) => findWatchDirs(target.rootDir)))).flat();
     watchers = dirs.map((dir) => watch(dir, () => scheduleBuild()));
   };
 
@@ -215,7 +225,7 @@ async function watchAndBuild() {
   process.on("SIGTERM", stop);
 
   await runBuild();
-  console.log(`[plugins] watching ${relative(cwd, rootDir)}`);
+  console.log(`[plugins] watching ${buildTargets.map((target) => relative(cwd, target.rootDir)).join(", ")}`);
   await new Promise(() => undefined);
 }
 
