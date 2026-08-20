@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isKnownAutoInstallablePiPackageId,
@@ -26,7 +27,7 @@ describe("resolveShippedPiPackagePath", () => {
       shippedPathSegments: ["dist", "pi-packages", "known"],
     };
 
-    expect(resolveShippedPiPackagePath(known, "/pi-web")).toBe("/pi-web/dist/pi-packages/known");
+    expect(resolveShippedPiPackagePath(known, "/pi-web")).toBe(join("/pi-web", "dist", "pi-packages", "known"));
   });
 
   it("resolves a real package root by default so callers do not need one for production use", () => {

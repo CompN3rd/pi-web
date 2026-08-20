@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { PiPackageInfo } from "../shared/apiTypes.js";
 import { type ActiveAgentProfileProvider } from "./activeAgentProfileProvider.js";
@@ -176,7 +177,7 @@ describe("ActiveProfilePiPackageService", () => {
 
     await expect(service.list()).resolves.toEqual({
       packages: [{ source: "npm:@acme/tools", scope: "user", filtered: false }],
-      installableKnownPackages: [{ id: "@acme/known", label: "Known package", description: "A known package.", source: "/pi-web/dist/pi-packages/known" }],
+      installableKnownPackages: [{ id: "@acme/known", label: "Known package", description: "A known package.", source: join("/pi-web", "dist", "pi-packages", "known") }],
     });
   });
 

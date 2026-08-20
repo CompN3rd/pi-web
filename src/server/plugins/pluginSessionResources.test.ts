@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -117,5 +117,8 @@ async function writeFixturePlugin(scope: PiWebPluginScope, id: string, files: Re
     await mkdir(join(filePath, ".."), { recursive: true });
     await writeFile(filePath, content);
   }
-  return root;
+  // Canonicalize: the catalog resolves `packageRoot` via `realpath` (e.g. to
+  // undo the OS temp dir's 8.3 short-name form on Windows), so the expected
+  // paths built from this return value must match that same canonical form.
+  return await realpath(root);
 }
