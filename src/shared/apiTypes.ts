@@ -977,13 +977,16 @@ export interface SessionModelCatalogEntry {
   contextWindow?: number;
   reasoning?: unknown;
   enabled: boolean;
+  /** Stable zero-based position in the machine's unscoped catalog. Optional for compatibility with older servers. */
+  catalogIndex?: number;
 }
 
 /**
  * The session machine's full available model catalog with per-model enabled
  * state. Enabled models come first — in the same set and order as the
  * session's pickable ("Enabled") model list — followed by the remaining
- * models in catalog order.
+ * models in catalog order. Each row's `catalogIndex` preserves its natural
+ * unscoped position independently of this enabled-first response order.
  */
 export interface SessionModelCatalogResponse {
   models: SessionModelCatalogEntry[];

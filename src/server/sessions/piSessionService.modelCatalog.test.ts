@@ -96,6 +96,7 @@ describe("PiSessionService model catalog", () => {
 
       expect(catalog.length).toBeGreaterThan(1);
       expect(catalogIds(catalog)).toEqual(snapshotIds);
+      expect(catalog.map((entry) => entry.catalogIndex)).toEqual(snapshotIds.map((_, index) => index));
       expect(catalog.every((entry) => entry.enabled)).toBe(true);
       const first = catalog[0];
       expect(first?.provider).toBe(PROVIDER);
@@ -115,6 +116,8 @@ describe("PiSessionService model catalog", () => {
 
       expect(catalogIds(catalog.slice(0, 2))).toEqual([`${PROVIDER}/${FIRST_MODEL}`, `${PROVIDER}/${DEFAULT_MODEL}`]);
       expect(catalog.slice(0, 2).map((entry) => entry.enabled)).toEqual([true, true]);
+      const naturalIds = catalogIds(modelRuntime.getAvailableSnapshot());
+      expect(catalog.every((entry) => naturalIds[entry.catalogIndex ?? -1] === `${entry.provider}/${entry.id}`)).toBe(true);
       const rest = catalog.slice(2);
       expect(rest.length).toBeGreaterThan(0);
       expect(rest.every((entry) => !entry.enabled)).toBe(true);

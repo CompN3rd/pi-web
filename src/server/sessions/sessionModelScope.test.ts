@@ -296,25 +296,25 @@ describe("catalogWithEnabledFirst", () => {
 
   it("marks every model enabled in catalog order when nothing is scoped", () => {
     expect(catalogWithEnabledFirst(available, null)).toEqual([
-      { model: available[0], enabled: true },
-      { model: available[1], enabled: true },
-      { model: available[2], enabled: true },
+      { model: available[0], enabled: true, catalogIndex: 0 },
+      { model: available[1], enabled: true, catalogIndex: 1 },
+      { model: available[2], enabled: true, catalogIndex: 2 },
     ]);
   });
 
   it("lists enabled models first in enabled-list order, then the rest in catalog order", () => {
     expect(catalogWithEnabledFirst(available, ["openai/c", "anthropic/a"])).toEqual([
-      { model: available[2], enabled: true },
-      { model: available[0], enabled: true },
-      { model: available[1], enabled: false },
+      { model: available[2], enabled: true, catalogIndex: 2 },
+      { model: available[0], enabled: true, catalogIndex: 0 },
+      { model: available[1], enabled: false, catalogIndex: 1 },
     ]);
   });
 
   it("skips enabled ids that match nothing available and ignores duplicates", () => {
     expect(catalogWithEnabledFirst(available, ["anthropic/gone", "anthropic/a", "anthropic/a"])).toEqual([
-      { model: available[0], enabled: true },
-      { model: available[1], enabled: false },
-      { model: available[2], enabled: false },
+      { model: available[0], enabled: true, catalogIndex: 0 },
+      { model: available[1], enabled: false, catalogIndex: 1 },
+      { model: available[2], enabled: false, catalogIndex: 2 },
     ]);
   });
 });

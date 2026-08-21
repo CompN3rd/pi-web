@@ -8,6 +8,7 @@ import { ModelPicker } from "./ModelPicker";
 afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
+  vi.restoreAllMocks();
 });
 
 describe("model-picker Enabled mode", () => {
@@ -51,7 +52,7 @@ describe("model-picker Enabled mode", () => {
 });
 
 describe("model-picker All models mode", () => {
-  it("lists the catalog enabled-first with group headers and per-row membership checkboxes", async () => {
+  it("keeps every model in natural catalog order", async () => {
     const picker = await mountPicker({ selectedValue: "openai/gpt-5" });
 
     scopeToggle(picker, "All models").click();
@@ -64,7 +65,6 @@ describe("model-picker All models mode", () => {
       "google/gemini-2.5-pro",
     ]);
     expect(catalogRows(picker).map((row) => rowCheckbox(row).checked)).toEqual([true, true, false, false]);
-    expect(groupHeaders(picker)).toEqual(["Enabled", "Other models"]);
     expect(toggleAllButton(picker).textContent.trim()).toBe("Deselect all");
     const currentRow = catalogRow(picker, "openai/gpt-5");
     expect(rowCheckbox(currentRow).disabled).toBe(true);
@@ -138,6 +138,7 @@ describe("model-picker All models mode", () => {
 
     const gpt4oRow = catalogRow(picker, "openai/gpt-4o");
     const checkbox = rowCheckbox(gpt4oRow);
+    checkbox.focus();
     checkbox.click();
     await settleRenderedDialog(picker);
 
@@ -160,6 +161,54 @@ describe("model-picker All models mode", () => {
     const updated = rowCheckbox(catalogRow(picker, "openai/gpt-4o"));
     expect(updated.checked).toBe(true);
     expect(updated.disabled).toBe(false);
+    expect(deepActiveElement()).toBe(updated);
+    expect(catalogRows(picker).map(rowValue)).toEqual([
+      "openai/gpt-5",
+      "anthropic/claude-sonnet-4-5",
+      "openai/gpt-4o",
+      "google/gemini-2.5-pro",
+    ]);
+  });
+
+  it("preserves the natural row and scroll position when a model is deselected", async () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    let toggleApplied: (() => void) | undefined;
+    const onToggleEnabled = vi.fn(() => new Promise<void>((resolve) => { toggleApplied = () => { resolve(); }; }));
+    const picker = await mountPicker({ selectedValue: "openai/gpt-5", onToggleEnabled });
+    scopeToggle(picker, "All models").click();
+    await settleRenderedDialog(picker);
+    await nextAnimationFrame();
+    scrollIntoView.mockClear();
+
+    const options = optionsList(picker);
+    options.scrollTop = 137;
+    const originalRow = catalogRow(picker, "anthropic/claude-sonnet-4-5");
+    membershipButton(originalRow).click();
+    await settleRenderedDialog(picker);
+
+    // Membership responses are enabled-first and may arrive in a different
+    // order. catalogIndex plus the dialog-owned order keeps the natural copy put.
+    picker.catalog = [
+      entry("openai", "gpt-5", true, undefined, 0),
+      entry("openai", "gpt-4o", false, undefined, 2),
+      entry("google", "gemini-2.5-pro", false, undefined, 3),
+      entry("anthropic", "claude-sonnet-4-5", false, undefined, 1),
+    ];
+    toggleApplied?.();
+    await settleRenderedDialog(picker);
+    await nextAnimationFrame();
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(catalogRow(picker, "anthropic/claude-sonnet-4-5")).toBe(originalRow);
+    expect(catalogRows(picker).map(rowValue)).toEqual([
+      "openai/gpt-5",
+      "anthropic/claude-sonnet-4-5",
+      "openai/gpt-4o",
+      "google/gemini-2.5-pro",
+    ]);
+    expect(options.scrollTop).toBe(137);
+    expect(rowCheckbox(originalRow).checked).toBe(false);
+    expect(onToggleEnabled).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-5", false);
   });
 
   it("keeps the checkbox state when the toggle fails", async () => {
@@ -181,7 +230,7 @@ describe("model-picker All models mode", () => {
     expect(rowCheckbox(catalogRow(picker, "openai/gpt-4o")).checked).toBe(false);
   });
 
-  it("filters the catalog by search and hides group headers while searching", async () => {
+  it("filters the natural catalog without changing its order", async () => {
     const picker = await mountPicker();
     scopeToggle(picker, "All models").click();
     await settleRenderedDialog(picker);
@@ -190,7 +239,6 @@ describe("model-picker All models mode", () => {
     await settleRenderedDialog(picker);
 
     expect(catalogRows(picker).map((row) => rowValue(row))).toEqual(["openai/gpt-5", "openai/gpt-4o"]);
-    expect(groupHeaders(picker)).toEqual([]);
   });
 
   it("toggles availability by row click and Enter without picking a model", async () => {
@@ -214,7 +262,7 @@ describe("model-picker All models mode", () => {
     expect(onPick).not.toHaveBeenCalled();
   });
 
-  it("keeps keyboard activation anchored to a focused checkbox", async () => {
+  it("keeps keyboard navigation and activation anchored to a focused checkbox", async () => {
     const onToggleEnabled = vi.fn<() => Promise<void>>(() => Promise.resolve());
     const picker = await mountPicker({ onToggleEnabled });
     scopeToggle(picker, "All models").click();
@@ -222,6 +270,7 @@ describe("model-picker All models mode", () => {
 
     const checkbox = rowCheckbox(catalogRow(picker, "openai/gpt-4o"));
     checkbox.focus();
+    pressKey(checkbox, "ArrowDown");
     pressKey(checkbox, "Enter");
 
     expect(onToggleEnabled).toHaveBeenCalledWith("openai", "gpt-4o", true);
@@ -278,16 +327,16 @@ interface ModelPickerProps {
   onSetScope?: (mode: "all" | "current") => Promise<void>;
 }
 
-function entry(provider: string, id: string, enabled: boolean, name?: string): SessionModelCatalogEntry {
-  return { provider, id, enabled, ...(name === undefined ? {} : { name }) };
+function entry(provider: string, id: string, enabled: boolean, name?: string, catalogIndex?: number): SessionModelCatalogEntry {
+  return { provider, id, enabled, ...(name === undefined ? {} : { name }), ...(catalogIndex === undefined ? {} : { catalogIndex }) };
 }
 
 function defaultCatalog(): SessionModelCatalogEntry[] {
   return [
-    entry("openai", "gpt-5", true),
-    entry("anthropic", "claude-sonnet-4-5", true),
-    entry("openai", "gpt-4o", false),
-    entry("google", "gemini-2.5-pro", false),
+    entry("openai", "gpt-5", true, undefined, 0),
+    entry("anthropic", "claude-sonnet-4-5", true, undefined, 1),
+    entry("openai", "gpt-4o", false, undefined, 2),
+    entry("google", "gemini-2.5-pro", false, undefined, 3),
   ];
 }
 
@@ -353,10 +402,6 @@ function membershipButton(row: HTMLElement): HTMLButtonElement {
   return requiredElement(row.querySelector<HTMLButtonElement>("button.membership"), "catalog row membership button");
 }
 
-function groupHeaders(picker: ModelPicker): string[] {
-  return [...(picker.shadowRoot?.querySelectorAll<HTMLElement>(".group-header") ?? [])].map((header) => header.textContent.trim());
-}
-
 function selectedRowText(picker: ModelPicker): string {
   const selected = picker.shadowRoot?.querySelector<HTMLElement>(".options > button.selected, .catalog-row.selected");
   return requiredElement(selected, "selected model row").textContent;
@@ -370,4 +415,8 @@ function typeSearch(picker: ModelPicker, query: string): void {
   const input = searchInput(picker);
   input.value = query;
   input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => { resolve(); }));
 }

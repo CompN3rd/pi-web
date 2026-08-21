@@ -1169,6 +1169,7 @@ function parseSessionModelCatalogEntry(value: unknown): SessionModelCatalogEntry
     ...optionalField("contextWindow", optionalNumber(record, "contextWindow")),
     ...optionalField("reasoning", record["reasoning"]),
     enabled: requireBoolean(record, "enabled"),
+    ...optionalField("catalogIndex", record["catalogIndex"] === undefined ? undefined : requireNonNegativeSafeInteger(record, "catalogIndex")),
   };
 }
 

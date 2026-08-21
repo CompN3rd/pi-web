@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
 import type { CommandOption, SessionModelCatalogEntry, SessionModelScopeMode } from "../api";
 import { keyboardEventOriginatesFromNativeActivationControl } from "./keyboardEventTarget";
 import "./ModalSurface";
@@ -12,11 +13,9 @@ import { scrollWhenSelected } from "./scrollWhenSelected";
  */
 export type ModelPickerMode = "enabled" | "all";
 
-/** Filtered All-mode catalog view. Catalog order (enabled first) is preserved. */
+/** Filtered All-mode catalog view in the machine catalog's natural order. */
 export interface ModelCatalogView {
   rows: SessionModelCatalogEntry[];
-  /** Group headers only help the unfiltered list; while searching, one flat list is clearer. */
-  showGroupHeaders: boolean;
 }
 
 /** The wire value identifying one model row: `${provider}/${id}`. */
@@ -31,14 +30,41 @@ export function filterModelOptions(options: readonly CommandOption[], query: str
   return options.filter((option) => `${option.label} ${option.description ?? ""} ${option.value}`.toLowerCase().includes(normalized));
 }
 
-/** Case-insensitive substring filter over the All-mode catalog, mirroring pi's model search text (id, provider, name). */
-export function modelCatalogView(catalog: readonly SessionModelCatalogEntry[], query: string): ModelCatalogView {
+function modelCatalogInNaturalOrder(catalog: readonly SessionModelCatalogEntry[]): SessionModelCatalogEntry[] {
+  if (!catalog.every((entry) => entry.catalogIndex !== undefined)) return [...catalog];
+  return [...catalog].sort((left, right) => (left.catalogIndex ?? 0) - (right.catalogIndex ?? 0));
+}
+
+/**
+ * Case-insensitive substring filter over the All-mode catalog, mirroring pi's
+ * model search text (id, provider, name). A dialog-owned stable order can be
+ * supplied so a response from an older server cannot regroup rows mid-edit.
+ */
+export function modelCatalogView(
+  catalog: readonly SessionModelCatalogEntry[],
+  query: string,
+  stableOrder?: readonly string[],
+): ModelCatalogView {
+  const naturalRows = modelCatalogInNaturalOrder(catalog);
+  const rowsByValue = new Map(naturalRows.map((entry) => [modelCatalogEntryValue(entry), entry]));
+  const listed = new Set<string>();
+  const orderedRows = stableOrder === undefined
+    ? naturalRows
+    : [
+        ...stableOrder.flatMap((value) => {
+          const entry = rowsByValue.get(value);
+          if (entry === undefined || listed.has(value)) return [];
+          listed.add(value);
+          return [entry];
+        }),
+        ...naturalRows.filter((entry) => !listed.has(modelCatalogEntryValue(entry))),
+      ];
   const normalized = query.trim().toLowerCase();
-  const rows = normalized === ""
-    ? [...catalog]
-    : catalog.filter((entry) => `${entry.provider} ${entry.id} ${entry.name ?? ""}`.toLowerCase().includes(normalized));
-  const showGroupHeaders = normalized === "" && rows.some((entry) => entry.enabled) && rows.some((entry) => !entry.enabled);
-  return { rows, showGroupHeaders };
+  return {
+    rows: normalized === ""
+      ? orderedRows
+      : orderedRows.filter((entry) => `${entry.provider} ${entry.id} ${entry.name ?? ""}`.toLowerCase().includes(normalized)),
+  };
 }
 
 export interface ModelCatalogToggleAllPlan {
@@ -84,7 +110,7 @@ export class ModelPicker extends LitElement {
   @property() override title = "Select Model";
   /** Enabled-mode rows: the session's pickable models, pre-labeled by the host. */
   @property({ attribute: false }) options: CommandOption[] = [];
-  /** All-mode rows: the machine's catalog, already grouped enabled-first by the server. */
+  /** All-mode rows, including enabled state and (on current servers) each model's natural catalog index. */
   @property({ attribute: false }) catalog: SessionModelCatalogEntry[] = [];
   @property({ attribute: false }) selectedValue?: string;
   @property({ attribute: false }) onPick?: (value: string) => void;
@@ -103,6 +129,10 @@ export class ModelPicker extends LitElement {
   @state() private query = "";
   @state() private pendingToggles: ReadonlySet<string> = new Set();
   @state() private toggleAllPending = false;
+  /** Stable for this dialog's lifetime so membership responses never move natural rows. */
+  private catalogOrder: string[] = [];
+  private catalogScrollTopBeforeUpdate: number | undefined;
+  private focusAfterToggle: HTMLElement | undefined;
 
   override render() {
     const rows = this.visibleRows();
@@ -122,10 +152,16 @@ export class ModelPicker extends LitElement {
           ${this.renderScopeToggleButton("all", "All models")}
         </div>
         <div class="search-row">
-          <input class="search" placeholder="Search" .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}>
+          <input class="search" aria-label="Search models" placeholder="Search" .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}>
           ${this.mode === "all" ? this.renderToggleAllButton() : nothing}
         </div>
-        <div class="options" tabindex="0" aria-busy=${this.membershipChangePending ? "true" : "false"}>
+        <div
+          class="options"
+          role="region"
+          aria-label=${this.mode === "all" ? "All models in catalog order" : "Enabled models"}
+          tabindex="0"
+          aria-busy=${this.membershipChangePending ? "true" : "false"}
+        >
           ${this.mode === "all" ? this.renderCatalogList() : this.renderEnabledList()}
           ${rows.length === 0 ? html`<div class="empty">No matching options</div>` : null}
         </div>
@@ -138,17 +174,30 @@ export class ModelPicker extends LitElement {
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
-    if (!changed.has("catalog") || this.mode !== "all") return;
-    // A toggle regroups the catalog (enabled first): keep the selection on the
-    // same row rather than on the same numeric index.
+    if (!changed.has("catalog")) return;
+    if (this.mode === "all") {
+      this.catalogScrollTopBeforeUpdate = this.shadowRoot?.querySelector<HTMLElement>(".options")?.scrollTop;
+    }
+    this.rememberCatalogOrder();
+    if (this.mode !== "all") return;
+
+    // The server keeps scope order enabled-first. Anchor keyboard selection by
+    // value while the dialog's natural row order stays fixed across responses.
     const previousCatalog = changed.get("catalog");
     if (previousCatalog === undefined) return;
-    const previousRows = modelCatalogView(previousCatalog, this.query).rows;
+    const previousRows = modelCatalogView(previousCatalog, this.query, this.catalogOrder).rows;
     const anchored = previousRows[this.selectedIndex];
-    const rows = modelCatalogView(this.catalog, this.query).rows;
+    const rows = modelCatalogView(this.catalog, this.query, this.catalogOrder).rows;
     const anchoredValue = anchored === undefined ? undefined : modelCatalogEntryValue(anchored);
     const nextIndex = anchoredValue === undefined ? -1 : rows.findIndex((entry) => modelCatalogEntryValue(entry) === anchoredValue);
     this.selectedIndex = nextIndex >= 0 ? nextIndex : Math.min(this.selectedIndex, Math.max(rows.length - 1, 0));
+  }
+
+  protected override updated(changed: PropertyValues<this>): void {
+    if (!changed.has("catalog") || this.catalogScrollTopBeforeUpdate === undefined) return;
+    const options = this.shadowRoot?.querySelector<HTMLElement>(".options");
+    if (options !== null && options !== undefined) options.scrollTop = this.catalogScrollTopBeforeUpdate;
+    this.catalogScrollTopBeforeUpdate = undefined;
   }
 
   private get membershipChangePending(): boolean {
@@ -174,6 +223,16 @@ export class ModelPicker extends LitElement {
     `;
   }
 
+  private rememberCatalogOrder(): void {
+    const knownCatalogValues = new Set(this.catalogOrder);
+    for (const entry of modelCatalogView(this.catalog, "").rows) {
+      const value = modelCatalogEntryValue(entry);
+      if (knownCatalogValues.has(value)) continue;
+      knownCatalogValues.add(value);
+      this.catalogOrder.push(value);
+    }
+  }
+
   private renderEnabledList(): TemplateResult[] {
     return filterModelOptions(this.options, this.query).map((option, index) => html`
       <button
@@ -190,18 +249,9 @@ export class ModelPicker extends LitElement {
     `);
   }
 
-  private renderCatalogList(): TemplateResult[] {
-    const view = modelCatalogView(this.catalog, this.query);
-    const rendered: TemplateResult[] = [];
-    let lastGroup: boolean | undefined;
-    view.rows.forEach((entry, index) => {
-      if (view.showGroupHeaders && entry.enabled !== lastGroup) {
-        rendered.push(html`<div class="group-header">${entry.enabled ? "Enabled" : "Other models"}</div>`);
-      }
-      lastGroup = entry.enabled;
-      rendered.push(this.renderCatalogRow(entry, index));
-    });
-    return rendered;
+  private renderCatalogList(): TemplateResult {
+    const rows = modelCatalogView(this.catalog, this.query, this.catalogOrder).rows;
+    return html`${repeat(rows, modelCatalogEntryValue, (entry, index) => this.renderCatalogRow(entry, index))}`;
   }
 
   private renderCatalogRow(entry: SessionModelCatalogEntry, index: number): TemplateResult {
@@ -223,9 +273,9 @@ export class ModelPicker extends LitElement {
           class="membership"
           ?disabled=${this.membershipChangePending || protectsCurrentModel}
           aria-label=${protectsCurrentModel ? `Current model ${value} cannot be deselected` : `${entry.enabled ? "Disable" : "Enable"} ${value}`}
-          aria-current=${selected ? "true" : nothing}
+          aria-current=${value === this.selectedValue ? "true" : nothing}
           @focus=${() => { this.selectedIndex = index; }}
-          @click=${() => { this.requestEnabledToggle(entry); }}
+          @click=${(event: MouseEvent) => { this.requestEnabledToggle(entry, event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined); }}
         >
           <span>${entry.id}${value === this.selectedValue ? " ✓ current" : ""}</span>
           <small>${entry.provider}</small>
@@ -236,7 +286,7 @@ export class ModelPicker extends LitElement {
 
   private visibleRows(): ModelPickerRow[] {
     if (this.mode === "all") {
-      return modelCatalogView(this.catalog, this.query).rows.map((entry) => ({ value: modelCatalogEntryValue(entry), entry }));
+      return modelCatalogView(this.catalog, this.query, this.catalogOrder).rows.map((entry) => ({ value: modelCatalogEntryValue(entry), entry }));
     }
     return filterModelOptions(this.options, this.query).map((option) => ({ value: option.value }));
   }
@@ -265,8 +315,19 @@ export class ModelPicker extends LitElement {
 
   // Escape and backdrop presses are owned by the modal surface (routed to
   // `onCancel`). Search and list-container keys retain the broadened option
-  // navigation idiom, while focused native buttons keep their own semantics.
+  // navigation idiom, while focused row controls keep their own semantics.
   private handleKeyDown(event: KeyboardEvent) {
+    const focusedCheckbox = event.composedPath().find((target): target is HTMLInputElement => target instanceof HTMLInputElement && target.type === "checkbox");
+    if (focusedCheckbox !== undefined) {
+      // Browsers do not consistently activate checkboxes with Enter. Support it
+      // explicitly, but never let row-navigation keys move a hidden selection
+      // away from the checkbox that still holds focus.
+      if (event.key === "Enter") {
+        event.preventDefault();
+        focusedCheckbox.click();
+      }
+      return;
+    }
     if (keyboardEventOriginatesFromNativeActivationControl(event)) return;
     if (this.membershipChangePending && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
@@ -300,13 +361,15 @@ export class ModelPicker extends LitElement {
     // The checkbox is controlled: cancel the native flip so the rendered state
     // keeps reflecting the catalog until the host applies the fresh one.
     event.preventDefault();
-    if (event.currentTarget instanceof HTMLInputElement) event.currentTarget.checked = entry.enabled;
-    this.requestEnabledToggle(entry);
+    const checkbox = event.currentTarget instanceof HTMLInputElement ? event.currentTarget : undefined;
+    if (checkbox !== undefined) checkbox.checked = entry.enabled;
+    this.requestEnabledToggle(entry, checkbox);
   }
 
-  private requestEnabledToggle(entry: SessionModelCatalogEntry): void {
+  private requestEnabledToggle(entry: SessionModelCatalogEntry, focusTarget?: HTMLElement): void {
     const value = modelCatalogEntryValue(entry);
-    if ((value === this.selectedValue && entry.enabled) || this.toggleAllPending || this.pendingToggles.has(value)) return;
+    if ((value === this.selectedValue && entry.enabled) || this.membershipChangePending) return;
+    if (focusTarget !== undefined && this.shadowRoot?.activeElement === focusTarget) this.focusAfterToggle = focusTarget;
     const pending = new Set(this.pendingToggles);
     pending.add(value);
     this.pendingToggles = pending;
@@ -342,6 +405,12 @@ export class ModelPicker extends LitElement {
       const settled = new Set(this.pendingToggles);
       settled.delete(value);
       this.pendingToggles = settled;
+      const focusTarget = this.focusAfterToggle;
+      this.focusAfterToggle = undefined;
+      await this.updateComplete;
+      if (focusTarget?.isConnected === true && this.shadowRoot?.activeElement === null) {
+        focusTarget.focus({ preventScroll: true });
+      }
     }
   }
 
@@ -368,7 +437,6 @@ export class ModelPicker extends LitElement {
     .catalog-row.selected, .catalog-row:hover { background: var(--pi-selection-bg); }
     .catalog-row input[type="checkbox"] { margin: 0 0 0 12px; accent-color: var(--pi-accent); }
     .catalog-row .membership { flex: 1; min-width: 0; display: block; padding: 10px 12px; text-align: left; }
-    .group-header { padding: 8px 12px 4px; color: var(--pi-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
     small { display: block; margin-top: 4px; color: var(--pi-muted); }
     .empty { padding: 24px; color: var(--pi-muted); text-align: center; }
   `;

@@ -1532,9 +1532,9 @@ export class PiSessionService implements SessionRouteService {
 
   /**
    * The session machine's full available catalog with per-model enabled state,
-   * ordered enabled-first the way the All-models picker lists it. Reads the
-   * snapshot after every refresh so the rows and the enabled-id resolution
-   * describe the same catalog.
+   * ordered enabled-first for scope semantics while retaining each model's
+   * natural catalog index for stable picker placement. Reads the snapshot after
+   * every refresh so the rows and enabled-id resolution describe the same catalog.
    */
   private async enabledModelCatalog(session: PiAgentSession): Promise<EnabledModelCatalogEntry<AgentModel>[]> {
     await session.modelRuntime.refresh({ allowNetwork: false });
@@ -4082,7 +4082,13 @@ function sessionScopeSource(session: PiAgentSession): { settingsManager: PiAgent
 }
 
 function catalogEntryToClientModel(entry: EnabledModelCatalogEntry<AgentModel>): ClientSessionModelCatalogEntry {
-  return { ...modelToClientModel(entry.model), provider: entry.model.provider, id: entry.model.id, enabled: entry.enabled };
+  return {
+    ...modelToClientModel(entry.model),
+    provider: entry.model.provider,
+    id: entry.model.id,
+    enabled: entry.enabled,
+    catalogIndex: entry.catalogIndex,
+  };
 }
 
 function notificationIdentityForSession(session: PiAgentSession): { sessionId: string; cwd: string } {

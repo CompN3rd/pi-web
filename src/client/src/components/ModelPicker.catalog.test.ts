@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { CommandOption, SessionModelCatalogEntry } from "../api";
 import { filterModelOptions, modelCatalogEntryValue, modelCatalogToggleAllPlan, modelCatalogView } from "./ModelPicker";
 
-function entry(provider: string, id: string, enabled: boolean, name?: string): SessionModelCatalogEntry {
-  return { provider, id, enabled, ...(name === undefined ? {} : { name }) };
+function entry(provider: string, id: string, enabled: boolean, name?: string, catalogIndex?: number): SessionModelCatalogEntry {
+  return { provider, id, enabled, ...(name === undefined ? {} : { name }), ...(catalogIndex === undefined ? {} : { catalogIndex }) };
 }
 
 const catalog: SessionModelCatalogEntry[] = [
@@ -56,23 +56,37 @@ describe("modelCatalogToggleAllPlan", () => {
 });
 
 describe("modelCatalogView", () => {
-  it("keeps the server's enabled-first order for a blank query and shows group headers for a mixed list", () => {
-    const view = modelCatalogView(catalog, "");
+  it("restores natural machine-catalog order from catalog indexes", () => {
+    const indexed = [
+      entry("openai", "gpt-5", true, undefined, 2),
+      entry("anthropic", "claude-sonnet-4-5", true, "Claude Sonnet 4.5", 0),
+      entry("openai", "gpt-4o", false, undefined, 1),
+      entry("google", "gemini-2.5-pro", false, undefined, 3),
+    ];
 
-    expect(view.rows.map(modelCatalogEntryValue)).toEqual(["openai/gpt-5", "anthropic/claude-sonnet-4-5", "openai/gpt-4o", "google/gemini-2.5-pro"]);
-    expect(view.showGroupHeaders).toBe(true);
+    expect(modelCatalogView(indexed, "").rows.map(modelCatalogEntryValue)).toEqual([
+      "anthropic/claude-sonnet-4-5",
+      "openai/gpt-4o",
+      "openai/gpt-5",
+      "google/gemini-2.5-pro",
+    ]);
   });
 
-  it("filters by provider, id, and display name case-insensitively, preserving catalog order", () => {
+  it("filters by provider, id, and display name case-insensitively, preserving natural order", () => {
     expect(modelCatalogView(catalog, "gpt").rows.map(modelCatalogEntryValue)).toEqual(["openai/gpt-5", "openai/gpt-4o"]);
     expect(modelCatalogView(catalog, "GOOGLE").rows.map(modelCatalogEntryValue)).toEqual(["google/gemini-2.5-pro"]);
     expect(modelCatalogView(catalog, "sonnet 4.5").rows.map(modelCatalogEntryValue)).toEqual(["anthropic/claude-sonnet-4-5"]);
   });
 
-  it("hides group headers while searching or when only one group exists", () => {
-    expect(modelCatalogView(catalog, "gpt").showGroupHeaders).toBe(false);
-    expect(modelCatalogView(catalog.map((row) => ({ ...row, enabled: true })), "").showGroupHeaders).toBe(false);
-    expect(modelCatalogView(catalog.map((row) => ({ ...row, enabled: false })), "").showGroupHeaders).toBe(false);
-    expect(modelCatalogView([], "").showGroupHeaders).toBe(false);
+  it("honors a dialog-owned stable order when a response regroups rows", () => {
+    const stableOrder = catalog.map(modelCatalogEntryValue);
+    const regrouped = [
+      entry("openai", "gpt-4o", false),
+      entry("openai", "gpt-5", true),
+      entry("google", "gemini-2.5-pro", false),
+      entry("anthropic", "claude-sonnet-4-5", true, "Claude Sonnet 4.5"),
+    ];
+
+    expect(modelCatalogView(regrouped, "", stableOrder).rows.map(modelCatalogEntryValue)).toEqual(stableOrder);
   });
 });
