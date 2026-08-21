@@ -60,6 +60,7 @@ import type {
   SessionNotificationDismissAllRequest,
   SessionNotificationDismissRequest,
   SessionNotificationInboxSnapshot,
+  SessionModelScopeMode,
   SessionUnreadAcknowledgeRequest,
   SessionUnreadCatalogSnapshot,
   SessionWarning,
@@ -1109,6 +1110,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly treeNavigations = new WeakSet<PiAgentSession>();
   /** Counts async operations that may append an entry before they settle. */
   private readonly sessionEntryMutationCounts = new WeakMap<PiAgentSession, number>();
+  /** Settings-wide queue preventing enabled-model read/modify/write races across sessions. */
+  private modelScopeMutationQueue: Promise<void> = Promise.resolve();
   /** Runtime/session-identity reservations for operations that must not overlap tree navigation. */
   private readonly treeExclusiveRuntimeOperationCounts = new WeakMap<PiSessionRuntime, number>();
   private readonly treeExclusiveSessionOperationCounts = new Map<string, number>();
@@ -1529,14 +1532,41 @@ export class PiSessionService implements SessionRouteService {
 
   /**
    * The session machine's full available catalog with per-model enabled state,
-   * ordered enabled-first the way the All-models picker lists it. Reads the
-   * snapshot after every refresh so the rows and the enabled-id resolution
-   * describe the same catalog.
+   * ordered enabled-first for scope semantics while retaining each model's
+   * natural catalog index for stable picker placement. Reads the snapshot after
+   * every refresh so the rows and enabled-id resolution describe the same catalog.
    */
   private async enabledModelCatalog(session: PiAgentSession): Promise<EnabledModelCatalogEntry<AgentModel>[]> {
     await session.modelRuntime.refresh({ allowNetwork: false });
     const enabledIds = await resolveEnabledModelIds(sessionScopeSource(session));
     return catalogWithEnabledFirst(session.modelRuntime.getAvailableSnapshot(), enabledIds);
+  }
+
+  private runModelScopeMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = this.modelScopeMutationQueue.then(operation);
+    this.modelScopeMutationQueue = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  /** Persist one complete enabled-model selection and apply its live cycling scope. */
+  private applyEnabledModelScope(
+    session: PiAgentSession,
+    available: readonly AgentModel[],
+    enabledIds: readonly string[] | null,
+  ): void {
+    const availableIds = available.map(modelScopeId);
+    const scopeIds = liveScopedModelIds(enabledIds, availableIds);
+    const modelsById = new Map(available.map((model) => [modelScopeId(model), model]));
+    // enabledIds can carry stale configured patterns. Exact lookup drops those
+    // from the live scope while persistence keeps them for per-row edits.
+    const scoped = scopeIds === null
+      ? []
+      : scopeIds.flatMap((id) => {
+        const model = modelsById.get(id);
+        return model === undefined ? [] : [{ model }];
+      });
+    session.settingsManager.setEnabledModels(persistedEnabledModelPatterns(enabledIds, availableIds));
+    session.setScopedModels(scoped);
   }
 
   /**
@@ -2180,37 +2210,49 @@ export class PiSessionService implements SessionRouteService {
   async setModelEnabled(ref: PiSessionRef, provider: string, modelId: string, enabled: boolean): Promise<ClientSessionModelCatalogEntry[]> {
     await this.assertWritable(ref);
     const session = await this.getOrOpen(ref);
-    this.assertTreeNavigationInactive(session, "change enabled models");
-    await session.modelRuntime.refresh({ allowNetwork: false });
-    const currentIds = await resolveEnabledModelIds(sessionScopeSource(session));
-    const available = session.modelRuntime.getAvailableSnapshot();
-    const availableIds = available.map(modelScopeId);
-    const targetId = `${provider}/${modelId}`;
-    if (!availableIds.includes(targetId)) throw new Error(`Model not found: ${targetId}`);
-    const nextIds = applyEnabledModelToggle(currentIds, availableIds, targetId, enabled);
-    this.assertTreeNavigationInactive(session, "change enabled models");
-    if (nextIds !== currentIds) {
-      // Decide the live scope before writing so a failure cannot leave the
-      // persisted patterns and the session scope disagreeing about the edit.
-      const scopeIds = liveScopedModelIds(nextIds, availableIds);
-      const modelsById = new Map(available.map((model) => [modelScopeId(model), model]));
-      // nextIds holds canonical `provider/id` keys plus possibly stale patterns
-      // that matched nothing on this same catalog, so exact lookup resolves the
-      // scope exactly the way pi's resolver would (unknown ids drop out).
-      const scoped = scopeIds === null
-        ? []
-        : scopeIds.flatMap((id) => {
-          const model = modelsById.get(id);
-          return model === undefined ? [] : [{ model }];
-        });
-      session.settingsManager.setEnabledModels(persistedEnabledModelPatterns(nextIds, availableIds));
-      session.setScopedModels(scoped);
-    }
-    // Respond from a fresh post-edit read (settings + live scope) so the
-    // response is exactly what GET models/catalog returns after the edit,
-    // including pi's normalizations (re-enabling everything collapses the
-    // scope, and an emptied list reads back as "all enabled").
-    return (await this.enabledModelCatalog(session)).map(catalogEntryToClientModel);
+    return this.runModelScopeMutation(async () => {
+      this.assertTreeNavigationInactive(session, "change enabled models");
+      await session.modelRuntime.refresh({ allowNetwork: false });
+      const currentIds = await resolveEnabledModelIds(sessionScopeSource(session));
+      const available = session.modelRuntime.getAvailableSnapshot();
+      const availableIds = available.map(modelScopeId);
+      const targetId = `${provider}/${modelId}`;
+      if (!availableIds.includes(targetId)) throw new Error(`Model not found: ${targetId}`);
+      if (!enabled && session.model !== undefined && modelScopeId(session.model) === targetId) {
+        throw new Error("Current model cannot be disabled");
+      }
+      const nextIds = applyEnabledModelToggle(currentIds, availableIds, targetId, enabled);
+      this.assertTreeNavigationInactive(session, "change enabled models");
+      if (nextIds !== currentIds) this.applyEnabledModelScope(session, available, nextIds);
+      // Respond from a fresh post-edit read (settings + live scope) so the
+      // response is exactly what GET models/catalog returns after the edit,
+      // including pi's normalizations (re-enabling everything collapses the
+      // scope, and an emptied list reads back as "all enabled").
+      return (await this.enabledModelCatalog(session)).map(catalogEntryToClientModel);
+    });
+  }
+
+  /** Atomically expose every model or narrow the enabled scope to the current model. */
+  async setModelScope(ref: PiSessionRef, mode: SessionModelScopeMode): Promise<ClientSessionModelCatalogEntry[]> {
+    await this.assertWritable(ref);
+    const session = await this.getOrOpen(ref);
+    return this.runModelScopeMutation(async () => {
+      this.assertTreeNavigationInactive(session, "change enabled models");
+      await session.modelRuntime.refresh({ allowNetwork: false });
+      const available = session.modelRuntime.getAvailableSnapshot();
+      const availableIds = available.map(modelScopeId);
+      let nextIds: readonly string[] | null = null;
+      if (mode === "current") {
+        const current = session.model;
+        if (current === undefined || !availableIds.includes(modelScopeId(current))) {
+          throw new Error("Current model is unavailable");
+        }
+        nextIds = [modelScopeId(current)];
+      }
+      this.assertTreeNavigationInactive(session, "change enabled models");
+      this.applyEnabledModelScope(session, available, nextIds);
+      return (await this.enabledModelCatalog(session)).map(catalogEntryToClientModel);
+    });
   }
 
   async setModel(ref: PiSessionRef, provider: string, modelId: string): Promise<ClientSessionStatus> {
@@ -4040,7 +4082,13 @@ function sessionScopeSource(session: PiAgentSession): { settingsManager: PiAgent
 }
 
 function catalogEntryToClientModel(entry: EnabledModelCatalogEntry<AgentModel>): ClientSessionModelCatalogEntry {
-  return { ...modelToClientModel(entry.model), provider: entry.model.provider, id: entry.model.id, enabled: entry.enabled };
+  return {
+    ...modelToClientModel(entry.model),
+    provider: entry.model.provider,
+    id: entry.model.id,
+    enabled: entry.enabled,
+    catalogIndex: entry.catalogIndex,
+  };
 }
 
 function notificationIdentityForSession(session: PiAgentSession): { sessionId: string; cwd: string } {

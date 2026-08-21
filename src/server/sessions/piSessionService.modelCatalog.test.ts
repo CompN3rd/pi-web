@@ -96,6 +96,7 @@ describe("PiSessionService model catalog", () => {
 
       expect(catalog.length).toBeGreaterThan(1);
       expect(catalogIds(catalog)).toEqual(snapshotIds);
+      expect(catalog.map((entry) => entry.catalogIndex)).toEqual(snapshotIds.map((_, index) => index));
       expect(catalog.every((entry) => entry.enabled)).toBe(true);
       const first = catalog[0];
       expect(first?.provider).toBe(PROVIDER);
@@ -115,6 +116,8 @@ describe("PiSessionService model catalog", () => {
 
       expect(catalogIds(catalog.slice(0, 2))).toEqual([`${PROVIDER}/${FIRST_MODEL}`, `${PROVIDER}/${DEFAULT_MODEL}`]);
       expect(catalog.slice(0, 2).map((entry) => entry.enabled)).toEqual([true, true]);
+      const naturalIds = catalogIds(modelRuntime.getAvailableSnapshot());
+      expect(catalog.every((entry) => naturalIds[entry.catalogIndex ?? -1] === `${entry.provider}/${entry.id}`)).toBe(true);
       const rest = catalog.slice(2);
       expect(rest.length).toBeGreaterThan(0);
       expect(rest.every((entry) => !entry.enabled)).toBe(true);
@@ -139,6 +142,49 @@ describe("PiSessionService model catalog", () => {
       await expectPersistedEnabledModels(agentDir, remainingIds);
       // The live scope follows immediately: the pickable models exclude the disabled one.
       expect(catalogIds((await service.availableModels(ref)).map((model) => ({ provider: model.provider ?? "", id: model.id ?? "" })))).toEqual(remainingIds);
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("serializes concurrent per-model edits so neither update is lost", async () => {
+    const { service, ref } = await startSessionWithSettings(undefined);
+    try {
+      const current = (await service.status(ref)).model;
+      const currentId = current?.provider === undefined || current.id === undefined ? undefined : `${current.provider}/${current.id}`;
+      const targets = (await service.modelCatalog(ref)).filter((entry) => `${entry.provider}/${entry.id}` !== currentId).slice(0, 2);
+      expect(targets).toHaveLength(2);
+
+      await Promise.all(targets.map((target) => service.setModelEnabled(ref, target.provider, target.id, false)));
+
+      const updated = await service.modelCatalog(ref);
+      for (const target of targets) {
+        expect(updated.find((entry) => entry.provider === target.provider && entry.id === target.id)?.enabled).toBe(false);
+      }
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("atomically narrows to the current model and clears the setting when selecting all", async () => {
+    const { service, ref, agentDir } = await startSessionWithSettings(undefined);
+    try {
+      const status = await service.status(ref);
+      const current = status.model;
+      if (current?.provider === undefined || current.id === undefined) throw new Error("expected a current model");
+      const currentId = `${current.provider}/${current.id}`;
+
+      const narrowed = await service.setModelScope(ref, "current");
+
+      expect(catalogIds(narrowed.filter((entry) => entry.enabled))).toEqual([currentId]);
+      await expectPersistedEnabledModels(agentDir, [currentId]);
+      expect(catalogIds((await service.availableModels(ref)).map((model) => ({ provider: model.provider ?? "", id: model.id ?? "" })))).toEqual([currentId]);
+      await expect(service.setModelEnabled(ref, current.provider, current.id, false)).rejects.toThrow("Current model cannot be disabled");
+
+      const all = await service.setModelScope(ref, "all");
+
+      expect(all.every((entry) => entry.enabled)).toBe(true);
+      await expectPersistedEnabledModels(agentDir, undefined);
     } finally {
       await service.dispose();
     }
