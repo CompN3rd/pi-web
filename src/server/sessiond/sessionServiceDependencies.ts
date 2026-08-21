@@ -29,8 +29,6 @@ export interface SessionServiceDependencyInput {
   askUserEnabled: boolean;
   /** Deployment facts appended to session system prompts; empty when there are none. */
   appendSystemPromptSections: readonly string[];
-  /** Pi prompt templates and skills shipped by enabled plugins; empty when there are none. */
-  pluginSessionResourcePaths: NonNullable<PiSessionServiceDependencies["pluginSessionResourcePaths"]>;
   /** Auto-cancel delay for extension dialogs whose extension set no timeout; `0` waits forever. */
   extensionDialogsTimeoutMs: number;
 }
@@ -58,7 +56,6 @@ export function sessionServiceDependencies(input: SessionServiceDependencyInput)
     subsessionsEnabled: input.spawnTargets !== undefined && input.subsessionsEnabled,
     askUserEnabled: input.askUserEnabled,
     appendSystemPromptSections: input.appendSystemPromptSections,
-    pluginSessionResourcePaths: input.pluginSessionResourcePaths,
     extensionDialogsTimeoutMs: input.extensionDialogsTimeoutMs,
     notificationStore: input.notificationStore,
     unreadStore: input.unreadStore,
