@@ -74,7 +74,6 @@ import type { WorkspaceActivityService } from "../activity/workspaceActivityServ
 import { createAskUserToolDefinition, type AskUserInvocation, type AskUserToolDeps } from "./askUserTool.js";
 import { PendingAskStore, renderAskUserAnswersText, type PendingAskCloseResult, type PendingAskOpenResult } from "./pendingAskStore.js";
 import { PendingExtensionDialogStore, type ExtensionDialogCancelReason } from "./pendingExtensionDialogStore.js";
-import type { PluginSessionResourcePaths } from "../plugins/pluginSessionResources.js";
 import { ExtensionDialogWaiters, effectiveExtensionDialogTimeoutMs, extensionDialogCancelValue } from "./extensionDialogWaiters.js";
 import { DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS } from "../../config.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
@@ -898,32 +897,18 @@ export async function resolveWebProjectTrusted(resolution: WebProjectTrustResolu
 }
 
 /**
- * Resource-loader options that append PI WEB's own system-prompt sections and
- * contribute the Pi prompt templates and skills shipped by enabled plugins.
+ * Resource-loader options that append PI WEB's own system-prompt sections.
  *
  * `appendSystemPromptOverride` composes with what the loader already resolved,
  * so the operator's `SYSTEM.md` / `APPEND_SYSTEM.md` files keep their content
- * and PI WEB's sections land after them. Plugin prompt and skill paths join pi's
- * load order last, so project and user resources with the same name shadow them.
- * Returns `undefined` when there is nothing to add, leaving the loader exactly
- * as pi configures it.
+ * and PI WEB's sections land after them. Returns `undefined` when there is
+ * nothing to append, leaving the loader exactly as pi configures it.
  */
 export function piWebResourceLoaderOptions(
   appendSystemPromptSections: readonly string[],
-  pluginSessionResourcePaths?: PluginSessionResourcePaths,
 ): CreateAgentSessionServicesOptions["resourceLoaderOptions"] | undefined {
-  const promptTemplatePaths = pluginSessionResourcePaths?.promptTemplatePaths ?? [];
-  const skillPaths = pluginSessionResourcePaths?.skillPaths ?? [];
-  if (appendSystemPromptSections.length === 0 && promptTemplatePaths.length === 0 && skillPaths.length === 0) {
-    return undefined;
-  }
-  return {
-    ...(appendSystemPromptSections.length === 0
-      ? {}
-      : { appendSystemPromptOverride: (base: string[]) => [...base, ...appendSystemPromptSections] }),
-    ...(promptTemplatePaths.length === 0 ? {} : { additionalPromptTemplatePaths: [...promptTemplatePaths] }),
-    ...(skillPaths.length === 0 ? {} : { additionalSkillPaths: [...skillPaths] }),
-  };
+  if (appendSystemPromptSections.length === 0) return undefined;
+  return { appendSystemPromptOverride: (base: string[]) => [...base, ...appendSystemPromptSections] };
 }
 
 function createDefaultRuntimeFactory(
@@ -933,9 +918,8 @@ function createDefaultRuntimeFactory(
   subsessions?: SubsessionToolDeps,
   askUser?: AskUserToolDeps,
   appendSystemPromptSections: readonly string[] = [],
-  pluginSessionResourcePaths?: PluginSessionResourcePaths,
 ): PiWebCreateAgentSessionRuntimeFactory {
-  const resourceLoaderOptions = piWebResourceLoaderOptions(appendSystemPromptSections, pluginSessionResourcePaths);
+  const resourceLoaderOptions = piWebResourceLoaderOptions(appendSystemPromptSections);
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, initialThinkingLevel, delegationToolsEnabled }) => {
     // PI WEB always honors pi's project-trust model. When the workspace ships
     // trust-requiring resources, trust is resolved exactly once, mirroring the
@@ -1054,12 +1038,6 @@ export interface PiSessionServiceDependencies {
    * it with container environment facts in Docker deployments.
    */
   appendSystemPromptSections?: readonly string[];
-  /**
-   * Pi prompt templates and skills shipped by enabled plugins, resolved by
-   * sessiond at daemon startup. Plugin resources are fallbacks: project and
-   * user resources with the same name shadow them.
-   */
-  pluginSessionResourcePaths?: PluginSessionResourcePaths;
   /** Daemon-lifetime open-ask state; defaults to an in-memory store in tests. */
   pendingAskStore?: PendingAskStore;
   /** Daemon-lifetime open-dialog state; defaults to an in-memory store in tests. */
@@ -1198,7 +1176,6 @@ export class PiSessionService implements SessionRouteService {
       },
       deps.askUserEnabled === true ? { open: (input) => this.openAsk(input) } : undefined,
       deps.appendSystemPromptSections ?? [],
-      deps.pluginSessionResourcePaths,
     );
     this.createAgentRuntime = deps.createAgentRuntime ?? defaultCreateAgentRuntime;
     this.workspaceActivity = deps.workspaceActivity;
