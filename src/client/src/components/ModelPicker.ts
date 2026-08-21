@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { CommandOption, SessionModelCatalogEntry } from "../api";
+import type { CommandOption, SessionModelCatalogEntry, SessionModelScopeMode } from "../api";
 import { keyboardEventOriginatesFromNativeActivationControl } from "./keyboardEventTarget";
 import "./ModalSurface";
 import { scrollWhenSelected } from "./scrollWhenSelected";
@@ -41,6 +41,33 @@ export function modelCatalogView(catalog: readonly SessionModelCatalogEntry[], q
   return { rows, showGroupHeaders };
 }
 
+export interface ModelCatalogToggleAllPlan {
+  mode: SessionModelScopeMode;
+  /** False when narrowing the scope cannot identify the current model to retain. */
+  canApply: boolean;
+  hasChanges: boolean;
+}
+
+/** Toggle between every model and the smallest usable scope: the current model. */
+export function modelCatalogToggleAllPlan(
+  catalog: readonly SessionModelCatalogEntry[],
+  currentValue: string | undefined,
+): ModelCatalogToggleAllPlan {
+  const enabledEntries = catalog.filter((entry) => entry.enabled);
+  const current = currentValue === undefined
+    ? undefined
+    : catalog.find((entry) => modelCatalogEntryValue(entry) === currentValue);
+  const onlyCurrentEnabled = current?.enabled === true && enabledEntries.length === 1;
+  const mode: SessionModelScopeMode = enabledEntries.length === 0 || onlyCurrentEnabled ? "all" : "current";
+  return {
+    mode,
+    canApply: mode === "all" || current !== undefined,
+    hasChanges: mode === "all"
+      ? enabledEntries.length < catalog.length
+      : current !== undefined && (!current.enabled || enabledEntries.some((entry) => entry !== current)),
+  };
+}
+
 interface ModelPickerRow {
   value: string;
   entry?: SessionModelCatalogEntry | undefined;
@@ -49,8 +76,8 @@ interface ModelPickerRow {
 /**
  * The session model selection dialog. Enabled mode keeps the classic
  * searchable pick list; All models mode lists the machine's full catalog with
- * per-model checkboxes editing pi's enabled-models scope (shared with the pi
- * TUI). Scope is selection UX only, never an authorization boundary.
+ * per-model membership controls editing pi's enabled-models scope (shared with
+ * the pi TUI). Scope is selection UX only, never an authorization boundary.
  */
 @customElement("model-picker")
 export class ModelPicker extends LitElement {
@@ -68,11 +95,14 @@ export class ModelPicker extends LitElement {
    * failure); the checkbox is controlled, so it tracks the catalog, not clicks.
    */
   @property({ attribute: false }) onToggleEnabled?: (provider: string, modelId: string, enabled: boolean) => unknown;
+  /** Atomically applies the bulk availability preset selected by the toggle-all action. */
+  @property({ attribute: false }) onSetScope?: (mode: SessionModelScopeMode) => unknown;
 
   @state() private mode: ModelPickerMode = "enabled";
   @state() private selectedIndex = 0;
   @state() private query = "";
   @state() private pendingToggles: ReadonlySet<string> = new Set();
+  @state() private toggleAllPending = false;
 
   override render() {
     const rows = this.visibleRows();
@@ -91,8 +121,11 @@ export class ModelPicker extends LitElement {
           ${this.renderScopeToggleButton("enabled", "Enabled")}
           ${this.renderScopeToggleButton("all", "All models")}
         </div>
-        <input class="search" placeholder="Search" .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}>
-        <div class="options" tabindex="0">
+        <div class="search-row">
+          <input class="search" placeholder="Search" .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}>
+          ${this.mode === "all" ? this.renderToggleAllButton() : nothing}
+        </div>
+        <div class="options" tabindex="0" aria-busy=${this.membershipChangePending ? "true" : "false"}>
           ${this.mode === "all" ? this.renderCatalogList() : this.renderEnabledList()}
           ${rows.length === 0 ? html`<div class="empty">No matching options</div>` : null}
         </div>
@@ -118,14 +151,34 @@ export class ModelPicker extends LitElement {
     this.selectedIndex = nextIndex >= 0 ? nextIndex : Math.min(this.selectedIndex, Math.max(rows.length - 1, 0));
   }
 
+  private get membershipChangePending(): boolean {
+    return this.toggleAllPending || this.pendingToggles.size > 0;
+  }
+
   private renderScopeToggleButton(mode: ModelPickerMode, label: string): TemplateResult {
-    return html`<button aria-pressed=${this.mode === mode ? "true" : "false"} @click=${() => { this.selectMode(mode); }}>${label}</button>`;
+    return html`<button ?disabled=${this.membershipChangePending} aria-pressed=${this.mode === mode ? "true" : "false"} @click=${() => { this.selectMode(mode); }}>${label}</button>`;
+  }
+
+  private renderToggleAllButton(): TemplateResult {
+    const plan = modelCatalogToggleAllPlan(this.catalog, this.selectedValue);
+    const label = plan.mode === "all" ? "Select all" : "Deselect all";
+    return html`
+      <button
+        class="toggle-all"
+        ?disabled=${!plan.canApply || !plan.hasChanges || this.toggleAllPending || this.pendingToggles.size > 0}
+        aria-describedby="model-scope-status"
+        title=${!plan.canApply ? "The current model is unavailable" : nothing}
+        @click=${() => { this.requestToggleAll(); }}
+      >${label}</button>
+      <span id="model-scope-status" class="scope-status" aria-live="polite">${this.membershipChangePending ? "Updating model availability" : !plan.canApply ? "The current model is unavailable" : nothing}</span>
+    `;
   }
 
   private renderEnabledList(): TemplateResult[] {
     return filterModelOptions(this.options, this.query).map((option, index) => html`
       <button
         class=${index === this.selectedIndex ? "selected" : ""}
+        ?disabled=${this.membershipChangePending}
         aria-current=${index === this.selectedIndex ? "true" : nothing}
         ${scrollWhenSelected(index === this.selectedIndex, option.value)}
         @focus=${() => { this.selectedIndex = index; }}
@@ -154,21 +207,25 @@ export class ModelPicker extends LitElement {
   private renderCatalogRow(entry: SessionModelCatalogEntry, index: number): TemplateResult {
     const value = modelCatalogEntryValue(entry);
     const selected = index === this.selectedIndex;
-    const pending = this.pendingToggles.has(value);
+    const protectsCurrentModel = value === this.selectedValue && entry.enabled;
     return html`
-      <div class="catalog-row ${selected ? "selected" : ""}" ${scrollWhenSelected(selected, value)}>
+      <div class="catalog-row ${selected ? "selected" : ""}" data-model-value=${value} ${scrollWhenSelected(selected, value)}>
         <input
           type="checkbox"
           .checked=${entry.enabled}
-          ?disabled=${pending}
-          aria-label=${`${entry.enabled ? "Disable" : "Enable"} ${value}`}
+          ?disabled=${this.membershipChangePending || protectsCurrentModel}
+          aria-label=${protectsCurrentModel ? `Current model ${value} cannot be deselected` : `${entry.enabled ? "Disable" : "Enable"} ${value}`}
+          title=${protectsCurrentModel ? "The current model must remain enabled" : nothing}
+          @focus=${() => { this.selectedIndex = index; }}
           @click=${(event: MouseEvent) => { this.handleEnableToggleClick(entry, event); }}
         />
         <button
-          class="pick"
+          class="membership"
+          ?disabled=${this.membershipChangePending || protectsCurrentModel}
+          aria-label=${protectsCurrentModel ? `Current model ${value} cannot be deselected` : `${entry.enabled ? "Disable" : "Enable"} ${value}`}
           aria-current=${selected ? "true" : nothing}
           @focus=${() => { this.selectedIndex = index; }}
-          @click=${() => this.onPick?.(value)}
+          @click=${() => { this.requestEnabledToggle(entry); }}
         >
           <span>${entry.id}${value === this.selectedValue ? " ✓ current" : ""}</span>
           <small>${entry.provider}</small>
@@ -211,6 +268,10 @@ export class ModelPicker extends LitElement {
   // navigation idiom, while focused native buttons keep their own semantics.
   private handleKeyDown(event: KeyboardEvent) {
     if (keyboardEventOriginatesFromNativeActivationControl(event)) return;
+    if (this.membershipChangePending && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      return;
+    }
     const rows = this.visibleRows();
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -221,7 +282,8 @@ export class ModelPicker extends LitElement {
     } else if (event.key === "Enter") {
       event.preventDefault();
       const row = rows[this.selectedIndex];
-      if (row !== undefined) this.onPick?.(row.value);
+      if (row?.entry !== undefined) this.requestEnabledToggle(row.entry);
+      else if (row !== undefined) this.onPick?.(row.value);
     } else if (event.key === " " && this.mode === "all") {
       // Space toggles the selected row only when it did not land on an input:
       // a focused checkbox toggles through its own click and the search input
@@ -244,11 +306,29 @@ export class ModelPicker extends LitElement {
 
   private requestEnabledToggle(entry: SessionModelCatalogEntry): void {
     const value = modelCatalogEntryValue(entry);
-    if (this.pendingToggles.has(value)) return;
+    if ((value === this.selectedValue && entry.enabled) || this.toggleAllPending || this.pendingToggles.has(value)) return;
     const pending = new Set(this.pendingToggles);
     pending.add(value);
     this.pendingToggles = pending;
     void this.settleEnabledToggle(value, entry);
+  }
+
+  private requestToggleAll(): void {
+    if (this.toggleAllPending || this.pendingToggles.size > 0) return;
+    const plan = modelCatalogToggleAllPlan(this.catalog, this.selectedValue);
+    if (!plan.canApply || !plan.hasChanges) return;
+    this.toggleAllPending = true;
+    void this.settleToggleAll(plan.mode);
+  }
+
+  private async settleToggleAll(mode: SessionModelScopeMode): Promise<void> {
+    try {
+      await this.onSetScope?.(mode);
+    } catch (error: unknown) {
+      console.warn(`Failed to ${mode === "all" ? "enable all models" : "keep only the current model"}`, error);
+    } finally {
+      this.toggleAllPending = false;
+    }
   }
 
   private async settleEnabledToggle(value: string, entry: SessionModelCatalogEntry): Promise<void> {
@@ -275,14 +355,19 @@ export class ModelPicker extends LitElement {
     .options { min-height: 0; overflow: auto; outline: none; }
     button { border: 0; background: transparent; color: var(--pi-text); cursor: pointer; }
     header button { font-size: 20px; color: var(--pi-muted); }
-    input.search { margin: 10px 12px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); font: var(--pi-control-font-size, 16px) var(--pi-control-font-family, system-ui, sans-serif); padding: 8px 10px; outline: none; }
+    .search-row { display: flex; align-items: center; gap: 8px; margin: 10px 12px; }
+    input.search { flex: 1; min-width: 0; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); font: var(--pi-control-font-size, 16px) var(--pi-control-font-family, system-ui, sans-serif); padding: 8px 10px; outline: none; }
     input.search:focus { border-color: var(--pi-accent); }
+    .toggle-all { flex: none; padding: 8px 10px; border: 1px solid var(--pi-border); border-radius: 8px; white-space: nowrap; }
+    .toggle-all:hover:not(:disabled) { background: var(--pi-selection-bg); }
+    .toggle-all:disabled { cursor: default; opacity: 0.55; }
+    .scope-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .options > button { display: block; width: 100%; padding: 10px 12px; border-bottom: 1px solid var(--pi-border-muted); text-align: left; }
     .options > button.selected, .options > button:hover { background: var(--pi-selection-bg); }
     .catalog-row { display: flex; align-items: center; border-bottom: 1px solid var(--pi-border-muted); }
     .catalog-row.selected, .catalog-row:hover { background: var(--pi-selection-bg); }
     .catalog-row input[type="checkbox"] { margin: 0 0 0 12px; accent-color: var(--pi-accent); }
-    .catalog-row .pick { flex: 1; min-width: 0; display: block; padding: 10px 12px; text-align: left; }
+    .catalog-row .membership { flex: 1; min-width: 0; display: block; padding: 10px 12px; text-align: left; }
     .group-header { padding: 8px 12px 4px; color: var(--pi-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
     small { display: block; margin-top: 4px; color: var(--pi-muted); }
     .empty { padding: 24px; color: var(--pi-muted); text-align: center; }

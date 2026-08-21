@@ -1,4 +1,4 @@
-import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, type CommandResult, type ExtensionDialogAnswer, type ExtensionDialogCloseReason, type ExtensionDialogCloseResponse, type ExtensionDialogOutcome, type PendingAskUser, type PendingExtensionDialog, type PromptAttachment, type QueuedSessionMessage, type SessionActivity, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionInfo, type SessionModelCatalogEntry, type SessionRef, type SessionStatus, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type Workspace } from "../api";
+import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, type CommandResult, type ExtensionDialogAnswer, type ExtensionDialogCloseReason, type ExtensionDialogCloseResponse, type ExtensionDialogOutcome, type PendingAskUser, type PendingExtensionDialog, type PromptAttachment, type QueuedSessionMessage, type SessionActivity, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionInfo, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionRef, type SessionStatus, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type Workspace } from "../api";
 import type { AppState, ClosedExtensionDialog } from "../appState";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
 import { textMessage } from "../chatMessages";
@@ -827,6 +827,19 @@ export class SessionController {
     if (!session || session.archived === true) return undefined;
     try {
       return (await this.api.setModelEnabled(session, provider, modelId, enabled, selectedMachineId(this.getState()))).models;
+    } catch (error) {
+      this.setState({ error: String(error) });
+      return undefined;
+    }
+  }
+
+  /** Atomically switch between an unrestricted catalog and the current model alone. */
+  async setModelScope(mode: SessionModelScopeMode): Promise<SessionModelCatalogEntry[] | undefined> {
+    const state = this.getState();
+    const session = state.selectedSession;
+    if (!session || session.archived === true) return undefined;
+    try {
+      return (await this.api.setModelScope(session, mode, selectedMachineId(state))).models;
     } catch (error) {
       this.setState({ error: String(error) });
       return undefined;

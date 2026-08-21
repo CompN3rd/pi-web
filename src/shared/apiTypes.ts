@@ -989,6 +989,9 @@ export interface SessionModelCatalogResponse {
   models: SessionModelCatalogEntry[];
 }
 
+/** Canonical model-scope presets exposed by the model picker's bulk toggle. */
+export type SessionModelScopeMode = "all" | "current";
+
 // Domain type is owned by pi and re-exported from the shared thinking-levels
 // module. Wire/data fields below intentionally use `string` so an unknown level
 // from a newer pi runtime parses and renders gracefully instead of failing.

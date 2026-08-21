@@ -17,6 +17,7 @@ describe("model-picker Enabled mode", () => {
     expect(deepActiveElement()).toBe(searchInput(picker));
     expect(scopeToggle(picker, "Enabled").getAttribute("aria-pressed")).toBe("true");
     expect(scopeToggle(picker, "All models").getAttribute("aria-pressed")).toBe("false");
+    expect(picker.shadowRoot?.querySelector("button.toggle-all")).toBeNull();
     expect(enabledRows(picker).map((row) => rowLabel(row))).toEqual(["gpt-5", "claude-sonnet-4-5"]);
     expect(selectedRowText(picker)).toContain("claude-sonnet-4-5");
   });
@@ -51,7 +52,7 @@ describe("model-picker Enabled mode", () => {
 
 describe("model-picker All models mode", () => {
   it("lists the catalog enabled-first with group headers and per-row membership checkboxes", async () => {
-    const picker = await mountPicker();
+    const picker = await mountPicker({ selectedValue: "openai/gpt-5" });
 
     scopeToggle(picker, "All models").click();
     await settleRenderedDialog(picker);
@@ -64,6 +65,56 @@ describe("model-picker All models mode", () => {
     ]);
     expect(catalogRows(picker).map((row) => rowCheckbox(row).checked)).toEqual([true, true, false, false]);
     expect(groupHeaders(picker)).toEqual(["Enabled", "Other models"]);
+    expect(toggleAllButton(picker).textContent.trim()).toBe("Deselect all");
+    const currentRow = catalogRow(picker, "openai/gpt-5");
+    expect(rowCheckbox(currentRow).disabled).toBe(true);
+    expect(membershipButton(currentRow).disabled).toBe(true);
+  });
+
+  it("uses one atomic action to narrow the scope and blocks overlapping edits while pending", async () => {
+    let resolveScope: (() => void) | undefined;
+    const onSetScope = vi.fn(() => new Promise<void>((resolve) => { resolveScope = resolve; }));
+    const picker = await mountPicker({ selectedValue: "openai/gpt-5", onSetScope });
+    scopeToggle(picker, "All models").click();
+    await settleRenderedDialog(picker);
+
+    toggleAllButton(picker).click();
+    await settleRenderedDialog(picker);
+
+    expect(onSetScope).toHaveBeenCalledWith("current");
+    expect(toggleAllButton(picker).disabled).toBe(true);
+    expect(catalogRows(picker).every((row) => rowCheckbox(row).disabled && membershipButton(row).disabled)).toBe(true);
+    expect(scopeToggle(picker, "Enabled").disabled).toBe(true);
+    expect(optionsList(picker).getAttribute("aria-busy")).toBe("true");
+    const statusId = toggleAllButton(picker).getAttribute("aria-describedby");
+    expect(requiredElement(picker.shadowRoot?.getElementById(statusId ?? ""), "model scope status").textContent).toBe("Updating model availability");
+
+    resolveScope?.();
+    await vi.waitFor(() => {
+      expect(toggleAllButton(picker).disabled).toBe(false);
+    });
+    expect(optionsList(picker).getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("selects the whole catalog when only the current model remains, even while search filters the rows", async () => {
+    const onSetScope = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const picker = await mountPicker({
+      selectedValue: "openai/gpt-5",
+      catalog: defaultCatalog().map((row) => ({ ...row, enabled: row.id === "gpt-5" })),
+      onSetScope,
+    });
+    scopeToggle(picker, "All models").click();
+    await settleRenderedDialog(picker);
+    typeSearch(picker, "gpt");
+    await settleRenderedDialog(picker);
+
+    expect(toggleAllButton(picker).textContent.trim()).toBe("Select all");
+    expect(catalogRows(picker)).toHaveLength(2);
+    toggleAllButton(picker).click();
+
+    await vi.waitFor(() => {
+      expect(onSetScope).toHaveBeenCalledWith("all");
+    });
   });
 
   it("marks the current model and selects it when switching modes", async () => {
@@ -142,25 +193,43 @@ describe("model-picker All models mode", () => {
     expect(groupHeaders(picker)).toEqual([]);
   });
 
-  it("picks a model by row click and by Enter, leaving pick behavior unchanged", async () => {
+  it("toggles availability by row click and Enter without picking a model", async () => {
     const onPick = vi.fn<(value: string) => void>();
-    const picker = await mountPicker({ onPick });
+    const onToggleEnabled = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const picker = await mountPicker({ onPick, onToggleEnabled });
     scopeToggle(picker, "All models").click();
     await settleRenderedDialog(picker);
 
-    pickButton(catalogRow(picker, "google/gemini-2.5-pro")).click();
-    expect(onPick).toHaveBeenCalledWith("google/gemini-2.5-pro");
+    membershipButton(catalogRow(picker, "google/gemini-2.5-pro")).click();
+    expect(onToggleEnabled).toHaveBeenCalledWith("google", "gemini-2.5-pro", true);
+    expect(onPick).not.toHaveBeenCalled();
 
+    await vi.waitFor(() => {
+      expect(membershipButton(catalogRow(picker, "google/gemini-2.5-pro")).disabled).toBe(false);
+    });
     pressKey(searchInput(picker), "ArrowDown");
     pressKey(searchInput(picker), "ArrowDown");
-    await settleRenderedDialog(picker);
     pressKey(searchInput(picker), "Enter");
-    expect(onPick).toHaveBeenLastCalledWith("openai/gpt-4o");
+    expect(onToggleEnabled).toHaveBeenLastCalledWith("openai", "gpt-4o", true);
+    expect(onPick).not.toHaveBeenCalled();
   });
 
-  it("toggles the selected row with Space, but lets the search input keep its spaces", async () => {
+  it("keeps keyboard activation anchored to a focused checkbox", async () => {
     const onToggleEnabled = vi.fn<() => Promise<void>>(() => Promise.resolve());
     const picker = await mountPicker({ onToggleEnabled });
+    scopeToggle(picker, "All models").click();
+    await settleRenderedDialog(picker);
+
+    const checkbox = rowCheckbox(catalogRow(picker, "openai/gpt-4o"));
+    checkbox.focus();
+    pressKey(checkbox, "Enter");
+
+    expect(onToggleEnabled).toHaveBeenCalledWith("openai", "gpt-4o", true);
+  });
+
+  it("toggles non-current rows with Space, but protects the current row and lets search keep its spaces", async () => {
+    const onToggleEnabled = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const picker = await mountPicker({ selectedValue: "openai/gpt-5", onToggleEnabled });
     scopeToggle(picker, "All models").click();
     await settleRenderedDialog(picker);
 
@@ -168,7 +237,11 @@ describe("model-picker All models mode", () => {
     expect(onToggleEnabled).not.toHaveBeenCalled();
 
     pressKey(optionsList(picker), " ");
-    expect(onToggleEnabled).toHaveBeenCalledWith("openai", "gpt-5", false);
+    expect(onToggleEnabled).not.toHaveBeenCalled();
+
+    pressKey(optionsList(picker), "ArrowDown");
+    pressKey(optionsList(picker), " ");
+    expect(onToggleEnabled).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-5", false);
   });
 
   it("keeps the selection anchored to the same row when a toggle regroups the catalog", async () => {
@@ -202,6 +275,7 @@ interface ModelPickerProps {
   onPick?: (value: string) => void;
   onCancel?: () => void;
   onToggleEnabled?: (provider: string, modelId: string, enabled: boolean) => Promise<void>;
+  onSetScope?: (mode: "all" | "current") => Promise<void>;
 }
 
 function entry(provider: string, id: string, enabled: boolean, name?: string): SessionModelCatalogEntry {
@@ -228,6 +302,7 @@ async function mountPicker(props: ModelPickerProps = {}): Promise<ModelPicker> {
   if (props.onPick !== undefined) picker.onPick = props.onPick;
   if (props.onCancel !== undefined) picker.onCancel = props.onCancel;
   if (props.onToggleEnabled !== undefined) picker.onToggleEnabled = props.onToggleEnabled;
+  if (props.onSetScope !== undefined) picker.onSetScope = props.onSetScope;
   document.body.append(picker);
   await settleRenderedDialog(picker);
   return picker;
@@ -247,6 +322,10 @@ function scopeToggle(picker: ModelPicker, label: string): HTMLButtonElement {
   return requiredElement(button, `model-picker ${label} scope toggle`);
 }
 
+function toggleAllButton(picker: ModelPicker): HTMLButtonElement {
+  return requiredElement(picker.shadowRoot?.querySelector<HTMLButtonElement>("button.toggle-all"), "model-picker toggle-all button");
+}
+
 function enabledRows(picker: ModelPicker): HTMLButtonElement[] {
   return [...(picker.shadowRoot?.querySelectorAll<HTMLButtonElement>(".options > button") ?? [])];
 }
@@ -261,16 +340,17 @@ function catalogRow(picker: ModelPicker, value: string): HTMLElement {
 }
 
 function rowValue(row: HTMLElement): string {
-  const label = requiredElement(row.querySelector<HTMLInputElement>("input[type='checkbox']"), "catalog row checkbox").getAttribute("aria-label") ?? "";
-  return label.replace(/^(Enable|Disable) /, "");
+  const value = row.dataset["modelValue"];
+  if (value === undefined) throw new Error("catalog row model value was unavailable");
+  return value;
 }
 
 function rowCheckbox(row: HTMLElement): HTMLInputElement {
   return requiredElement(row.querySelector<HTMLInputElement>("input[type='checkbox']"), "catalog row checkbox");
 }
 
-function pickButton(row: HTMLElement): HTMLButtonElement {
-  return requiredElement(row.querySelector<HTMLButtonElement>("button.pick"), "catalog row pick button");
+function membershipButton(row: HTMLElement): HTMLButtonElement {
+  return requiredElement(row.querySelector<HTMLButtonElement>("button.membership"), "catalog row membership button");
 }
 
 function groupHeaders(picker: ModelPicker): string[] {
