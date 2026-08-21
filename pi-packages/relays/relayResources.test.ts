@@ -3,11 +3,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Guards the shipped layout of the plugin's Pi resources: sessiond injects
- * `prompts/` and `skills/` into sessions by convention, so a renamed or
- * malformed file would silently drop the feature.
+ * Guards the shipped layout of the Relay Pi package resources: Pi loads
+ * `prompts/` and `skills/` from installed packages by convention, so a renamed
+ * or malformed file would silently drop the feature.
  */
-describe("relays plugin Pi resources", () => {
+describe("Relay Pi package resources", () => {
   it.each(["relay", "relay-worktree"])("ships the /%s prompt template with frontmatter and argument expansion", async (name) => {
     const content = await readFile(join(__dirname, "prompts", `${name}.md`), "utf8");
     const frontmatter = frontmatterOf(content);
