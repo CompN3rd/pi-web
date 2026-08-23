@@ -47,6 +47,23 @@ The charter must require every runner to follow the repository's own canonical i
 
 When the repository's canonical instructions name an implementation and review quality standard, designate it as the quality standard for every leg. When there is none, hold legs to ordinary professional standards: focused, minimal, verified changes consistent with the surrounding repository.
 
+## Proportionate robustness and graceful failure
+
+“Good enough” means satisfying the chartered behavior and preserving material invariants without trying to automate every theoretically possible scenario. When considering an edge case, race, or missing business rule, assess:
+
+- whether the charter or an existing contract requires it;
+- whether it belongs to a main success path or an expected failure path;
+- its plausible likelihood in the recorded operating context;
+- the consequence if it occurs;
+- whether failure would be observable, bounded, and recoverable; and
+- whether a practical manual recovery path exists.
+
+For scenarios outside the main success paths, expected failure paths, and specific objectives of the work, lean toward a clear, bounded failure with a practical manual recovery path rather than adding automatic handling. Automatic handling is warranted when required by contract, reasonably likely in normal operation, or justified by the consequence of failure. Do not add speculative handling merely because a state is theoretically possible.
+
+An explicit failure can be acceptable behavior when successful automatic handling is not part of the finish line. False success, swallowed failures, and silent or ambiguous state are not acceptable. At the appropriate boundary, stop unsafe follow-on effects, preserve or restore material invariants, communicate failure to the caller or user when applicable, and emit or propagate enough contextual information for the failure to be traced and acted upon.
+
+Manual recovery is valid only when the condition is reliably surfaced, durable state remains safe and reconcilable, and enough context is retained for someone to diagnose and resolve it. Do not defer a scenario merely because it is uncommon when it can credibly corrupt durable state, weaken security or authorization, cause an irreversible or unreconciled external effect, or leave no practical recovery path.
+
 ## Working location
 
 This prompt is the worktree variant of the generic Relay prompt. Create a new branch and worktree for this Relay, unless the task explicitly names an existing checkout or worktree to use. If the intended target is ambiguous, prefer asking the user over guessing. Create the packet inside the worktree, not the dispatching checkout.
@@ -83,11 +100,15 @@ The phase immediately before delivery is a whole-work review:
 
 The whole-work reviewer decides how much independent review is proportionate and records that decision in `log.md`. It may review directly or use `spawn_subsession` for focused or independent report-only reviews, then `yield_to_subsessions` and consolidate their findings. Subreview prompts must identify the repository, base, exact diff scope, charter finish line and designated supporting material, and canonical quality instructions. They must prohibit all file changes, including Relay packet changes. The consolidating reviewer is the sole packet writer. Do not assume particular model IDs are available. The Relay handoff remains one `spawn_session` at the end of the leg.
 
+A finding is not blocking merely because a scenario is possible. Classify it using the charter and the proportionality factors above. Treat required or normal behavior, credible invariant violations, false success, silent failure, and failures without a practical recovery path as blocking.
+
+An uncommon scenario may be classified as non-blocking or deferred when it is outside the agreed objectives, bounded in impact, reliably detected, and recoverable through a practical response appropriate to the recorded operating context. Record such a finding only when it is material or likely to recur in later reviews; do not create a backlog of every hypothetical edge case.
+
 ### Review decision continuity
 
 When a finding disposition may matter to a later reviewer, create or update `review-decisions.md` in the Relay packet and point to it from `status.md`. Before reviewing, read that register when status references it; do not reconstruct decisions by reading `log.md` end-to-end.
 
-Give each finding that may recur a stable identifier and record its concern, disposition, rationale, evidence, decision authority, applicability, and revisit conditions. A blocking finding stays active until a later review records remediation evidence. A remediated disposition cites the fixing commit and verification; not-applicable cites concrete evidence; accepted-risk and out-of-scope cite an exact charter clause or explicit human direction. A reviewer cannot waive an in-scope defect unilaterally.
+Give each finding that may recur a stable identifier and record its concern, disposition, rationale, evidence, decision authority, applicability, and revisit conditions. A blocking finding stays active until a later review records remediation evidence. A remediated disposition cites the fixing commit and verification; not-applicable cites concrete evidence; accepted-risk and out-of-scope cite an exact charter clause or explicit human direction. A deferred or non-blocking edge-case disposition cites the applicable charter assumptions, the likelihood and consequence assessment, how the condition will be detected, and the practical recovery path. A reviewer cannot waive an in-scope defect unilaterally.
 
 Do not create a duplicate finding when an existing record covers the concern; update or reaffirm that record. A later reviewer honors a supported disposition while its facts and conditions remain unchanged, but may reopen it for materially new evidence, changed applicability, or a specific demonstrable error or charter inconsistency in the prior decision. Record the reopening rationale and what supersedes the old disposition.
 
@@ -109,6 +130,7 @@ The final leg performs the delivery mechanism recorded in the charter:
 In addition to the charter required by the `relay` skill, require that:
 
 - the charter records the interpreted finish line, minimum acceptance criteria, preserved behavior or contracts, non-goals, material assumptions, and any outcome-oriented work packages used;
+- the charter defines a proportionate quality bar for completion using the repository's canonical quality standard and the guidance above; when material, it records the operating assumptions that affect that bar, the invariants that must survive failure, and which uncommon scenarios may fail explicitly or use manual intervention rather than requiring automatic handling, without attempting to enumerate every hypothetical case;
 - the charter defines adaptive leg sizing and task selection, keeps route assumptions provisional, and does not promise a fixed total leg count;
 - when bounded transitional checkpoints are permitted, the charter defines their breakage budget, last-known-functional reference, recovery action, uninterrupted restoration milestone, and safety constraints;
 - the charter defines durable review-decision continuity, with a compact `review-decisions.md` subordinate to the charter, created only when a disposition needs to survive into later reviews, and continuously referenced by status until delivery;
