@@ -117,6 +117,16 @@ describe("federated route contract", () => {
     expect(FEDERATED_WEBSOCKET_ROUTES.some((path) => path.includes("trust"))).toBe(false);
   });
 
+  it("allowlists model catalog reads and scope edits without a new WebSocket", () => {
+    expect(FEDERATED_HTTP_ROUTES.filter((route) => route.path.includes("/models"))).toEqual([
+      { method: "GET", path: "/sessions/:sessionId/models" },
+      { method: "GET", path: "/sessions/:sessionId/models/catalog" },
+      { method: "POST", path: "/sessions/:sessionId/models/enabled" },
+      { method: "POST", path: "/sessions/:sessionId/models/scope" },
+    ]);
+    expect(FEDERATED_WEBSOCKET_ROUTES.some((path) => path.includes("models"))).toBe(false);
+  });
+
   it("covers machine-scoped client HTTP calls with remote proxy routes", async () => {
     const fetchMock = vi.fn<FetchLike>(() => Promise.resolve(jsonResponse({})));
     vi.stubGlobal("fetch", fetchMock);
@@ -166,6 +176,9 @@ describe("federated route contract", () => {
       ignoreParseFailure(sessionsApi.answerDialog(session, "dialog 1", true, machineId)),
       ignoreParseFailure(sessionsApi.cancelDialog(session, "dialog 1", machineId)),
       ignoreParseFailure(sessionsApi.models(session, machineId)),
+      ignoreParseFailure(sessionsApi.modelCatalog(session, machineId)),
+      ignoreParseFailure(sessionsApi.setModelEnabled(session, "openai", "gpt", true, machineId)),
+      ignoreParseFailure(sessionsApi.setModelScope(session, "current", machineId)),
       ignoreParseFailure(sessionsApi.setModel(session, "openai", "gpt", machineId)),
       ignoreParseFailure(sessionsApi.cycleModel(session, "forward", machineId)),
       ignoreParseFailure(sessionsApi.thinkingLevels(session, machineId)),

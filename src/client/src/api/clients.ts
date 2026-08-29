@@ -1,4 +1,4 @@
-import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, RunTerminalCommandInput, SessionBulkMutationRef, SessionCleanupRequest, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, TerminalCommandRun, TerminalCommandRunFilter, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
+import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, RunTerminalCommandInput, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, TerminalCommandRun, TerminalCommandRunFilter, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { resolveAppUrl } from "../appUrl";
 import { request } from "./http";
 import {
@@ -22,6 +22,7 @@ import {
   parseMachinesResponse,
   parseMessagePage,
   parseModelSelectionResponse,
+  parseSessionModelCatalogResponse,
   parseMoveWorkspaceFileResponse,
   parseOAuthFlowState,
   parsePiPackageMutationResponse,
@@ -233,6 +234,9 @@ export const sessionsApi = {
   answerDialog: (session: SessionRef, dialogId: string, value: ExtensionDialogAnswer, machineId = "local") => request(sessionPath(session, "dialogs/answer", machineId), parseExtensionDialogCloseResponse, { method: "POST", body: sessionBody(session, { dialogId, value }) }),
   cancelDialog: (session: SessionRef, dialogId: string, machineId = "local") => request(sessionPath(session, "dialogs/cancel", machineId), parseExtensionDialogCloseResponse, { method: "POST", body: sessionBody(session, { dialogId }) }),
   models: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "models", machineId), parseModelSelectionResponse),
+  modelCatalog: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "models/catalog", machineId), parseSessionModelCatalogResponse),
+  setModelEnabled: (session: SessionRef, provider: string, modelId: string, enabled: boolean, machineId = "local") => request(sessionPath(session, "models/enabled", machineId), parseSessionModelCatalogResponse, { method: "POST", body: sessionBody(session, { provider, modelId, enabled }) }),
+  setModelScope: (session: SessionRef, mode: SessionModelScopeMode, machineId = "local") => request(sessionPath(session, "models/scope", machineId), parseSessionModelCatalogResponse, { method: "POST", body: sessionBody(session, { mode }) }),
   setModel: (session: SessionRef, provider: string, modelId: string, machineId = "local") => request(sessionPath(session, "model", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { provider, modelId }) }),
   cycleModel: (session: SessionRef, direction: "forward" | "backward", machineId = "local") => request(sessionPath(session, "model/cycle", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { direction }) }),
   thinkingLevels: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "thinking-levels", machineId), parseThinkingLevelsResponse),
