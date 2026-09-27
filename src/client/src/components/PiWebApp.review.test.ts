@@ -59,7 +59,7 @@ describe("PiWebApp workspace panel context review adapter", () => {
     expect(authoring.review.total()).toBe(0);
   });
 
-  it("exposes invalidateFile (core-only, for CodeViewer staleness invalidation) alongside the public review service", () => {
+  it("exposes invalidateFile for the Files plugin's source staleness checks", () => {
     const app = createApp();
     setAppState(app, { ...initialAppState(), selectedWorkspace: workspace, workspaces: [workspace], selectedSession: sessionInfo("session-1") });
     const context = createWorkspacePanelContext(app, workspace);
@@ -70,9 +70,8 @@ describe("PiWebApp workspace panel context review adapter", () => {
     context.review.submitDraft();
     expect(context.review.countForFile("src/a.ts")).toBe(1);
 
-    const invalidateFile: unknown = Reflect.get(context.review, "invalidateFile");
-    if (typeof invalidateFile !== "function") throw new Error("Expected the review adapter to expose invalidateFile");
-    Reflect.apply(invalidateFile, context.review, ["src/a.ts", "different-hash"]);
+    if (context.review.invalidateFile === undefined) throw new Error("Expected the review adapter to expose invalidateFile");
+    context.review.invalidateFile("src/a.ts", "different-hash");
 
     expect(context.review.countForFile("src/a.ts")).toBe(0);
   });

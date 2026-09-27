@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { hashSource } from "./reviewHash";
+import { hashSource as filesSourceHash } from "../../../../pi-web-plugins/files/reviewHash";
 
 describe("hashSource", () => {
+  it.each(["", "a\nb\n", "const emoji = '😀';\r\n"])("keeps the Files plugin fingerprint compatible with the host: %j", (text) => {
+    expect(filesSourceHash(text)).toBe(hashSource(text));
+  });
   it("is stable for the same input", () => {
     expect(hashSource("hello world")).toBe(hashSource("hello world"));
   });

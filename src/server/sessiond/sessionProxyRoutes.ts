@@ -44,6 +44,9 @@ export function registerSessionProxyRoutes(app: FastifyInstance, daemon: Session
     bridgeSockets(socket, daemon.connectWebSocket("/events"));
   });
 
+  app.post(`${prefix}/projects`, (request, reply) => proxy(request, reply));
+  app.delete(`${prefix}/projects/:projectId`, (request, reply) => proxy(request, reply));
+
   app.all(`${prefix}/status`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/notices`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/notices/dismiss`, (request, reply) => proxy(request, reply));

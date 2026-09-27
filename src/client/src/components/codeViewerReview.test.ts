@@ -3,10 +3,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { computeDragRange, buildReviewExtensions, reviewGutterDomEventHandlers, reviewRefreshEffect, reviewThemeSpec, reviewWidgetHostStyle } from "./codeViewerReview";
-import { hashSource } from "../review/reviewHash";
-import type { ReviewComment } from "../review/reviewTypes";
-import type { WorkspaceReview, WorkspaceReviewDraft, WorkspaceReviewLineRef } from "../plugins/types";
+import { computeDragRange, buildReviewExtensions, reviewGutterDomEventHandlers, reviewRefreshEffect, reviewThemeSpec, reviewWidgetHostStyle } from "../../../../pi-web-plugins/files/codeViewerReview";
+import { hashSource } from "../../../../pi-web-plugins/files/reviewHash";
+import type { ReviewComment, WorkspaceReview, WorkspaceReviewDraft, WorkspaceReviewLineRef } from "@jmfederico/pi-web/plugin-api";
 import "./ReviewThread";
 
 describe("computeDragRange", () => {

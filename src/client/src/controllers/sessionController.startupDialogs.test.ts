@@ -87,7 +87,7 @@ function beginPendingStart(harness: PendingStartHarness): { start: Promise<void>
   const start = harness.controller.startSession();
   const tempId = harness.state.current.selectedSession?.id;
   if (tempId === undefined) throw new Error("Expected a pending-start row to be selected");
-  if (!tempId.startsWith("pending-session-")) throw new Error("Expected a pending-start row to be selected");
+  if (!tempId.startsWith("creating:")) throw new Error("Expected a pending-start row to be selected");
   return { start, tempId };
 }
 
@@ -352,7 +352,7 @@ describe("SessionController session_start dialog startup reachability", () => {
     harness.startRequest.reject(new Error("create exploded"));
     await start;
 
-    expect(harness.state.current.error).toBe("Failed to start session: create exploded");
+    expect(Object.values(harness.state.current.browserErrors).map((error) => error.message)).toContain("Failed to start session: create exploded");
     expect(harness.state.current.pendingDialogs).toEqual([]);
     expect(closeSpy).toHaveBeenCalled();
 

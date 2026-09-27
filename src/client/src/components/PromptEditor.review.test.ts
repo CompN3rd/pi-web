@@ -212,18 +212,21 @@ describe("PromptEditor review-bearing send flow", () => {
     expect(onReviewCompleteSend).not.toHaveBeenCalled();
   });
 
-  it("treats an onSend resolving undefined (legacy void callers) as success", async () => {
+  it("retains comments when onSend does not confirm successful delivery", async () => {
     const editor = new PromptEditor();
     editor.reviewComments = [comment("review-1", "src/a.ts", 1, 1, "fix this")];
     editor.onReviewBeginSend = () => snapshot();
     const onReviewCompleteSend = vi.fn();
     editor.onReviewCompleteSend = onReviewCompleteSend;
+    const onReviewAbortSend = vi.fn();
+    editor.onReviewAbortSend = onReviewAbortSend;
     editor.onSend = vi.fn().mockResolvedValue(undefined);
     await mount(editor);
 
     await callSend(editor);
 
-    expect(onReviewCompleteSend).toHaveBeenCalledWith(["review-1"]);
+    expect(onReviewCompleteSend).not.toHaveBeenCalled();
+    expect(onReviewAbortSend).toHaveBeenCalledOnce();
   });
 });
 

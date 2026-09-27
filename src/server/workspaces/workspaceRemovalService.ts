@@ -7,7 +7,7 @@ import {
   WORKSPACE_REMOVAL_OPERATION_TIMEOUT_MS,
 } from "../../shared/workspaceRemovalProtocol.js";
 import type { Project } from "../types.js";
-import type { RunTerminalCommandOptions } from "../terminals/terminalService.js";
+import type { RunTerminalCommandOptions } from "../terminals/requiredTerminalService.js";
 import {
   WorkspaceProviderRemovalError,
   type WorkspaceProviderRemovalTarget,
@@ -65,6 +65,8 @@ export class WorkspaceRemovalService {
   private readonly preRemoveHook: WorktreePreRemoveHookProbe;
   private readonly notices: Pick<ServerNoticeCreator, "record"> | undefined;
   private readonly flights = new Map<string, WorkspaceRemovalFlight>();
+  private readonly shutdown = new AbortController();
+  private closePromise: Promise<void> | undefined;
 
   constructor(
     private readonly providers: WorkspaceRemovalProvider,
@@ -82,6 +84,7 @@ export class WorkspaceRemovalService {
     precondition: string,
     signal?: AbortSignal,
   ): Promise<TerminalCommandRun> {
+    throwIfAborted(this.shutdown.signal);
     let expectedPrecondition: string;
     try {
       expectedPrecondition = requireWorkspaceRemovalPrecondition(precondition);
@@ -117,6 +120,21 @@ export class WorkspaceRemovalService {
       () => { this.finishFlight(key, flight); },
     );
     return await this.waitForFlight(flight, signal);
+  }
+
+  /** Cancels removal orchestration before the required Terminal capability is disposed. */
+  closeAll(reason = "Session daemon shutdown"): Promise<void> {
+    this.closePromise ??= this.closeRemovalFlights(reason);
+    return this.closePromise;
+  }
+
+  private async closeRemovalFlights(reason: string): Promise<void> {
+    if (!this.shutdown.signal.aborted) this.shutdown.abort(new DOMException(reason, "AbortError"));
+    const flights = [...this.flights.values()];
+    for (const flight of flights) {
+      if (!flight.controller.signal.aborted) flight.controller.abort(abortError(this.shutdown.signal));
+    }
+    await Promise.allSettled(flights.map(({ promise }) => promise));
   }
 
   private async executeRemoval(
@@ -171,6 +189,10 @@ export class WorkspaceRemovalService {
             title: plan.title,
             command,
             metadata: workspaceDeletionMetadata(target),
+            failureNotice: {
+              message: "Workspace removal failed. See terminal output.",
+              context: { targetWorkspaceId: target.id },
+            },
           });
         } catch (error) {
           throw new WorkspaceRemovalError(
@@ -188,7 +210,8 @@ export class WorkspaceRemovalService {
         severity: "error",
         message: `Workspace removal failed: ${errorMessage(failure)}`,
         source: workspaceDeleteOperation,
-        context: { projectId: project.id, workspaceId },
+        scope: { projectId: project.id },
+        context: { targetWorkspaceId: workspaceId },
       });
       throw failure;
     }

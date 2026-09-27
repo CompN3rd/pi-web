@@ -13,6 +13,18 @@ export interface ServerNoticeProjectionView {
   notices: ServerNotice[];
 }
 
+/** Selected front-end namespace used to project a machine's complete notice snapshot. */
+export interface ServerNoticeDisplayContext {
+  projectId?: string;
+  workspaceId?: string;
+  sessionId?: string;
+}
+
+/** Keep the server snapshot complete and scope only its front-end presentation. */
+export function visibleServerNotices(notices: readonly ServerNotice[], context: ServerNoticeDisplayContext): ServerNotice[] {
+  return notices.filter((notice) => serverNoticeIsVisible(notice, context));
+}
+
 export interface ServerNoticesApi {
   snapshot(machineId: string): Promise<ServerNoticeSnapshot>;
   dismiss(machineId: string, daemonInstanceId: string, noticeId: string): Promise<ServerNoticeSnapshot>;
@@ -97,6 +109,11 @@ export class ServerNoticesController {
       revision: projection.revision,
       notices: projection.notices.filter((notice) => !state.pendingDismissedIds.has(notice.id)),
     };
+  }
+
+  hasNotice(machineId: string, matches: (notice: ServerNotice) => boolean): boolean {
+    const projection = this.projection(machineId);
+    return projection?.status === "fresh" && projection.notices.some(matches);
   }
 
   applyEvent(machineId: string, event: ServerNoticeEvent): void {
@@ -324,12 +341,21 @@ export class ServerNoticesController {
   }
 }
 
+function serverNoticeIsVisible(notice: ServerNotice, context: ServerNoticeDisplayContext): boolean {
+  const scope = notice.scope;
+  if (scope === undefined) return true;
+  return (scope.projectId === undefined || scope.projectId === context.projectId)
+    && (scope.workspaceId === undefined || scope.workspaceId === context.workspaceId)
+    && (scope.sessionId === undefined || scope.sessionId === context.sessionId);
+}
+
 function projectionFromSnapshot(snapshot: ServerNoticeSnapshot): ProjectionData {
   return {
     daemonInstanceId: snapshot.daemonInstanceId,
     revision: snapshot.revision,
     notices: snapshot.notices.map((notice) => ({
       ...notice,
+      ...(notice.scope === undefined ? {} : { scope: { ...notice.scope } }),
       ...(notice.context === undefined ? {} : { context: { ...notice.context } }),
     })),
   };

@@ -30,7 +30,7 @@ describe("SessionController send() return-value contract", () => {
     );
 
     await expect(controller.send("hello")).resolves.toBe(false);
-    expect(state.error).toBe("Error: boom");
+    expect(Object.values(state.browserErrors).map((error) => error.message)).toContain("Error: boom");
   });
 
   it("resolves true when enqueuing for a pending-start session", async () => {
