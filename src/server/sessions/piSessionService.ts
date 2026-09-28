@@ -1189,8 +1189,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly subsessionHydratedParents = new Set<string>();
   /**
    * Tracked subsession id -> whether a completion notification is armed.
-   * Armed when the child starts working; firing on completion disarms it so a
-   * child that works again (and stops again) notifies the parent each time.
+   * Armed when the child's agent starts a run (not for commands or compaction);
+   * firing on completion disarms it for the next run.
    */
   private readonly subsessionNotifyArmed = new Map<string, boolean>();
   private readonly archiveStore: SessionArchiveRepository;
@@ -2281,19 +2281,19 @@ export class PiSessionService implements SessionRouteService {
   }
 
   /**
-   * Drive parent notifications from a tracked child's status. Arms a pending
-   * notification while the child is working, and when it stops fires a single
-   * follow-up message to the parent via {@link prompt} (which queues if the
-   * parent is busy and delivers immediately when it is idle).
+   * Arm on a tracked child's agent_start, then notify the parent once it stops
+   * working. Commands and compactions can be busy without starting an agent run,
+   * so they must not arm a completion notice.
    */
-  private updateSubsessionTracking(session: PiAgentSession): void {
+  private updateSubsessionTracking(session: PiAgentSession, agentStarted = false): void {
     const link = this.subsessionLinkForActiveChild(session);
     if (link === undefined) return;
     const childId = link.childSessionId;
-    if (this.hasActiveWork(session)) {
+    if (agentStarted) {
       this.subsessionNotifyArmed.set(childId, true);
       return;
     }
+    if (this.hasActiveWork(session)) return;
     if (this.subsessionNotifyArmed.get(childId) !== true) return;
     this.subsessionNotifyArmed.set(childId, false);
     const status: SubsessionStatus = this.activities.get(childId)?.phase === "error" ? "error" : "idle";
@@ -4044,7 +4044,7 @@ export class PiSessionService implements SessionRouteService {
       if (eventType === "compaction_end") this.scheduleCompactionQueueDrain(session.sessionId);
       if (eventType === "agent_start" || eventType === "agent_end") this.scheduleCompactionQueueDrain(session.sessionId);
       this.publishStatus(session);
-      this.updateSubsessionTracking(session);
+      this.updateSubsessionTracking(session, eventType === "agent_start");
     });
     active.unsubscribe = () => {
       this.sessionEvents.close(session);
