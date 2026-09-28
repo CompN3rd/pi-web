@@ -30,7 +30,7 @@ describe("SessionController reload and selection", () => {
       restore: () => restoreRequest.promise,
       messages: () => Promise.resolve(emptyPage),
       status: () => Promise.resolve(status(archivedSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => Promise.resolve({ page: emptyPage, status: status(archivedSession.id), seq: 0, partial: null }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -158,7 +158,7 @@ describe("SessionController reload and selection", () => {
     const freshPage: MessagePage = { messages: [{ role: "assistant", content: "fresh from disk" }], start: 1, total: 2 };
     const cachedPages = new Map<string, MessagePage>([[cacheKey, { messages: [{ role: "user", content: "stale cached transcript" }], start: 0, total: 2 }]]);
     const reloadCalls: string[] = [];
-    const messageCalls: string[] = [];
+    const snapshotCalls: string[] = [];
     let state: AppState = {
       ...initialAppState(),
       selectedWorkspace: workspace,
@@ -171,12 +171,10 @@ describe("SessionController reload and selection", () => {
         reloadCalls.push(sessionLookupId(session));
         return Promise.resolve({ reloaded: true });
       },
-      messages: (session) => {
-        messageCalls.push(sessionLookupId(session));
-        return Promise.resolve(freshPage);
+      transcriptSnapshot: (session) => {
+        snapshotCalls.push(sessionLookupId(session));
+        return Promise.resolve({ page: freshPage, status: status(sessionLookupId(session)), seq: 0, partial: null });
       },
-      status: (session) => Promise.resolve(status(sessionLookupId(session))),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -198,7 +196,7 @@ describe("SessionController reload and selection", () => {
     await controller.reloadSession(persistedSession);
 
     expect(reloadCalls).toEqual([oldSession.id]);
-    expect(messageCalls).toEqual([oldSession.id]);
+    expect(snapshotCalls).toEqual([oldSession.id]);
     expect(cachedPages.get(cacheKey)).toEqual(freshPage);
     expect(state.messages).toEqual([{ role: "assistant", parts: [{ type: "text", text: "fresh from disk" }] }]);
     expect(state.messagePageStart).toBe(1);

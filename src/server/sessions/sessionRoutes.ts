@@ -183,6 +183,17 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     }
   });
 
+  app.get<{ Params: { sessionId: string }; Querystring: MessageQuery }>(`${prefix}/sessions/:sessionId/transcript-snapshot`, async (request, reply) => {
+    const ref = sessionRefFromQueryOr400(request.params.sessionId, request.query, reply);
+    if (ref === undefined) return reply;
+    try {
+      const snapshot = await sessions.transcriptSnapshot(ref, { ...optionalField("limit", optionalNumber(request.query.limit)) });
+      return { ...snapshot, page: projectBrowserMessageResponse(snapshot.page) };
+    } catch (error) {
+      return reply.code(404).send({ error: errorMessage(error) });
+    }
+  });
+
   app.get<{ Params: { sessionId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId/stream-snapshot`, async (request, reply) => {
     const ref = sessionRefFromQueryOr400(request.params.sessionId, request.query, reply);
     if (ref === undefined) return reply;
