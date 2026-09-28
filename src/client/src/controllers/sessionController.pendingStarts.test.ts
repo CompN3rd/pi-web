@@ -4,6 +4,7 @@ import { browserErrorScopeKey, visibleBrowserErrors, workspaceBrowserErrorScope 
 import { isCachedNewSessionInfo, loadCachedNewSessions } from "../cachedNewSessions";
 import { loadDraft, saveDraft } from "../promptDraftStorage";
 import { loadStagedAttachments, saveStagedAttachments, type PendingAttachment } from "../promptAttachmentStaging";
+import { loadComments, saveComments } from "../review/reviewCommentStorage";
 import { SessionController } from "./sessionController";
 import type { NavigationFreshness } from "./types";
 import { defaultApi, deferred, emptyPage, FakeSocket, MemoryStorage, oldSession, sessionKey, sessionLookupId, status, workspace, type AppState, type SessionInfo } from "./sessionController.testSupport";
@@ -491,6 +492,7 @@ describe("SessionController pending starts", () => {
     const temporaryId = state.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
     saveDraft(sessionKey(temporaryId), "draft text");
+    saveComments(sessionKey(temporaryId), [{ id: "review-temp", anchor: { filePath: "a.ts", source: "files", range: { side: "new", start: 1, end: 1 } }, body: "keep this feedback", sourceHash: "h", createdAt: 0, updatedAt: 0 }]);
     const attachment: PendingAttachment = { id: "attachment-1", kind: "file", name: "notes.txt", mimeType: "text/plain", data: "aGVsbG8=", size: 5 };
     saveStagedAttachments(sessionKey(temporaryId), [attachment]);
 
@@ -499,6 +501,8 @@ describe("SessionController pending starts", () => {
 
     expect(loadDraft(sessionKey(temporaryId))).toBe("");
     expect(loadDraft(sessionKey(started.id))).toBe("draft text");
+    expect(loadComments(sessionKey(temporaryId))).toEqual([]);
+    expect(loadComments(sessionKey(started.id)).map((comment) => comment.body)).toEqual(["keep this feedback"]);
     expect(loadStagedAttachments(sessionKey(temporaryId))).toEqual([]);
     expect(loadStagedAttachments(sessionKey(started.id))).toEqual([attachment]);
     expect(loadCachedNewSessions().map((session) => session.id)).toEqual([started.id]);
@@ -528,6 +532,8 @@ describe("SessionController pending starts", () => {
     expect(state.activity).toMatchObject({ sessionId: temporaryId, phase: "error", label: "Session creation failed" });
     expect(Object.values(state.browserErrors).map((error) => error.message).join("\n")).toContain("backend unavailable");
 
+    await expect(controller.send("review feedback", undefined, undefined, "inline", undefined, true)).resolves.toBe(false);
+    expect(state.clientQueuedSessionMessages[temporaryId ?? ""]).toBeUndefined();
     await controller.deleteCachedNewSession(state.sessions[0]);
 
     expect(state.sessions).toEqual([]);

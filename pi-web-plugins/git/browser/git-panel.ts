@@ -47,7 +47,7 @@ interface GitWorkspaceUiState {
   diffLoading: boolean;
   error: string | undefined;
   /** Whether a line-number-cell drag gesture (mousedown..mouseup) is active. */
-  reviewDragActive: boolean;
+  reviewDragSource: WorkspaceReviewLineRef["source"];
   expandedDirectories: Set<string>;
   statusRequest: Promise<void> | undefined;
   diffRequestSequence: number;
@@ -269,7 +269,7 @@ class GitUiController {
       selectedStagedDiff: undefined,
       diffLoading: false,
       error: undefined,
-      reviewDragActive: false,
+      reviewDragSource: undefined,
       expandedDirectories: new Set(),
       statusRequest: undefined,
       diffRequestSequence: 0,
@@ -347,6 +347,9 @@ class GitUiController {
         requestGitBackend(context, GIT_DIFF_OPERATION, { path, staged: true }).then(parseGitDiffResponse),
       ]);
       if (!state.retained || state.diffRequestSequence !== sequence || state.selectedDiffPath !== path) return;
+      // Each response owns a different coordinate space, even for the same path.
+      state.context.review.invalidateFile?.(path, hashDiffSource(selectedDiff.diff), "git-unstaged");
+      state.context.review.invalidateFile?.(path, hashDiffSource(selectedStagedDiff.diff), "git-staged");
       state.selectedDiff = createDiffView(selectedDiff, state.selectedDiff);
       state.selectedStagedDiff = createDiffView(selectedStagedDiff, state.selectedStagedDiff);
       state.error = undefined;
@@ -609,7 +612,7 @@ function renderDiffSection(html: HtmlTemplateTag, context: WorkspacePanelContext
       ${lines.length === 0 ? html`<p class="git-muted">No diff.</p>` : html`
         <div class="git-diff-scroller">
           <div class="git-diff-grid" role="table" aria-label="Unified diff">
-            ${lines.map((line) => renderDiffLine(html, context, state, path, sourceHash, line))}
+            ${lines.map((line) => renderDiffLine(html, context, state, path, sourceHash, line, diff.staged))}
           </div>
         </div>
       `}
@@ -624,8 +627,10 @@ function renderDiffLine(
   path: string,
   sourceHash: string,
   line: UnifiedDiffLine,
+  staged: boolean,
 ) {
-  const ref = reviewRefForDiffLine(line);
+  const lineRef = reviewRefForDiffLine(line);
+  const ref: WorkspaceReviewLineRef | undefined = lineRef === undefined ? undefined : { ...lineRef, sourceHash, source: staged ? "git-staged" : "git-unstaged" };
   const review = ref === undefined ? undefined : context.review.lineState(path, ref);
   const handlers = reviewCellHandlers(context, state, path, ref, sourceHash);
   const rowClasses = ["git-diff-line", review?.selected === true ? "is-review-selected" : "", review?.commented === true ? "has-review" : ""].filter((entry) => entry !== "").join(" ");
@@ -664,16 +669,21 @@ function reviewCellHandlers(
   return {
     mousedown(event) {
       if (ref === undefined || event.button !== 0) return;
-      state.reviewDragActive = true;
+      state.reviewDragSource = ref.source;
       context.review.beginSelection(path, ref);
     },
     mousemove(event) {
-      if (ref === undefined || !state.reviewDragActive || event.buttons !== 1) return;
+      if (ref === undefined || state.reviewDragSource !== ref.source || event.buttons !== 1) return;
       context.review.extendSelection(ref);
     },
     mouseup() {
-      if (ref === undefined || !state.reviewDragActive) return;
-      state.reviewDragActive = false;
+      if (ref === undefined || state.reviewDragSource === undefined) return;
+      const source = state.reviewDragSource;
+      state.reviewDragSource = undefined;
+      if (source !== ref.source) {
+        context.review.cancelSelection();
+        return;
+      }
       // Cover the plain-click case and a pointer jump straight to the final
       // line without an intervening mousemove: extend once more to the
       // mouseup ref before committing, so the committed range always

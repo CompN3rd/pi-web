@@ -15,7 +15,7 @@ import { MachineController } from "../controllers/machineController";
 import { MachineStatusController } from "../controllers/machineStatusController";
 import { ProjectController, type ProjectTrustChoice } from "../controllers/projectController";
 import { PiWebStatusController } from "../controllers/piWebStatusController";
-import { ReviewController } from "../controllers/reviewController";
+import { ReviewController, type ReviewSendSnapshot } from "../controllers/reviewController";
 import { SessionController } from "../controllers/sessionController";
 import { SessionNotificationController } from "../controllers/sessionNotificationController";
 import { WorkspaceController } from "../controllers/workspaceController";
@@ -183,6 +183,7 @@ export class PiWebApp extends LitElement {
     new SessionStorageSessionSelectionMemory(),
     {
       notifications: this.notifications,
+      moveReviewComments: (from, to) => { this.reviewController.renameSession(from, to); },
       navigateToSession: (session, options) => this.navigateToSessionFromController(session, options),
       captureNavigation: () => navigationSelectionFromState(this.state),
       beginNavigationOperation: (scope) => this.beginNavigationOperation(scope),
@@ -2222,23 +2223,25 @@ export class PiWebApp extends LitElement {
   /** Shared review state for the Files and Git plugin surfaces. */
   private createReviewAdapter(): WorkspaceReview {
     const controller = this.reviewController;
+    const owner = JSON.stringify([selectedMachineId(this.state), this.state.selectedWorkspace?.id, this.state.selectedSession?.id]);
+    const current = () => owner === JSON.stringify([selectedMachineId(this.state), this.state.selectedWorkspace?.id, this.state.selectedSession?.id]);
     return {
-      invalidateFile: (path, currentHash) => { controller.invalidateFile(path, currentHash); },
-      total: () => controller.total(),
-      countForFile: (filePath) => controller.countForFile(filePath),
-      commentsForLine: (filePath, ref: WorkspaceReviewLineRef) => controller.commentsForLine(filePath, ref),
-      draftForLine: (filePath, ref: WorkspaceReviewLineRef) => controller.draftForLine(filePath, ref) ?? null,
-      lineState: (filePath, ref: WorkspaceReviewLineRef) => controller.lineState(filePath, ref),
-      canAuthor: () => controller.canAuthor(),
-      beginSelection: (filePath, ref: WorkspaceReviewLineRef) => { controller.beginSelection(filePath, ref); },
-      extendSelection: (ref: WorkspaceReviewLineRef) => { controller.extendSelection(ref); },
-      commitSelection: (sourceHash) => { controller.commitSelection(sourceHash); },
-      cancelSelection: () => { controller.cancelSelection(); },
-      setDraftBody: (body) => { controller.setDraftBody(body); },
-      submitDraft: (anchor) => { controller.submitDraft(anchor); },
-      cancelDraft: () => { controller.cancelDraft(); },
-      updateComment: (id, body, anchor) => { controller.update(id, body, anchor); },
-      removeComment: (id) => { controller.remove(id); },
+      invalidateFile: (path, currentHash, source) => { if (current()) controller.invalidateFile(path, currentHash, source); },
+      total: () => current() ? controller.total() : 0,
+      countForFile: (filePath) => current() ? controller.countForFile(filePath) : 0,
+      commentsForLine: (filePath, ref: WorkspaceReviewLineRef) => current() ? controller.commentsForLine(filePath, ref) : [],
+      draftForLine: (filePath, ref: WorkspaceReviewLineRef) => current() ? controller.draftForLine(filePath, ref) ?? null : null,
+      lineState: (filePath, ref: WorkspaceReviewLineRef) => current() ? controller.lineState(filePath, ref) : { selected: false, commented: false },
+      canAuthor: () => current() && controller.canAuthor(),
+      beginSelection: (filePath, ref: WorkspaceReviewLineRef) => { if (current()) controller.beginSelection(filePath, ref); },
+      extendSelection: (ref: WorkspaceReviewLineRef) => { if (current()) controller.extendSelection(ref); },
+      commitSelection: (sourceHash) => { if (current()) controller.commitSelection(sourceHash); },
+      cancelSelection: () => { if (current()) controller.cancelSelection(); },
+      setDraftBody: (body) => { if (current()) controller.setDraftBody(body); },
+      submitDraft: (anchor) => { if (current()) controller.submitDraft(anchor); },
+      cancelDraft: () => { if (current()) controller.cancelDraft(); },
+      updateComment: (id, body, anchor) => { if (current()) controller.update(id, body, anchor); },
+      removeComment: (id) => { if (current()) controller.remove(id); },
     };
   }
 
@@ -3292,12 +3295,12 @@ export class PiWebApp extends LitElement {
 
   private readonly handleReviewBeginSend = () => this.reviewController.beginSend();
 
-  private readonly handleReviewCompleteSend = (ids: string[]): void => {
-    this.reviewController.completeSend(ids);
+  private readonly handleReviewCompleteSend = (snapshot: ReviewSendSnapshot): void => {
+    this.reviewController.completeSend(snapshot);
   };
 
-  private readonly handleReviewAbortSend = (): void => {
-    this.reviewController.abortSend();
+  private readonly handleReviewAbortSend = (snapshot: ReviewSendSnapshot): void => {
+    this.reviewController.abortSend(snapshot);
   };
 
   private readonly handleStopActiveWork = (): void => {

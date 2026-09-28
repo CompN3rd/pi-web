@@ -1,6 +1,5 @@
 import { Decoration, type DecorationSet, EditorView, WidgetType, type BlockInfo } from "@codemirror/view";
 import { RangeSetBuilder, StateEffect, StateField, type EditorState, type Extension, type Transaction } from "@codemirror/state";
-import { hashSource } from "./reviewHash";
 import type { ReviewAnchor, ReviewComment, WorkspaceReview, WorkspaceReviewDraft } from "@jmfederico/pi-web/plugin-api";
 
 /**
@@ -16,6 +15,8 @@ export function computeDragRange(anchorLine: number, currentLine: number): { sta
 export interface CodeViewerReviewOptions {
   /** Workspace-relative path of the file shown in this viewer. */
   filePath: string;
+  /** Fingerprint of the raw snapshot, before CodeMirror normalizes line endings. */
+  sourceHash: string;
   /** Gesture-agnostic review service (same instance used by plugin surfaces). */
   review: WorkspaceReview;
 }
@@ -59,12 +60,12 @@ export function reviewGutterDomEventHandlers(options: CodeViewerReviewOptions): 
   mousemove: (view: EditorView, line: BlockInfo, event: Event) => boolean;
   mouseup: (view: EditorView, line: BlockInfo, event: Event) => boolean;
 } {
-  const { filePath, review } = options;
+  const { filePath } = options;
   return {
     mousedown(view, line, event) {
       if (!(event instanceof MouseEvent) || event.button !== 0) return false;
       const lineNumber = lineNumberOf(view, line);
-      review.beginSelection(filePath, { side: "new", line: lineNumber });
+      options.review.beginSelection(filePath, { source: "files", sourceHash: options.sourceHash, side: "new", line: lineNumber });
       view.dispatch({ effects: dragEffect.of({ anchor: lineNumber, current: lineNumber }) });
       return true;
     },
@@ -73,7 +74,7 @@ export function reviewGutterDomEventHandlers(options: CodeViewerReviewOptions): 
       const drag = view.state.field(dragField);
       if (drag === undefined) return false;
       const lineNumber = lineNumberOf(view, line);
-      review.extendSelection({ side: "new", line: lineNumber });
+      options.review.extendSelection({ source: "files", side: "new", line: lineNumber });
       view.dispatch({ effects: dragEffect.of({ anchor: drag.anchor, current: lineNumber }) });
       return true;
     },
@@ -86,8 +87,8 @@ export function reviewGutterDomEventHandlers(options: CodeViewerReviewOptions): 
       // gutter mousemove in between: extend once more to the mouseup line
       // before committing, so the committed range always reflects where the
       // gesture actually ended.
-      review.extendSelection({ side: "new", line: lineNumber });
-      review.commitSelection(hashSource(view.state.doc.toString()));
+      options.review.extendSelection({ source: "files", side: "new", line: lineNumber });
+      options.review.commitSelection(options.sourceHash);
       view.dispatch({ effects: [dragEffect.of(undefined), reviewRefreshEffect.of(undefined)] });
       return true;
     },
@@ -149,7 +150,7 @@ class ReviewThreadWidget extends WidgetType {
     private readonly filePath: string,
     private readonly comments: readonly ReviewComment[],
     private readonly draft: WorkspaceReviewDraft | null,
-    private readonly review: WorkspaceReview,
+    private readonly options: CodeViewerReviewOptions,
   ) {
     super();
   }
@@ -159,9 +160,7 @@ class ReviewThreadWidget extends WidgetType {
   }
 
   private signature(): string {
-    const comments = this.comments.map((comment) => `${comment.id}:${String(comment.updatedAt)}:${comment.body}`).join("|");
-    const draft = this.draft === null ? "" : this.draft.body;
-    return `${comments}//${draft}`;
+    return JSON.stringify([this.comments, this.draft]);
   }
 
   override toDOM(view: EditorView): HTMLElement {
@@ -179,10 +178,10 @@ class ReviewThreadWidget extends WidgetType {
     Object.assign(el, {
       comments: this.comments,
       draft: this.draft ?? undefined,
-      onSubmitDraft: (body: string, anchor: ReviewAnchor) => { this.review.setDraftBody(body); this.review.submitDraft(anchor); refresh(); },
-      onCancelDraft: () => { this.review.cancelDraft(); refresh(); },
-      onUpdate: (id: string, body: string, anchor: ReviewAnchor) => { this.review.updateComment(id, body, anchor); refresh(); },
-      onRemove: (id: string) => { this.review.removeComment(id); refresh(); },
+      onSubmitDraft: (body: string, anchor: ReviewAnchor) => { this.options.review.setDraftBody(body); this.options.review.submitDraft(anchor); refresh(); },
+      onCancelDraft: () => { this.options.review.cancelDraft(); refresh(); },
+      onUpdate: (id: string, body: string, anchor: ReviewAnchor) => { this.options.review.updateComment(id, body, anchor); refresh(); },
+      onRemove: (id: string) => { this.options.review.removeComment(id); refresh(); },
     });
     return el;
   }
@@ -203,8 +202,9 @@ function buildCommentDecorations(state: EditorState, options: CodeViewerReviewOp
   const { filePath, review } = options;
   const builder = new RangeSetBuilder<Decoration>();
   const doc = state.doc;
+  const sourceHash = options.sourceHash;
   for (let lineNumber = 1; lineNumber <= doc.lines; lineNumber += 1) {
-    const ref = { side: "new" as const, line: lineNumber };
+    const ref = { source: "files" as const, sourceHash, side: "new" as const, line: lineNumber };
     const line = doc.line(lineNumber);
     const { selected, commented } = review.lineState(filePath, ref);
     if (selected) builder.add(line.from, line.from, reviewSelectionLineDecoration);
@@ -214,7 +214,7 @@ function buildCommentDecorations(state: EditorState, options: CodeViewerReviewOp
     const draftAtLine = review.draftForLine(filePath, ref);
     const draft = draftAtLine !== null && draftAtLine.anchor.range.end === lineNumber ? draftAtLine : null;
     if (comments.length === 0 && draft === null) continue;
-    const widget = new ReviewThreadWidget(filePath, comments, draft, review);
+    const widget = new ReviewThreadWidget(filePath, comments, draft, options);
     builder.add(line.to, line.to, Decoration.widget({ widget, block: true, side: 1 }));
   }
   return builder.finish();

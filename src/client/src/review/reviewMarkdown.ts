@@ -44,7 +44,7 @@ export function buildReviewMarkdown(comments: readonly ReviewComment[]): string 
       "",
       comment.body.trim(),
       "",
-      `<sub><sup><small>*-- end of ${id} --*</small></sup></sub>`,
+      `*-- end of ${id} --*`,
     ].join("\n");
   });
   return [`### Code review comments (${String(sorted.length)})`, ...blocks].join("\n\n");

@@ -6,7 +6,7 @@ import { EditorView } from "@codemirror/view";
 import { computeDragRange, buildReviewExtensions, reviewGutterDomEventHandlers, reviewRefreshEffect, reviewThemeSpec, reviewWidgetHostStyle } from "../../../../pi-web-plugins/files/codeViewerReview";
 import { hashSource } from "../../../../pi-web-plugins/files/reviewHash";
 import type { ReviewComment, WorkspaceReview, WorkspaceReviewDraft, WorkspaceReviewLineRef } from "@jmfederico/pi-web/plugin-api";
-import "./ReviewThread";
+import { ReviewThread } from "./ReviewThread";
 
 describe("computeDragRange", () => {
   it("normalizes forward drags", () => {
@@ -63,7 +63,7 @@ function makeView(doc: string, review: WorkspaceReview, filePath = "src/a.ts"): 
     parent: host,
     state: EditorState.create({
       doc,
-      extensions: buildReviewExtensions({ filePath, review }),
+      extensions: buildReviewExtensions({ filePath, review, sourceHash: hashSource(doc) }),
     }),
   });
 }
@@ -84,29 +84,29 @@ describe("reviewGutterDomEventHandlers", () => {
   it("mousedown begins a single-line selection", () => {
     const { review, spies } = fakeReview();
     const view = makeView("a\nb\nc\n", review);
-    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review });
+    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review, sourceHash: hashSource(view.state.doc.toString()) });
     const line = view.lineBlockAt(view.state.doc.line(2).from);
     handlers.mousedown(view, line, new MouseEvent("mousedown", { button: 0 }));
-    expect(spies.beginSelection).toHaveBeenCalledWith("src/a.ts", { side: "new", line: 2 });
+    expect(spies.beginSelection).toHaveBeenCalledWith("src/a.ts", expect.objectContaining({ source: "files", side: "new", line: 2 }));
     view.destroy();
   });
 
   it("mousemove while dragging extends the selection", () => {
     const { review, spies } = fakeReview();
     const view = makeView("a\nb\nc\n", review);
-    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review });
+    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review, sourceHash: hashSource(view.state.doc.toString()) });
     const line2 = view.lineBlockAt(view.state.doc.line(2).from);
     const line3 = view.lineBlockAt(view.state.doc.line(3).from);
     handlers.mousedown(view, line2, new MouseEvent("mousedown", { button: 0 }));
     handlers.mousemove(view, line3, new MouseEvent("mousemove", { buttons: 1 }));
-    expect(spies.extendSelection).toHaveBeenCalledWith({ side: "new", line: 3 });
+    expect(spies.extendSelection).toHaveBeenCalledWith(expect.objectContaining({ source: "files", side: "new", line: 3 }));
     view.destroy();
   });
 
   it("mousemove without a held button does not extend", () => {
     const { review, spies } = fakeReview();
     const view = makeView("a\nb\nc\n", review);
-    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review });
+    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review, sourceHash: hashSource(view.state.doc.toString()) });
     const line2 = view.lineBlockAt(view.state.doc.line(2).from);
     handlers.mousedown(view, line2, new MouseEvent("mousedown", { button: 0 }));
     handlers.mousemove(view, line2, new MouseEvent("mousemove", { buttons: 0 }));
@@ -118,7 +118,7 @@ describe("reviewGutterDomEventHandlers", () => {
     const { review, spies } = fakeReview();
     const doc = "a\nb\nc\n";
     const view = makeView(doc, review);
-    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review });
+    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review, sourceHash: hashSource(view.state.doc.toString()) });
     const line1 = view.lineBlockAt(view.state.doc.line(1).from);
     handlers.mousedown(view, line1, new MouseEvent("mousedown", { button: 0 }));
     handlers.mouseup(view, line1, new MouseEvent("mouseup", {}));
@@ -129,12 +129,12 @@ describe("reviewGutterDomEventHandlers", () => {
   it("a plain click (mousedown+mouseup, same line, no move) commits a single-line selection", () => {
     const { review, spies } = fakeReview();
     const view = makeView("a\nb\nc\n", review);
-    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review });
+    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review, sourceHash: hashSource(view.state.doc.toString()) });
     const line2 = view.lineBlockAt(view.state.doc.line(2).from);
     handlers.mousedown(view, line2, new MouseEvent("mousedown", { button: 0 }));
     handlers.mouseup(view, line2, new MouseEvent("mouseup", {}));
-    expect(spies.beginSelection).toHaveBeenCalledWith("src/a.ts", { side: "new", line: 2 });
-    expect(spies.extendSelection).toHaveBeenCalledWith({ side: "new", line: 2 });
+    expect(spies.beginSelection).toHaveBeenCalledWith("src/a.ts", expect.objectContaining({ source: "files", side: "new", line: 2 }));
+    expect(spies.extendSelection).toHaveBeenCalledWith(expect.objectContaining({ source: "files", side: "new", line: 2 }));
     expect(spies.commitSelection).toHaveBeenCalled();
     view.destroy();
   });
@@ -142,7 +142,7 @@ describe("reviewGutterDomEventHandlers", () => {
   it("ignores mousedown for non-primary buttons", () => {
     const { review, spies } = fakeReview();
     const view = makeView("a\nb\n", review);
-    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review });
+    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review, sourceHash: hashSource(view.state.doc.toString()) });
     const line1 = view.lineBlockAt(view.state.doc.line(1).from);
     handlers.mousedown(view, line1, new MouseEvent("mousedown", { button: 2 }));
     expect(spies.beginSelection).not.toHaveBeenCalled();
@@ -267,7 +267,7 @@ describe("buildReviewExtensions line highlighting", () => {
       lineState: (_path, ref) => ({ selected: ref.line <= extent, commented: false }),
     });
     const view = makeView("a\nb\nc\n", liveReview, "src/a.ts");
-    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review: liveReview });
+    const handlers = reviewGutterDomEventHandlers({ filePath: "src/a.ts", review: liveReview, sourceHash: hashSource(view.state.doc.toString()) });
     const line1 = view.lineBlockAt(view.state.doc.line(1).from);
     const line2 = view.lineBlockAt(view.state.doc.line(2).from);
     handlers.mousedown(view, line1, new MouseEvent("mousedown", { button: 0 }));
@@ -352,4 +352,31 @@ describe("review widget host width containment", () => {
     expect(thread.style.right).toBe("0px");
     view.destroy();
   });
+});
+
+
+it("refreshes an existing thread when an empty composer opens or its anchor changes", () => {
+  const saved: ReviewComment = {
+    id: "saved", anchor: { source: "files", filePath: "src/a.ts", range: { side: "new", start: 1, end: 2 } },
+    body: "existing", createdAt: 0, updatedAt: 0, sourceHash: "h",
+  };
+  let draft: WorkspaceReviewDraft | null = null;
+  const { review } = fakeReview({
+    commentsForLine: (_path, ref) => ref.line === 2 ? [saved] : [],
+    draftForLine: (_path, ref) => ref.line === 2 ? draft : null,
+  });
+  const view = makeView("a\nb\n", review);
+  const thread = () => {
+    const element = view.dom.querySelector("pi-web-review-thread");
+    if (!(element instanceof ReviewThread)) throw new Error("Expected review thread");
+    return element;
+  };
+  expect(thread().draft).toBeUndefined();
+  draft = { anchor: saved.anchor, body: "" };
+  view.dispatch({ effects: reviewRefreshEffect.of(undefined) });
+  expect(thread().draft).toEqual(draft);
+  draft = { anchor: { ...saved.anchor, range: { side: "new", start: 2, end: 2 } }, body: "" };
+  view.dispatch({ effects: reviewRefreshEffect.of(undefined) });
+  expect(thread().draft?.anchor.range.start).toBe(2);
+  view.destroy();
 });

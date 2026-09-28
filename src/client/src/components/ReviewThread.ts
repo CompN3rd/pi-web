@@ -1,11 +1,20 @@
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { customElement, property, state } from "lit/decorators.js";
-import { formatAnchorLabel } from "../review/reviewCoordinates";
+import { formatAnchorLabel, isValidReviewRange } from "../review/reviewCoordinates";
 import type { ReviewAnchor, ReviewComment } from "../review/reviewTypes";
 import { actionMenuPanelStyle } from "./actionMenu";
 import { createMobilePromptEnterMedia, readPromptEnterPreference, shouldSendPromptOnEnterShortcut } from "../promptEnterBehavior";
 import { toSafeMarkdownHtml } from "../formatting/markdown";
+
+interface RangeInput {
+  start: string;
+  end: string;
+}
+
+function editedAnchor(anchor: ReviewAnchor, input: RangeInput | undefined): ReviewAnchor {
+  return input === undefined ? anchor : { ...anchor, range: { ...anchor.range, start: Number(input.start), end: Number(input.end) } };
+}
 
 /** An in-progress, not-yet-saved comment rendered alongside saved ones. */
 export interface ReviewThreadDraft {
@@ -33,9 +42,8 @@ export class ReviewThread extends LitElement {
   @state() private draftBody = "";
   @state() private openMenuCommentId: string | undefined;
   @state() private menuStyle = "";
-  @state() private lineRangeEditOpen = false;
-  @state() private lineEditStartLine: number | undefined;
-  @state() private lineEditEndLine: number | undefined;
+  @state() private editingRange: RangeInput | undefined;
+  @state() private draftRange: RangeInput | undefined;
 
   private readonly mobilePromptEnterMedia = createMobilePromptEnterMedia();
 
@@ -55,9 +63,15 @@ export class ReviewThread extends LitElement {
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
-    if (changed.has("draft")) this.draftBody = this.draft?.body ?? "";
-    if (changed.has("comments") && this.editingCommentId !== undefined && !this.comments.some((comment) => comment.id === this.editingCommentId)) {
-      this.editingCommentId = undefined;
+    if (changed.has("draft")) {
+      this.draftBody = this.draft?.body ?? "";
+      this.draftRange = undefined;
+    }
+    if (changed.has("comments") && this.editingCommentId !== undefined) {
+      const current = this.comments.find((comment) => comment.id === this.editingCommentId);
+      const previous = changed.get("comments")?.find((comment) => comment.id === this.editingCommentId);
+      if (current === undefined) this.cancelEdit();
+      else if (previous !== current) this.editingRange = undefined;
     }
   }
 
@@ -102,7 +116,7 @@ export class ReviewThread extends LitElement {
   private renderEditingComment(comment: ReviewComment): TemplateResult {
     return html`
       <div class="card">
-        <small class="caption">${this.renderEditingCaption(comment.anchor)}</small>
+        <small class="caption">${this.renderRangeCaption(comment.anchor, this.editingRange, "edit", (range) => { this.editingRange = range; })}</small>
         <textarea
           class="editor"
           rows="3"
@@ -111,7 +125,7 @@ export class ReviewThread extends LitElement {
           @keydown=${(event: KeyboardEvent) => { this.handleEditingKeydown(event); }}
         ></textarea>
         <div class="editor-actions">
-          <button type="button" class="primary" ?disabled=${this.editingBody.trim() === ""} @click=${() => { this.saveEdit(comment.id); }}>Save</button>
+          <button type="button" class="primary" ?disabled=${this.editingBody.trim() === "" || !isValidReviewRange(editedAnchor(comment.anchor, this.editingRange).range)} @click=${() => { this.saveEdit(comment.id); }}>Save</button>
           <button type="button" @click=${() => { this.cancelEdit(); }}>Cancel</button>
         </div>
       </div>
@@ -121,7 +135,7 @@ export class ReviewThread extends LitElement {
   private renderDraft(draft: ReviewThreadDraft): TemplateResult {
     return html`
       <div class="card draft">
-        <small class="caption">${this.renderDraftCaption(draft)}</small>
+        <small class="caption">${this.renderRangeCaption(draft.anchor, this.draftRange, "draft", (range) => { this.draftRange = range; })}</small>
         <textarea
           class="editor"
           rows="3"
@@ -131,76 +145,41 @@ export class ReviewThread extends LitElement {
           @keydown=${(event: KeyboardEvent) => { this.handleDraftKeydown(event); }}
         ></textarea>
         <div class="editor-actions">
-          <button type="button" class="primary" ?disabled=${this.draftBody.trim() === ""} @click=${() => { this.submitDraft(); }}>Comment</button>
-          <button type="button" @click=${() => { this.onCancelDraft?.(); }}>Cancel</button>
+          <button type="button" class="primary" ?disabled=${this.draftBody.trim() === "" || !isValidReviewRange(editedAnchor(draft.anchor, this.draftRange).range)} @click=${() => { this.submitDraft(); }}>Comment</button>
+          <button type="button" @click=${() => { this.draftRange = undefined; this.onCancelDraft?.(); }}>Cancel</button>
         </div>
       </div>
     `;
   }
 
-  private renderDraftCaption(draft: ReviewThreadDraft): TemplateResult {
-    const { filePath, range } = draft.anchor;
-    const { start, end, side } = range;
-    const sideLabel = side === "old" ? " (deleted)" : "";
-    const isSingleLine = start === end;
-    const startLine = this.lineEditStartLine ?? start;
-    const endLine = this.lineEditEndLine ?? end;
-    const maxLine = 9999;
-    const isInvalid = startLine < 1 || endLine < 1 || startLine > endLine || startLine > maxLine || endLine > maxLine;
-
-    if (this.lineRangeEditOpen) {
-      return html`${filePath}:<span class="line-range-edit"><input type="number" min="1" max="${String(maxLine)}" .value=${String(startLine)} class="line-input ${isInvalid ? "invalid" : ""}" @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) { this.lineEditStartLine = parseInt(event.target.value, 10) || 1; } }} /> – <input type="number" min="1" max="${String(maxLine)}" .value=${String(endLine)} class="line-input ${isInvalid ? "invalid" : ""}" @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) { this.lineEditEndLine = parseInt(event.target.value, 10) || 1; } }} />${sideLabel}</span>`;
-    }
-    const lineLabel = isSingleLine ? String(start) : `${String(start)}-${String(end)}`;
-    return html`${filePath}:<span class="line-range"><span class="line-number-clickable" @click=${() => { this.openDraftLineRangeEdit(); }}>${lineLabel}</span>${sideLabel}</span>`;
-  }
-
-  private openDraftLineRangeEdit(): void {
-    const { start, end } = this.draft?.anchor.range ?? { start: 1, end: 1 };
-    this.lineRangeEditOpen = true;
-    this.lineEditStartLine = start;
-    this.lineEditEndLine = end;
-  }
-
-  private renderEditingCaption(anchor: ReviewAnchor): TemplateResult {
+  private renderRangeCaption(anchor: ReviewAnchor, input: RangeInput | undefined, kind: "draft" | "edit", onChange: (range: RangeInput) => void): TemplateResult {
     const { filePath, range } = anchor;
     const { start, end, side } = range;
     const sideLabel = side === "old" ? " (deleted)" : "";
-    const isSingleLine = start === end;
-    const startLine = this.lineEditStartLine ?? start;
-    const endLine = this.lineEditEndLine ?? end;
-    const maxLine = 9999;
-
-    if (this.lineRangeEditOpen) {
-      return html`${filePath}:<span class="line-range-edit"><input type="number" min="1" max="${String(maxLine)}" .value=${String(startLine)} class="line-input" @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) { this.lineEditStartLine = parseInt(event.target.value, 10) || 1; } }} /> – <input type="number" min="1" max="${String(maxLine)}" .value=${String(endLine)} class="line-input" @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) { this.lineEditEndLine = parseInt(event.target.value, 10) || 1; } }} />${sideLabel}</span>`;
+    const invalid = !isValidReviewRange(editedAnchor(anchor, input).range);
+    const errorId = `${kind}-range-error`;
+    const error = invalid ? html`<span id=${errorId} role="alert">Use positive whole line numbers with start no greater than end.</span>` : null;
+    if (input !== undefined) {
+      return html`${filePath}:<span class="line-range-edit">
+        <input type="number" min="1" step="1" aria-label="Start line" aria-invalid=${String(invalid)} aria-describedby=${invalid ? errorId : ""}
+          .value=${input.start} class=${invalid ? "line-input invalid" : "line-input"}
+          @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) onChange({ ...input, start: event.target.value }); }} /> –
+        <input type="number" min="1" step="1" aria-label="End line" aria-invalid=${String(invalid)} aria-describedby=${invalid ? errorId : ""}
+          .value=${input.end} class=${invalid ? "line-input invalid" : "line-input"}
+          @input=${(event: Event) => { if (event.target instanceof HTMLInputElement) onChange({ ...input, end: event.target.value }); }} />
+        ${sideLabel}</span>${error}`;
     }
-    const lineLabel = isSingleLine ? String(start) : `${String(start)}-${String(end)}`;
-    return html`${filePath}:<span class="line-range"><span class="line-number-clickable" @click=${() => { this.openEditingLineRangeEdit(anchor); }}>${lineLabel}</span>${sideLabel}</span>`;
+    const lineLabel = start === end ? String(start) : `${String(start)}-${String(end)}`;
+    return html`${filePath}:<span class="line-range"><button type="button" class="line-number-clickable"
+      aria-label="Edit line range" @click=${() => { onChange({ start: String(start), end: String(end) }); }}>${lineLabel}</button>${sideLabel}</span>${error}`;
   }
 
-  private openEditingLineRangeEdit(anchor: ReviewAnchor): void {
-    const { start, end } = anchor.range;
-    this.lineRangeEditOpen = true;
-    this.lineEditStartLine = start;
-    this.lineEditEndLine = end;
-  }
-
-  /** No-ops for a blank/whitespace-only body -- an empty comment carries no signal and is not worth persisting. Mirrors the `?disabled` guard on the "Comment" button as a belt-and-suspenders check. */
   private submitDraft(): void {
-    if (this.draftBody.trim() === "") return;
-    if (!this.draft) return;
-    this.lineRangeEditOpen = false;
-    const startLine = this.lineEditStartLine ?? this.draft.anchor.range.start;
-    const endLine = this.lineEditEndLine ?? this.draft.anchor.range.end;
-    const updatedAnchor: ReviewAnchor = {
-      filePath: this.draft.anchor.filePath,
-      range: {
-        side: this.draft.anchor.range.side,
-        start: startLine,
-        end: endLine,
-      },
-    };
-    this.onSubmitDraft?.(this.draftBody, updatedAnchor);
+    if (this.draftBody.trim() === "" || this.draft === undefined) return;
+    const anchor = editedAnchor(this.draft.anchor, this.draftRange);
+    if (!isValidReviewRange(anchor.range)) return;
+    this.draftRange = undefined;
+    this.onSubmitDraft?.(this.draftBody, anchor);
   }
 
   private toggleMenu(commentId: string, target: EventTarget | null): void {
@@ -216,32 +195,22 @@ export class ReviewThread extends LitElement {
     this.openMenuCommentId = undefined;
     this.editingCommentId = comment.id;
     this.editingBody = comment.body;
+    this.editingRange = undefined;
   }
 
-  /** No-ops for a blank/whitespace-only body, mirroring `submitDraft`'s guard (belt-and-suspenders alongside the `?disabled` guard on the "Save" button). */
   private saveEdit(commentId: string): void {
     const body = this.editingBody;
-    if (body.trim() === "") return;
-    const comment = this.comments.find((c) => c.id === commentId);
-    if (!comment) return;
-    this.editingCommentId = undefined;
-    this.lineRangeEditOpen = false;
-    const startLine = this.lineEditStartLine ?? comment.anchor.range.start;
-    const endLine = this.lineEditEndLine ?? comment.anchor.range.end;
-    const updatedAnchor: ReviewAnchor = {
-      filePath: comment.anchor.filePath,
-      range: {
-        side: comment.anchor.range.side,
-        start: startLine,
-        end: endLine,
-      },
-    };
-    this.onUpdate?.(commentId, body, updatedAnchor);
+    const comment = this.comments.find((candidate) => candidate.id === commentId);
+    if (body.trim() === "" || comment === undefined) return;
+    const anchor = editedAnchor(comment.anchor, this.editingRange);
+    if (!isValidReviewRange(anchor.range)) return;
+    this.cancelEdit();
+    this.onUpdate?.(commentId, body, anchor);
   }
 
   private cancelEdit(): void {
     this.editingCommentId = undefined;
-    this.lineRangeEditOpen = false;
+    this.editingRange = undefined;
   }
 
   private handleDraftKeydown(event: KeyboardEvent): void {
@@ -282,7 +251,7 @@ export class ReviewThread extends LitElement {
     .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
     .caption { color: var(--pi-muted); font-size: 11px; overflow-wrap: anywhere; }
     .line-range, .line-range-edit { display: inline-flex; align-items: center; gap: 4px; }
-    .line-number-clickable { color: var(--pi-accent); text-decoration: underline; cursor: pointer; }
+    .line-number-clickable { border: 0; background: transparent; padding: 0; font: inherit; color: var(--pi-accent); text-decoration: underline; cursor: pointer; }
     .line-input { width: 40px; padding: 2px 4px; border: 1px solid var(--pi-border-muted); border-radius: 3px; background: var(--pi-bg); color: var(--pi-text); font: 11px system-ui, sans-serif; }
     .line-input.invalid { border-color: var(--pi-danger); background: color-mix(in srgb, var(--pi-danger) 8%, var(--pi-bg)); }
     .body { margin: 0; overflow-wrap: anywhere; white-space: normal; line-height: 1.45; }

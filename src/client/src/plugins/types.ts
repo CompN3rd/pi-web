@@ -4,7 +4,7 @@ import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse
 import type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
 import type { AppState } from "../appState";
 import type { SettingsSection } from "../settingsRoute";
-import type { ReviewAnchor, ReviewComment, ReviewLineRef } from "../review/reviewTypes";
+import type { ReviewAnchor, ReviewComment, ReviewLineRef, ReviewSource } from "../review/reviewTypes";
 import type { LocalContributionId, PluginId, QualifiedContributionId } from "./ids";
 
 export type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
@@ -303,8 +303,8 @@ export interface WorkspaceReviewDraft {
  * `<pi-web-review-thread>` mounts differ per surface.
  */
 export interface WorkspaceReview {
-  /** Drop anchors whose source hash no longer matches the loaded file. */
-  invalidateFile?(path: string, currentHash: string): void;
+  /** Drop stale anchors only within this source; omitted/legacy sources are preserved. */
+  invalidateFile?(path: string, currentHash: string, source?: ReviewSource): void;
   // --- data / badges ---
   total(): number;
   countForFile(filePath: string): number;
@@ -316,7 +316,7 @@ export interface WorkspaceReview {
   // --- selection + draft state machine (gesture-agnostic) ---
   canAuthor(): boolean;
   beginSelection(filePath: string, ref: WorkspaceReviewLineRef): void;
-  extendSelection(ref: WorkspaceReviewLineRef): void; // clamped to the anchor's side
+  extendSelection(ref: WorkspaceReviewLineRef): void; // clamped to the anchor's source and side
   commitSelection(sourceHash: string): void; // opens the draft at the current selection
   cancelSelection(): void;
   setDraftBody(body: string): void;

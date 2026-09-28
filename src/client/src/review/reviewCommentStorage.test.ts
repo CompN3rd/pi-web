@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { clearComments, loadComments, moveComments, saveComments } from "./reviewCommentStorage";
 import type { ReviewComment } from "./reviewTypes";
 
@@ -39,6 +39,17 @@ function comment(id: string): ReviewComment {
 }
 
 describe("reviewCommentStorage", () => {
+  it("reports a failed destination write without removing either owner's feedback", () => {
+    const storage = new MemoryStorage();
+    saveComments("old", [comment("source")], storage);
+    saveComments("new", [comment("destination")], storage);
+    const before = storage.raw("pi-web:review-comments:new");
+    vi.spyOn(storage, "setItem").mockImplementation(() => { throw new Error("quota exceeded"); });
+    expect(() => { moveComments("old", "new", storage); }).toThrow("original feedback was retained");
+    expect(loadComments("old", storage)).toEqual([comment("source")]);
+    expect(storage.raw("pi-web:review-comments:new")).toBe(before);
+  });
+
   it("round-trips comments", () => {
     const storage = new MemoryStorage();
     saveComments("local:s1", [comment("a"), comment("b")], storage);
@@ -98,4 +109,36 @@ describe("reviewCommentStorage", () => {
     );
     expect(loadComments("local:s1", storage).map((entry) => entry.id)).toEqual(["a"]);
   });
+});
+
+
+it("round-trips snapshot domains while preserving legacy comments", () => {
+  const storage = new MemoryStorage();
+  const comments = [comment("legacy"), ...(["files", "git-staged", "git-unstaged"] as const).map((source) => ({
+    ...comment(source), anchor: { ...comment(source).anchor, source },
+  }))];
+  saveComments("local:A", comments, storage);
+  expect(loadComments("local:A", storage)).toEqual(comments);
+});
+
+it("repairs colliding legacy IDs deterministically without losing feedback", () => {
+  const storage = new MemoryStorage();
+  saveComments("local:A", [comment("review-1"), { ...comment("review-1"), body: "second" }, comment("review-1-duplicate-1")], storage);
+  const loaded = loadComments("local:A", storage);
+  expect(loaded.map((entry) => entry.body)).toEqual(["note", "second", "note"]);
+  expect(new Set(loaded.map((entry) => entry.id)).size).toBe(3);
+  expect(loadComments("local:A", storage)).toEqual(loaded);
+});
+
+it("merges migrated feedback with destination feedback and repairs collisions", () => {
+  const storage = new MemoryStorage();
+  saveComments("local:temp", [comment("same")], storage);
+  saveComments("local:real", [{ ...comment("same"), body: "existing destination" }], storage);
+  moveComments("local:temp", "local:real", storage);
+  const loaded = loadComments("local:real", storage);
+  expect(loaded.map((entry) => entry.body)).toEqual(["note", "existing destination"]);
+  expect(new Set(loaded.map((entry) => entry.id)).size).toBe(2);
+  expect(loadComments("local:temp", storage)).toEqual([]);
+  moveComments("local:real", "local:real", storage);
+  expect(loadComments("local:real", storage)).toEqual(loaded);
 });

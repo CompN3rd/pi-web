@@ -7,6 +7,7 @@ import { machineSessionKey } from "../machineKeys";
 import { isCreatingSessionId } from "../route";
 import { clearDraft, moveDraft, saveDraft } from "../promptDraftStorage";
 import { clearStagedAttachments, moveStagedAttachments } from "../promptAttachmentStaging";
+import { moveComments } from "../review/reviewCommentStorage";
 import { clearAskDraft } from "../askDrafts";
 import { ChatTranscriptStore } from "../chatTranscriptStore";
 import { isHistoryTailSlice } from "../chatHistoryCache";
@@ -55,6 +56,7 @@ export interface SelectedSessionReady {
 }
 
 export interface SessionControllerDependencies {
+  moveReviewComments?: (fromSessionKey: string, toSessionKey: string) => void;
   api?: typeof defaultApi;
   captureNavigation?: () => NavigationSelection;
   beginNavigationOperation?: (scope: readonly NavigationScope[]) => NavigationFreshness;
@@ -154,6 +156,7 @@ export class SessionController {
   private pendingStatusBySession = new Map<string, SessionStatus>();
   private pendingActivityBySession = new Map<string, SessionActivity>();
   private pendingFrame: number | undefined;
+  private readonly moveReviewComments: (fromSessionKey: string, toSessionKey: string) => void;
   private pendingQueuedSendSeq = 0;
   private readonly pendingSessionStarts = new Map<string, PendingSessionStart>();
   private readonly suppressedCreatedSessions = new Map<string, SuppressedCreatedSession>();
@@ -166,6 +169,7 @@ export class SessionController {
     private readonly sessionSelection: SessionSelectionMemory = new InMemorySessionSelectionMemory(),
     deps: SessionControllerDependencies = {},
   ) {
+    this.moveReviewComments = deps.moveReviewComments ?? moveComments;
     this.socket = deps.socket ?? new SessionSocket();
     this.api = deps.api ?? defaultApi;
     this.transcripts = deps.transcripts ?? new ChatTranscriptStore();
@@ -404,10 +408,9 @@ export class SessionController {
     const trimmed = text.trim();
     const hasAttachments = attachments !== undefined && attachments.length > 0;
     if (isClientPendingStartSessionInfo(session)) {
-      if (!hasAttachments && !hasReviewContent && trimmed.startsWith("/")) this.enqueuePendingSessionSend(session, { type: "command", text });
-      else if (!hasAttachments && !hasReviewContent && isShellInput(text)) this.enqueuePendingSessionSend(session, { type: "shell", text });
-      else this.enqueuePendingSessionSend(session, { type: "prompt", text, streamingBehavior, attachments, delivery, folder });
-      return true;
+      if (!hasAttachments && !hasReviewContent && trimmed.startsWith("/")) return this.enqueuePendingSessionSend(session, { type: "command", text });
+      else if (!hasAttachments && !hasReviewContent && isShellInput(text)) return this.enqueuePendingSessionSend(session, { type: "shell", text });
+      return this.enqueuePendingSessionSend(session, { type: "prompt", text, streamingBehavior, attachments, delivery, folder });
     }
     if (!hasAttachments && !hasReviewContent && trimmed.startsWith("/")) { await this.runCommand(text); return true; }
     if (!hasAttachments && !hasReviewContent && isShellInput(text)) { await this.runShell(text); return true; }
@@ -453,12 +456,12 @@ export class SessionController {
     await this.deliverCommandToSession(session, text, machineId, { applyResult: true }, errorOwner);
   }
 
-  private enqueuePendingSessionSend(session: ClientPendingStartSessionInfo, input: QueuedPendingSessionSendInput): void {
+  private enqueuePendingSessionSend(session: ClientPendingStartSessionInfo, input: QueuedPendingSessionSendInput): boolean {
     const pending = this.pendingSessionStarts.get(session.id);
     if (pending === undefined || pending.discarded) {
       const errorOwner = pending === undefined ? this.captureSessionErrorOwner(session) : this.captureSessionErrorOwner(session, pending.originWorkspace);
       this.reportSessionError(session, session.machineId, "The backend session is not ready for queued sends. Copy your message before discarding this failed start.", errorOwner);
-      return;
+      return false;
     }
     const queued: QueuedPendingSessionSend = { ...input, id: `pending-send-${String(++this.pendingQueuedSendSeq)}` };
     pending.queuedSends.push(queued);
@@ -471,6 +474,7 @@ export class SessionController {
       activity: state.selectedSession?.id === session.id ? activity : state.activity,
       error: "",
     });
+    return true;
   }
 
   private async flushQueuedPendingSends(session: SessionInfo, machineId: string, queuedSends: readonly QueuedPendingSessionSend[], errorOwner: SessionBrowserErrorOwner): Promise<void> {
@@ -1553,6 +1557,9 @@ export class SessionController {
   private async resolvePendingSessionStart(tempId: string, session: SessionInfo): Promise<void> {
     const pending = this.pendingSessionStarts.get(tempId);
     if (pending === undefined) return;
+    // Keep the pending row and queued recovery data intact until review ownership can move.
+    // Discarded starts must never migrate feedback into the newly created backend session.
+    if (!pending.discarded) this.moveReviewComments(machineSessionKey(pending.machineId, tempId), machineSessionKey(pending.machineId, session.id));
     this.pendingSessionStarts.delete(tempId);
     const queuedSends = pending.queuedSends.splice(0);
     const releasedCreatedSessions = this.takeSuppressedCreatedSessionsFor(pending.cwd, pending.machineId, session.id);
@@ -1772,6 +1779,7 @@ export class SessionController {
     try {
       const replacement = await this.api.startSession(session.cwd, machineId);
       if (!this.isCurrentSessionSelection(session.id, machineId, selectionSeq)) return;
+      this.moveReviewComments(this.sessionCacheKey(session.id), this.sessionCacheKey(replacement.id));
       rememberCachedNewSession(replacement, machineId);
       moveDraft(this.sessionCacheKey(session.id), this.sessionCacheKey(replacement.id));
       moveStagedAttachments(this.sessionCacheKey(session.id), this.sessionCacheKey(replacement.id));

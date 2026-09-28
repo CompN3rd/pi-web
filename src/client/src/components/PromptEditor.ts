@@ -55,9 +55,10 @@ export class PromptEditor extends LitElement {
   @property({ attribute: false }) reviewComments: readonly ReviewComment[] = [];
   @property({ attribute: false }) reviewSendLocked = false;
   @property({ attribute: false }) onReviewRemove?: (id: string) => void;
-  @property({ attribute: false }) onReviewBeginSend?: () => ReviewSendSnapshot;
-  @property({ attribute: false }) onReviewCompleteSend?: (ids: string[]) => void;
-  @property({ attribute: false }) onReviewAbortSend?: () => void;
+  @property({ attribute: false }) onReviewBeginSend?: () => ReviewSendSnapshot | undefined;
+  @property({ attribute: false }) onReviewCompleteSend?: (snapshot: ReviewSendSnapshot) => void;
+  @property({ attribute: false }) onReviewAbortSend?: (snapshot: ReviewSendSnapshot) => void;
+  private readonly pendingReviewSends = new Set<string>();
   @query(".markdown-editor") private editorHost?: HTMLDivElement;
   @query(".attachment-input") private attachmentInput?: HTMLInputElement;
   // `draft` is the live document text but is intentionally NOT reactive: it
@@ -129,7 +130,7 @@ export class PromptEditor extends LitElement {
     const shellInputMode = this.currentInputMode.kind === "shell" ? this.currentInputMode : undefined;
     const shellMode = shellInputMode !== undefined;
     const queuesInput = this.canSteer || this.isCompacting;
-    const busy = this.disabled || this.sending;
+    const busy = this.disabled || this.sending || this.reviewSendLocked || this.pendingReviewSends.has(this.reviewSendKey());
     return html`
       <footer class=${shellMode ? "shell-mode" : ""} @paste=${(event: ClipboardEvent) => { void this.handlePaste(event); }} @dragover=${(event: DragEvent) => { this.handleDragOver(event); }} @drop=${(event: DragEvent) => { void this.handleDrop(event); }}>
         <div class="editor-wrap">
@@ -537,16 +538,31 @@ export class PromptEditor extends LitElement {
       return;
     }
 
-    const snapshot = this.onReviewBeginSend?.() ?? { ids: [], markdown: "" };
+    const sendKey = this.reviewSendKey();
+    if (this.reviewSendLocked || this.pendingReviewSends.has(sendKey)) return;
+    this.pendingReviewSends.add(sendKey);
+    const snapshot = this.onReviewBeginSend?.();
+    if (snapshot === undefined) {
+      this.pendingReviewSends.delete(sendKey);
+      return;
+    }
+    this.requestUpdate();
     const body = [text, snapshot.markdown].filter((part) => part !== "").join("\n\n");
     this.resetComposer();
     try {
       const result = await this.onSend?.(body, behavior, attachments, attachments === undefined ? undefined : delivery, folder, true);
-      if (result === true) this.onReviewCompleteSend?.(snapshot.ids);
-      else this.onReviewAbortSend?.();
+      if (result === true) this.onReviewCompleteSend?.(snapshot);
+      else this.onReviewAbortSend?.(snapshot);
     } catch {
-      this.onReviewAbortSend?.();
+      this.onReviewAbortSend?.(snapshot);
+    } finally {
+      this.pendingReviewSends.delete(sendKey);
+      this.requestUpdate();
     }
+  }
+
+  private reviewSendKey(): string {
+    return JSON.stringify([this.machineId, this.sessionId]);
   }
 
   private resetComposer() {

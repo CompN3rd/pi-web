@@ -16,6 +16,28 @@ afterEach(() => {
 });
 
 describe("Files panel component boundary", () => {
+  it("shows review counts on file rows only and removes badges at zero", async () => {
+    const files = createFiles({ listFiles: () => Promise.resolve(treeResponse("", [
+      { name: "src", path: "src", type: "directory" },
+      { name: "a.ts", path: "a.ts", type: "file" },
+      { name: "b.ts", path: "b.ts", type: "file" },
+    ])) });
+    const context = createContext({ files });
+    const countForFile = vi.fn((path: string) => path === "b.ts" ? 0 : 2);
+    context.review = { ...context.review, countForFile };
+    const panel = await mountPanel(context);
+    await vi.waitFor(() => { expect(panel.shadowRoot?.querySelectorAll(".row")).toHaveLength(3); });
+    const badges = panel.shadowRoot?.querySelectorAll(".review-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges?.[0]?.textContent).toBe("2");
+    expect(badges?.[0]?.getAttribute("title")).toBe("2 review comments");
+    expect(badges?.[0]?.closest(".row")?.textContent).toContain("a.ts");
+    expect(countForFile).not.toHaveBeenCalledWith("src");
+    panel.context = { ...context, review: { ...context.review, countForFile: () => 0 } };
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.querySelector(".review-badge")).toBeNull();
+  });
+
   it("loads and renders the tree, wires expansion/selection, and passes content to the viewer", async () => {
     const listFiles = vi.fn<WorkspaceFilesCapabilityV1["listFiles"]>((path) => Promise.resolve(path === ""
       ? treeResponse("", [{ name: "src", path: "src", type: "directory" }, { name: "README.md", path: "README.md", type: "file" }])

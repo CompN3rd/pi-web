@@ -25,7 +25,13 @@ describe("reviewCoordinates", () => {
   });
 
   it("builds a full anchor label", () => {
-    expect(formatAnchorLabel(anchor("src/app.ts", "new", 12, 15))).toBe("src/app.ts:12-15");
-    expect(formatAnchorLabel(anchor("src/app.ts", "old", 8, 9))).toBe("src/app.ts:8-9 (deleted)");
+    expect(formatAnchorLabel(anchor("src/app.ts", "new", 12, 15))).toBe("src/app.ts:12-15 (legacy snapshot)");
+    expect(formatAnchorLabel(anchor("src/app.ts", "old", 8, 9))).toBe("src/app.ts:8-9 (deleted) (legacy snapshot)");
   });
+});
+
+it.each([
+  ["files", "Files"], ["git-staged", "Git staged"], ["git-unstaged", "Git unstaged"],
+] as const)("labels %s snapshot coordinates", (source, label) => {
+  expect(formatAnchorLabel({ ...anchor("a.ts", "new", 1, 1), source })).toBe(`a.ts:1 (${label})`);
 });

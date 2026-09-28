@@ -150,7 +150,7 @@ describe("PromptEditor review-bearing send flow", () => {
       undefined,
       true,
     );
-    expect(onReviewCompleteSend).toHaveBeenCalledWith(["review-1"]);
+    expect(onReviewCompleteSend).toHaveBeenCalledWith(snapshot());
     expect(onReviewAbortSend).not.toHaveBeenCalled();
     // resetComposer clears the draft, not the review comments (the component
     // does not clear them itself -- the parent does via completeSend/abortSend).
@@ -250,5 +250,57 @@ describe("PromptEditor fast path with zero review comments", () => {
     expect(onReviewCompleteSend).not.toHaveBeenCalled();
     expect(onReviewAbortSend).not.toHaveBeenCalled();
     expect(onSend).toHaveBeenCalledWith("plain message", undefined, undefined, undefined, undefined);
+  });
+});
+
+
+describe("PromptEditor review send reentry", () => {
+  it("blocks synchronous duplicate sends before Lit updates and allows a different session", async () => {
+    const editor = new PromptEditor();
+    editor.machineId = "local";
+    editor.sessionId = "A";
+    editor.reviewComments = [comment("a", "a.ts", 1, 1, "A")];
+    const first = { ids: ["a"], markdown: "feedback A" };
+    const second = { ids: ["b"], markdown: "feedback B" };
+    const begin = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    editor.onReviewBeginSend = begin;
+    const complete = vi.fn();
+    editor.onReviewCompleteSend = complete;
+    let resolveFirst: ((accepted: boolean) => void) | undefined;
+    const firstDelivery = new Promise<boolean>((resolve) => { resolveFirst = resolve; });
+    const onSend = vi.fn().mockReturnValueOnce(firstDelivery).mockResolvedValueOnce(true);
+    editor.onSend = onSend;
+    await mount(editor);
+
+    const firstSend = callSend(editor);
+    await callSend(editor);
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(begin).toHaveBeenCalledTimes(1);
+    editor.sessionId = "B";
+    editor.reviewComments = [comment("b", "b.ts", 1, 1, "B")];
+    await callSend(editor);
+    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledWith(second);
+    resolveFirst?.(true);
+    await firstSend;
+    expect(complete).toHaveBeenLastCalledWith(first);
+  });
+
+  it("does not reset or send when the controller rejects beginSend or the owner is locked", async () => {
+    const editor = new PromptEditor();
+    editor.reviewComments = [comment("a", "a.ts", 1, 1, "A")];
+    const begin = vi.fn().mockReturnValue(undefined);
+    const onSend = vi.fn();
+    editor.onReviewBeginSend = begin;
+    editor.onSend = onSend;
+    await mount(editor);
+    Reflect.set(editor, "draft", "keep this text");
+    await callSend(editor);
+    expect(Reflect.get(editor, "draft")).toBe("keep this text");
+    expect(onSend).not.toHaveBeenCalled();
+    editor.reviewSendLocked = true;
+    await callSend(editor);
+    expect(begin).toHaveBeenCalledTimes(1);
+    expect(onSend).not.toHaveBeenCalled();
   });
 });

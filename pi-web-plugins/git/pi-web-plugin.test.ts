@@ -2,7 +2,8 @@
 
 import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JsonValue, PluginPeer, PluginRuntimeContext, Workspace, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { JsonValue, PluginPeer, PluginRuntimeContext, Workspace, WorkspacePanelContext, WorkspaceReviewLineRef } from "@jmfederico/pi-web/plugin-api";
+import { hashDiffSource } from "./browser/reviewDiffRef.js";
 import { GIT_FILE_VIEW_STORAGE_KEY } from "./browser/gitFileViewPreference.js";
 import plugin from "./browser/pi-web-plugin.js";
 
@@ -26,6 +27,30 @@ afterEach(() => {
 });
 
 describe("bundled Git browser plugin", () => {
+  it("invalidates accepted staged and unstaged snapshots independently on refresh", async () => {
+    const panel = requiredPanel(activate("git"));
+    const response = { diffText: "@@ -1 +1 @@\n-old\n+first" };
+    const backend = backendFixture(response);
+    const invalidateFile = vi.fn();
+    const context = panelContext(backend.request, gitWorkspace, "local", { invalidateFile });
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(panel.render(context), container);
+    await settleBackend();
+    render(panel.render(context), container);
+    button(container, "src/main.ts").click();
+    await settleBackend();
+    render(panel.render(context), container);
+    expect(invalidateFile).toHaveBeenCalledWith("src/main.ts", hashDiffSource(response.diffText), "git-unstaged");
+    expect(invalidateFile).toHaveBeenCalledWith("src/main.ts", hashDiffSource("@@ -1 +1 @@\n-old value\n+new value"), "git-staged");
+    invalidateFile.mockClear();
+    response.diffText = "@@ -1 +1 @@\n-old\n+changed";
+    await panel.onInvalidate?.(context);
+    expect(invalidateFile).toHaveBeenCalledTimes(2);
+    expect(invalidateFile).toHaveBeenCalledWith("src/main.ts", hashDiffSource(response.diffText), "git-unstaged");
+    expect(invalidateFile).toHaveBeenCalledWith("src/main.ts", hashDiffSource("@@ -1 +1 @@\n-old value\n+new value"), "git-staged");
+  });
+
   it("contributes provider-owned actions and a panel that replacements suppress", async () => {
     const contributions = activate("git");
     const panel = contributions.workspacePanels?.[0];
@@ -499,7 +524,8 @@ describe("git tab review comments", () => {
     const beginSelection = vi.fn();
     const extendSelection = vi.fn();
     const commitSelection = vi.fn();
-    const context = panelContext(backend.request, gitWorkspace, "local", { beginSelection, extendSelection, commitSelection });
+    const cancelSelection = vi.fn();
+    const context = panelContext(backend.request, gitWorkspace, "local", { beginSelection, extendSelection, commitSelection, cancelSelection });
     const container = document.createElement("div");
     document.body.append(container);
     render(panel.render(context), container);
@@ -515,8 +541,8 @@ describe("git tab review comments", () => {
     addCell.dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true }));
     addCell.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 
-    expect(beginSelection).toHaveBeenCalledWith("src/main.ts", { side: "new", line: 1 });
-    expect(extendSelection).toHaveBeenCalledWith({ side: "new", line: 1 });
+    expect(beginSelection).toHaveBeenCalledWith("src/main.ts", expect.objectContaining({ source: "git-staged", side: "new", line: 1 }));
+    expect(extendSelection).toHaveBeenCalledWith(expect.objectContaining({ source: "git-staged", side: "new", line: 1 }));
     expect(commitSelection).toHaveBeenCalledTimes(1);
 
     const removeCell = container.querySelector(".git-diff-cell.git-line-number.remove");
@@ -527,8 +553,19 @@ describe("git tab review comments", () => {
     removeCell.dispatchEvent(new MouseEvent("mousemove", { buttons: 1, bubbles: true }));
     removeCell.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 
-    expect(beginSelection).toHaveBeenCalledWith("src/main.ts", { side: "old", line: 1 });
-    expect(extendSelection).toHaveBeenCalledWith({ side: "old", line: 1 });
+    expect(beginSelection).toHaveBeenCalledWith("src/main.ts", expect.objectContaining({ source: "git-staged", side: "old", line: 1 }));
+    expect(extendSelection).toHaveBeenCalledWith(expect.objectContaining({ source: "git-staged", side: "old", line: 1 }));
+
+    const unstagedCell = container.querySelectorAll(".git-diff-section")[1]?.querySelector(".git-line-number.add");
+    if (unstagedCell == null) throw new Error("Expected an unstaged line cell");
+    commitSelection.mockClear();
+    extendSelection.mockClear();
+    addCell.dispatchEvent(new MouseEvent("mousedown", { button: 0, bubbles: true }));
+    unstagedCell.dispatchEvent(new MouseEvent("mousemove", { buttons: 1, bubbles: true }));
+    unstagedCell.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    expect(extendSelection).not.toHaveBeenCalled();
+    expect(commitSelection).not.toHaveBeenCalled();
+    expect(cancelSelection).toHaveBeenCalledOnce();
   });
 
   it("ignores gestures on rows with no line, e.g. hunk headers", async () => {
@@ -557,9 +594,9 @@ describe("git tab review comments", () => {
   it("mounts an inline review thread only for lines with comments or a draft, wired to the shared callbacks", async () => {
     const panel = requiredPanel(activate("git"));
     const backend = backendFixture();
-    const comment = { id: "c1", anchor: { filePath: "src/main.ts", range: { side: "new" as const, start: 1, end: 1 } }, body: "hi", createdAt: 0, updatedAt: 0, sourceHash: "h" };
-    const commentsForLine = vi.fn((_path: string, ref: { side: "old" | "new"; line: number }) =>
-      ref.side === "new" && ref.line === 1 ? [comment] : []);
+    const comment = { id: "c1", anchor: { source: "git-unstaged" as const, filePath: "src/main.ts", range: { side: "new" as const, start: 1, end: 1 } }, body: "hi", createdAt: 0, updatedAt: 0, sourceHash: "h" };
+    const commentsForLine = vi.fn((_path: string, ref: WorkspaceReviewLineRef) =>
+      ref.source === "git-unstaged" && ref.side === "new" && ref.line === 1 ? [comment] : []);
     const updateComment = vi.fn();
     const removeComment = vi.fn();
     const setDraftBody = vi.fn();
@@ -576,10 +613,11 @@ describe("git tab review comments", () => {
     await settleBackend();
     render(panel.render(context), container);
 
-    // Both the staged and unstaged diff sections have a `new`-side line 1
-    // (see `backendFixture`'s fixed diff text), so both mount a thread.
+    // Both sections have new-side line 1, but only the unstaged snapshot owns this thread.
     const threads = [...container.querySelectorAll<ReviewThreadTestElement>("pi-web-review-thread")];
-    expect(threads).toHaveLength(2);
+    expect(threads).toHaveLength(1);
+    expect(commentsForLine).toHaveBeenCalledWith("src/main.ts", expect.objectContaining({ source: "git-staged" }));
+    expect(commentsForLine).toHaveBeenCalledWith("src/main.ts", expect.objectContaining({ source: "git-unstaged" }));
     const thread = threads[0];
     if (thread === undefined) throw new Error("Expected a mounted review thread");
     expect(thread.comments).toEqual([comment]);
@@ -765,7 +803,7 @@ function backendFixture(patch: { files?: ReturnType<typeof changedFile>[]; submo
     return Promise.resolve({
       path,
       staged,
-      hash: staged ? "staged-hash" : "unstaged-hash",
+      hash: hashDiffSource(staged ? "@@ -1 +1 @@\n-old value\n+new value" : (patch.diffText ?? "@@ -1 +1 @@\n-old work\n+new work")),
       diff: staged ? "@@ -1 +1 @@\n-old value\n+new value" : (patch.diffText ?? "@@ -1 +1 @@\n-old work\n+new work"),
       truncated: false,
     });

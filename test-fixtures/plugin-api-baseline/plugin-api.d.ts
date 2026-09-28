@@ -355,6 +355,8 @@ export interface WorkspacePanelTerminal {
  * import, since the internal version depends on `AppState`).
  */
 export type ReviewSide = "new" | "old";
+/** Coordinate and fingerprint domain. Missing source denotes legacy, unscoped feedback. */
+export type ReviewSource = "files" | "git-staged" | "git-unstaged";
 export interface ReviewLineRange {
     side: ReviewSide;
     /** 1-based inclusive line number on the given side. */
@@ -362,13 +364,14 @@ export interface ReviewLineRange {
     end: number;
 }
 export interface ReviewAnchor {
+    source?: ReviewSource;
     /** Workspace-relative path. */
     filePath: string;
     /** Single side, contiguous range. */
     range: ReviewLineRange;
 }
 export interface ReviewComment {
-    /** Stable local id, e.g. "review-<seq>". */
+    /** Stable local id, unique across reloads. */
     id: string;
     anchor: ReviewAnchor;
     /** User text (markdown allowed). */
@@ -380,6 +383,9 @@ export interface ReviewComment {
 }
 /** A line reference on a diff/file surface, used by the review selection and query APIs. */
 export interface WorkspaceReviewLineRef {
+    source?: ReviewSource;
+    /** Current snapshot fingerprint; queries omit comments from older content. */
+    sourceHash?: string;
     side: ReviewSide;
     line: number;
 }
@@ -396,8 +402,8 @@ export interface WorkspaceReviewDraft {
  * `<pi-web-review-thread>` mounts differ per surface.
  */
 export interface WorkspaceReview {
-    /** Drop anchors whose source hash no longer matches the loaded file. */
-    invalidateFile?(path: string, currentHash: string): void;
+    /** Drop stale anchors only within this source; omitted/legacy sources are preserved. */
+    invalidateFile?(path: string, currentHash: string, source?: ReviewSource): void;
     total(): number;
     countForFile(filePath: string): number;
     commentsForLine(filePath: string, ref: WorkspaceReviewLineRef): readonly ReviewComment[];

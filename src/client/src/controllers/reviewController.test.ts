@@ -71,6 +71,7 @@ function createHarness(statePatch: Partial<AppState> = {}, deps: ReviewControlle
     backing,
     get state() { return state; },
     /** Simulates `sessionController.selectSession` updating `selectedSession` -- production always does this alongside `adoptSession`, whereas this harness otherwise pins it to a fixed session. */
+    setMachineId(id: string) { state = { ...state, selectedMachine: { id, name: id, kind: "remote", baseUrl: "http://localhost", createdAt: "", updatedAt: "" } }; },
     setSelectedSessionId(id: string) { state = { ...state, selectedSession: { ...session, id } }; },
   };
 }
@@ -83,6 +84,33 @@ function commitAndFillDraft(harness: ReturnType<typeof createHarness>, body: str
 }
 
 describe("ReviewController authoring + queries", () => {
+  it.each([
+    { start: -1, end: -1 }, { start: 0, end: 2 }, { start: 3, end: 2 },
+    { start: 1.5, end: 2 }, { start: 1, end: Infinity }, { start: NaN, end: 2 },
+  ])("rejects invalid ranges without persisting a draft or changing an existing comment: %j", (range) => {
+    const harness = createHarness();
+    commitAndFillDraft(harness, "saved note");
+    harness.controller.submitDraft();
+    const saved = harness.controller.list()[0];
+    if (saved === undefined) throw new Error("Expected saved comment");
+    commitAndFillDraft(harness, "pending note");
+    const invalidAnchor = { ...saved.anchor, range: { ...saved.anchor.range, ...range } };
+    harness.controller.submitDraft(invalidAnchor);
+    expect(harness.controller.list()).toEqual([saved]);
+    expect(harness.controller.draft()?.body).toBe("pending note");
+    harness.controller.update(saved.id, "invalid edit", invalidAnchor);
+    expect(harness.controller.list()).toEqual([saved]);
+    expect(reviewCommentStorage.loadComments("local:session-1", harness.backing)).toEqual([saved]);
+  });
+
+  it("also rejects an invalid stored draft anchor when no override is supplied", () => {
+    const harness = createHarness({ reviewDraft: { anchor: { filePath: "a.ts", source: "files", range: { side: "new", start: 2, end: 1 } }, body: "pending" } });
+    harness.controller.submitDraft();
+    expect(harness.controller.list()).toEqual([]);
+    expect(harness.controller.draft()?.body).toBe("pending");
+    expect(reviewCommentStorage.loadComments("local:session-1", harness.backing)).toEqual([]);
+  });
+
   it("adds a comment through the draft flow and lists/queries it", () => {
     const harness = createHarness();
     commitAndFillDraft(harness, "looks off");
@@ -234,7 +262,9 @@ describe("ReviewController staleness", () => {
     harness.controller.setDraftBody("other file");
     harness.controller.submitDraft();
 
-    harness.controller.invalidateFile("a.ts", "fresh-hash");
+    // The surface explicitly owns the source domain of these comments.
+    for (const comment of harness.controller.list()) harness.controller.update(comment.id, comment.body, { ...comment.anchor, source: "files" });
+    harness.controller.invalidateFile("a.ts", "fresh-hash", "files");
 
     const remainingBodies = harness.controller.list().map((comment) => comment.body).sort();
     expect(remainingBodies).toEqual(["fresh note", "other file"]);
@@ -288,7 +318,7 @@ describe("ReviewController send lifecycle", () => {
     harness.controller.commitSelection("hash-c");
     harness.controller.setDraftBody("in progress");
 
-    const snapshot = harness.controller.beginSend();
+    const snapshot = requiredSnapshot(harness.controller);
 
     expect(snapshot.ids.sort()).toEqual(ids.sort());
     expect(snapshot.markdown).toContain("Code review comments (");
@@ -300,9 +330,9 @@ describe("ReviewController send lifecycle", () => {
   it("completeSend removes exactly the snapshotted ids and clears the lock", () => {
     const harness = createHarness();
     twoComments(harness);
-    const snapshot = harness.controller.beginSend();
+    const snapshot = requiredSnapshot(harness.controller);
 
-    harness.controller.completeSend(snapshot.ids);
+    harness.controller.completeSend(snapshot);
 
     expect(harness.controller.list()).toHaveLength(0);
     expect(harness.state.reviewSendLocked).toBe(false);
@@ -311,9 +341,9 @@ describe("ReviewController send lifecycle", () => {
   it("abortSend keeps all comments and clears the lock", () => {
     const harness = createHarness();
     twoComments(harness);
-    harness.controller.beginSend();
+    const snapshot = requiredSnapshot(harness.controller);
 
-    harness.controller.abortSend();
+    harness.controller.abortSend(snapshot);
 
     expect(harness.controller.list()).toHaveLength(2);
     expect(harness.state.reviewSendLocked).toBe(false);
@@ -322,14 +352,14 @@ describe("ReviewController send lifecycle", () => {
   it("rejects mutation attempts made while locked (canAuthor guard holds)", () => {
     const harness = createHarness();
     twoComments(harness);
-    harness.controller.beginSend();
+    const snapshot = requiredSnapshot(harness.controller);
 
     harness.controller.beginSelection("d.ts", { side: "new", line: 1 });
     expect(harness.state.reviewSelection).toBeUndefined();
     harness.controller.commitSelection("hash-d");
     expect(harness.controller.draft()).toBeUndefined();
 
-    harness.controller.abortSend();
+    harness.controller.abortSend(snapshot);
     expect(harness.controller.list()).toHaveLength(2);
   });
 });
@@ -448,3 +478,141 @@ function fakeComment(filePath: string): ReviewComment {
     sourceHash: "hash",
   };
 }
+
+function requiredSnapshot(controller: ReviewController) {
+  const snapshot = controller.beginSend();
+  if (snapshot === undefined) throw new Error("Expected accepted review send");
+  return snapshot;
+}
+
+
+describe("ReviewController owner-bound sends", () => {
+  it.each([true, false])("settles only the originating machine/session after navigation (success: %s)", (success) => {
+    const harness = createHarness();
+    commitAndFillDraft(harness, "A");
+    harness.controller.submitDraft();
+    const first = requiredSnapshot(harness.controller);
+    expect(harness.controller.beginSend()).toBeUndefined();
+    harness.setMachineId("remote");
+    harness.controller.adoptSession("remote", "session-1");
+    expect(harness.state.reviewSendLocked).toBe(false);
+    commitAndFillDraft(harness, "B");
+    harness.controller.submitDraft();
+    const second = requiredSnapshot(harness.controller);
+
+    if (success) harness.controller.completeSend(first);
+    else harness.controller.abortSend(first);
+
+    expect(harness.controller.list().map((comment) => comment.body)).toEqual(["B"]);
+    expect(harness.state.reviewSendLocked).toBe(true);
+    expect(reviewCommentStorage.loadComments("local:session-1", harness.backing)).toHaveLength(success ? 0 : 1);
+    harness.controller.abortSend(second);
+    expect(harness.state.reviewSendLocked).toBe(false);
+  });
+
+  it("restores an in-flight lock on revisit and ignores an already settled token", () => {
+    const harness = createHarness();
+    commitAndFillDraft(harness, "A");
+    harness.controller.submitDraft();
+    const first = requiredSnapshot(harness.controller);
+    harness.setSelectedSessionId("B");
+    harness.controller.adoptSession("local", "B");
+    harness.setSelectedSessionId("session-1");
+    harness.controller.adoptSession("local", "session-1");
+    expect(harness.controller.canAuthor()).toBe(false);
+    harness.controller.abortSend(first);
+    const second = requiredSnapshot(harness.controller);
+    harness.controller.completeSend(first);
+    expect(harness.controller.list()).toHaveLength(1);
+    expect(harness.state.reviewSendLocked).toBe(true);
+    harness.controller.completeSend(second);
+    expect(harness.controller.list()).toEqual([]);
+  });
+
+  it.each([true, false])("follows a pending send through replacement without clearing newer feedback (adopt first: %s)", (adoptFirst) => {
+    const harness = createHarness();
+    commitAndFillDraft(harness, "temporary");
+    harness.controller.submitDraft();
+    const snapshot = requiredSnapshot(harness.controller);
+    reviewCommentStorage.saveComments("local:real", [fakeComment("newer.ts")], harness.backing);
+    harness.controller.renameSession("local:session-1", "local:real");
+    harness.setSelectedSessionId("real");
+    if (adoptFirst) harness.controller.adoptSession("local", "real");
+    expect(harness.state.reviewSendLocked).toBe(true);
+    harness.controller.completeSend(snapshot);
+    harness.controller.adoptSession("local", "real");
+    expect(harness.controller.list().map((comment) => comment.anchor.filePath)).toEqual(["newer.ts"]);
+    expect(reviewCommentStorage.loadComments("local:session-1", harness.backing)).toEqual([]);
+    expect(reviewCommentStorage.loadComments("local:real", harness.backing)).toHaveLength(1);
+  });
+
+  it("generates independent IDs after recreating the controller and adopting stored comments", () => {
+    const backing = new MemoryStorage();
+    let state = { ...initialAppState(), selectedSession: session };
+    const storage = {
+      loadComments: (key: string) => reviewCommentStorage.loadComments(key, backing),
+      saveComments: (key: string, comments: readonly ReviewComment[]) => { reviewCommentStorage.saveComments(key, comments, backing); },
+      clearComments: (key: string) => { reviewCommentStorage.clearComments(key, backing); },
+      moveComments: (from: string, to: string) => { reviewCommentStorage.moveComments(from, to, backing); },
+    };
+    const makeController = () => new ReviewController(() => state, (patch) => { state = { ...state, ...patch, selectedSession: session }; }, { storage });
+    for (let index = 0; index < 2; index += 1) {
+      const controller = makeController();
+      controller.adoptSession("local", session.id);
+      controller.beginSelection("a.ts", { source: "files", side: "new", line: 1 });
+      controller.commitSelection("hash");
+      controller.setDraftBody(`comment ${String(index)}`);
+      controller.submitDraft();
+    }
+    expect(state.reviewComments).toHaveLength(2);
+    expect(new Set(state.reviewComments.map((comment) => comment.id)).size).toBe(2);
+  });
+});
+
+describe("ReviewController snapshot domains", () => {
+  it("keeps raw, staged, unstaged, and legacy feedback isolated in queries and invalidation", () => {
+    const harness = createHarness();
+    commitAndFillDraft(harness, "legacy", "legacy-hash");
+    harness.controller.submitDraft();
+    for (const source of ["files", "git-staged", "git-unstaged"] as const) {
+      const ref = { source, side: "new" as const, line: 3 };
+      harness.controller.beginSelection("a.ts", ref);
+      harness.controller.commitSelection(source);
+      harness.controller.setDraftBody(source);
+      expect(harness.controller.draftForLine("a.ts", ref)?.body).toBe(source);
+      expect(harness.controller.draftForLine("a.ts", { ...ref, sourceHash: "older" })).toBeUndefined();
+      harness.controller.submitDraft();
+      expect(harness.controller.commentsForLine("a.ts", ref).map((comment) => comment.body)).toEqual([source]);
+      expect(harness.controller.commentsForLine("a.ts", { ...ref, sourceHash: "older" })).toEqual([]);
+    }
+    harness.controller.invalidateFile("a.ts", "raw-content", "files");
+    expect(harness.controller.list().map((comment) => comment.body)).toEqual(["legacy", "git-staged", "git-unstaged"]);
+    harness.controller.invalidateFile("a.ts", "git-staged", "git-staged");
+    expect(harness.controller.total()).toBe(3);
+    harness.controller.invalidateFile("a.ts", "changed-worktree", "git-unstaged");
+    harness.controller.invalidateFile("a.ts", "unknown");
+    expect(harness.controller.list().map((comment) => comment.body)).toEqual(["legacy", "git-staged"]);
+    expect(requiredSnapshot(harness.controller).markdown).toContain("(Git staged)");
+  });
+
+  it("does not commit a selection against content changed during the gesture", () => {
+    const harness = createHarness();
+    harness.controller.beginSelection("a.ts", { source: "git-staged", sourceHash: "old", side: "new", line: 3 });
+    harness.controller.commitSelection("new");
+    expect(harness.controller.draft()).toBeUndefined();
+    expect(harness.state.reviewSelection).toBeUndefined();
+  });
+
+  it("does not extend a staged selection with an unstaged line", () => {
+    const harness = createHarness();
+    harness.controller.beginSelection("a.ts", { source: "git-staged", side: "new", line: 3 });
+    harness.controller.extendSelection({ source: "git-unstaged", side: "new", line: 8 });
+    expect(harness.controller.lineState("a.ts", { source: "git-unstaged", side: "new", line: 3 }).selected).toBe(false);
+    harness.controller.commitSelection("staged");
+    expect(harness.controller.draft()?.anchor).toEqual({ source: "git-staged", filePath: "a.ts", range: { side: "new", start: 3, end: 3 } });
+    harness.controller.invalidateFile("a.ts", "different", "git-unstaged");
+    expect(harness.controller.draft()).toBeDefined();
+    harness.controller.invalidateFile("a.ts", "different", "git-staged");
+    expect(harness.controller.draft()).toBeUndefined();
+  });
+});

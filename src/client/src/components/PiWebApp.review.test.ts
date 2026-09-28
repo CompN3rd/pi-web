@@ -59,19 +59,38 @@ describe("PiWebApp workspace panel context review adapter", () => {
     expect(authoring.review.total()).toBe(0);
   });
 
+  it("ignores stale panel callbacks after the selected session changes", () => {
+    const app = createApp();
+    setAppState(app, { ...initialAppState(), selectedWorkspace: workspace, selectedSession: sessionInfo("A") });
+    const previous = createWorkspacePanelContext(app, workspace).review;
+    setAppState(app, { ...appState(app), selectedSession: sessionInfo("B") });
+    const current = createWorkspacePanelContext(app, workspace).review;
+    current.beginSelection("a.ts", { source: "files", side: "new", line: 1 });
+    current.commitSelection("current");
+    current.setDraftBody("B feedback");
+    current.submitDraft();
+    previous.invalidateFile?.("a.ts", "older", "files");
+    previous.beginSelection("a.ts", { source: "files", side: "new", line: 8 });
+    expect(previous.canAuthor()).toBe(false);
+    expect(previous.total()).toBe(0);
+    expect(current.total()).toBe(1);
+    expect(appState(app).reviewSelection).toBeUndefined();
+    expect(appState(app).reviewComments[0]?.body).toBe("B feedback");
+  });
+
   it("exposes invalidateFile for the Files plugin's source staleness checks", () => {
     const app = createApp();
     setAppState(app, { ...initialAppState(), selectedWorkspace: workspace, workspaces: [workspace], selectedSession: sessionInfo("session-1") });
     const context = createWorkspacePanelContext(app, workspace);
 
-    context.review.beginSelection("src/a.ts", { side: "new", line: 1 });
+    context.review.beginSelection("src/a.ts", { source: "files", side: "new", line: 1 });
     context.review.commitSelection("hash-1");
     context.review.setDraftBody("stale comment");
     context.review.submitDraft();
     expect(context.review.countForFile("src/a.ts")).toBe(1);
 
     if (context.review.invalidateFile === undefined) throw new Error("Expected the review adapter to expose invalidateFile");
-    context.review.invalidateFile("src/a.ts", "different-hash");
+    context.review.invalidateFile("src/a.ts", "different-hash", "files");
 
     expect(context.review.countForFile("src/a.ts")).toBe(0);
   });

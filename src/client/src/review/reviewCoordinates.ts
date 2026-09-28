@@ -1,5 +1,10 @@
 import type { ReviewAnchor, ReviewLineRange } from "./reviewTypes";
 
+/** Persisted/editor ranges are ordered, positive integer coordinates. */
+export function isValidReviewRange(range: Pick<ReviewLineRange, "start" | "end">): boolean {
+  return Number.isInteger(range.start) && Number.isInteger(range.end) && range.start > 0 && range.start <= range.end;
+}
+
 /** Normalize a range to `[min, max]` regardless of drag direction. */
 export function normalizedRange(range: ReviewLineRange): { start: number; end: number } {
   return { start: Math.min(range.start, range.end), end: Math.max(range.start, range.end) };
@@ -17,5 +22,6 @@ export function formatLineRange(range: ReviewLineRange): string {
 
 /** Full coordinate label, e.g. `src/app.ts:12-15` or `src/app.ts:8-9 (deleted)`. */
 export function formatAnchorLabel(anchor: ReviewAnchor): string {
-  return `${anchor.filePath}:${formatLineRange(anchor.range)}`;
+  const source = anchor.source === "files" ? "Files" : anchor.source === "git-staged" ? "Git staged" : anchor.source === "git-unstaged" ? "Git unstaged" : "legacy snapshot";
+  return `${anchor.filePath}:${formatLineRange(anchor.range)} (${source})`;
 }

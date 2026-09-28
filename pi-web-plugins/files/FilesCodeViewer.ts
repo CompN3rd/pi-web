@@ -30,6 +30,7 @@ export class FilesCodeViewer extends LitElement {
       void this.recreateEditor();
     } else if (changed.has("review") && this.view !== undefined && this.reviewOptions !== undefined && this.review !== undefined) {
       // Keep scroll/selection while refreshing comments removed from the composer.
+      this.review.invalidateFile?.(this.reviewOptions.filePath, this.reviewOptions.sourceHash, "files");
       this.reviewOptions.review = this.review;
       this.view.dispatch({ effects: reviewRefreshEffect.of(undefined) });
     }
@@ -51,8 +52,8 @@ export class FilesCodeViewer extends LitElement {
     const dependencies = await loadFilesViewerDependencies();
     if (generation !== this.recreateGeneration || !this.isConnected || this.editorHost === undefined) return;
     const reviewOptions = this.review !== undefined && this.reviewFilePath !== undefined
-      ? { filePath: this.reviewFilePath, review: this.review } : undefined;
-    reviewOptions?.review.invalidateFile?.(reviewOptions.filePath, hashSource(this.content));
+      ? { filePath: this.reviewFilePath, sourceHash: hashSource(this.content), review: this.review } : undefined;
+    reviewOptions?.review.invalidateFile?.(reviewOptions.filePath, reviewOptions.sourceHash, "files");
     this.reviewOptions = reviewOptions;
     this.view?.destroy();
     this.view = new dependencies.EditorView({

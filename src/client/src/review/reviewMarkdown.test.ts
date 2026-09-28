@@ -35,7 +35,7 @@ describe("buildReviewMarkdown", () => {
     // fences/lists), and an explicit end marker so the block's extent is
     // unambiguous regardless of body content.
     expect(buildReviewMarkdown([comment("src/app.ts", "new", 12, 12, "fix this")])).toBe(
-      "### Code review comments (1)\n\n---\n\n#### C1: src/app.ts:12\n\nfix this\n\n<sub><sup><small>*-- end of C1 --*</small></sup></sub>",
+      "### Code review comments (1)\n\n---\n\n#### C1: src/app.ts:12 (legacy snapshot)\n\nfix this\n\n*-- end of C1 --*",
     );
   });
 
@@ -46,14 +46,14 @@ describe("buildReviewMarkdown", () => {
     ]);
     expect(md).toBe(
       "### Code review comments (2)\n\n"
-      + "---\n\n#### C1: a.ts:3-5\n\nrange note\n\n<sub><sup><small>*-- end of C1 --*</small></sup></sub>\n\n"
-      + "---\n\n#### C2: b.ts:8-9 (deleted)\n\ndeletion note\n\n<sub><sup><small>*-- end of C2 --*</small></sup></sub>",
+      + "---\n\n#### C1: a.ts:3-5 (legacy snapshot)\n\nrange note\n\n*-- end of C1 --*\n\n"
+      + "---\n\n#### C2: b.ts:8-9 (deleted) (legacy snapshot)\n\ndeletion note\n\n*-- end of C2 --*",
     );
   });
 
   it("trims comment bodies", () => {
     expect(buildReviewMarkdown([comment("a.ts", "new", 1, 1, "  spaced  ", 1)])).toContain(
-      "#### C1: a.ts:1\n\nspaced\n\n",
+      "#### C1: a.ts:1 (legacy snapshot)\n\nspaced\n\n",
     );
   });
 
@@ -61,7 +61,7 @@ describe("buildReviewMarkdown", () => {
     const body = "Test comment `inline code`. \n```\nexample code\n```\n\n* list of elements\n* list of elements 2";
     const md = buildReviewMarkdown([comment("a.ts", "new", 1, 1, body, 1)]);
     expect(md).toBe(
-      `### Code review comments (1)\n\n---\n\n#### C1: a.ts:1\n\n${body.trim()}\n\n<sub><sup><small>*-- end of C1 --*</small></sup></sub>`,
+      `### Code review comments (1)\n\n---\n\n#### C1: a.ts:1 (legacy snapshot)\n\n${body.trim()}\n\n*-- end of C1 --*`,
     );
   });
 

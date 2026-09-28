@@ -2,7 +2,7 @@ import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogA
 import type { ChatLine } from "./components/shared";
 import type { MachineStatusSnapshot } from "../../shared/machineStatus";
 import type { QualifiedContributionId } from "./plugins/ids";
-import type { ReviewComment, ReviewDraft, ReviewSide } from "./review/reviewTypes";
+import type { ReviewComment, ReviewDraft, ReviewSide, ReviewSource } from "./review/reviewTypes";
 import type { SelectedSessionNotificationInbox } from "./sessionNotifications";
 import type { BrowserErrorMap } from "./browserErrors";
 import type { MainView } from "./route";
@@ -90,7 +90,7 @@ export interface AppState {
    * Both share `side` (single-side selection): `extendSelection` clamps
    * updates to a different side.
    */
-  reviewSelection: { filePath: string; side: ReviewSide; anchorLine: number; currentLine: number } | undefined;
+  reviewSelection: { source?: ReviewSource; sourceHash?: string; filePath: string; side: ReviewSide; anchorLine: number; currentLine: number } | undefined;
   /** True while a send is in flight; disables authoring/removal until it settles. */
   reviewSendLocked: boolean;
 }

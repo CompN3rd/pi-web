@@ -6,6 +6,7 @@ import { ReviewThread, type ReviewThreadDraft } from "./ReviewThread";
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
 });
 
 describe("ReviewThread :host white-space reset", () => {
@@ -93,6 +94,146 @@ function typeInto(textarea: HTMLTextAreaElement, value: string): void {
   textarea.value = value;
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
+
+async function editComment(element: ReviewThread, index = 0): Promise<void> {
+  const card = root(element).querySelectorAll(".card")[index];
+  if (card === undefined) throw new Error("Expected comment card");
+  buttonWithText(card, "⋯").click();
+  await element.updateComplete;
+  buttonWithText(root(element), "Edit").click();
+  await element.updateComplete;
+}
+
+async function openRange(element: ReviewThread, card: Element | ShadowRoot = root(element)): Promise<void> {
+  const button = card.querySelector<HTMLElement>(".line-number-clickable");
+  if (button === null) throw new Error("Expected line-range control");
+  button.click();
+  await element.updateComplete;
+}
+
+async function setRange(element: ReviewThread, start: string, end: string, card: Element | ShadowRoot = root(element)): Promise<void> {
+  for (const [label, value] of [["Start line", start], ["End line", end]] as const) {
+    const input = card.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+    if (input === null) throw new Error("Expected range input");
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await element.updateComplete;
+  }
+}
+
+describe("ReviewThread range editing", () => {
+  it("discards cancelled saved ranges before reopening, and resets when switching comments", async () => {
+    const first = comment({ anchor: { ...comment().anchor, source: "git-staged" } });
+    const second = comment({ id: "review-2", anchor: { filePath: "b.ts", source: "git-unstaged", range: { side: "old", start: 30, end: 31 } } });
+    const onUpdate = vi.fn();
+    const element = await mount({ comments: [first, second], onUpdate });
+    await editComment(element);
+    await openRange(element);
+    await setRange(element, "3", "4");
+    buttonWithText(root(element), "Cancel").click();
+    await element.updateComplete;
+    await editComment(element);
+    buttonWithText(root(element), "Save").click();
+    await element.updateComplete;
+    expect(onUpdate).toHaveBeenLastCalledWith(first.id, first.body, first.anchor);
+
+    await editComment(element);
+    await openRange(element);
+    await setRange(element, "5", "6");
+    await editComment(element, 1);
+    textareaAt(root(element)).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await element.updateComplete;
+    expect(onUpdate).toHaveBeenLastCalledWith(second.id, second.body, second.anchor);
+  });
+
+  it("resets a pending range when the saved target is replaced at the same ID", async () => {
+    const onUpdate = vi.fn();
+    const element = await mount({ comments: [comment()], onUpdate });
+    await editComment(element);
+    await openRange(element);
+    await setRange(element, "3", "4");
+    const replacement = comment({ anchor: { filePath: "other.ts", source: "git-staged", range: { side: "old", start: 8, end: 9 } } });
+    element.comments = [replacement];
+    await element.updateComplete;
+    buttonWithText(root(element), "Save").click();
+    await element.updateComplete;
+    expect(onUpdate).toHaveBeenCalledWith(replacement.id, replacement.body, replacement.anchor);
+  });
+
+  it("keeps draft and saved ranges independent and resets drafts after cancel, submit and replacement", async () => {
+    const original = comment({ anchor: { ...comment().anchor, source: "files" } });
+    const pending = draft({ body: "draft text", anchor: { ...draft().anchor, source: "git-staged" } });
+    const onUpdate = vi.fn();
+    const onSubmitDraft = vi.fn();
+    const onCancelDraft = vi.fn();
+    const element = await mount({ comments: [original], draft: pending, onUpdate, onSubmitDraft, onCancelDraft });
+    const draftCard = root(element).querySelector(".draft");
+    if (draftCard === null) throw new Error("Expected draft card");
+    await openRange(element, draftCard);
+    await setRange(element, "3", "4", draftCard);
+    await editComment(element);
+    await openRange(element);
+    await setRange(element, "7", "8");
+    buttonWithText(root(element), "Save").click();
+    await element.updateComplete;
+    expect(onUpdate).toHaveBeenLastCalledWith(original.id, original.body, { ...original.anchor, range: { side: "new", start: 7, end: 8 } });
+    buttonWithText(draftCard, "Comment").click();
+    await element.updateComplete;
+    expect(onSubmitDraft).toHaveBeenLastCalledWith("draft text", { ...pending.anchor, range: { side: "new", start: 3, end: 4 } });
+    await openRange(element, draftCard);
+    expect(draftCard.querySelector<HTMLInputElement>('input[aria-label="Start line"]')?.value).toBe("20");
+    await setRange(element, "5", "6", draftCard);
+    buttonWithText(draftCard, "Cancel").click();
+    await element.updateComplete;
+    expect(onCancelDraft).toHaveBeenCalledOnce();
+    buttonWithText(draftCard, "Comment").click();
+    await element.updateComplete;
+    expect(onSubmitDraft).toHaveBeenLastCalledWith("draft text", pending.anchor);
+    await openRange(element, draftCard);
+    await setRange(element, "9", "10", draftCard);
+    const replacement = draft({ body: "replacement", anchor: { filePath: "c.ts", source: "files", range: { side: "new", start: 10000, end: 10001 } } });
+    element.draft = replacement;
+    await element.updateComplete;
+    buttonWithText(draftCard, "Comment").click();
+    expect(onSubmitDraft).toHaveBeenLastCalledWith("replacement", replacement.anchor);
+    await element.updateComplete;
+    await openRange(element, draftCard);
+    await setRange(element, "7", "8", draftCard);
+    element.draft = { ...replacement, body: "new draft at the same anchor" };
+    await element.updateComplete;
+    buttonWithText(draftCard, "Comment").click();
+    expect(onSubmitDraft).toHaveBeenLastCalledWith("new draft at the same anchor", replacement.anchor);
+  });
+
+  for (const mode of ["draft", "edit"] as const) {
+    it.each([["-1", "-1"], ["5", "4"], ["1.5", "2"], ["", "2"]])(`rejects invalid ${mode} ranges %s–%s through buttons and Enter`, async (start, end) => {
+      const onSubmitDraft = vi.fn();
+      const onUpdate = vi.fn();
+      const element = await mount({ ...(mode === "draft" ? { draft: draft({ body: "note" }) } : { comments: [comment()] }), onSubmitDraft, onUpdate });
+      if (mode === "edit") await editComment(element);
+      await openRange(element);
+      await setRange(element, start, end);
+      const button = buttonWithText(root(element), mode === "draft" ? "Comment" : "Save");
+      expect(button.disabled).toBe(true);
+      const inputs = root(element).querySelectorAll("input");
+      for (const input of inputs) {
+        expect(input.getAttribute("aria-invalid")).toBe("true");
+        const errorId = input.getAttribute("aria-describedby");
+        expect(root(element).getElementById(errorId ?? "")?.textContent).toContain("positive whole line numbers");
+      }
+      button.click();
+      textareaAt(root(element)).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await element.updateComplete;
+      expect(onSubmitDraft).not.toHaveBeenCalled();
+      expect(onUpdate).not.toHaveBeenCalled();
+      await setRange(element, "12", "13");
+      expect(button.disabled).toBe(false);
+      expect(root(element).querySelector('[role="alert"]')).toBeNull();
+      button.click();
+      expect(mode === "draft" ? onSubmitDraft : onUpdate).toHaveBeenCalledOnce();
+    });
+  }
+});
 
 describe("pi-web-review-thread", () => {
   it("renders nothing but its empty shell with no comments and no draft", async () => {

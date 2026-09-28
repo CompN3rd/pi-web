@@ -112,11 +112,11 @@ function isReviewBeginSend(value: unknown): value is () => ReviewSendSnapshot {
   return typeof value === "function";
 }
 
-function isReviewIdsCallback(value: unknown): value is (ids: string[]) => void {
+function isReviewSnapshotCallback(value: unknown): value is (snapshot: ReviewSendSnapshot) => void {
   return typeof value === "function";
 }
 
-function isReviewAbortSend(value: unknown): value is () => void {
+function isReviewAbortSend(value: unknown): value is (snapshot: ReviewSendSnapshot) => void {
   return typeof value === "function";
 }
 
@@ -206,13 +206,13 @@ describe("PiWebApp <prompt-editor> review wiring", () => {
 
     const onReviewBeginSend = templateValueAfterMarker(template, ".onReviewBeginSend=");
     const onReviewCompleteSend = templateValueAfterMarker(template, ".onReviewCompleteSend=");
-    if (!isReviewBeginSend(onReviewBeginSend) || !isReviewIdsCallback(onReviewCompleteSend)) {
+    if (!isReviewBeginSend(onReviewBeginSend) || !isReviewSnapshotCallback(onReviewCompleteSend)) {
       throw new Error("Expected onReviewBeginSend/onReviewCompleteSend callbacks");
     }
     const snapshot = onReviewBeginSend();
     expect(appState(app).reviewSendLocked).toBe(true);
 
-    onReviewCompleteSend(snapshot.ids);
+    onReviewCompleteSend(snapshot);
     expect(appState(app).reviewSendLocked).toBe(false);
     expect(appState(app).reviewComments).toHaveLength(0);
   });
@@ -229,10 +229,10 @@ describe("PiWebApp <prompt-editor> review wiring", () => {
     if (!isReviewBeginSend(onReviewBeginSend) || !isReviewAbortSend(onReviewAbortSend)) {
       throw new Error("Expected onReviewBeginSend/onReviewAbortSend callbacks");
     }
-    onReviewBeginSend();
+    const snapshot = onReviewBeginSend();
     expect(appState(app).reviewSendLocked).toBe(true);
 
-    onReviewAbortSend();
+    onReviewAbortSend(snapshot);
     expect(appState(app).reviewSendLocked).toBe(false);
     expect(appState(app).reviewComments).toHaveLength(1);
   });

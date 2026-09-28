@@ -3,6 +3,7 @@ import { initialAppState } from "../appState";
 import { isCachedNewSessionInfo, loadCachedNewSessions, markCachedNewSessionInfo, rememberCachedNewSession } from "../cachedNewSessions";
 import { loadDraft, saveDraft } from "../promptDraftStorage";
 import { clearStagedAttachments, loadStagedAttachments, saveStagedAttachments, type PendingAttachment } from "../promptAttachmentStaging";
+import { loadComments, saveComments } from "../review/reviewCommentStorage";
 import { SessionController } from "./sessionController";
 import { defaultApi, emptyPage, FakeSocket, MemoryStorage, oldSession, replacementSession, sessionKey, sessionLookupId, status, workspace, type AppState } from "./sessionController.testSupport";
 
@@ -83,6 +84,7 @@ describe("SessionController cached-new sessions", () => {
     Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
     rememberCachedNewSession(oldSession);
     saveDraft(sessionKey(oldSession.id), "draft text");
+    saveComments(sessionKey(oldSession.id), [{ id: "review-cached", anchor: { filePath: "a.ts", source: "git-staged", range: { side: "new", start: 1, end: 1 } }, body: "cached feedback", sourceHash: "h", createdAt: 0, updatedAt: 0 }]);
     const carriedAttachment: PendingAttachment = { id: "attachment-1", kind: "file", name: "notes.txt", mimeType: "text/plain", data: "aGVsbG8=", size: 5 };
     saveStagedAttachments(sessionKey(oldSession.id), [carriedAttachment]);
 
@@ -113,6 +115,8 @@ describe("SessionController cached-new sessions", () => {
     expect(socket.connectedSessionIds).toEqual([oldSession.id, replacementSession.id]);
     expect(loadDraft(sessionKey(oldSession.id))).toBe("");
     expect(loadDraft(sessionKey(replacementSession.id))).toBe("draft text");
+    expect(loadComments(sessionKey(oldSession.id))).toEqual([]);
+    expect(loadComments(sessionKey(replacementSession.id)).map((comment) => comment.body)).toEqual(["cached feedback"]);
     expect(loadStagedAttachments(sessionKey(oldSession.id))).toEqual([]);
     expect(loadStagedAttachments(sessionKey(replacementSession.id))).toEqual([carriedAttachment]);
     expect(loadCachedNewSessions().map((session) => session.id)).toEqual([replacementSession.id]);

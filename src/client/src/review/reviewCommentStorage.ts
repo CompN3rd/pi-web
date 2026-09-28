@@ -32,6 +32,7 @@ function parseComment(value: unknown): ReviewComment[] {
   if (!isRecord(anchor)) return [];
   const filePath = anchor["filePath"];
   const range = anchor["range"];
+  const source = anchor["source"];
   if (typeof filePath !== "string" || !isRecord(range)) return [];
   const side = range["side"];
   const start = range["start"];
@@ -44,8 +45,24 @@ function parseComment(value: unknown): ReviewComment[] {
     sourceHash,
     createdAt,
     updatedAt,
-    anchor: { filePath, range: { side, start, end } },
+    anchor: { filePath, range: { side, start, end }, ...(source === "files" || source === "git-staged" || source === "git-unstaged" ? { source } : {}) },
   }];
+}
+
+/** Repair older stores with duplicate IDs without dropping either comment. */
+function uniqueCommentIds(comments: ReviewComment[]): ReviewComment[] {
+  const reserved = new Set(comments.map((comment) => comment.id));
+  const seen = new Set<string>();
+  return comments.map((comment) => {
+    let id = comment.id;
+    let suffix = 1;
+    while (seen.has(id)) {
+      id = `${comment.id}-duplicate-${String(suffix++)}`;
+      while (reserved.has(id)) id = `${comment.id}-duplicate-${String(suffix++)}`;
+    }
+    seen.add(id);
+    return id === comment.id ? comment : { ...comment, id };
+  });
 }
 
 export function loadComments(sessionKey: string, storage = browserStorage()): ReviewComment[] {
@@ -54,7 +71,7 @@ export function loadComments(sessionKey: string, storage = browserStorage()): Re
     if (raw === null || raw === undefined || raw === "") return [];
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || parsed["version"] !== STORAGE_VERSION || !Array.isArray(parsed["comments"])) return [];
-    return parsed["comments"].flatMap((candidate) => parseComment(candidate));
+    return uniqueCommentIds(parsed["comments"].flatMap((candidate) => parseComment(candidate)));
   } catch {
     return [];
   }
@@ -81,8 +98,15 @@ export function clearComments(sessionKey: string, storage = browserStorage()): v
 }
 
 export function moveComments(fromSessionKey: string, toSessionKey: string, storage = browserStorage()): void {
+  if (fromSessionKey === toSessionKey) return;
   const comments = loadComments(fromSessionKey, storage);
   if (comments.length === 0) return;
-  saveComments(toSessionKey, comments, storage);
+  const merged = uniqueCommentIds([...comments, ...loadComments(toSessionKey, storage)]);
+  // Unlike best-effort edits, migration must confirm the write before retiring its owner.
+  try {
+    storage?.setItem(storageKey(toSessionKey), JSON.stringify({ version: STORAGE_VERSION, comments: merged }));
+  } catch (cause) {
+    throw new Error("Could not move review comments to the replacement session; original feedback was retained.", { cause });
+  }
   clearComments(fromSessionKey, storage);
 }
