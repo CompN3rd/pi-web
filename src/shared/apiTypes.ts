@@ -1,4 +1,5 @@
 import type { MachineStatusUiEvent } from "./machineStatus.js";
+import type { TerminalPluginMode } from "./requiredTerminalPlugin.js";
 import type {
   DeleteWorkspaceFileResponse,
   FileContentMediaType,
@@ -62,15 +63,6 @@ export type {
   WriteWorkspaceFileOptions,
   WriteWorkspaceFileResponse,
 };
-
-/** Internal query shape for PI WEB's terminal-command-runs host protocol. */
-export interface TerminalCommandRunFilter {
-  projectId?: string;
-  workspaceId?: string;
-  terminalId?: string;
-  statuses?: TerminalCommandRunStatus[];
-  metadata?: Record<string, string>;
-}
 
 export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
@@ -211,10 +203,10 @@ export interface PiWebConfigValues {
 
 export type PiWebPluginScope = "bundled" | "local" | "user" | "project";
 
-export const PI_WEB_PLUGIN_LIFECYCLE_VERSION = 1;
+export const PI_WEB_PLUGIN_LIFECYCLE_VERSION = 2;
 
 export type PiWebPluginServerState = "active" | "failed" | "incompatible" | "disabled" | "missing" | "unknown";
-export type PiWebPluginLifecyclePhase = "import" | "activate" | "validate" | "start" | "health" | "stop";
+export type PiWebPluginLifecyclePhase = "import" | "activate" | "validate" | "start" | "health" | "dispose";
 export type PiWebPluginHealthStatus = "healthy" | "degraded" | "unhealthy";
 export type PiWebPluginRuntimeStatus = "available" | "unavailable" | "incompatible";
 export type PiWebPluginSafeStart = "bundled-only" | "none";
@@ -237,6 +229,8 @@ export interface PiWebPluginServerInfo {
 
 export interface PiWebPluginInfo {
   id: string;
+  /** The bundled Terminal package is required outside explicit recovery mode. */
+  required?: true;
   /** Browser module URL for the currently discovered package, if any. */
   module?: string;
   source: string;
@@ -268,6 +262,7 @@ export interface PiWebPluginRecoveryCommands {
 
 export interface PiWebPluginRuntimeInfo {
   status: PiWebPluginRuntimeStatus;
+  terminalMode: TerminalPluginMode;
   /** Safe-start level active in sessiond; absence means sessiond started normally. */
   safeStart?: PiWebPluginSafeStart;
   /** Current offline recovery config, including explicit `off` when known. */
@@ -296,8 +291,8 @@ export interface PiPackageInfo {
 export interface PiPackagesResponse {
   packages: PiPackageInfo[];
   /**
-   * Known Pi packages PI WEB ships and can auto-install (see the
-   * `relay-pi-package-autoinstall` relay) that are not currently configured
+   * Known Pi packages PI WEB ships (including explicit opt-in packages)
+   * that are not currently configured
    * for the active profile — omitted or empty once every known package is
    * configured. Lets the Settings UI offer a one-click (re)install with no
    * path typing for a package the user dismissed or never installed.
@@ -441,13 +436,22 @@ export interface SessionRef {
 
 export type ServerNoticeSeverity = "info" | "warning" | "error";
 
-/** One independent server-created application event retained until dismissal. */
+/** Browser-visibility selectors for one server notice. */
+export type ServerNoticeScope =
+  | { projectId: string; workspaceId?: string; sessionId?: string }
+  | { projectId?: string; workspaceId: string; sessionId?: string }
+  | { projectId?: string; workspaceId?: string; sessionId: string };
+
+/** One independent server-created event retained until dismissal, eligible plugin eviction, or daemon end. */
 export interface ServerNotice {
   id: string;
   severity: ServerNoticeSeverity;
   message: string;
   createdAt: string;
   source?: string;
+  /** Omitted for global visibility. */
+  scope?: ServerNoticeScope;
+  /** Detached diagnostic metadata that never controls visibility. */
   context?: JsonObject;
 }
 
@@ -1091,6 +1095,18 @@ export interface ModelSelectionResponse {
   models: SessionModel[];
 }
 
+export interface SessionDefaults {
+  defaultProvider?: string;
+  defaultModel?: string;
+  defaultThinkingLevel?: import("./thinkingLevels.js").ThinkingLevel;
+}
+
+export interface SessionDefaultsUpdate {
+  provider?: string;
+  modelId?: string;
+  thinkingLevel?: import("./thinkingLevels.js").ThinkingLevel;
+}
+
 export interface ThinkingLevelsResponse {
   levels: string[];
 }
@@ -1157,30 +1173,20 @@ export interface SessionStatus {
 export interface SlashCommand {
   name: string;
   description?: string;
+  /**
+   * Pi-style argument hint (e.g. `<PR-URL>`, `[instructions]`) shown next to
+   * the command name in autocomplete, using `<angle>` for required and
+   * `[square]` for optional arguments. Sourced from the `argument-hint`
+   * frontmatter of prompt templates; absent when a command takes no arguments
+   * or does not declare them.
+   */
+  argumentHint?: string;
   source: "extension" | "prompt" | "skill" | "builtin";
 }
 
 export interface FileSuggestion {
   path: string;
   kind: "tracked" | "untracked" | "other";
-}
-
-export interface TerminalInfo {
-  id: string;
-  cwd: string;
-  name: string;
-  createdAt: string;
-  exited: boolean;
-  exitCode?: number;
-  commandRunId?: string;
-}
-
-export interface RunTerminalCommandInput {
-  workspace: Workspace;
-  title: string;
-  command: string;
-  metadata?: Record<string, string>;
-  open?: boolean;
 }
 
 /** Secret-free identity of the pi agent state directory fixed for one sessiond lifetime. */
@@ -1213,11 +1219,6 @@ export interface PiWebRuntimeResponse {
   };
   capabilities: PiWebCapability[];
 }
-
-export type TerminalUiEvent =
-  | { type: "terminal.created"; terminal: TerminalInfo }
-  | { type: "terminal.exited"; terminal: TerminalInfo }
-  | { type: "terminal.closed"; terminalId: string; cwd: string };
 
 export interface CommandOption {
   value: string;
@@ -1291,7 +1292,14 @@ export type SessionTreeForkResult =
   | { cancelled: false; session: SessionInfo; promptDraft?: string }
   | { cancelled: true };
 
+/** Browser transcript payload; entryId identifies the durable session-tree entry, not the provider response. */
+export interface TranscriptMessage {
+  entryId?: string;
+  [key: string]: unknown;
+}
+
 export interface MessagePage {
+  /** Opaque SDK payloads, with TranscriptMessage metadata when backed by a durable entry. */
   messages: unknown[];
   start: number;
   total: number;
@@ -1309,6 +1317,12 @@ export interface SessionStreamSnapshot {
   seq: number;
   /** Browser-projected in-flight `AssistantMessage`, or `null` when idle. */
   partial: unknown;
+}
+
+/** History, status, and partial captured at one event watermark for refresh/replay. */
+export interface SessionTranscriptSnapshot extends SessionStreamSnapshot {
+  page: MessagePage;
+  status: SessionStatus;
 }
 
 export type CommandResult =
@@ -1364,4 +1378,4 @@ export type GlobalSessionEvent =
   | SessionStartupProgressEvent
   | ModelScopeChangedEvent
   | ServerNoticeEvent;
-export type RealtimeEvent = GlobalSessionEvent | TerminalUiEvent | MachineStatusUiEvent;
+export type RealtimeEvent = GlobalSessionEvent | MachineStatusUiEvent;
