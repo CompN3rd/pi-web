@@ -1031,15 +1031,17 @@ describe("PiWebApp plugin host", () => {
     const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
     const sessionApi: unknown = Reflect.get(sessions, "api");
     if (typeof sessionApi !== "object" || sessionApi === null) throw new Error("Missing session API");
-    const messages = vi.fn(() => Promise.resolve({ messages: [], start: 0, total: 0 }));
-    if (!Reflect.set(sessionApi, "messages", messages)) throw new Error("Could not stub message loading");
+    const loadSnapshot: unknown = Reflect.get(sessionApi, "transcriptSnapshot");
+    if (typeof loadSnapshot !== "function") throw new Error("Missing transcript API");
+    const transcriptSnapshot = vi.fn((...args: unknown[]): unknown => Reflect.apply(loadSnapshot, sessionApi, args));
+    if (!Reflect.set(sessionApi, "transcriptSnapshot", transcriptSnapshot)) throw new Error("Could not observe transcript loading");
     const pluginsReady = deferred<undefined>();
     const loadPlugins = vi.fn(() => pluginsReady.promise);
     if (!Reflect.set(app, "loadPluginsForSelectedMachine", loadPlugins)) throw new Error("Could not stub plugin loading");
     let settled = false;
     const restoring = callAsyncAppMethod(app, "restoreRoute", false).then(() => { settled = true; });
     try {
-      await vi.waitFor(() => { expect(messages).toHaveBeenCalledOnce(); });
+      await vi.waitFor(() => { expect(transcriptSnapshot).toHaveBeenCalledOnce(); });
       expect(appState(app).selectedSession?.id).toBe(session.id);
       expect(loadPlugins).toHaveBeenCalledOnce();
       if (withTool) {
