@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { appendFile, mkdir, symlink, truncate, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, realpath, symlink, truncate, unlink, writeFile } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import { basename, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -77,10 +77,11 @@ describe("readWorkspaceFilePreview", () => {
     const external = await createTempWorkspace();
     const target = join(external, "outside.svg");
     await writeFile(target, "<svg></svg>");
+    const canonicalTarget = await realpath(target);
     await symlink(target, join(root, "linked.svg"));
     for (const path of [relative(root, target), target, `~/${relative(homedir(), target)}`, "linked.svg"]) {
       const preview = await readWorkspaceFilePreview(root, path, undefined, { explicitlyRequestedImage: true });
-      expect(preview).toMatchObject({ path: target, mediaType: "image", size: 11 });
+      expect(preview).toMatchObject({ path: canonicalTarget, mediaType: "image", size: 11 });
       expect(await previewText(preview.body)).toBe("<svg></svg>");
       await expect(readWorkspaceFilePreview(root, path)).rejects.toThrow();
       await expect(readWorkspaceFilePreview(root, path, undefined, { download: true })).rejects.toThrow();
@@ -88,7 +89,7 @@ describe("readWorkspaceFilePreview", () => {
     }
   });
 
-  it("rejects non-images, disguised symlinks, oversized images and special files for explicit previews", async () => {
+  it("rejects non-images, disguised symlinks, oversized images, directories and missing files for explicit previews", async () => {
     const root = await createTempWorkspace();
     const external = await createTempWorkspace();
     const options = { explicitlyRequestedImage: true };
@@ -106,10 +107,16 @@ describe("readWorkspaceFilePreview", () => {
     const directory = join(external, "directory.png");
     await mkdir(directory);
     await expect(readWorkspaceFilePreview(root, directory, undefined, options)).rejects.toThrow("not a file");
+    await expect(readWorkspaceFilePreview(root, join(external, "missing.png"), undefined, options)).rejects.toThrow();
+  });
+
+  // Windows does not support POSIX filesystem FIFOs, even when Git Bash supplies mkfifo.
+  it.skipIf(process.platform === "win32")("rejects FIFOs for explicit previews", async () => {
+    const root = await createTempWorkspace();
+    const external = await createTempWorkspace();
     const fifo = join(external, "pipe.png");
     execFileSync("mkfifo", [fifo]);
-    await expect(readWorkspaceFilePreview(root, fifo, undefined, options)).rejects.toThrow("not a file");
-    await expect(readWorkspaceFilePreview(root, join(external, "missing.png"), undefined, options)).rejects.toThrow();
+    await expect(readWorkspaceFilePreview(root, fifo, undefined, { explicitlyRequestedImage: true })).rejects.toThrow("not a file");
   });
 
   it("returns inline previews as a snapshot of the validated file", async () => {
