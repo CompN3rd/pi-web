@@ -928,6 +928,24 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
 
+    it("does not notify the parent for an idle child's /pi-vcc command or compaction", async () => {
+      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" }, 10);
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "go" });
+
+      const commandPrompt = vi.fn(() => { child.emit({ type: "message_start" }); return Promise.resolve(); });
+      child.session.prompt = commandPrompt;
+      await service.prompt(sessionRef("child-1", "/workspace"), "/pi-vcc");
+      await vi.waitFor(() => { expect(commandPrompt).toHaveBeenCalled(); });
+      child.session.isCompacting = true;
+      child.emit({ type: "compaction_start" });
+      child.session.isCompacting = false;
+      child.emit({ type: "compaction_end" });
+      await new Promise<void>((resolve) => setTimeout(resolve, 35)); // include heartbeat recheck
+      expect(parent.calls.sendCustomMessage).toHaveLength(0);
+      await service.dispose();
+    });
+
     it("notifies the parent once when the tracked child stops working", async () => {
       const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace" });
       child.session.sessionManager.getBranch = () => [

@@ -60,6 +60,15 @@ describe("machine-scoped session proxy routes", () => {
     expect(daemon.requests).toEqual([{ method: "GET", path: "/sessions?cwd=/repo", body: undefined }]);
   });
 
+  it("forwards transcript snapshot queries and the atomic response unchanged", async () => {
+    const snapshot = { page: { start: 0, total: 0, messages: [] }, status: { sessionId: "session-1" }, seq: 12, partial: null };
+    daemon.respondWith({ statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify(snapshot) });
+    const response = await app.inject({ method: "GET", url: "/api/machines/local/sessions/session-1/transcript-snapshot?cwd=%2Frepo&limit=25" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(snapshot);
+    expect(daemon.requests).toEqual([{ method: "GET", path: "/sessions/session-1/transcript-snapshot?cwd=%2Frepo&limit=25", body: undefined }]);
+  });
+
   it("forwards the machine status snapshot request to the daemon", async () => {
     const response = await app.inject({ method: "GET", url: "/api/machines/local/status" });
 

@@ -28,7 +28,7 @@ import {
   type ProjectTrustEventResult,
   type ResourceDiagnostic,
 } from "@earendil-works/pi-coding-agent";
-import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionUiEvent } from "../types.js";
+import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionTranscriptSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
@@ -1161,6 +1161,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly unpersistedTreeBranchLeaves = new WeakMap<PiAgentSession, string | null>();
   /** Counts async operations that may append an entry before they settle. */
   private readonly sessionEntryMutationCounts = new WeakMap<PiAgentSession, number>();
+  private readonly pendingPromptEchoes = new WeakMap<PiAgentSession, { userIndex: number; message: ReturnType<typeof userMessage> }[]>();
+  private readonly publishedAssistantPartials = new WeakMap<PiAgentSession, unknown>();
   /** Settings-wide queue preventing enabled-model read/modify/write races across sessions. */
   private modelScopeMutationQueue: Promise<void> = Promise.resolve();
   /** Global and workspace-owned enabled-model states; live session scopes project one entry lazily. */
@@ -1189,8 +1191,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly subsessionHydratedParents = new Set<string>();
   /**
    * Tracked subsession id -> whether a completion notification is armed.
-   * Armed when the child starts working; firing on completion disarms it so a
-   * child that works again (and stops again) notifies the parent each time.
+   * Armed when the child's agent starts a run (not for commands or compaction);
+   * firing on completion disarms it for the next run.
    */
   private readonly subsessionNotifyArmed = new Map<string, boolean>();
   private readonly archiveStore: SessionArchiveRepository;
@@ -2281,19 +2283,19 @@ export class PiSessionService implements SessionRouteService {
   }
 
   /**
-   * Drive parent notifications from a tracked child's status. Arms a pending
-   * notification while the child is working, and when it stops fires a single
-   * follow-up message to the parent via {@link prompt} (which queues if the
-   * parent is busy and delivers immediately when it is idle).
+   * Arm on a tracked child's agent_start, then notify the parent once it stops
+   * working. Commands and compactions can be busy without starting an agent run,
+   * so they must not arm a completion notice.
    */
-  private updateSubsessionTracking(session: PiAgentSession): void {
+  private updateSubsessionTracking(session: PiAgentSession, agentStarted = false): void {
     const link = this.subsessionLinkForActiveChild(session);
     if (link === undefined) return;
     const childId = link.childSessionId;
-    if (this.hasActiveWork(session)) {
+    if (agentStarted) {
       this.subsessionNotifyArmed.set(childId, true);
       return;
     }
+    if (this.hasActiveWork(session)) return;
     if (this.subsessionNotifyArmed.get(childId) !== true) return;
     this.subsessionNotifyArmed.set(childId, false);
     const status: SubsessionStatus = this.activities.get(childId)?.phase === "error" ? "error" : "idle";
@@ -2358,6 +2360,28 @@ export class PiSessionService implements SessionRouteService {
       { parentSessionId: parentId, sessionId: childId, error: error instanceof Error ? error.message : String(error) },
       "failed to notify parent of subsession completion",
     );
+  }
+
+  async transcriptSnapshot(ref: PiSessionRef, page?: { limit?: number }): Promise<SessionTranscriptSnapshot> {
+    const session = await this.getOrOpen(ref);
+    const seqBeforeRead = this.events.currentSeq(session.sessionId);
+    const activeAtCapture = this.hasActiveWork(session);
+    const diskBranch = activeAtCapture ? undefined : await this.readableSessionBranch(ref, session);
+    // Disk reads yield, even if a whole turn starts AND ends while they run.
+    // From the final runtime read through the watermark capture nothing may yield.
+    const branch = diskBranch === undefined || this.hasActiveWork(session) || this.events.currentSeq(session.sessionId) !== seqBeforeRead
+      ? session.sessionManager.getBranch()
+      : diskBranch;
+    const messages = historyMessagesFromEntries(branch);
+    const userCount = messages.filter((message) => isRecord(message) && message["role"] === "user").length;
+    const echoes = (this.pendingPromptEchoes.get(session) ?? []).filter((echo) => echo.userIndex >= userCount);
+    messages.push(...echoes.map((echo) => echo.message));
+    return {
+      page: pageMessagesAtSafeBoundary(messages, page),
+      status: this.statusFromSession(session, transcriptMessageCount(branch) + echoes.length),
+      seq: this.events.currentSeq(session.sessionId),
+      partial: this.publishedAssistantPartials.get(session) ?? null,
+    };
   }
 
   async messages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage> {
@@ -2620,9 +2644,25 @@ export class PiSessionService implements SessionRouteService {
 
   private beginPromptSubmission(session: PiAgentSession, text: string, behavior: QueuedPromptKind | undefined, images: ImageContent[] = [], echoUserMessage = true): Promise<void> {
     this.publishActivity(session, behavior === "steer" ? "steering queued" : behavior === "followUp" ? "message queued" : "prompt accepted", "active");
-    if (behavior === undefined && echoUserMessage) this.events.publish(session.sessionId, { type: "message.append", message: userMessage(text, images) });
+    const echoes = this.pendingPromptEchoes.get(session) ?? [];
+    const userCount = historyMessagesFromEntries(session.sessionManager.getBranch()).filter((message) => isRecord(message) && message["role"] === "user").length;
+    const echo = behavior === undefined && echoUserMessage
+      ? { userIndex: Math.max(userCount, ...echoes.map((pending) => pending.userIndex + 1)), message: userMessage(text, images) }
+      : undefined;
+    if (echo !== undefined) {
+      // SDK input hooks may await before appending the user message. Keep the
+      // already-published echo visible in snapshots until that append occurs.
+      this.pendingPromptEchoes.set(session, [...echoes, echo]);
+      this.events.publish(session.sessionId, { type: "message.append", message: echo.message });
+    }
     const promptOptions = buildPromptOptions(behavior, images);
-    const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions));
+    const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions)).finally(() => {
+      if (echo !== undefined) {
+        const remaining = (this.pendingPromptEchoes.get(session) ?? []).filter((pending) => pending !== echo);
+        if (remaining.length === 0) this.pendingPromptEchoes.delete(session);
+        else this.pendingPromptEchoes.set(session, remaining);
+      }
+    });
     void promptPromise.catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.publishActivity(session, "error", "error", message);
@@ -4028,9 +4068,19 @@ export class PiSessionService implements SessionRouteService {
       }
     }
     const unsubscribe = session.subscribe((event) => {
+      const eventType = getString(event, "type");
+      const message = getProperty(event, "message");
+      if ((eventType === "message_start" || eventType === "message_update") && getString(message, "role") === "assistant") {
+        // SDK state advances before async extension hooks finish. Capture only
+        // published messages, detaching even blocks left intact by projection.
+        this.publishedAssistantPartials.set(session, structuredClone(
+          annotateAssistantThinkingLevel(projectBrowserMessage(message), session.thinkingLevel),
+        ));
+      } else if (eventType === "message_start" || eventType === "message_end" || eventType === "agent_end") {
+        this.publishedAssistantPartials.delete(session);
+      }
       this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
       this.publishActivityForEvent(session, event);
-      const eventType = getString(event, "type");
       // Queued messages can reach the model after an ask opened, even though
       // there was no ask to dismiss when the user originally submitted them.
       if (eventType === "message_start" && isRecord(event) && getString(event["message"], "role") === "user") {
@@ -4044,11 +4094,12 @@ export class PiSessionService implements SessionRouteService {
       if (eventType === "compaction_end") this.scheduleCompactionQueueDrain(session.sessionId);
       if (eventType === "agent_start" || eventType === "agent_end") this.scheduleCompactionQueueDrain(session.sessionId);
       this.publishStatus(session);
-      this.updateSubsessionTracking(session);
+      this.updateSubsessionTracking(session, eventType === "agent_start");
     });
     active.unsubscribe = () => {
       this.sessionEvents.close(session);
       unsubscribe();
+      this.publishedAssistantPartials.delete(session);
     };
     this.active.set(session.sessionId, active);
   }
