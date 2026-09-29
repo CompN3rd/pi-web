@@ -8,6 +8,7 @@ import { SessionController } from "./sessionController";
 import { InMemorySessionSelectionMemory } from "./sessionSelection";
 import {
   defaultApi,
+  transcriptSnapshotFixture,
   deferred,
   EmitSocket,
   FakeSocket,
@@ -114,8 +115,7 @@ describe("SessionController session tree navigation", () => {
     const cacheKey = machineSessionKey("local", oldSession.id);
     const cachedPages = new Map<string, MessagePage>();
     const removedKeys: string[] = [];
-    let messageCalls = 0;
-    let statusCalls = 0;
+    let snapshotCalls = 0;
     const navigationCalls: unknown[] = [];
     const replacePromptEditorText = vi.fn();
     const socket = new EmitSocket();
@@ -126,18 +126,13 @@ describe("SessionController session tree navigation", () => {
         navigationCalls.push({ sessionId: sessionLookupId(session), request, machineId });
         return Promise.resolve({ cancelled: false, editorText: "edit original prompt" });
       },
-      messages: () => {
-        messageCalls += 1;
-        if (messageCalls === 1) return Promise.resolve(initialPage);
-        if (messageCalls === 2) return stalePage.promise;
-        return Promise.resolve(freshPage);
+      transcriptSnapshot: () => {
+        snapshotCalls += 1;
+        return transcriptSnapshotFixture(
+          snapshotCalls === 1 ? initialPage : snapshotCalls === 2 ? stalePage.promise : freshPage,
+          snapshotCalls === 2 ? staleStatus.promise : { ...status(oldSession.id), messageCount: snapshotCalls === 1 ? 1 : 2 },
+        );
       },
-      status: () => {
-        statusCalls += 1;
-        if (statusCalls === 2) return staleStatus.promise;
-        return Promise.resolve({ ...status(oldSession.id), messageCount: statusCalls === 1 ? 1 : 2 });
-      },
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const transcripts = new ChatTranscriptStore({
@@ -159,7 +154,7 @@ describe("SessionController session tree navigation", () => {
 
     const oldRefresh = controller.refreshSelectedSession();
     await Promise.resolve();
-    expect(messageCalls).toBe(2);
+    expect(snapshotCalls).toBe(2);
 
     const navigation = controller.navigateTree("root", { mode: "custom", instructions: "focus on the prompt" });
     await Promise.resolve();
@@ -173,8 +168,7 @@ describe("SessionController session tree navigation", () => {
       request: { targetId: "root", expectedLeafId: "leaf-1", summary: { mode: "custom", instructions: "focus on the prompt" } },
       machineId: "local",
     }]);
-    expect(messageCalls).toBe(3);
-    expect(statusCalls).toBe(3);
+    expect(snapshotCalls).toBe(3);
     expect(removedKeys).toEqual([cacheKey]);
     expect(cachedPages.get(cacheKey)).toEqual(freshPage);
     expect(state.messages).toEqual([{ role: "assistant", parts: [{ type: "text", text: "fresh branch" }] }]);
@@ -194,13 +188,11 @@ describe("SessionController session tree navigation", () => {
       treeDialog: tree,
     };
     const replacePromptEditorText = vi.fn();
-    const messages = vi.fn<typeof defaultApi.messages>(() => authoritativePage.promise);
+    const transcriptSnapshot = vi.fn<typeof defaultApi.transcriptSnapshot>(() => transcriptSnapshotFixture(authoritativePage.promise, status(oldSession.id)));
     const api: typeof defaultApi = {
       ...defaultApi,
       navigateTree: () => Promise.resolve({ cancelled: false, editorText: "edit after refresh" }),
-      messages,
-      status: () => Promise.resolve(status(oldSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot,
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -212,7 +204,7 @@ describe("SessionController session tree navigation", () => {
     );
 
     const navigation = controller.navigateTree("root", { mode: "none" });
-    await vi.waitFor(() => { expect(messages).toHaveBeenCalledOnce(); });
+    await vi.waitFor(() => { expect(transcriptSnapshot).toHaveBeenCalledOnce(); });
     expect(state.treeDialog).toBe(tree);
     expect(replacePromptEditorText).not.toHaveBeenCalled();
 
@@ -236,9 +228,7 @@ describe("SessionController session tree navigation", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       navigateTree: () => Promise.resolve({ cancelled: false, editorText: "recovered draft" }),
-      messages: () => Promise.reject(new Error("authoritative history refresh failed")),
-      status: () => Promise.resolve(status(oldSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => Promise.reject(new Error("authoritative history refresh failed")),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -268,9 +258,7 @@ describe("SessionController session tree navigation", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       navigateTree: () => Promise.resolve({ cancelled: false, editorText: "recovered draft" }),
-      messages: () => Promise.resolve(page("authoritative branch", 1)),
-      status: () => Promise.resolve(status(oldSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => transcriptSnapshotFixture(page("authoritative branch", 1), status(oldSession.id)),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -295,9 +283,7 @@ describe("SessionController session tree navigation", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       navigateTree: () => Promise.resolve({ cancelled: false }),
-      messages: () => Promise.resolve(page("selected entry", 1)),
-      status: () => Promise.resolve(status(oldSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => transcriptSnapshotFixture(page("selected entry", 1), status(oldSession.id)),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -345,9 +331,7 @@ describe("SessionController session tree navigation", () => {
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: oldSession, sessions: [oldSession] };
     const api: typeof defaultApi = {
       ...defaultApi,
-      messages: () => Promise.reject(new Error("history refresh failed")),
-      status: () => Promise.resolve(status(oldSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => Promise.reject(new Error("history refresh failed")),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -366,7 +350,7 @@ describe("SessionController session tree navigation", () => {
 
   it("does not reopen a disposed controller when navigation settles late", async () => {
     const navigationResult = deferred<{ cancelled: false; editorText: string }>();
-    const messages = vi.fn<typeof defaultApi.messages>(() => Promise.resolve(page("must not load", 1)));
+    const transcriptSnapshot = vi.fn<typeof defaultApi.transcriptSnapshot>(() => transcriptSnapshotFixture(page("must not load", 1), status(oldSession.id)));
     const replacePromptEditorText = vi.fn();
     let state: AppState = {
       ...initialAppState(),
@@ -375,7 +359,7 @@ describe("SessionController session tree navigation", () => {
       sessions: [oldSession],
       treeDialog: tree,
     };
-    const api: typeof defaultApi = { ...defaultApi, navigateTree: () => navigationResult.promise, messages };
+    const api: typeof defaultApi = { ...defaultApi, navigateTree: () => navigationResult.promise, transcriptSnapshot };
     const controller = new SessionController(
       () => state,
       (patch) => { state = { ...state, ...patch }; },
@@ -389,7 +373,7 @@ describe("SessionController session tree navigation", () => {
     navigationResult.resolve({ cancelled: false, editorText: "late result" });
     await navigation;
 
-    expect(messages).not.toHaveBeenCalled();
+    expect(transcriptSnapshot).not.toHaveBeenCalled();
     expect(replacePromptEditorText).not.toHaveBeenCalled();
   });
 
@@ -407,12 +391,10 @@ describe("SessionController session tree navigation", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       navigateTree: () => navigationResult.promise,
-      messages: () => {
+      transcriptSnapshot: () => {
         messageCalls += 1;
-        return Promise.resolve(page(messageCalls === 1 ? "pre-navigation reselection" : "authoritative branch", 1));
+        return transcriptSnapshotFixture(page(messageCalls === 1 ? "pre-navigation reselection" : "authoritative branch", 1), status(oldSession.id));
       },
-      status: () => Promise.resolve(status(oldSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -447,12 +429,10 @@ describe("SessionController session tree navigation", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       navigateTree: () => Promise.resolve({ cancelled: false, editorText: "recovered draft" }),
-      messages: () => {
+      transcriptSnapshot: () => {
         messageCalls += 1;
-        return messageCalls === 1 ? firstRefresh.promise : Promise.resolve(page("reselected authoritative branch", 1));
+        return transcriptSnapshotFixture(messageCalls === 1 ? firstRefresh.promise : page("reselected authoritative branch", 1), status(oldSession.id));
       },
-      status: () => Promise.resolve(status(oldSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -495,12 +475,10 @@ describe("SessionController session tree navigation", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       navigateTree: () => navigationResult.promise,
-      messages: (session) => {
+      transcriptSnapshot: (session) => {
         requestedMessages.push(sessionLookupId(session));
-        return Promise.resolve(page("replacement authoritative", 1));
+        return transcriptSnapshotFixture(page("replacement authoritative", 1), status(sessionLookupId(session)));
       },
-      status: (session) => Promise.resolve(status(sessionLookupId(session))),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const transcripts = new ChatTranscriptStore({
@@ -566,9 +544,7 @@ describe("SessionController session tree navigation", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       runCommand: () => command.promise,
-      messages: () => Promise.resolve(page("replacement", 1)),
-      status: () => Promise.resolve(status(replacementSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => transcriptSnapshotFixture(page("replacement", 1), status(replacementSession.id)),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const controller = new SessionController(
@@ -603,9 +579,7 @@ describe("SessionController session tree fork", () => {
         forkCalls.push({ sessionId: sessionLookupId(session), request, machineId });
         return Promise.resolve({ cancelled: false, session: replacementSession, promptDraft: "resend me" });
       },
-      messages: () => Promise.resolve(page("forked branch", 1)),
-      status: () => Promise.resolve(status(replacementSession.id)),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => transcriptSnapshotFixture(page("forked branch", 1), status(replacementSession.id)),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     };
     const transcripts = new ChatTranscriptStore({

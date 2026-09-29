@@ -762,10 +762,12 @@ describe("PiWebApp plugin host", () => {
       || !Reflect.set(sessions, "api", {
         ...defaultApi,
         startSession,
-        messages: (session: Parameters<typeof defaultApi.messages>[0]) => session.id === cached.id
-          ? Promise.reject(new Error("Session not found")) : Promise.resolve({ messages: [], start: 0, total: 0 }),
-        status: () => Promise.resolve({ sessionId: replacement.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
-        streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+        transcriptSnapshot: (session: Parameters<typeof defaultApi.transcriptSnapshot>[0]) => session.id === cached.id
+          ? Promise.reject(new Error("Session not found")) : Promise.resolve({
+            page: { messages: [], start: 0, total: 0 },
+            status: { sessionId: replacement.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 },
+            seq: 0, partial: null,
+          }),
         thinkingLevels: () => Promise.resolve({ levels: [] }),
       })) throw new Error("Could not stub session boundaries");
     // Keep the real publication/ownership guard; isolate only destination loading
@@ -1375,9 +1377,10 @@ describe("PiWebApp plugin host", () => {
     if (!Reflect.set(sessions, "socket", socket)
       || !Reflect.set(sessions, "notifications", undefined)
       || !Reflect.set(sessions, "api", {
-        messages: async () => { await waitAt("refresh"); return { messages: [], start: 0, total: 0 }; },
-        status: () => Promise.resolve(status),
-        streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+        transcriptSnapshot: async () => {
+          await waitAt("refresh");
+          return { page: { messages: [], start: 0, total: 0 }, status, seq: 0, partial: null };
+        },
         thinkingLevels: () => Promise.resolve({ levels: [] }),
       })) throw new Error("Could not stub session boundaries");
     const restoring = callAsyncAppMethod(app, "restoreRouteFor", {
@@ -1417,7 +1420,9 @@ describe("PiWebApp plugin host", () => {
     expect(appState(app).selectedSession?.id).toBe(session.id);
     expect(appState(app).mainView).toBe("workspace");
     expect(browser.url.href).toBe(destination);
-    expect(setHandler).toHaveBeenCalledOnce();
+    // The shared join keeps its original socket handler rather than swapping
+    // handlers after the fetch; buffered and subsequent events still reach it.
+    expect(handler).toBeTypeOf("function");
     sessions.flushPendingUpdates();
     expect(appState(app).status?.cost).toBe(phase === "refresh" ? 2 : 0);
     const liveEvent: SessionUiEvent = { type: "status.update", status: { ...status, cost: 1 } };
@@ -4107,9 +4112,11 @@ async function installRuntimeRecoveryBoundaries(
   if (!Reflect.set(sessions, "socket", socket)
     || !Reflect.set(sessions, "notifications", undefined)
     || !Reflect.set(sessions, "api", {
-      messages: () => Promise.resolve({ messages: [], start: 0, total: 0 }),
-      status: () => Promise.resolve({ sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => Promise.resolve({
+        page: { messages: [], start: 0, total: 0 },
+        status: { sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 },
+        seq: 0, partial: null,
+      }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     })) throw new Error("Could not stub session boundaries");
   return sessions;
