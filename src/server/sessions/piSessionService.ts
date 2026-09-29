@@ -28,7 +28,7 @@ import {
   type ProjectTrustEventResult,
   type ResourceDiagnostic,
 } from "@earendil-works/pi-coding-agent";
-import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionUiEvent } from "../types.js";
+import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionTranscriptSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
@@ -1161,6 +1161,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly unpersistedTreeBranchLeaves = new WeakMap<PiAgentSession, string | null>();
   /** Counts async operations that may append an entry before they settle. */
   private readonly sessionEntryMutationCounts = new WeakMap<PiAgentSession, number>();
+  private readonly pendingPromptEchoes = new WeakMap<PiAgentSession, { userIndex: number; message: ReturnType<typeof userMessage> }[]>();
+  private readonly publishedAssistantPartials = new WeakMap<PiAgentSession, unknown>();
   /** Settings-wide queue preventing enabled-model read/modify/write races across sessions. */
   private modelScopeMutationQueue: Promise<void> = Promise.resolve();
   /** Global and workspace-owned enabled-model states; live session scopes project one entry lazily. */
@@ -2360,6 +2362,28 @@ export class PiSessionService implements SessionRouteService {
     );
   }
 
+  async transcriptSnapshot(ref: PiSessionRef, page?: { limit?: number }): Promise<SessionTranscriptSnapshot> {
+    const session = await this.getOrOpen(ref);
+    const seqBeforeRead = this.events.currentSeq(session.sessionId);
+    const activeAtCapture = this.hasActiveWork(session);
+    const diskBranch = activeAtCapture ? undefined : await this.readableSessionBranch(ref, session);
+    // Disk reads yield, even if a whole turn starts AND ends while they run.
+    // From the final runtime read through the watermark capture nothing may yield.
+    const branch = diskBranch === undefined || this.hasActiveWork(session) || this.events.currentSeq(session.sessionId) !== seqBeforeRead
+      ? session.sessionManager.getBranch()
+      : diskBranch;
+    const messages = historyMessagesFromEntries(branch);
+    const userCount = messages.filter((message) => isRecord(message) && message["role"] === "user").length;
+    const echoes = (this.pendingPromptEchoes.get(session) ?? []).filter((echo) => echo.userIndex >= userCount);
+    messages.push(...echoes.map((echo) => echo.message));
+    return {
+      page: pageMessagesAtSafeBoundary(messages, page),
+      status: this.statusFromSession(session, transcriptMessageCount(branch) + echoes.length),
+      seq: this.events.currentSeq(session.sessionId),
+      partial: this.publishedAssistantPartials.get(session) ?? null,
+    };
+  }
+
   async messages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage> {
     const session = await this.getOrOpen(ref);
     return pageMessagesAtSafeBoundary(historyMessagesFromEntries(await this.readableSessionBranch(ref, session)), page);
@@ -2620,9 +2644,25 @@ export class PiSessionService implements SessionRouteService {
 
   private beginPromptSubmission(session: PiAgentSession, text: string, behavior: QueuedPromptKind | undefined, images: ImageContent[] = [], echoUserMessage = true): Promise<void> {
     this.publishActivity(session, behavior === "steer" ? "steering queued" : behavior === "followUp" ? "message queued" : "prompt accepted", "active");
-    if (behavior === undefined && echoUserMessage) this.events.publish(session.sessionId, { type: "message.append", message: userMessage(text, images) });
+    const echoes = this.pendingPromptEchoes.get(session) ?? [];
+    const userCount = historyMessagesFromEntries(session.sessionManager.getBranch()).filter((message) => isRecord(message) && message["role"] === "user").length;
+    const echo = behavior === undefined && echoUserMessage
+      ? { userIndex: Math.max(userCount, ...echoes.map((pending) => pending.userIndex + 1)), message: userMessage(text, images) }
+      : undefined;
+    if (echo !== undefined) {
+      // SDK input hooks may await before appending the user message. Keep the
+      // already-published echo visible in snapshots until that append occurs.
+      this.pendingPromptEchoes.set(session, [...echoes, echo]);
+      this.events.publish(session.sessionId, { type: "message.append", message: echo.message });
+    }
     const promptOptions = buildPromptOptions(behavior, images);
-    const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions));
+    const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions)).finally(() => {
+      if (echo !== undefined) {
+        const remaining = (this.pendingPromptEchoes.get(session) ?? []).filter((pending) => pending !== echo);
+        if (remaining.length === 0) this.pendingPromptEchoes.delete(session);
+        else this.pendingPromptEchoes.set(session, remaining);
+      }
+    });
     void promptPromise.catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.publishActivity(session, "error", "error", message);
@@ -4028,9 +4068,19 @@ export class PiSessionService implements SessionRouteService {
       }
     }
     const unsubscribe = session.subscribe((event) => {
+      const eventType = getString(event, "type");
+      const message = getProperty(event, "message");
+      if ((eventType === "message_start" || eventType === "message_update") && getString(message, "role") === "assistant") {
+        // SDK state advances before async extension hooks finish. Capture only
+        // published messages, detaching even blocks left intact by projection.
+        this.publishedAssistantPartials.set(session, structuredClone(
+          annotateAssistantThinkingLevel(projectBrowserMessage(message), session.thinkingLevel),
+        ));
+      } else if (eventType === "message_start" || eventType === "message_end" || eventType === "agent_end") {
+        this.publishedAssistantPartials.delete(session);
+      }
       this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
       this.publishActivityForEvent(session, event);
-      const eventType = getString(event, "type");
       // Queued messages can reach the model after an ask opened, even though
       // there was no ask to dismiss when the user originally submitted them.
       if (eventType === "message_start" && isRecord(event) && getString(event["message"], "role") === "user") {
@@ -4049,6 +4099,7 @@ export class PiSessionService implements SessionRouteService {
     active.unsubscribe = () => {
       this.sessionEvents.close(session);
       unsubscribe();
+      this.publishedAssistantPartials.delete(session);
     };
     this.active.set(session.sessionId, active);
   }

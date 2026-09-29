@@ -1016,6 +1016,24 @@ describe("session routes", () => {
     }
   });
 
+  it("returns a transcript snapshot with workspace and limit forwarding", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+    try {
+      const response = await routeApp.inject({ method: "GET", url: `/sessions/session-1/transcript-snapshot?cwd=${encodeURIComponent(resolve("/repo"))}&limit=25` });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ page: routeService.messagesResponse, status: { sessionId: "session-1" }, seq: 0, partial: null });
+      expect(routeService.transcriptSnapshotCalls).toEqual([{ lookup: { id: "session-1", cwd: resolve("/repo") }, page: { limit: 25 } }]);
+      routeService.transcriptSnapshot = () => Promise.reject(new Error("Session not found"));
+      expect((await routeApp.inject({ method: "GET", url: "/sessions/missing/transcript-snapshot?cwd=/repo" })).statusCode).toBe(404);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
   it("maps stream-snapshot lookup failures to 404", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1416,6 +1434,12 @@ class CapturingRouteSessionService implements SessionRouteService {
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       cost: 0,
     });
+  }
+
+  readonly transcriptSnapshotCalls: { lookup: SessionRouteRef; page?: { limit?: number } }[] = [];
+  async transcriptSnapshot(lookup: SessionRouteRef, page?: { limit?: number }) {
+    this.transcriptSnapshotCalls.push({ lookup, ...(page === undefined ? {} : { page }) });
+    return { page: this.messagesResponse, status: await this.status(lookup), ...this.streamSnapshotResponse };
   }
 
   streamSnapshot(lookup: SessionRouteRef): Promise<SessionStreamSnapshot> {

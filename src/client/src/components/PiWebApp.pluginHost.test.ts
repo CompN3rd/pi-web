@@ -762,10 +762,12 @@ describe("PiWebApp plugin host", () => {
       || !Reflect.set(sessions, "api", {
         ...defaultApi,
         startSession,
-        messages: (session: Parameters<typeof defaultApi.messages>[0]) => session.id === cached.id
-          ? Promise.reject(new Error("Session not found")) : Promise.resolve({ messages: [], start: 0, total: 0 }),
-        status: () => Promise.resolve({ sessionId: replacement.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
-        streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+        transcriptSnapshot: (session: Parameters<typeof defaultApi.transcriptSnapshot>[0]) => session.id === cached.id
+          ? Promise.reject(new Error("Session not found")) : Promise.resolve({
+            page: { messages: [], start: 0, total: 0 },
+            status: { sessionId: replacement.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 },
+            seq: 0, partial: null,
+          }),
         thinkingLevels: () => Promise.resolve({ levels: [] }),
       })) throw new Error("Could not stub session boundaries");
     // Keep the real publication/ownership guard; isolate only destination loading
@@ -1019,6 +1021,99 @@ describe("PiWebApp plugin host", () => {
     await navigation;
 
     expect(browser.url.searchParams.get("browser-only.workspace.panel--file")).toBe("new.ts");
+  });
+
+  it.each([false, true])("loads session messages before plugins finish (tool route: %s)", async (withTool) => {
+    const session = runtimeRecoverySession(workspace);
+    const browser = installBrowserWindow(`http://localhost/app?project=${project.id}&workspace=${workspace.id}&session=${session.id}&view=chat${withTool ? "&tool=delayed%3Apanel" : ""}`);
+    const app = new PiWebApp();
+    setAppState(app, { ...initialAppState(), projects: [project] });
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
+    const sessionApi: unknown = Reflect.get(sessions, "api");
+    if (typeof sessionApi !== "object" || sessionApi === null) throw new Error("Missing session API");
+    const loadSnapshot: unknown = Reflect.get(sessionApi, "transcriptSnapshot");
+    if (typeof loadSnapshot !== "function") throw new Error("Missing transcript API");
+    const transcriptSnapshot = vi.fn((...args: unknown[]): unknown => Reflect.apply(loadSnapshot, sessionApi, args));
+    if (!Reflect.set(sessionApi, "transcriptSnapshot", transcriptSnapshot)) throw new Error("Could not observe transcript loading");
+    const pluginsReady = deferred<undefined>();
+    const loadPlugins = vi.fn(() => pluginsReady.promise);
+    if (!Reflect.set(app, "loadPluginsForSelectedMachine", loadPlugins)) throw new Error("Could not stub plugin loading");
+    let settled = false;
+    const restoring = callAsyncAppMethod(app, "restoreRoute", false).then(() => { settled = true; });
+    try {
+      await vi.waitFor(() => { expect(transcriptSnapshot).toHaveBeenCalledOnce(); });
+      expect(appState(app).selectedSession?.id).toBe(session.id);
+      expect(loadPlugins).toHaveBeenCalledOnce();
+      if (withTool) {
+        expect(settled).toBe(false);
+        await appPluginRegistry(app).register({
+          id: "delayed",
+          plugin: {
+            apiVersion: 4,
+            name: "Delayed",
+            activate: () => ({ contributions: { workspacePanels: [{ id: "panel", title: "Delayed", render: () => html`<p>Ready</p>` }] } }),
+          },
+        });
+      } else {
+        await restoring;
+        expect(settled).toBe(true);
+      }
+      pluginsReady.resolve(undefined);
+      await restoring;
+      expect(settled).toBe(true);
+      if (withTool) expect(appState(app).workspaceTool).toBe("delayed:panel");
+      expect(browser.url.searchParams.get("session")).toBe(session.id);
+    } finally {
+      pluginsReady.resolve(undefined);
+      await restoring;
+      sessions.dispose();
+    }
+  });
+
+  it.each(["", "&project=missing-project"])("ignores an obsolete machine restore after navigating away and back (%s)", async (oldProjectQuery) => {
+    const localMachine: Machine = { id: "local", name: "Local", kind: "local", createdAt: "now", updatedAt: "now" };
+    const browser = installBrowserWindow(`http://localhost/app?machine=${remoteMachine.id}&view=chat${oldProjectQuery}`);
+    const app = new PiWebApp();
+    setAppState(app, { ...initialAppState(), machines: [localMachine, remoteMachine], selectedMachine: localMachine });
+    const session = runtimeRecoverySession(workspace);
+    const sessions = await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([workspace]), session);
+    await markPluginLoadingReady(app, [remoteMachine.id]);
+    // Keep machine/project/selection orchestration real; suppress unrelated
+    // background sockets, health probes, and status polling.
+    for (const name of ["connectRealtime", "schedulePiWebStatusRefresh"]) {
+      if (!Reflect.set(app, name, () => undefined)) throw new Error(`Could not stub ${name}`);
+    }
+    const machines: unknown = Reflect.get(app, "machines");
+    if (typeof machines !== "object" || machines === null) throw new Error("Missing machine controller");
+    for (const name of ["refreshMachineHealth", "refreshMachineRuntime"]) {
+      if (!Reflect.set(machines, name, () => Promise.resolve())) throw new Error(`Could not stub ${name}`);
+    }
+    const oldProjects = deferred<Project[]>();
+    const loadProjects = vi.spyOn(defaultApi, "projects")
+      .mockReturnValueOnce(oldProjects.promise)
+      .mockResolvedValue([project]);
+    const oldRestore = callAsyncAppMethod(app, "restoreRoute", false);
+    try {
+      await vi.waitFor(() => { expect(loadProjects).toHaveBeenCalledTimes(1); });
+      browser.navigate("http://localhost/app?view=chat");
+      await callAsyncAppMethod(app, "restoreRoute", false);
+      browser.navigate(`http://localhost/app?machine=${remoteMachine.id}&project=${project.id}&workspace=${workspace.id}&session=${session.id}&view=chat`);
+      await callAsyncAppMethod(app, "restoreRoute", false);
+      expect(loadProjects).toHaveBeenCalledTimes(3);
+      expect(appState(app).selectedSession?.id).toBe(session.id);
+      const latestUrl = browser.url.href;
+      oldProjects.resolve([project]);
+      await oldRestore;
+      expect(appState(app).selectedProject?.id).toBe(project.id);
+      expect(appState(app).selectedWorkspace?.id).toBe(workspace.id);
+      expect(appState(app).selectedSession?.id).toBe(session.id);
+      expect(browser.url.href).toBe(latestUrl);
+      expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([]);
+    } finally {
+      oldProjects.resolve([project]);
+      await oldRestore;
+      sessions.dispose();
+    }
   });
 
   it("preserves a missing project route while clearing its workspace surface", async () => {
@@ -1284,9 +1379,10 @@ describe("PiWebApp plugin host", () => {
     if (!Reflect.set(sessions, "socket", socket)
       || !Reflect.set(sessions, "notifications", undefined)
       || !Reflect.set(sessions, "api", {
-        messages: async () => { await waitAt("refresh"); return { messages: [], start: 0, total: 0 }; },
-        status: () => Promise.resolve(status),
-        streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+        transcriptSnapshot: async () => {
+          await waitAt("refresh");
+          return { page: { messages: [], start: 0, total: 0 }, status, seq: 0, partial: null };
+        },
         thinkingLevels: () => Promise.resolve({ levels: [] }),
       })) throw new Error("Could not stub session boundaries");
     const restoring = callAsyncAppMethod(app, "restoreRouteFor", {
@@ -1326,7 +1422,9 @@ describe("PiWebApp plugin host", () => {
     expect(appState(app).selectedSession?.id).toBe(session.id);
     expect(appState(app).mainView).toBe("workspace");
     expect(browser.url.href).toBe(destination);
-    expect(setHandler).toHaveBeenCalledOnce();
+    // The shared join keeps its original socket handler rather than swapping
+    // handlers after the fetch; buffered and subsequent events still reach it.
+    expect(handler).toBeTypeOf("function");
     sessions.flushPendingUpdates();
     expect(appState(app).status?.cost).toBe(phase === "refresh" ? 2 : 0);
     const liveEvent: SessionUiEvent = { type: "status.update", status: { ...status, cost: 1 } };
@@ -4016,9 +4114,11 @@ async function installRuntimeRecoveryBoundaries(
   if (!Reflect.set(sessions, "socket", socket)
     || !Reflect.set(sessions, "notifications", undefined)
     || !Reflect.set(sessions, "api", {
-      messages: () => Promise.resolve({ messages: [], start: 0, total: 0 }),
-      status: () => Promise.resolve({ sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
-      streamSnapshot: () => Promise.resolve({ seq: 0, partial: null }),
+      transcriptSnapshot: () => Promise.resolve({
+        page: { messages: [], start: 0, total: 0 },
+        status: { sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 },
+        seq: 0, partial: null,
+      }),
       thinkingLevels: () => Promise.resolve({ levels: [] }),
     })) throw new Error("Could not stub session boundaries");
   return sessions;
