@@ -72,7 +72,7 @@ export function activateFilesPlugin(context: PluginActivationContext, filesRunti
           shortcutAliases: ["core:view.files"],
           group: "Navigation",
           enabled: (runtimeContext) => runtimeContext.state.selectedWorkspace !== undefined,
-          run: (runtimeContext) => { runtimeContext.selectMainView(panelId); },
+          run: (runtimeContext) => { runtimeContext.selectWorkspaceTool(panelId); },
         },
         {
           id: "workspace.refresh-files",

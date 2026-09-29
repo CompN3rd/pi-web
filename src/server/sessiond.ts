@@ -23,6 +23,8 @@ import { SessionArchiveStore, defaultSessionArchiveFilePath } from "./sessions/s
 import { FileSessionUnreadPersistence, SessionUnreadStore, defaultSessionUnreadFilePath } from "./sessions/sessionUnreadStore.js";
 import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver.js";
 import { ProjectService } from "./projects/projectService.js";
+import { ProjectLifecycleService } from "./projects/projectLifecycleService.js";
+import { registerProjectMutationRoutes } from "./sessiond/projectMutationRoutes.js";
 import { ProjectStore, projectStorePath } from "./storage/projectStore.js";
 import {
   eligibleWorkspaceProviderContributions,
@@ -210,6 +212,7 @@ async function createSessionDaemonRuntime() {
     lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY],
   });
   let sessionsForFailedConstruction: PiSessionService | undefined;
+  let projectLifecycleForFailedConstruction: ProjectLifecycleService | undefined;
   try {
     const notificationStore = new SessionNotificationStore();
     const unreadStore = new SessionUnreadStore({
@@ -265,6 +268,18 @@ async function createSessionDaemonRuntime() {
     // Every global subscriber is handed the current projection on connect, so a
     // browser never has to reconcile a snapshot fetch against live frames.
     eventHub.setGlobalJoinFrame(() => ({ type: "machine.status", status: machineStatus.snapshot() }));
+    const projectLifecycle: ProjectLifecycleService = new ProjectLifecycleService({
+      projects,
+      workspaces: workspaceProviders,
+      hasUnread: () => unreadStore.hasUnread(),
+      reconcileUnreadWorkspaces: (cwds): Promise<void> => sessions.reconcileUnreadWorkspaces(cwds),
+      logger: app.log,
+      onProjectsChanged: () => {
+        statusAttribution.invalidate();
+        machineStatus.notifyChanged();
+      },
+    });
+    projectLifecycleForFailedConstruction = projectLifecycle;
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
     const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
     const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
@@ -296,7 +311,10 @@ async function createSessionDaemonRuntime() {
       extensionDialogsTimeoutMs: config.extensionDialogsTimeoutMs,
       notificationStore,
       unreadStore,
-      onUnreadChanged: () => { machineStatus.notifyChanged(); },
+      onUnreadChanged: (hasNewCompletion) => {
+        machineStatus.notifyChanged();
+        if (hasNewCompletion) projectLifecycle.scheduleCleanup();
+      },
       catalogRefreshStatus: catalogRefresher,
       sessionManager: createPiSessionManagerGateway({
         agentDir: activeAgentProfile.dir,
@@ -330,10 +348,7 @@ async function createSessionDaemonRuntime() {
       serverPlugins.safeStartLevel(),
       serverPlugins.catalogDiagnostics(),
     );
-    // Unread state was loaded from disk above, so the projection is computed
-    // once at startup instead of waiting for the first change. It is not
-    // awaited: resolving it lists workspaces through provider plugins, and
-    // daemon startup must not depend on how long that takes.
+    // Render current state immediately; stale unread is collected in the background.
     machineStatus.notifyChanged();
     const terminals = serverPlugins.safeStartLevel() === "none"
       ? unavailableRequiredTerminalService()
@@ -358,7 +373,10 @@ async function createSessionDaemonRuntime() {
       await runSessionDaemonShutdown({
         logger: app.log,
         dependencies: {
-          quiesceServer: () => { serverQuiescing = true; },
+          quiesceServer: async () => {
+            serverQuiescing = true;
+            await projectLifecycle.closeAll();
+          },
           serverPlugins,
           catalogRefresher,
           auth,
@@ -376,8 +394,10 @@ async function createSessionDaemonRuntime() {
       // next start discards it.
       await stateOwnership.release();
     };
-    return { eventHub, machineStatus, statusAttribution, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    projectLifecycle.scheduleCleanup(); // One delayed pass for existing persisted unread, if any.
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
   } catch (error) {
+    await projectLifecycleForFailedConstruction?.closeAll();
     try {
       await serverPlugins.stop();
     } catch (disposeError) {
@@ -392,7 +412,8 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+  registerProjectMutationRoutes(app, projectLifecycle);
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
   registerAuthRoutes(app, auth);
@@ -411,7 +432,10 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
   registerWorkspaceRemovalRoutes(app, {
     projects,
     removals: workspaceRemovals,
-    onWorkspacesMutated: () => { statusAttribution.invalidate(); },
+    onWorkspacesMutated: () => {
+      statusAttribution.invalidate();
+      projectLifecycle.scheduleCleanup();
+    },
   });
 
   app.get("/health", () => ({

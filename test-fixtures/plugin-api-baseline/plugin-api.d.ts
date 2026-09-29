@@ -141,7 +141,7 @@ export interface PluginRuntimeState {
     selectedWorkspace?: Workspace;
     selectedSession?: PluginSelectedSession;
     workspaceTool?: string;
-    mainView?: string;
+    mainView?: "navigation" | "chat" | "workspace";
     piWebStatus?: PiWebStatusResponse;
 }
 export interface PluginPromptEditor {
@@ -158,7 +158,18 @@ export interface PluginPromptEditor {
         text: string;
     } | null;
 }
+/** A complete navigation destination, not a patch of the current route. */
+export interface PluginNavigationDestination {
+    machineId?: string;
+    projectId?: string;
+    workspaceId?: string;
+    sessionId?: string;
+    view?: "navigation" | "chat" | "workspace";
+    tool?: QualifiedContributionId;
+}
 export interface PluginRuntimeContext {
+    /** Navigate using host restoration defaults. Route failures appear in the host UI. */
+    navigate: (destination: PluginNavigationDestination) => Promise<void>;
     state: PluginRuntimeState;
     prompt: PluginPromptEditor;
     openActionPalette: () => void;
@@ -167,7 +178,7 @@ export interface PluginRuntimeContext {
     configureAuth: () => void | Promise<void>;
     logoutAuth: () => void | Promise<void>;
     openThemePicker: () => void;
-    selectMainView: (view: string) => void;
+    selectMainView: (view: "navigation" | "chat" | "workspace") => void;
     selectWorkspaceTool: (tool: QualifiedContributionId) => void;
     openTerminal: (options?: {
         terminalId?: string | undefined;
@@ -340,6 +351,8 @@ export interface WorkspacePanelNavigationV1 {
     }): void;
 }
 export interface WorkspacePanelContext extends WorkspaceContext {
+    /** Navigate using host restoration defaults. Route failures appear in the host UI. */
+    navigate: (destination: PluginNavigationDestination) => Promise<void>;
     prompt: PluginPromptEditor;
     terminal: WorkspacePanelTerminal;
     /** Contribution-scoped address-bar state for deep links and browser history. */

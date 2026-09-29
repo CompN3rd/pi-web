@@ -92,7 +92,7 @@ it.each(["stop", "error", "aborted", "length", "empty", "interference", "tools",
       if (outcome === "tool-error") expect(saved.text).toContain("Review tool failed: read");
     });
     expect(hookErrors).not.toHaveBeenCalled();
-    expect(session.messages[0]).toMatchObject({ role: "user" });
+    expect(session.messages.find((message) => message.role !== "system")).toMatchObject({ role: "user" });
   } finally {
     lifetime.abort();
     await activation.dispose();

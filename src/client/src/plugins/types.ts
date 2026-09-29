@@ -210,7 +210,10 @@ export interface PluginPromptEditor {
   getSelection(): { start: number; end: number; text: string } | null;
 }
 
+export type { PluginNavigationDestination } from "../../../plugin-api";
+
 export interface PluginRuntimeContext {
+  navigate: (destination: import("../../../plugin-api").PluginNavigationDestination) => Promise<void>;
   state: AppState;
   prompt: PluginPromptEditor;
   piWebUnstable?: PiWebUnstableRuntimeContext;
@@ -274,6 +277,7 @@ export interface WorkspacePanelNavigationV1 {
 }
 
 export interface WorkspacePanelContext extends WorkspaceContext {
+  navigate: (destination: import("../../../plugin-api").PluginNavigationDestination) => Promise<void>;
   prompt: PluginPromptEditor;
   terminal: WorkspacePanelTerminal;
   /** Contribution-scoped address-bar state for deep links and browser history. */
