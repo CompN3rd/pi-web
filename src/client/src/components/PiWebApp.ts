@@ -761,6 +761,9 @@ export class PiWebApp extends LitElement {
         }
         return;
       }
+      // Machine/project loading may finish after navigation has selected a
+      // newer destination, including after switching away and back.
+      if (!selectionNavigation.isCurrent()) return;
       // Only resolving a `tool` route value needs plugin contributions. The
       // project/workspace/session selection never does, so it restores while
       // plugins load; a tool route waits for them only before finalization, so
