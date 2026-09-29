@@ -206,6 +206,42 @@ describe("external plugin manifests", () => {
     expect(result.failures).toEqual([]);
   });
 
+  it("retains an early ordinary import failure while an earlier import is pending", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
+      lifecycleVersion: 2,
+      terminalMode: "recovery-disabled",
+      plugins: [
+        { id: "first", module: "./first/plugin.js" },
+        { id: "failed", module: "./failed/plugin.js" },
+        { id: "last", module: "./last/plugin.js" },
+      ],
+    })))));
+    let resolveFirst!: (module: unknown) => void;
+    const firstImport = new Promise<unknown>((resolve) => { resolveFirst = resolve; });
+    const failure = new Error("ordinary module unavailable");
+    const moduleLoader = vi.fn((moduleUrl: string) => {
+      if (moduleUrl.includes("/first/")) return firstImport;
+      if (moduleUrl.includes("/failed/")) return Promise.reject(failure);
+      return Promise.resolve({ default: { apiVersion: 4, name: "Last", activate: () => ({ contributions: {} }) } });
+    });
+
+    const loading = loadExternalPlugins(undefined, { moduleLoader });
+    try {
+      await vi.waitFor(() => { expect(moduleLoader).toHaveBeenCalledTimes(3); });
+      // Cross an event-loop turn while the first import is pending: Vitest must not
+      // observe an unhandled rejection from the later, already-failed import.
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    } finally {
+      resolveFirst({ default: { apiVersion: 4, name: "First", activate: () => ({ contributions: {} }) } });
+      await loading;
+    }
+    const result = await loading;
+
+    expect(result.declarations.map(({ id }) => id)).toEqual(["first", "failed", "last"]);
+    expect(result.registrations.map(({ id }) => id)).toEqual(["first", "last"]);
+    expect(result.failures).toEqual([{ entry: { id: "failed", module: "./failed/plugin.js", machineSpecific: false }, error: failure }]);
+  });
+
   it("attributes unsupported browser API versions to the plugin module", async () => {
     const manifestUrl = "https://pi.example.test/pi-web-plugins/manifest.json";
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({
