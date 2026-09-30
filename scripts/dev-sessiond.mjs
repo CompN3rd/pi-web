@@ -26,16 +26,21 @@ export async function waitForPluginBuild({ cwd = process.cwd(), timeoutMs = 120_
 export async function runDevelopmentSessiond({ env = process.env, watch = false, launch = startDevelopmentProcess,
   signals = process, wait = waitForPluginBuild, stop } = {}) {
   const controller = new AbortController();
-  const cancel = () => controller.abort();
-  signals.once("SIGINT", cancel);
-  signals.once("SIGTERM", cancel);
+  let signalExitCode;
+  const onInterrupt = () => { signalExitCode = 130; controller.abort(); };
+  const onTerminate = () => { signalExitCode = 143; controller.abort(); };
+  signals.once("SIGINT", onInterrupt);
+  signals.once("SIGTERM", onTerminate);
   try {
     console.log("[plugins] sessiond waiting for the web-owned plugin build");
     await wait({ signal: controller.signal });
     controller.signal.throwIfAborted();
+  } catch (error) {
+    if (controller.signal.aborted && signalExitCode !== undefined) return signalExitCode;
+    throw error;
   } finally {
-    signals.removeListener("SIGINT", cancel);
-    signals.removeListener("SIGTERM", cancel);
+    signals.removeListener("SIGINT", onInterrupt);
+    signals.removeListener("SIGTERM", onTerminate);
   }
   return superviseDevelopmentProcesses((add) => {
     // Track the actual long-lived daemon so shutdown waits for its cleanup.

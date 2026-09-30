@@ -26,7 +26,7 @@ const plugin: PiWebPlugin = {
         if (operation === "list") {
           if (!Array.isArray(result) || !result.every(isReview)) throw new Error("Invalid review list");
           state.reviews = result;
-          const selectedId = state.selected?.id ?? result[0]?.id;
+          const selectedId = result.find((review) => review.id === state.selected?.id)?.id ?? result[0]?.id;
           if (selectedId !== undefined && result.some((review) => review.id === selectedId)) {
             const selected: unknown = await context.peer.request("read", selectedId);
             if (!isReview(selected)) throw new Error("Invalid saved review");

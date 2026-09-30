@@ -12,6 +12,45 @@ afterEach(() => {
 });
 
 describe("Terminal browser runtime", () => {
+  it("shows peer-unavailable failures with the same retry window as transport errors", async () => {
+    const context = workspaceContext("local", vi.fn());
+    delete context.peer;
+    const render = vi.fn();
+    context.host.requestRender = render;
+    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
+    runtime.activeTerminalBadge(context);
+    await expect(runtime.refresh(context)).rejects.toThrow("peer is unavailable");
+    expect(runtime.activeTerminalBadge(context)).toBe("!");
+    expect(render).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(4_999);
+    const request = vi.fn(() => Promise.resolve([]));
+    context.peer = { request, openChannel: vi.fn() };
+    runtime.activeTerminalBadge(context);
+    expect(request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledOnce();
+    expect(runtime.activeTerminalBadge(context)).toBeUndefined();
+    runtime.dispose();
+  });
+
+  it.each(["success", "failure"])("does not replace newer panel/mutation counts with an older badge %s", async (outcome) => {
+    let complete!: (value: JsonValue) => void;
+    let fail!: (error: Error) => void;
+    const context = workspaceContext("local", vi.fn(() => new Promise<JsonValue>((resolve, reject) => { complete = resolve; fail = reject; })));
+    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
+    const refresh = runtime.refresh(context);
+    const panelGeneration = runtime.beginTerminalList(context);
+    runtime.updateTerminals(context, [{ id: "active", cwd: "/repo", name: "Shell", createdAt: "now", exited: false }], panelGeneration);
+    if (outcome === "success") { complete([]); await refresh; }
+    else { fail(new Error("old failure")); await expect(refresh).rejects.toThrow("old failure"); }
+    expect(runtime.activeTerminalBadge(context)).toBe(1);
+    const oldPanel = runtime.beginTerminalList(context);
+    runtime.updateTerminals(context, []);
+    runtime.updateTerminals(context, [{ id: "closed", cwd: "/repo", name: "Shell", createdAt: "now", exited: false }], oldPanel);
+    expect(runtime.activeTerminalBadge(context)).toBeUndefined();
+    runtime.dispose();
+  });
+
   it("owns active-count refresh and badge state for each machine workspace", async () => {
     let now = 1_000;
     const request = vi.fn<NonNullable<PluginPeer["request"]>>((operation: string): Promise<JsonValue> => Promise.resolve(operation === "terminal.list" ? [

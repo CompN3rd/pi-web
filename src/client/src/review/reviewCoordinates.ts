@@ -5,6 +5,11 @@ export function isValidReviewRange(range: Pick<ReviewLineRange, "start" | "end">
   return Number.isInteger(range.start) && Number.isInteger(range.end) && range.start > 0 && range.start <= range.end;
 }
 
+/** Files has no deleted-side coordinates; legacy unscoped feedback remains valid. */
+export function isValidReviewAnchor(anchor: ReviewAnchor): boolean {
+  return isValidReviewRange(anchor.range) && (anchor.source !== "files" || anchor.range.side === "new");
+}
+
 /** Normalize a range to `[min, max]` regardless of drag direction. */
 export function normalizedRange(range: ReviewLineRange): { start: number; end: number } {
   return { start: Math.min(range.start, range.end), end: Math.max(range.start, range.end) };

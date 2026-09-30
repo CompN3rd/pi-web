@@ -32,7 +32,8 @@ function browserIsSecureContext(): boolean {
 }
 
 function browserClipboardWriteText(): ((text: string) => Promise<void>) | undefined {
-  if (typeof navigator === "undefined" || !("clipboard" in navigator)) return undefined;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Older browsers can expose a missing or partial Clipboard implementation.
+  if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") return undefined;
   return navigator.clipboard.writeText.bind(navigator.clipboard);
 }
 

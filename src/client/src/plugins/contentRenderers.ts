@@ -33,15 +33,15 @@ export function snapshotContentRenderer(contribution: ContentRendererContributio
   if (typeof contribution.render !== "function") throw new Error("Content renderer must have a synchronous render callback");
   const renderMode: unknown = contribution.renderMode;
   if (renderMode !== undefined && renderMode !== "manual" && renderMode !== "automatic") throw new Error("Content renderer renderMode must be manual or automatic");
-  const selectors = (values: readonly string[] | undefined): readonly string[] => {
+  const selectors = (values: readonly string[] | undefined, pattern: RegExp): readonly string[] => {
     if (values === undefined) return Object.freeze([]);
-    if (!Array.isArray(values) || values.some((value: unknown) => typeof value !== "string" || !/^[a-z0-9][a-z0-9_+.-]*$/iu.test(value))) {
+    if (!Array.isArray(values) || values.some((value: unknown) => typeof value !== "string" || !pattern.test(value))) {
       throw new Error("Content renderer selectors must be non-empty language names or extensions without a leading dot");
     }
     return Object.freeze([...new Set(values.map((value: string) => value.toLowerCase()))]);
   };
-  const languages = selectors(contribution.languages);
-  const fileExtensions = selectors(contribution.fileExtensions);
+  const languages = selectors(contribution.languages, /^[a-z0-9][a-z0-9_+.#-]*$/iu);
+  const fileExtensions = selectors(contribution.fileExtensions, /^[a-z0-9][a-z0-9_+.-]*$/iu);
   if (languages.length + fileExtensions.length === 0) throw new Error("Content renderer must declare a selector");
   return Object.freeze({ id: contribution.id, languages, fileExtensions, renderMode: contribution.renderMode ?? "manual", render: contribution.render.bind(contribution) });
 }

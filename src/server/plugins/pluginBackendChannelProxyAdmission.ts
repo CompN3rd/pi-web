@@ -1,5 +1,6 @@
 import { WebSocket } from "ws";
 import {
+  PLUGIN_BACKEND_CHANNEL_ERROR_MESSAGE_MAX_BYTES,
   PLUGIN_BACKEND_CHANNEL_MAX_TOTAL,
   PLUGIN_BACKEND_CHANNEL_OPEN_TIMEOUT_MS,
   PLUGIN_BACKEND_CHANNEL_TEARDOWN_TIMEOUT_MS,
@@ -32,7 +33,7 @@ export class PluginBackendChannelProxyAdmissionError extends Error {
     readonly closeCode: number,
     message: string,
   ) {
-    super(message);
+    super(boundedAdmissionMessage(message));
   }
 }
 
@@ -118,6 +119,18 @@ export function rejectPluginBackendChannelProxyAdmission(
       teardown();
     }
   });
+}
+
+function boundedAdmissionMessage(message: string): string {
+  if (Buffer.byteLength(message, "utf8") <= PLUGIN_BACKEND_CHANNEL_ERROR_MESSAGE_MAX_BYTES) return message;
+  let prefix = "";
+  let bytes = 0;
+  for (const character of message) {
+    bytes += Buffer.byteLength(character, "utf8");
+    if (bytes > PLUGIN_BACKEND_CHANNEL_ERROR_MESSAGE_MAX_BYTES - 3) break;
+    prefix += character;
+  }
+  return `${prefix}…`;
 }
 
 function positiveInteger(value: number | undefined, fallback: number, label: string): number {

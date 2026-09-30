@@ -377,6 +377,8 @@ export function createDevelopmentNativeServicePlan(input: DevelopmentNativeServi
         restart: "never",
         environment,
         workingDirectory: input.workingDirectory,
+        // performServiceAction gates the web-owned build before starting sessiond.
+        // Wants=sessiond would bypass that gate when the daemon is stopped.
         after: [],
         wants: [],
         prerequisites: [

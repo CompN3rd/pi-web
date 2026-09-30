@@ -7,7 +7,7 @@ interface PanelState {
   entries: LogEntry[]; selected?: LogEntry; status: string;
   notice?: string;
   connecting: boolean; channel?: PluginPeerChannel; controller?: AbortController;
-  pending?: string; revision: number; readRevision: number; updates: Map<string, LogEntry>;
+  pending?: string; admittedId?: string; failedReadId?: string; revision: number; readRevision: number; updates: Map<string, LogEntry>;
 }
 const plugin: PiWebPlugin = {
   apiVersion: 4,
@@ -53,28 +53,37 @@ const plugin: PiWebPlugin = {
     function upsert(state: PanelState, entry: LogEntry) {
       state.updates.set(entry.id, entry);
       state.entries = [entry, ...state.entries.filter((item) => item.id !== entry.id)].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      if (!state.selected || state.selected.id === entry.id || entry.status === "running") {
+      if (!state.selected || state.selected.id === entry.id || entry.id === state.admittedId || entry.status === "running") {
         if (state.selected?.id !== entry.id) state.readRevision++;
         state.selected = entry;
       }
+      if (entry.id === state.admittedId) delete state.admittedId;
     }
-    async function readEntry(context: WorkspacePanelContext, state: PanelState, id: string) {
+    async function readEntry(context: WorkspacePanelContext, state: PanelState, id: string): Promise<boolean> {
       const revision = state.revision;
       const readRevision = ++state.readRevision;
       const before = state.updates.get(id);
       try {
         if (!context.peer?.request) throw new Error("Captain saved records unavailable");
         const entry: unknown = await context.peer.request("read", id, { signal: state.controller?.signal ?? lifetimeSignal });
-        if (revision !== state.revision || readRevision !== state.readRevision || lifetimeSignal.aborted) return;
+        if (revision !== state.revision || readRevision !== state.readRevision || lifetimeSignal.aborted) return false;
         if (!isLogEntry(entry)) throw new Error("Invalid Captain record");
         const record = state.updates.get(id) !== before ? state.updates.get(id) ?? entry : entry;
         state.selected = record;
         state.updates.set(id, record);
         state.entries = state.entries.map((item) => item.id === id ? record : item);
+        delete state.failedReadId;
+        delete state.notice;
+        state.status = "Saved translation loaded.";
         context.host.requestRender();
+        return true;
       } catch (error) {
-        if (revision !== state.revision || readRevision !== state.readRevision || lifetimeSignal.aborted) return;
-        state.status = String(error); context.host.requestRender();
+        if (revision !== state.revision || readRevision !== state.readRevision || lifetimeSignal.aborted) return false;
+        state.failedReadId = id;
+        state.notice = `Could not load the saved translation: ${String(error)}`;
+        state.status = state.notice;
+        context.host.requestRender();
+        return false;
       }
     }
     async function connect(context: WorkspacePanelContext, state: PanelState) {
@@ -97,6 +106,7 @@ const plugin: PiWebPlugin = {
             if (!isCaptainServerFrame(data)) { state.status = "Invalid Captain channel frame"; stop(state); context.host.requestRender(); return; }
             if (data.type === "admitted" && data.requestId === state.pending) {
               delete state.pending;
+              state.admittedId = data.id;
               state.status = `Backend admitted ${data.id}; admission is not completion.`;
             } else if (data.type === "rejected" && data.requestId === state.pending) {
               delete state.pending; state.status = data.message; state.notice = data.message;
@@ -129,16 +139,22 @@ const plugin: PiWebPlugin = {
         if (!live()) return;
         if (!Array.isArray(result) || !result.every(isLogEntry)) throw new Error("Invalid Captain snapshot");
         state.entries = [...state.updates.values(), ...result.filter((entry) => entry.sourceSessionId !== undefined && !state.updates.has(entry.id))].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        const preferredId = state.admittedId ?? (state.pending === undefined ? state.selected?.id : undefined);
         delete state.pending;
-        const id = state.selected?.id ?? state.entries[0]?.id;
+        const id = state.entries.find((entry) => entry.id === preferredId)?.id ?? state.entries[0]?.id;
+        let loaded = true;
         if (id !== undefined && state.entries.some((entry) => entry.id === id)) {
           const pushed = state.updates.get(id);
           if (pushed) state.selected = pushed;
-          else await readEntry(context, state, id);
+          else loaded = await readEntry(context, state, id);
         } else delete state.selected;
         if (!live()) return;
-        state.status = "Connected. Live updates arrive from the backend.";
-        delete state.notice;
+        delete state.admittedId;
+        if (loaded) {
+          delete state.failedReadId;
+          state.status = "Connected. Live updates arrive from the backend.";
+          delete state.notice;
+        }
         state.connecting = false;
         context.host.requestRender();
       } catch (error) {
@@ -149,7 +165,7 @@ const plugin: PiWebPlugin = {
     }
     function translate(context: WorkspacePanelContext, state: PanelState) {
       const source = selectedSourceSession(context);
-      if (!source || !state.channel || state.connecting || state.pending !== undefined || lifetimeSignal.aborted || state.entries.some((entry) => entry.status === "running" || entry.sessionId === source.id)) return;
+      if (!source || !state.channel || state.connecting || state.pending !== undefined || state.admittedId !== undefined || lifetimeSignal.aborted || state.entries.some((entry) => entry.status === "running" || entry.sessionId === source.id)) return;
       state.pending = crypto.randomUUID();
       delete state.notice;
       state.status = `Translation queued for source session ${source.id}; waiting for backend admission.`;
@@ -174,7 +190,7 @@ const plugin: PiWebPlugin = {
               ${renderCaptainPanel(html, {
                 ...state,
                 connected: state.channel !== undefined && context.peer?.openChannel !== undefined,
-                pending: state.pending !== undefined,
+                pending: state.pending !== undefined || state.admittedId !== undefined,
                 machineName: context.machine.name,
                 ...(source ? { source } : {}),
                 onTranslate() { translate(context, state); },

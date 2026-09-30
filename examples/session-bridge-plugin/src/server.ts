@@ -20,7 +20,9 @@ const plugin = {
     const visible = (scope: string, record: Review): Review => {
       const failed = unsaved.get(record.id);
       if (failed) return failed;
-      return record.status === "running" && active.get(scope)?.id !== record.id
+      const live = active.get(scope);
+      if (live?.id === record.id) return live;
+      return record.status === "running"
         ? { ...record, status: "interrupted", text: "Backend stopped before recording completion. Inspect the conversation; start a new review explicitly." }
         : record;
     };

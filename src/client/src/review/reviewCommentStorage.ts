@@ -102,11 +102,24 @@ export function moveComments(fromSessionKey: string, toSessionKey: string, stora
   const comments = loadComments(fromSessionKey, storage);
   if (comments.length === 0) return;
   const merged = uniqueCommentIds([...comments, ...loadComments(toSessionKey, storage)]);
+  const previousDestination = storage?.getItem(storageKey(toSessionKey));
   // Unlike best-effort edits, migration must confirm the write before retiring its owner.
   try {
     storage?.setItem(storageKey(toSessionKey), JSON.stringify({ version: STORAGE_VERSION, comments: merged }));
   } catch (cause) {
     throw new Error("Could not move review comments to the replacement session; original feedback was retained.", { cause });
   }
-  clearComments(fromSessionKey, storage);
+  try {
+    storage?.removeItem(storageKey(fromSessionKey));
+  } catch (cause) {
+    // A failed Web Storage removal leaves the source intact. Undo the copy so
+    // a retry cannot duplicate its feedback or retire the still-owning session.
+    try {
+      if (previousDestination == null) storage?.removeItem(storageKey(toSessionKey));
+      else storage?.setItem(storageKey(toSessionKey), previousDestination);
+    } catch (rollbackError) {
+      throw new AggregateError([cause, rollbackError], "Could not finish moving review comments or undo the copy; feedback remains in both sessions.", { cause: rollbackError });
+    }
+    throw new Error("Could not clear the original review comments; migration was rolled back and original feedback was retained.", { cause });
+  }
 }

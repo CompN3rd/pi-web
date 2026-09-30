@@ -1,6 +1,6 @@
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_UNREAD_LIMIT, SESSION_UNREAD_SESSION_ID_MAX_LENGTH } from "../../shared/apiTypes.js";
 import {
@@ -179,6 +179,18 @@ describe("SessionUnreadStore", () => {
     complete(store, "new", "/repo/./");
     expect(currentOrder(store, "new", "/repo/./")).toBe(5);
 
+  });
+
+  it("never resolves relative identities against the daemon working directory during cleanup", () => {
+    const store = storeAt("2026-07-20T00:00:00.000Z", "catalog-a");
+    const absolute = resolve("relative-workspace");
+    complete(store, "relative", "relative-workspace");
+    complete(store, "absolute", absolute);
+    store.observeActivityState("relative-active", "relative-workspace", true);
+    expect(store.reconcileWorkspaces([absolute])).toMatchObject([{ event: { sessionId: "relative", unread: null } }]);
+    expect(store.catalogSnapshot().sessions.map((entry) => entry.sessionId)).toEqual(["absolute"]);
+    expect(store.observeActivityState("relative-active", "relative-workspace", false)).toEqual([]);
+    expect(store.reconcileWorkspaces(["relative-workspace"])).toMatchObject([{ event: { sessionId: "absolute", unread: null } }]);
   });
 
   it("clears orphan active latches without maintaining permanent workspace eligibility", () => {

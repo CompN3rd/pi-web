@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { hashSource } from "./reviewHash";
 import { hashSource as filesSourceHash } from "../../../../pi-web-plugins/files/reviewHash";
+import { hashDiffSource } from "../../../../pi-web-plugins/git/browser/reviewDiffRef";
 
 describe("hashSource", () => {
-  it.each(["", "a\nb\n", "const emoji = '😀';\r\n"])("keeps the Files plugin fingerprint compatible with the host: %j", (text) => {
+  it.each(["", "a\nb\n", "const emoji = '😀';\r\n", "é漢字", "\ud800"])("keeps self-contained plugin fingerprints compatible with the host: %j", (text) => {
     expect(filesSourceHash(text)).toBe(hashSource(text));
+    expect(hashDiffSource(text)).toBe(hashSource(text));
   });
   it("is stable for the same input", () => {
     expect(hashSource("hello world")).toBe(hashSource("hello world"));

@@ -13,8 +13,13 @@ describe("session defaults wire contract", () => {
     expect(parseSessionDefaults({ defaultProvider: "p", defaultModel: "m", unrelated: true })).toEqual({ defaultProvider: "p", defaultModel: "m" });
   });
 
+  it("preserves thinking levels from newer runtimes while checking their wire type", () => {
+    expect(parseSessionDefaults({ defaultThinkingLevel: "future-level" })).toEqual({ defaultThinkingLevel: "future-level" });
+    expect(() => parseSessionDefaultsUpdate({ thinkingLevel: "future-level" })).toThrow("Invalid thinking level");
+  });
+
   it("rejects malformed responses", () => {
-    for (const value of [null, [], "defaults", { defaultModel: 42 }, { defaultProvider: null }, { defaultThinkingLevel: "unknown" }]) {
+    for (const value of [null, [], "defaults", { defaultModel: 42 }, { defaultProvider: null }, { defaultThinkingLevel: 42 }]) {
       expect(() => parseSessionDefaults(value)).toThrow();
     }
   });

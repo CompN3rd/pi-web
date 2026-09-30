@@ -3,12 +3,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import { publicApiDeclarationPaths } from "./refresh-plugin-api-baseline.mjs";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const publicApiDeclarationPaths = [
-  "plugin-api.d.ts",
-  "server-plugin-api.d.ts",
-  "shared/pluginApiTypes.d.ts",
-];
 
 describe("public API delivery artifacts", () => {
   it("keeps the browser API type-only and exports the supported server runtime contract", async () => {
@@ -36,7 +33,7 @@ describe("public API delivery artifacts", () => {
       ]);
       expect(
         normalizeLineEndings(actual),
-        `${declarationPath} changed; update the baseline only for an intentional public API change`,
+        `${declarationPath} changed; review the diff, then run npm run refresh:plugin-api-baseline to accept intentional declaration changes`,
       ).toBe(normalizeLineEndings(baseline));
       expect(
         actual,

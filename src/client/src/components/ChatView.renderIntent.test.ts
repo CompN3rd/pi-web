@@ -2,11 +2,30 @@
 import { afterEach, expect, it } from "vitest";
 import { html } from "lit";
 import { ChatView } from "./ChatView";
+import { normalizeMessage, textMessage } from "../chatMessages";
 import type { FormattedText } from "./FormattedText";
 import type { ContentRendererHost } from "./ContentRendererHost";
 import { createContentRenderingService } from "../formatting/contentRendering";
 
 afterEach(() => { document.body.replaceChildren(); localStorage.clear(); });
+
+it("distinguishes projected lines while keeping their keys stable across pagination", async () => {
+  const view = new ChatView();
+  view.sessionId = "projection-session";
+  const projected = normalizeMessage({ entryId: "shared-entry", role: "assistant", content: [{ type: "text", text: "Partial reply" }],
+    stopReason: "error", errorMessage: "Provider failed" });
+  view.messages = projected;
+  document.body.append(view);
+  await view.updateComplete;
+  const keys = () => [...view.renderRoot.querySelectorAll<FormattedText>("formatted-text")].map((element) => element.intentKey);
+  const initial = keys();
+  expect(initial).toHaveLength(2);
+  expect(new Set(initial).size).toBe(2);
+  expect(projected.map((line) => line.entryId)).toEqual(["shared-entry", "shared-entry"]);
+  view.messages = [textMessage("user", "Older message"), ...projected];
+  await view.updateComplete;
+  expect(keys().slice(1)).toEqual(initial);
+});
 
 it("scopes chat intent by machine, session, message, part and block rather than duplicate text", async () => {
   const view = new ChatView();

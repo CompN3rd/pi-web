@@ -1098,7 +1098,8 @@ export interface ModelSelectionResponse {
 export interface SessionDefaults {
   defaultProvider?: string;
   defaultModel?: string;
-  defaultThinkingLevel?: import("./thinkingLevels.js").ThinkingLevel;
+  /** Opaque wire value: a remote runtime may support levels unknown to this client. */
+  defaultThinkingLevel?: string;
 }
 
 export interface SessionDefaultsUpdate {

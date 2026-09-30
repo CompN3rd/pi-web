@@ -117,7 +117,10 @@ export class PromptEditor extends LitElement {
 
   protected override updated(changed: PropertyValues) {
     if (changed.has("disabled")) this.updateEditorDisabledState();
-    if (changed.has("sessionId") || changed.has("machineId")) this.syncEditorDoc();
+    if (changed.has("sessionId") || changed.has("machineId")) {
+      this.editor?.dispatch({ effects: setPromptArgumentHint.of(null) });
+      this.syncEditorDoc();
+    }
   }
 
   override disconnectedCallback(): void {

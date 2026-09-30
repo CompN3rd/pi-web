@@ -244,6 +244,7 @@ export class TerminalPanel extends LitElement {
     this.error = undefined;
     try {
       const client = this.peerClient(context);
+      const listGeneration = runtime.beginTerminalList(context);
       const [terminals, commandRuns] = await Promise.all([
         client.list(controller.signal),
         client.listCommandRuns({}, controller.signal),
@@ -258,7 +259,7 @@ export class TerminalPanel extends LitElement {
       }
       this.terminals = [...reconciledTerminals.values()];
       this.commandRuns = commandRuns;
-      runtime.updateTerminals(context, this.terminals);
+      runtime.updateTerminals(context, this.terminals, listGeneration);
       if (navigationGeneration === this.terminalNavigationGeneration
         && this.pendingStartNavigationGeneration !== this.terminalNavigationGeneration) {
         this.selectPreferredLoadedTerminal({ replaceUrl: true });

@@ -991,7 +991,9 @@ export class ChatView extends LitElement {
   }
 
   private renderPart(part: ChatPart, message: ChatLine, messageIndex: number, partIndex: number) {
-    const intentKey = JSON.stringify([this.machineId, this.sessionId, message.entryId ?? messageIndex, partIndex]);
+    // One transcript entry can project into assistant/error or skill/request
+    // lines. Role and part kind distinguish them without pagination-sensitive indices.
+    const intentKey = JSON.stringify([this.machineId, this.sessionId, message.entryId ?? messageIndex, message.role, part.type, partIndex]);
     if (part.type === "text" && message.role === "bash") return html`<pre class="part shell-output">${part.text}</pre>`;
     if (part.type === "text") return html`<formatted-text .intentKey=${intentKey} class="part" .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${part.text}></formatted-text>`;
     if (part.type === "thinking") return html`<details class="part"><summary>thinking</summary><formatted-text .intentKey=${intentKey} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${part.text}></formatted-text></details>`;

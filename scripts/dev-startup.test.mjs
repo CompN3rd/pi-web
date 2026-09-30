@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, it, vi } from "vitest";
 import { runDevelopmentWeb } from "./dev-web.mjs";
 import { runDevelopmentSessiond, waitForPluginBuild } from "./dev-sessiond.mjs";
@@ -74,14 +75,29 @@ it("starts sessiond only after build readiness without starting another builder"
   expect(await running).toBe(0);
 });
 
-it("does not launch sessiond if stopped while readiness is resolving", async () => {
+it.each([["SIGINT", 130], ["SIGTERM", 143]])("exits with the signal status when %s interrupts readiness", async (signal, code) => {
   const options = harness();
   let publish;
   const running = runDevelopmentSessiond({ ...options, wait: () => new Promise(resolve => { publish = resolve; }) });
-  options.signals.emit("SIGTERM");
+  options.signals.emit(signal);
   publish();
-  await expect(running).rejects.toMatchObject({ name: "AbortError" });
+  expect(await running).toBe(code);
   expect(options.launch).not.toHaveBeenCalled();
+  expect(options.signals.listenerCount("SIGINT")).toBe(0);
+  expect(options.signals.listenerCount("SIGTERM")).toBe(0);
+});
+
+it("removes prior readiness before a combined dev startup can launch either owner", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-web-dev-prepare-"));
+  try {
+    await mkdir(join(cwd, "dist"));
+    await writeFile(join(cwd, "dist", ".plugins-ready"), "old publication");
+    await waitForPluginBuild({ cwd, timeoutMs: 0 });
+    execFileSync(process.execPath, [resolve("scripts/dev-prepare.mjs")], { cwd });
+    await expect(waitForPluginBuild({ cwd, timeoutMs: 0 })).rejects.toThrow("Plugin build not ready");
+    await writeFile(join(cwd, "dist", ".plugins-ready"), "fresh publication");
+    await waitForPluginBuild({ cwd, timeoutMs: 0 });
+  } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
 it("waits for the cold-start marker and reports a missing builder", async () => {

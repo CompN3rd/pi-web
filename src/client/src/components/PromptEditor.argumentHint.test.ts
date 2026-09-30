@@ -2,12 +2,15 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
-import { promptArgumentHintExtension, promptArgumentHintState } from "../promptArgumentHint";
+import { machineSessionKey } from "../machineKeys";
+import { saveDraft } from "../promptDraftStorage";
+import { promptArgumentHintExtension, promptArgumentHintState, setPromptArgumentHint } from "../promptArgumentHint";
 import { PromptEditor } from "./PromptEditor";
 import type { CompletionItem } from "./shared";
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
 });
 
 describe("PromptEditor argument hint ghost", () => {
@@ -27,6 +30,24 @@ describe("PromptEditor argument hint ghost", () => {
     } finally {
       view.destroy();
     }
+  });
+
+  it.each(["session", "machine"])("clears a hint on a %s change even with an identical draft", async (change) => {
+    const editor = new PromptEditor();
+    editor.machineId = "local";
+    editor.sessionId = "first";
+    saveDraft(machineSessionKey("local", "first"), "/pr ");
+    saveDraft(machineSessionKey(change === "machine" ? "remote" : "local", change === "session" ? "second" : "first"), "/pr ");
+    document.body.append(editor);
+    await editor.updateComplete;
+    const view: unknown = Reflect.get(editor, "editor");
+    if (!(view instanceof EditorView)) throw new Error("Expected prompt editor");
+    view.dispatch({ effects: setPromptArgumentHint.of({ pos: 4, text: "<PR-URL>" }) });
+    if (change === "session") editor.sessionId = "second";
+    else editor.machineId = "remote";
+    await editor.updateComplete;
+    expect(view.state.doc.toString()).toBe("/pr ");
+    expect(view.state.field(promptArgumentHintState)).toBeNull();
   });
 
   it("does not show a hint when picking a command without one", () => {

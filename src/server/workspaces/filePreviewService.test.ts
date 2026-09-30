@@ -78,7 +78,7 @@ describe("readWorkspaceFilePreview", () => {
     const target = join(external, "outside.svg");
     await writeFile(target, "<svg></svg>");
     await symlink(target, join(root, "linked.svg"));
-    for (const path of [relative(root, target), target, `~/${relative(homedir(), target)}`, "linked.svg"]) {
+    for (const path of [relative(root, target), target, `~/${relative(homedir(), target)}`, `~\\${relative(homedir(), target)}`, "linked.svg"]) {
       const preview = await readWorkspaceFilePreview(root, path, undefined, { explicitlyRequestedImage: true });
       expect(preview).toMatchObject({ path: target, mediaType: "image", size: 11 });
       expect(await previewText(preview.body)).toBe("<svg></svg>");

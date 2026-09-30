@@ -84,6 +84,25 @@ function commitAndFillDraft(harness: ReturnType<typeof createHarness>, body: str
 }
 
 describe("ReviewController authoring + queries", () => {
+  it("rejects Files deleted-side anchors at selection, draft, and edit boundaries", () => {
+    const harness = createHarness();
+    const { controller } = harness;
+    const invalid = { source: "files" as const, filePath: "a.ts", range: { side: "old" as const, start: 1, end: 1 } };
+    controller.beginSelection("a.ts", { source: "files", side: "old", line: 1 });
+    expect(harness.state.reviewSelection).toBeUndefined();
+    controller.beginSelection("a.ts", { source: "files", side: "new", line: 1 });
+    controller.commitSelection("hash");
+    controller.setDraftBody("valid feedback");
+    controller.submitDraft(invalid);
+    expect(controller.list()).toEqual([]);
+    expect(controller.draft()?.body).toBe("valid feedback");
+    controller.submitDraft();
+    const saved = controller.list()[0];
+    if (saved === undefined) throw new Error("Expected saved feedback");
+    controller.update(saved.id, "invalid edit", invalid);
+    expect(controller.list()[0]).toEqual(saved);
+  });
+
   it.each([
     { start: -1, end: -1 }, { start: 0, end: 2 }, { start: 3, end: 2 },
     { start: 1.5, end: 2 }, { start: 1, end: Infinity }, { start: NaN, end: 2 },

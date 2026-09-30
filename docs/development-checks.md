@@ -27,4 +27,17 @@ npm run check:artifacts
 
 `check:artifacts` consumes the current `dist` output; it does not build or refresh it. Always run the build first after changing source or packaging inputs. Artifact checks cover emitted public declarations, package contents, deployment-relative client URLs, and plugin bundle contracts such as self-containment and size limits. They are separate from `npm test` and `npm run verify`.
 
+### Updating the public declaration baseline
+
+Artifact checks compare normalized declaration text, including JSDoc and TypeScript emitter formatting, so not every difference is a compatibility break. Review those differences before accepting an intentional API, documentation, or compiler-output change. Refresh all baseline files mechanically from a fresh build:
+
+```sh
+npm run build
+npm run refresh:plugin-api-baseline
+npm run check:artifacts
+git diff -- test-fixtures/plugin-api-baseline
+```
+
+The refresh command copies declarations from the existing `dist`; it does not rebuild. Commit the reviewed baseline with the corresponding change rather than refreshing it merely to silence a failing check.
+
 CI and the publish workflow run artifact checks after their build. On Linux they also run `npm run smoke:package-install`, which checks an actual global installation, public API consumer resolution, and native PTY execution. That installed-package boundary is distinct from inspecting build output.

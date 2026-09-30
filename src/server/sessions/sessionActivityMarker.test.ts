@@ -96,6 +96,15 @@ describe("SessionActivityMarker", () => {
     expect(await contents()).toEqual({ owner: "observer", updatedAt: now });
   });
 
+  it("does not treat future-dated foreign markers as active", async () => {
+    await writeFile(sidecar, JSON.stringify({ owner: "future", updatedAt: now + 60_000 }));
+    const observer = service("observer");
+    await observer.refresh(file, false);
+    expect(observer.isActiveElsewhere(file)).toBe(false);
+    await observer.refresh(file, true);
+    expect(await contents()).toEqual({ owner: "observer", updatedAt: now });
+  });
+
   it("preserves the last known activity while a filesystem refresh is pending", async () => {
     const observer = service("observer");
     await writeFile(sidecar, JSON.stringify({ owner: "foreign", updatedAt: now }));

@@ -50,6 +50,19 @@ async function mountCodeViewer(): Promise<FilesCodeViewer> {
   return el;
 }
 
+it("recreates the raw editor when a retained viewer reconnects", async () => {
+  const viewer = await mountCodeViewer();
+  viewer.content = "retained code";
+  await viewer.updateComplete;
+  await vi.waitFor(() => { expect(viewer.shadowRoot?.querySelector(".cm-content")?.textContent).toBe("retained code"); });
+  viewer.remove();
+  expect(viewer.shadowRoot?.querySelector(".cm-editor")).toBeNull();
+  document.body.append(viewer);
+  await viewer.updateComplete;
+  await vi.waitFor(() => { expect(viewer.shadowRoot?.querySelector(".cm-content")?.textContent).toBe("retained code"); });
+  expect(viewer.shadowRoot?.querySelectorAll(".cm-editor")).toHaveLength(1);
+});
+
 it("keeps one raw CRLF fingerprint through gestures, review refreshes, and invalidation", async () => {
   let state = initialAppState();
   state = { ...state, selectedSession: { id: "review-session", path: "/session.jsonl", cwd: "/repo", created: "", modified: "", messageCount: 0, firstMessage: "" } };

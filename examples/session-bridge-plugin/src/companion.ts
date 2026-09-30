@@ -35,7 +35,7 @@ export default function companion(pi: ExtensionAPI): void {
   });
   // agent_end can precede automatic retries/compaction. Settlement is the final boundary.
   pi.on("agent_settled", () => {
-    if (active?.started !== true) return;
+    if (active === undefined || (!active.started && active.error === undefined)) return;
     const result = active;
     active = undefined;
     const error = result.error ?? (result.stopReason !== "stop" || !result.text.trim()

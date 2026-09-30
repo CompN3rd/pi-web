@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectService } from "../projects/projectService.js";
+import { InvalidProjectPathError, type ProjectService } from "../projects/projectService.js";
 import { registerProjectMutationRoutes } from "./projectMutationRoutes.js";
 
 let app: FastifyInstance;
@@ -31,8 +31,10 @@ describe("daemon project mutations", () => {
   });
 
   it.each([
-    [new Error("Project path must be a directory"), 400],
-    [Object.assign(new Error("Missing path"), { code: "ENOENT" }), 400],
+    [new InvalidProjectPathError("Project path must be a directory"), 400],
+    [new InvalidProjectPathError("Missing path"), 400],
+    [Object.assign(new Error("Unread cleanup denied"), { code: "EACCES" }), 500],
+    [Object.assign(new Error("Catalog parent missing"), { code: "ENOENT" }), 500],
     [new Error("Catalog reconciliation failed"), 500],
   ])("maps add error %s to %s", async (error, status) => {
     projects.add.mockRejectedValue(error);

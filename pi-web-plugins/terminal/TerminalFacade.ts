@@ -88,13 +88,13 @@ export class TerminalFacade implements RequiredTerminalBrowserFacadeV1 {
     return Object.freeze({
       open: (options?: { terminalId?: string | undefined }) => {
         throwIfAborted(this.lifetime.signal);
-        this.openTerminal(binding, options);
+        void this.openTerminal(binding, options);
       },
       runCommand: async (input: WorkspaceTerminalCommandInput): Promise<TerminalCommandRunHandle> => {
         throwIfAborted(this.lifetime.signal);
         const run = await client.runCommand(binding.origin, input, this.lifetime.signal);
         throwIfAborted(this.lifetime.signal);
-        if (input.open === true) this.openTerminal(binding, { terminalId: run.terminalId });
+        if (input.open === true) void this.openTerminal(binding, { terminalId: run.terminalId });
         return Object.freeze({
           run,
           completed: waitForCommandRunCompletion(run, client, this.pollIntervalMs, this.setTimer, this.clearTimer, this.lifetime.signal),
@@ -109,17 +109,23 @@ export class TerminalFacade implements RequiredTerminalBrowserFacadeV1 {
     }
   }
 
-  private openTerminal(binding: RequiredTerminalWorkspaceBindingV1, options?: { terminalId?: string | undefined }): void {
+  private async openTerminal(binding: RequiredTerminalWorkspaceBindingV1, options?: { terminalId?: string | undefined }): Promise<void> {
     const contributionId: QualifiedContributionId = `${binding.registrationPluginId}:${TERMINAL_PANEL_LOCAL_ID}`;
     const terminalId = options?.terminalId;
     const query: Record<string, ContributionQueryValue | undefined> = terminalId === undefined
       ? { start: String(++this.openRequestSequence) }
       : { terminal: terminalId, start: undefined };
-    void binding.host.navigateWorkspaceContribution(binding.workspace, {
-      contributionId,
-      navigationAliases: TERMINAL_PANEL_NAVIGATION_ALIASES,
-      query,
-    });
+    try {
+      await binding.host.navigateWorkspaceContribution(binding.workspace, {
+        contributionId,
+        navigationAliases: TERMINAL_PANEL_NAVIGATION_ALIASES,
+        query,
+      });
+    } catch (error) {
+      // The public open() API is void-returning; neither kind of host failure
+      // may escape as an unobserved navigation promise.
+      console.error("Could not open the Terminal panel", error);
+    }
   }
 
   async listCommandRuns(query: RequiredTerminalCommandRunQueryV1): Promise<TerminalCommandRun[]> {

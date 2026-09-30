@@ -63,6 +63,10 @@ it("starts, refreshes, selects and cycles text reviews through the selected mach
   select.dispatchEvent(new Event("change"));
   await vi.waitFor(() => { expect(document.querySelector("pre")?.textContent).toBe(two.text); });
   expect(document.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
+  // Pruning the selected record must fall back to the first remaining saved review.
+  first.mockImplementation((operation) => operation === "list" ? Promise.resolve([{ ...one, text: "" }]) : Promise.resolve({ ...one }));
+  button("Refresh reviews").click();
+  await vi.waitFor(() => { expect(document.querySelector("pre")?.textContent).toBe(one.text); });
 
   context = { ...context, machine: { id: "remote-b", name: "B", kind: "remote" }, peer: { request: second } };
   context.host.requestRender();

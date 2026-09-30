@@ -138,7 +138,7 @@ function parseWorkspaceRouteSurface(value: unknown): WorkspaceRouteSurface {
   const contributionQuery = normalizeContributionQueryRecord({
     ...(legacySelectedFilePath === undefined ? {} : { [LEGACY_FILES_QUERY_PARAMETER]: legacySelectedFilePath }),
     ...(legacySelectedTerminalId === undefined ? {} : { [LEGACY_TERMINAL_QUERY_PARAMETER]: legacySelectedTerminalId }),
-    ...storedContributionQuery,
+    ...normalizeContributionQueryRecord(storedContributionQuery),
   });
   return {
     ...(Object.keys(contributionQuery).length === 0 ? {} : { contributionQuery }),

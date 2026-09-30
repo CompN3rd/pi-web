@@ -607,14 +607,12 @@ function workspaceContextKey(context: WorkspacePanelContext): string {
 }
 
 function workspaceNavigationModeKey(context: WorkspacePanelContext | undefined): string {
-  const value = context?.navigation?.query["mode"];
-  const mode = typeof value === "string" ? value : value?.[0];
   return JSON.stringify([
     context?.machine.id ?? null,
     context?.workspace.projectId ?? null,
     context?.workspace.id ?? null,
     context?.navigation?.contributionId ?? null,
-    mode ?? null,
+    context?.navigation?.query ?? null,
   ]);
 }
 

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { ProjectService } from "../projects/projectService.js";
+import { InvalidProjectPathError, type ProjectService } from "../projects/projectService.js";
 
 export function registerProjectMutationRoutes(app: FastifyInstance, projects: Pick<ProjectService, "add" | "close">): void {
   app.post<{ Body: unknown }>("/projects", async (request, reply) => {
@@ -10,7 +10,7 @@ export function registerProjectMutationRoutes(app: FastifyInstance, projects: Pi
     try {
       return await projects.add(input);
     } catch (error) {
-      return reply.code(isInvalidProjectPath(error) ? 400 : 500).send({ error: error instanceof Error ? error.message : String(error) });
+      return reply.code(error instanceof InvalidProjectPathError ? 400 : 500).send({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 
@@ -30,10 +30,4 @@ function isProjectInput(input: unknown): input is Parameters<ProjectService["add
     && "path" in input && typeof input.path === "string" && input.path.trim() !== ""
     && (!("name" in input) || input.name === undefined || typeof input.name === "string")
     && (!("create" in input) || input.create === undefined || typeof input.create === "boolean");
-}
-
-function isInvalidProjectPath(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  if (error.message === "Project path must be a directory") return true;
-  return "code" in error && ["ENOENT", "ENOTDIR", "EEXIST", "EACCES", "EPERM", "EINVAL", "ENAMETOOLONG", "ELOOP", "ERR_INVALID_ARG_VALUE"].includes(String(error.code));
 }

@@ -64,16 +64,16 @@ describe("Files plugin activation", () => {
     expect(secondRuntime).not.toBe(firstRuntime);
   });
 
-  it("still rejects an unrelated owner of a reserved Files element name", () => {
+  it.each([FILES_CODE_VIEWER_ELEMENT, FILES_VIEWER_ELEMENT, FILES_PANEL_ELEMENT])("preflights an unrelated owner of %s before defining anything", (conflict) => {
     class UnrelatedElement extends HTMLElement {}
     const registry = {
-      get: vi.fn((name: string) => name === FILES_CODE_VIEWER_ELEMENT ? UnrelatedElement : undefined),
+      get: vi.fn((name: string) => name === conflict ? UnrelatedElement : undefined),
       define: vi.fn(),
     };
     vi.stubGlobal("customElements", registry);
 
     expect(() => activateFilesPlugin(activationContext(), new FilesRuntime()))
-      .toThrow(`Files custom element name is already owned: ${FILES_CODE_VIEWER_ELEMENT}`);
+      .toThrow(`Files custom element name is already owned: ${conflict}`);
     expect(registry.define).not.toHaveBeenCalled();
   });
 

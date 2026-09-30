@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 
 /** Each development child owns a process group so stopping a watcher also stops its runtime. */
 export function startDevelopmentProcess(entry, args, env, ipc = false, execArgv = []) {
@@ -12,9 +12,16 @@ export function startDevelopmentProcess(entry, args, env, ipc = false, execArgv 
 export function stopDevelopmentProcess(child, signal = "SIGTERM") {
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
   try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
+    if (process.platform === "win32") {
+      // Node's Windows kill() terminates only the watcher, orphaning its runtime.
+      execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } else process.kill(-child.pid, signal);
   } catch (error) {
+    // The child may have exited between the liveness check and tree termination.
+    if (process.platform === "win32") {
+      try { process.kill(child.pid, 0); }
+      catch (probe) { if (probe?.code === "ESRCH") return; }
+    }
     if (error?.code !== "ESRCH") throw error;
   }
 }

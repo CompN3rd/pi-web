@@ -586,6 +586,25 @@ describe("Docker command assets", () => {
     expect(await readFile(helperLog, "utf8")).toBe(plan.steps.map((step) => `allow=0 args=${step.args.join(" ")}\n`).join(""));
   });
 
+  dockerCommandIt.each(["healthy", "unhealthy"])("gates legacy Compose restarts on portable web health (%s)", async (health) => {
+    const helperLog = join(tempDir, "legacy-helper.log");
+    const devRoot = await createDevRepoFixtureWithFakeHelper(helperLog);
+    const fakeDocker = await installFakeDocker();
+    await installFakeId(fakeDocker.binDir, 1234, 2345);
+    const legacy = join(fakeDocker.binDir, "docker-compose");
+    await writeFile(legacy, '#!/usr/bin/env sh\nprintf "legacy Compose up options\\n"\n');
+    await chmod(legacy, 0o755);
+    const result = await runDockerCommandAllowFailure(["--dev", "restart"], {
+      ...devHostEnv(fakeDocker, devRoot, join(tempDir, "home")), FAKE_COMPOSE_LEGACY: "1", FAKE_WEB_HEALTH: health,
+    });
+    const log = await readFile(helperLog, "utf8");
+    expect(log).toContain("args=restart web");
+    expect(log).toContain("args=ps -q web");
+    expect(log).not.toContain("--wait");
+    if (health === "healthy") { expect(result.exitCode).toBe(0); expect(log).toContain("args=restart sessiond"); }
+    else { expect(result.exitCode).not.toBe(0); expect(log).not.toContain("args=restart sessiond"); }
+  });
+
   dockerCommandIt.each(["restart web", "up -d --no-deps --no-recreate --wait --wait-timeout 120 web"])("does not restart sessiond when %s fails", async (failedCommand) => {
     const helperLog = join(tempDir, "dev-helper.log");
     const devRoot = await createDevRepoFixtureWithFakeHelper(helperLog);
@@ -902,6 +921,7 @@ async function createDevRepoFixtureWithFakeHelper(logPath: string): Promise<stri
 set -eu
 printf 'allow=%s args=%s\n' "\${PI_WEB_DOCKER_ALLOW_ROOT:-}" "$*" >>${shellSingleQuote(logPath)}
 if [ "$*" = "\${FAKE_COMPOSE_FAIL:-}" ]; then exit 17; fi
+if [ "$*" = "ps -q web" ]; then printf 'web-container\\n'; fi
 `, "utf8");
   await chmod(helperPath, 0o755);
   return devRoot;
@@ -1017,8 +1037,10 @@ case "\${1:-}" in
     ;;
   compose)
     if [ "\${2:-}" = version ]; then
+      [ "\${FAKE_COMPOSE_LEGACY:-0}" != 1 ] || exit 1
       exit 0
     fi
+    if [ "$*" = "compose up --help" ]; then printf '%s\\n' '--wait --wait-timeout'; exit 0; fi
     printf 'fake docker'
     for arg in "$@"; do
       printf ' %s' "$arg"
@@ -1052,6 +1074,10 @@ case "\${1:-}" in
   inspect)
     for arg in "$@"; do
       case "$arg" in
+        *State.Health*)
+          printf '%s\\n' "\${FAKE_WEB_HEALTH:-healthy}"
+          exit 0
+          ;;
         *State.ExitCode*)
           printf '0\n'
           exit 0

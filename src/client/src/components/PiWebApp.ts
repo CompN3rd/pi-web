@@ -365,11 +365,12 @@ export class PiWebApp extends LitElement {
   private readonly resetKeyboardSequence = () => { this.keyboard.reset(); };
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (this.isRenderedModalOpen()) {
+    // Normal typing never needs the composed-tree fallback for plugin dialogs.
+    if (this.promptEditor?.ownsKeyboardEvent(event) === true || this.keyboard.ignoresPlainInput(event)) {
       this.keyboard.reset();
       return;
     }
-    if (this.promptEditor?.ownsKeyboardEvent(event) === true) {
+    if (this.isRenderedModalOpen()) {
       this.keyboard.reset();
       return;
     }
@@ -3596,7 +3597,7 @@ export class PiWebApp extends LitElement {
         ${state.authDialog !== undefined ? html`<auth-dialog .state=${state.authDialog} .onChooseMethod=${(authType: "oauth" | "api_key") => { void this.auth.chooseLoginMethod(authType); }} .onSelectProvider=${(providerId: string, authType: "oauth" | "api_key") => { void this.auth.selectLoginProvider(providerId, authType); }} .onLogoutProvider=${(providerId: string) => { void this.auth.logoutProvider(providerId); }} .onOAuthInput=${(value: string) => { this.auth.updateOAuthInput(value); }} .onOAuthRespond=${(value?: string) => { void this.auth.respondOAuth(value); }} .onOAuthCancel=${() => { void this.auth.cancelOAuth(); }} .onCancel=${() => { this.auth.closeDialog(); }}></auth-dialog>` : null}
         ${this.navigationDialogOpen ? html`<navigation-dialog
           .tabs=${this.availableNavigationTabs()}
-          .pinUniverse=${this.mobileMainTabs().map((tab) => tab.id)}
+          .pinUniverse=${["navigation", "chat", ...this.plugins.getWorkspacePanels().map((panel) => panel.id)]}
           .selectedTab=${this.selectedNavigationTab()}
           .preferences=${this.navigationPreferences}
           .onPreferencesChange=${this.changeNavigationPreferences}

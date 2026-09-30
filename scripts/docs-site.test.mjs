@@ -98,6 +98,7 @@ describe("compact documentation contents menu", () => {
       const sources = [...window.document.querySelectorAll('.toc a[href^="#"], .reference-nav a[href^="#"]')];
       const dialog = window.document.querySelector(".docs-toc-dialog");
       const toggle = window.document.querySelector(".docs-toc-toggle");
+      expect(window.document.body.classList.contains("docs-has-contents")).toBe(true);
       const links = [...dialog.querySelectorAll("nav a")];
       expect(links.map((link) => link.getAttribute("href"))).toEqual(sources.map((link) => link.getAttribute("href")));
       expect(links.map((link) => link.textContent)).toEqual(sources.map((link) => link.textContent));
@@ -114,6 +115,18 @@ describe("compact documentation contents menu", () => {
     } finally {
       window.close();
     }
+  });
+
+  it("keeps the source navigation available when native dialogs are unsupported", () => {
+    const window = new Window();
+    try {
+      window.HTMLDialogElement.prototype.showModal = undefined;
+      window.document.write('<nav class="toc"><a href="#section">Section</a></nav><section id="section"></section>');
+      window.eval(siteScript);
+      expect(window.document.querySelector(".docs-toc-toggle")).toBeNull();
+      expect(window.document.body.classList.contains("docs-has-contents")).toBe(false);
+      expect(window.document.querySelector(".toc a").getAttribute("href")).toBe("#section");
+    } finally { window.close(); }
   });
 
   it("does not add a contents button to pages without a table of contents", () => {

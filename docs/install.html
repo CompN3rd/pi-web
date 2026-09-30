@@ -208,7 +208,9 @@
               <p>
                 Run <code>pi-web restart</code> to restart the installed development services. It handles
                 build readiness and restart order for you. Restarting interrupts active sessions, so wait for
-                important work to finish first.
+                important work to finish first. Use <code>pi-web start</code> to start both development services:
+                starting the UI service directly intentionally does not pull in sessiond, because the web-owned
+                build and API must be ready before the daemon starts.
               </p>
             </section>
 

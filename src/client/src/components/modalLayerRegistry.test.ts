@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { mockNativeDialogModality } from "./nativeDialog.testSupport";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasRenderedModal, registerRenderedModal, type RenderedModalRegistration } from "./modalLayerRegistry";
 
 interface TestModalLayer {
@@ -16,6 +17,7 @@ const openLayers: RenderedModalRegistration[] = [];
 afterEach(() => {
   while (openLayers.length > 0) openLayers.pop()?.unregister();
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 describe("rendered modal layer visibility", () => {
@@ -87,10 +89,14 @@ describe("rendered modal layer visibility", () => {
     const host = document.createElement("div");
     const root = host.attachShadow({ mode: "open" });
     const dialog = document.createElement("dialog");
+    mockNativeDialogModality(dialog);
     root.append(dialog);
     document.body.append(host);
 
     expect(hasRenderedModal(document)).toBe(false);
+    dialog.show();
+    expect(hasRenderedModal(document)).toBe(false);
+    dialog.close();
     dialog.showModal();
     expect(hasRenderedModal(document)).toBe(true);
     dialog.close();

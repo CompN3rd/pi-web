@@ -32,9 +32,28 @@ const succeededRun: TerminalCommandRun = {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("Terminal facade", () => {
+  it.each([false, true])("observes host navigation failures (async=%s) without losing completed command handles", async (asynchronous) => {
+    const failure = new Error("Navigation failed");
+    const report = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const terminal = new TerminalFacade().createWorkspaceTerminal({
+      origin: "actions", registrationPluginId: "pi-web.terminal", workspace,
+      peer: peer(vi.fn(() => Promise.resolve(runJson(succeededRun)))),
+      host: { navigateWorkspaceContribution: () => {
+        if (asynchronous) return Promise.reject(failure);
+        throw failure;
+      } },
+    });
+    expect(() => { terminal.open(); }).not.toThrow();
+    const handle = await terminal.runCommand({ title: "Build", command: "npm run build", open: true });
+    await expect(handle.completed).resolves.toEqual(succeededRun);
+    expect(report).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenCalledWith("Could not open the Terminal panel", failure);
+  });
+
   it("runs a command through the peer and opens its terminal when requested", async () => {
     const request = vi.fn<NonNullable<PluginPeer["request"]>>((operation: string): Promise<JsonValue> => {
       if (operation === "terminal.run") return Promise.resolve(runJson(succeededRun));

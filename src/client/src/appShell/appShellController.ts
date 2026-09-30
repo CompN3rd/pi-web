@@ -34,6 +34,16 @@ export class AppShellController implements ReactiveController {
   }
 
   hostConnected(): void {
+    // Media queries may have changed while the host was detached and unsubscribed.
+    const desktop = this.desktopSideBySideMedia?.matches ?? true;
+    const mobile = this.mobileNavigationMedia?.matches ?? false;
+    const pwa = detectPwaDisplayMode(this.pwaDisplayModeMedia);
+    if (desktop !== this.isDesktopSideBySideLayout || mobile !== this.isMobileNavigationLayout || pwa !== this.isPwaDisplayMode) {
+      this.isDesktopSideBySideLayout = desktop;
+      this.isMobileNavigationLayout = mobile;
+      this.isPwaDisplayMode = pwa;
+      this.host.requestUpdate();
+    }
     this.desktopSideBySideMedia?.addEventListener("change", this.onDesktopSideBySideMediaChange);
     this.mobileNavigationMedia?.addEventListener("change", this.onMobileNavigationMediaChange);
     for (const media of this.pwaDisplayModeMedia) media.addEventListener("change", this.onPwaDisplayModeChange);

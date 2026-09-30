@@ -1301,6 +1301,12 @@ html:has(.docs-toc-dialog[open]) {
     overflow: visible;
   }
 
+  /* Only hide the source TOC after the native-dialog enhancement succeeds. */
+  .docs-has-contents .reference-nav,
+  .docs-has-contents .toc {
+    display: none;
+  }
+
   .docs-toc-toggle {
     display: flex;
   }

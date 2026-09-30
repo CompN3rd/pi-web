@@ -39,7 +39,7 @@ const SpawnSessionParams = Type.Object({
     description: "Working directory for the new session. Must be a workspace (worktree, or root) of the same project as this session. Defaults to this session's working directory.",
   })),
   model: Type.Optional(Type.String({
-    description: 'Model override for the new session, as an exact "provider/model-id". Set this field only when instructed to use a specific model or to choose an appropriate one. Otherwise omit it to inherit this session\'s model. An unknown value is rejected.',
+    description: 'Model override for the new session, as an exact "provider/model-id". Set this field only when instructed to use a specific model or to choose an appropriate one. Otherwise omit it to inherit this session\'s model. Forward an explicit #provider/model-id reference from the user as this field, without the #. An unknown value is rejected.',
   })),
 });
 

@@ -31,7 +31,7 @@ export function parseSessionDefaults(value: unknown): SessionDefaults {
   }
   const level = record["defaultThinkingLevel"];
   if (level !== undefined) {
-    if (typeof level !== "string" || !isKnownThinkingLevel(level)) throw new Error("Invalid defaultThinkingLevel");
+    if (typeof level !== "string") throw new Error("Invalid defaultThinkingLevel");
     result.defaultThinkingLevel = level;
   }
   return result;

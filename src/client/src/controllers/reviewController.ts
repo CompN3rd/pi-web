@@ -7,7 +7,7 @@ import {
 } from "../review/reviewCommentStorage";
 import { hashSource as defaultHashSource } from "../review/reviewHash";
 import { buildReviewMarkdown } from "../review/reviewMarkdown";
-import { isValidReviewRange } from "../review/reviewCoordinates";
+import { isValidReviewAnchor } from "../review/reviewCoordinates";
 import type { ReviewAnchor, ReviewComment, ReviewLineRef, ReviewSide, ReviewSource } from "../review/reviewTypes";
 import { selectedMachineId, type GetState, type SetState } from "./types";
 
@@ -128,7 +128,7 @@ export class ReviewController {
   }
 
   beginSelection(path: string, ref: ReviewLineRef): void {
-    if (!this.canAuthor()) return;
+    if (!this.canAuthor() || (ref.source === "files" && ref.side !== "new")) return;
     this.setState({ reviewSelection: { filePath: path, side: ref.side, anchorLine: ref.line, currentLine: ref.line, ...(ref.source === undefined ? {} : { source: ref.source }), ...(ref.sourceHash === undefined ? {} : { sourceHash: ref.sourceHash }) } });
   }
 
@@ -190,7 +190,7 @@ export class ReviewController {
   /** Creates the comment from the current draft and persists it. No-ops without an open draft. */
   submitDraft(anchor?: ReviewAnchor): void {
     const draft = this.getState().reviewDraft;
-    if (draft === undefined || !this.canAuthor() || !isValidReviewRange((anchor ?? draft.anchor).range)) return;
+    if (draft === undefined || !this.canAuthor() || !isValidReviewAnchor(anchor ?? draft.anchor)) return;
     const timestamp = this.now();
     const comment: ReviewComment = {
       id: this.idFactory(),
@@ -211,7 +211,7 @@ export class ReviewController {
   }
 
   update(id: string, body: string, anchor: ReviewAnchor): void {
-    if (!this.canAuthor() || !isValidReviewRange(anchor.range)) return;
+    if (!this.canAuthor() || !isValidReviewAnchor(anchor)) return;
     const timestamp = this.now();
     this.persistComments(this.getState().reviewComments.map((comment) => (comment.id === id ? { ...comment, body, anchor, updatedAt: timestamp } : comment)));
   }

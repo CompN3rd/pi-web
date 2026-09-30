@@ -69,8 +69,26 @@ describe("KeyboardShortcutDispatcher", () => {
     }
     const sequence = action("mod+g p");
     expect(dispatcher.handle(keyEvent("g", { target: child, ctrlKey: true }), [sequence.value])).toBe(true);
+    expect(dispatcher.ignoresPlainInput(keyEvent("p", { target: child }))).toBe(false);
     expect(dispatcher.handle(keyEvent("p", { target: child }), [sequence.value])).toBe(true);
     expect(sequence.run).toHaveBeenCalledOnce();
+  });
+
+  it.each(["button", "a", "summary"])("preserves native activation on %s, including shadow-path controls", (tag) => {
+    const target = document.createElement(tag);
+    if (target instanceof HTMLAnchorElement) target.href = "https://example.com";
+    const child = target.appendChild(document.createElement("span"));
+    const dispatcher = new KeyboardShortcutDispatcher();
+    for (const [key, shortcut] of [["Enter", "enter"], [" ", "space"]]) {
+      const { value, run } = action(shortcut ?? "");
+      const event = keyEvent(key ?? "", { target: child, composedPath: () => [child, target] });
+      expect(dispatcher.ignoresPlainInput(event)).toBe(true);
+      expect(dispatcher.handle(event, [value])).toBe(false);
+      expect(run).not.toHaveBeenCalled();
+    }
+    const modified = action("mod+enter");
+    expect(dispatcher.handle(keyEvent("Enter", { target, ctrlKey: true }), [modified.value])).toBe(true);
+    expect(modified.run).toHaveBeenCalledOnce();
   });
 
   it("detects editable fields through a shadow composed path", () => {
@@ -90,8 +108,8 @@ describe("KeyboardShortcutDispatcher", () => {
   it.each([false, true])("resets pending sequences when the actual target changes (shadow: %s)", (shadow) => {
     const host = document.body.appendChild(document.createElement("div"));
     const parent = shadow ? host.attachShadow({ mode: "open" }) : host;
-    const first = parent.appendChild(document.createElement("button"));
-    const second = parent.appendChild(document.createElement("button"));
+    const first = parent.appendChild(document.createElement("div"));
+    const second = parent.appendChild(document.createElement("div"));
     const dispatcher = new KeyboardShortcutDispatcher();
     const { value, run } = action("g p");
     const handled: boolean[] = [];

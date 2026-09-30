@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../../../examples/session-bridge-plugin/src/server.js";
 import { collectReview } from "../../../examples/session-bridge-plugin/src/reviewRun.js";
 import { REVIEW_REPLY, REVIEW_REQUEST, isReview, type Review } from "../../../examples/session-bridge-plugin/src/browser/protocol.js";
+import { LogStore } from "../../../pi-packages/captains-log/src/store.js";
+import type { LogEntry } from "../../../pi-packages/captains-log/src/browser/protocol.js";
 import { ReviewStore, reviewScope } from "../../../examples/session-bridge-plugin/src/store.js";
 import type { ServerPluginPeerRequestContext } from "../../server-plugin-api.js";
 
@@ -114,6 +116,7 @@ describe("review backend", () => {
       await expect(fixture.activation.peer.request({ ...fixture.context, operation: "read", input: record.id, workspace: { ...fixture.context.workspace, id: "other" } })).rejects.toThrow();
       await fixture.stop();
       const store = new ReviewStore(fixture.dataDirectory);
+      expect(fixture.logger.error).not.toHaveBeenCalled();
       expect(await store.read(reviewScope("project", "workspace"), record.id)).toMatchObject({ status: "completed", text: "Bug in src/file.ts:4" });
     } finally { await fixture.stop(); }
   });
@@ -142,6 +145,32 @@ describe("review backend", () => {
       expect(fixture.create).not.toHaveBeenCalled();
     } finally { await fixture.stop(); }
   });
+  it("overlays an active completion while its final persistence is still pending", async () => {
+    const fixture = await setup();
+    let complete: () => void = () => { throw new Error("Not requested"); };
+    onRequest(fixture.bus, (requestId) => {
+      complete = () => { fixture.bus.emit(REVIEW_REPLY, { requestId, status: "completed", text: "Fresh completion" }); };
+    });
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const record = await fixture.request("start");
+      if (!isReview(record)) throw new Error("Expected admitted review");
+      await vi.waitFor(() => { expect(fixture.connect).toHaveBeenCalledOnce(); });
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- The spy explicitly supplies its receiver with save.call(this, ...) below.
+      const save = ReviewStore.prototype.save;
+      const spy = vi.spyOn(ReviewStore.prototype, "save").mockImplementation(async function (this: ReviewStore, scope, review) {
+        await waiting;
+        await save.call(this, scope, review);
+      });
+      try {
+        complete();
+        await vi.waitFor(() => { expect(spy).toHaveBeenCalled(); });
+        expect(await fixture.request("read", record.id)).toMatchObject({ status: "completed", text: "Fresh completion" });
+      } finally { release(); spy.mockRestore(); }
+    } finally { release(); await fixture.stop(); }
+  });
+
   it("surfaces final persistence failure in the panel and logger", async () => {
     const fixture = await setup();
     let complete: () => void = () => { throw new Error("Review not requested yet"); };
@@ -167,15 +196,17 @@ describe("review backend", () => {
 });
 
 describe("plugin-owned review files", () => {
-  it("uses atomic private records and rejects traversal, symlinks, and corrupt records", async () => {
+  it.each([["review", ReviewStore], ["captain", LogStore]] as const)("keeps the standalone %s store atomic and rejects traversal, symlinks, and corruption", async (kind, Store) => {
     const root = await directory();
-    const store = new ReviewStore(root);
+    const store = new Store(root);
     const scope = reviewScope("../project", "/workspace");
-    const record: Review = { id, createdAt: "2026-09-01", sessionId: "session", status: "completed", text: "<script>untrusted</script>" };
+    const record: Review & LogEntry = { id, createdAt: "2026-09-01", sessionId: "session", status: "completed", text: "<script>untrusted</script>", question: "Review", stages: [] };
     await store.save(scope, record);
     expect(await store.read(scope, id)).toEqual(record);
+    await store.save(scope, { ...record, text: "Updated record" });
+    expect(await store.read(scope, id)).toEqual({ ...record, text: "Updated record" });
     expect(await readdir(join(root, scope))).toEqual([`${id}.json`]);
-    await expect(store.read(scope, "../../secret")).rejects.toThrow("Invalid review id");
+    await expect(store.read(scope, "../../secret")).rejects.toThrow(`Invalid ${kind} id`);
     const target = join(root, "outside.json");
     await writeFile(target, JSON.stringify(record));
     await rm(join(root, scope, `${id}.json`));

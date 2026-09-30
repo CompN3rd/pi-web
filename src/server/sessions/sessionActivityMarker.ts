@@ -48,7 +48,7 @@ export class SessionActivityMarker {
       // Never create directories or sidecars for transcripts that do not exist.
       await stat(sessionFile);
       const marker = await this.readMarker(sessionFile);
-      state.activeElsewhere = marker !== undefined && marker.owner !== this.owner && now - marker.updatedAt <= 15_000;
+      state.activeElsewhere = marker !== undefined && marker.owner !== this.owner && marker.updatedAt <= now && now - marker.updatedAt <= 15_000;
       if (state.activeElsewhere) return;
       if (busy) {
         await writeFile(markerPath(sessionFile), JSON.stringify({ owner: this.owner, updatedAt: now }));

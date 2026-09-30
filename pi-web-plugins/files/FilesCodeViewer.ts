@@ -19,6 +19,11 @@ export class FilesCodeViewer extends LitElement {
   private recreateGeneration = 0;
   private reviewOptions: CodeViewerReviewOptions | undefined;
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (this.hasUpdated && this.view === undefined) void this.recreateEditor();
+  }
+
   override firstUpdated(): void {
     void this.recreateEditor();
   }

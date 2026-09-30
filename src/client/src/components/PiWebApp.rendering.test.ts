@@ -53,6 +53,32 @@ afterEach(() => {
 });
 
 describe("application rendering boundaries", () => {
+  it("keeps registered context-hidden panels pinned when materializing implicit pins", async () => {
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" }, () => html`Tool`);
+    const registry: unknown = Reflect.get(app, "plugins");
+    if (!(registry instanceof PluginRegistry)) throw new Error("Missing registry");
+    let visible = false;
+    await registry.register({ id: "conditional", plugin: { apiVersion: 4, name: "Conditional", activate: () => ({ contributions: {
+      workspacePanels: [{ id: "panel", title: "Conditional", visible: () => visible, render: () => html`Hidden until ready` }],
+    } }) } });
+    app.requestUpdate();
+    await settle(app);
+    app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]')?.click();
+    await settle(app);
+    const dialog = app.shadowRoot?.querySelector<NavigationDialog>("navigation-dialog");
+    if (dialog == null) throw new Error("Expected navigation dialog");
+    expect(dialog.tabs.some((tab) => tab.id === "conditional:panel")).toBe(false);
+    expect(dialog.pinUniverse).toContain("conditional:panel");
+    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Test"]')?.click();
+    await settle(app);
+    expect(loadNavigationPreferences().pinnedIds).toContain("conditional:panel");
+    visible = true;
+    app.requestUpdate();
+    await settle(app);
+    expect(dialog.tabs.some((tab) => tab.id === "conditional:panel")).toBe(true);
+    expect(loadNavigationPreferences().pinnedIds).toContain("conditional:panel");
+  });
+
   it("reactively filters navigation at both layout boundaries without losing hidden pins", async () => {
     let width = 1181;
     const originalMatchMedia = window.matchMedia.bind(window);

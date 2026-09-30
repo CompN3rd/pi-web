@@ -11,6 +11,10 @@ function required<T>(value: T | null | undefined): T {
   return value;
 }
 
+it.each(["C:/repo/image.png", "C:\\repo\\image.png", "\\\\server\\share\\image.png", "~\\Pictures\\image.png"])("routes native path %s through approval rather than a browser URL", (path) => {
+  expect(localMarkdownImage(path, "C:\\repo")).toEqual({ path, outside: true });
+});
+
 it.each([
   ["screenshots/a.png", "screenshots/a.png", false],
   ["/srv/work/a.png", "a.png", false],
@@ -29,6 +33,14 @@ it.each(["/srv/work", "C:\\repo", "C:/repo/", "\\\\server\\share\\repo", "//serv
   expect(localMarkdownImage("./docs//draft/../a%20b.png?raw=1#preview", root)).toEqual({ path: "docs/a b.png", outside: false });
   expect(localMarkdownImage("docs/../../outside.png", root)).toEqual({ path: "../outside.png", outside: true });
   expect(localMarkdownImage("../../outside.png", root)).toEqual({ path: "../../outside.png", outside: true });
+});
+
+it.each([".", "./", "a/.."])("routes workspace-root reference %s through the preview component", (reference) => {
+  expect(localMarkdownImage(reference, "/srv/work")).toEqual({ path: ".", outside: false });
+  const host = document.createElement("div");
+  host.innerHTML = toSafeMarkdownHtml(`![root](${reference})`, { machineId: "local", projectId: "p", workspaceId: "w", root: "/srv/work" });
+  expect(host.querySelector("img")).toBeNull();
+  expect(host.querySelector("pi-web-markdown-image")?.getAttribute("path")).toBe(".");
 });
 
 it.each(["https://example.com/a.png", "//example.com/a.png", "data:image/png,x", "bad%ZZ.png", "a%00.png", "a%5Cb.png"])("does not interpret %s as a local file", (input) => {

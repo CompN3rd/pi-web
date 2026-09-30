@@ -10,6 +10,7 @@ type ClearTimer = (timer: TimerId) => void;
 
 interface WorkspaceRuntimeState {
   activeCount?: number;
+  generation: number;
   refreshFailed: boolean;
   refreshedAt: number;
   retryAt: number;
@@ -67,14 +68,16 @@ export class TerminalBrowserRuntime {
   async refresh(context: WorkspacePanelContext): Promise<void> {
     this.requireActive();
     const peer = context.peer;
-    if (peer === undefined) throw new Error("Required Terminal peer is unavailable");
     const state = this.workspaceState(context);
     if (state.refresh !== undefined) return state.refresh;
     const controller = new AbortController();
-    const refresh = new TerminalPeerClient(peer).list(controller.signal).then((terminals) => {
-      this.updateTerminals(context, terminals);
+    const generation = this.beginTerminalList(context);
+    const request = peer === undefined ? Promise.reject(new Error("Required Terminal peer is unavailable"))
+      : new TerminalPeerClient(peer).list(controller.signal);
+    const refresh = request.then((terminals) => {
+      this.updateTerminals(context, terminals, generation);
     }).catch((error: unknown) => {
-      if (this.disposed || controller.signal.aborted) throw error;
+      if (this.disposed || controller.signal.aborted || generation !== state.generation) throw error;
       const changed = !state.refreshFailed;
       state.refreshFailed = true;
       state.retryAt = this.now() + ACTIVE_TERMINAL_FAILURE_RETRY_MS;
@@ -92,9 +95,17 @@ export class TerminalBrowserRuntime {
     return refresh;
   }
 
-  updateTerminals(context: WorkspacePanelContext, terminals: readonly TerminalInfo[]): void {
+  /** Panel and badge requests share ordering; direct mutations supersede both. */
+  beginTerminalList(context: WorkspacePanelContext): number {
+    this.requireActive();
+    return ++this.workspaceState(context).generation;
+  }
+
+  updateTerminals(context: WorkspacePanelContext, terminals: readonly TerminalInfo[], generation?: number): void {
     if (this.disposed) return;
     const state = this.workspaceState(context);
+    if (generation !== undefined && generation !== state.generation) return;
+    if (generation === undefined) state.generation += 1;
     const activeCount = terminals.reduce((count, terminal) => count + (terminal.exited ? 0 : 1), 0);
     const changed = state.activeCount !== activeCount || state.refreshFailed;
     state.activeCount = activeCount;
@@ -177,6 +188,7 @@ export class TerminalBrowserRuntime {
       return existing;
     }
     const state: WorkspaceRuntimeState = {
+      generation: 0,
       refreshFailed: false,
       refreshedAt: 0,
       retryAt: 0,

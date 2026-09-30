@@ -84,6 +84,24 @@ describe("Files panel component boundary", () => {
     expect(panel.context).toBe(restored);
   });
 
+  it("publishes mode changes through the latest file query even when the mode stayed raw", async () => {
+    const files = createFiles({ readFile: (path) => Promise.resolve({ ...fileResponse(path), mediaType: "markdown" }) });
+    const first = createContext({ files, navigation: createNavigation({ file: "a.md", mode: "raw" }) });
+    const runtime = new FilesRuntime();
+    const panel = await mountPanel(first, runtime);
+    await vi.waitFor(() => { expect(panel.shadowRoot?.querySelector("pi-web-files-viewer")).not.toBeNull(); });
+    const set = vi.fn();
+    const next = { ...first, navigation: { ...createNavigation({ file: "b.md", mode: "raw" }), set } };
+    await runtime.invalidate(next);
+    await vi.waitFor(() => {
+      const viewer = requiredElement(panel.shadowRoot?.querySelector<HTMLElement & { file?: FileContentResponse }>("pi-web-files-viewer"), "Files viewer");
+      expect(viewer.file?.path).toBe("b.md");
+    });
+    const viewer = requiredElement(panel.shadowRoot?.querySelector<HTMLElement>("pi-web-files-viewer"), "Files viewer");
+    buttonWithText(viewer.shadowRoot, "Preview").click();
+    await vi.waitFor(() => { expect(set).toHaveBeenCalledWith("mode", "preview", { replace: true }); });
+  });
+
   it("cancels an obsolete selected-file request on disconnect and restores it on reconnect", async () => {
     const signals: AbortSignal[] = [];
     let readCount = 0;

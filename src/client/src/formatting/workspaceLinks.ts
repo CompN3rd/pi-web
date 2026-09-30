@@ -20,7 +20,9 @@ export interface WorkspaceFileOpenRequest extends MarkdownWorkspaceContext {
 /** Classification only: filesystem containment and symlink checks belong to the server. */
 export function workspaceMarkdownFilePath(href: string, context: MarkdownWorkspaceContext): string | undefined {
   const reference = href.trim();
-  if (reference === "" || /^[#?]/.test(reference) || reference.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(reference)) return undefined;
+  const driveReference = /^[a-z]:[\\/]/i.test(reference);
+  if (reference === "" || /^[#?]/.test(reference) || reference.startsWith("//")
+    || (!driveReference && /^[a-z][a-z\d+.-]*:/i.test(reference))) return undefined;
   // Markdown destinations are URL references. Decode the path once, after removing URL suffixes.
   let path: string;
   try {
@@ -28,10 +30,18 @@ export function workspaceMarkdownFilePath(href: string, context: MarkdownWorkspa
   } catch {
     return undefined;
   }
-  // Reject URL paths containing control characters or platform-specific separators.
   // eslint-disable-next-line no-control-regex -- Explicitly reject control characters in file references.
-  if (path === "" || /[\\\u0000-\u001f\u007f]/.test(path)) return undefined;
-  if (path.startsWith("/")) {
+  if (path === "" || /[\u0000-\u001f\u007f]/.test(path)) return undefined;
+  const windowsAbsolute = /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\");
+  if (windowsAbsolute) {
+    const root = context.root.replace(/\\/g, "/");
+    if (!/^[a-z]:\//i.test(root) && !root.startsWith("//")) return undefined;
+    path = path.replace(/\\/g, "/");
+    const prefix = `${trimTrailingSlashes(root)}/`;
+    if (!path.toLowerCase().startsWith(prefix.toLowerCase())) return undefined;
+    path = path.slice(prefix.length);
+  } else if (path.includes("\\")) return undefined;
+  else if (path.startsWith("/")) {
     const prefix = `${trimTrailingSlashes(context.root)}/`;
     if (!path.startsWith(prefix)) return undefined;
     path = path.slice(prefix.length);

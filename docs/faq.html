@@ -262,7 +262,7 @@
               </p>
               <ul>
                 <li>Use NetBird, Tailscale, WireGuard, private LAN, SSH tunnel, or an authenticated reverse proxy.</li>
-                <li>Credentials, sessions, terminals, repositories, and plugin settings stay on the target machine.</li>
+                <li>Pi/provider credentials, sessions, terminals, repositories, and plugin settings stay on the target machine. The gateway stores the optional bearer token configured for connecting to that remote machine.</li>
                 <li>API-key model-provider configuration and subscription (OAuth) login both work from the gateway; a subscription flow that asks for a code or redirect URL needs the full URL pasted back, because its redirect page belongs to the target machine.</li>
                 <li>Plugins follow the selected machine. Only enable plugins you trust: they can run code in your browser or on the target machine. See <a href="plugins#remote-machines">remote-machine plugins</a>.</li>
                 <li>If the remote reports offline, check that the gateway server can reach the remote URL and try <strong>Actions → Refresh Selected Machine</strong>.</li>

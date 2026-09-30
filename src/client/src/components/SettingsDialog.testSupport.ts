@@ -67,6 +67,7 @@ export function pluginsResponse(plugins: PiWebPluginInfo[]): PiWebPluginsRespons
     serverRuntime: {
       status: "available",
       terminalMode: "recovery-disabled",
+      safeStart: "none",
       restartRequired: false,
       recovery: {
         showSafeStart: "pi-web plugins safe-start show",

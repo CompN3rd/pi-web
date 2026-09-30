@@ -468,6 +468,22 @@ run_restart_sessiond() {
   compose_for_install restart sessiond
 }
 
+wait_dev_web_healthy() {
+  web_container=$(dev_compose ps -q web)
+  [ -n "$web_container" ] || die "Development web container is not running"
+  attempts=0
+  while [ "$attempts" -lt 120 ]; do
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$web_container")
+    case "$health" in
+      healthy) return 0 ;;
+      unhealthy|none) die "Development web readiness failed: $health" ;;
+    esac
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+  die "Timed out waiting for the development web build and API"
+}
+
 run_restart_all() {
   assert_no_args restart "$@"
   case "$(docker_mode)" in
@@ -475,7 +491,12 @@ run_restart_all() {
       # Web owns the initial build. Do not restart sessiond until that build
       # and the API are ready. --no-deps keeps the wait local to web.
       dev_compose restart web
-      dev_compose up -d --no-deps --no-recreate --wait --wait-timeout 120 web
+      if docker_compose up --help 2>/dev/null | grep -q -- '--wait-timeout'; then
+        dev_compose up -d --no-deps --no-recreate --wait --wait-timeout 120 web
+      else
+        # Legacy docker-compose and older V2 releases do not support --wait.
+        wait_dev_web_healthy
+      fi
       dev_compose restart sessiond
       ;;
     runtime) runtime_compose restart web sessiond ;;

@@ -79,7 +79,7 @@ export async function readWorkspaceFilePreview(
 async function resolveExplicitImageTarget(rootPath: string, path: string): Promise<{ target: string; displayPath: string }> {
   const workspaceRoot = await realpath(rootPath);
   if (!(await stat(workspaceRoot)).isDirectory()) throw new Error("Workspace path must be a directory");
-  const expanded = path === "~" ? homedir() : path.startsWith("~/") ? resolve(homedir(), path.slice(2)) : path;
+  const expanded = path === "~" ? homedir() : (path.startsWith("~/") || path.startsWith("~\\")) ? resolve(homedir(), path.slice(2)) : path;
   const target = await realpath(resolve(workspaceRoot, expanded));
   // Classify and serve using the canonical filename, not a symlink's extension.
   return { target, displayPath: target };

@@ -25,6 +25,20 @@ it("projects only documented session fields and does not share the internal sess
     .toMatchObject({ archived: true, pending: false });
 });
 
+it("copies public workspace fields without leaking host configuration or removal preconditions", () => {
+  const workspace = { id: "w", projectId: "p", path: "/workspace", label: "Workspace", isMain: true,
+    effectiveConfig: {}, provider: { pluginId: "owner", capabilities: { remove: true }, metadata: { nested: { value: "original" } } },
+    removal: { actionLabel: "Remove", confirmation: "Sure?", precondition: "private" },
+  };
+  const projected = publicPluginState({ ...initialAppState(), selectedWorkspace: workspace }).selectedWorkspace;
+  expect(projected).not.toHaveProperty("effectiveConfig");
+  expect(projected?.removal).toEqual({ actionLabel: "Remove", confirmation: "Sure?" });
+  expect(projected?.provider?.metadata).toEqual(workspace.provider.metadata);
+  expect(projected?.provider?.metadata).not.toBe(workspace.provider.metadata);
+  if (projected !== undefined) Reflect.set(projected, "label", "mutated");
+  expect(workspace.label).toBe("Workspace");
+});
+
 it("preserves lifecycle callback receivers while adapting contributions", async () => {
   class Activation {
     contributions = {};
@@ -77,6 +91,11 @@ it("projects state for every external workspace callback without changing the ho
   for (const callback of [visible, badge, onInvalidate, render, items]) {
     expect(callback).toHaveBeenCalledWith(expect.objectContaining({ state: publicPluginState(context.state) }),
       ...(callback === onInvalidate ? [{ reason: "manual", resources: ["workspace.files"] }] : []));
+  }
+  for (const callback of [visible, badge, onInvalidate, render, items]) {
+    expect(callback.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ workspace: {
+      id: "workspace", projectId: "project", path: "/workspace", label: "Workspace", isMain: true,
+    } }));
   }
   expect(context.state.selectedSession).toBe(session);
 });

@@ -49,6 +49,11 @@ describe("bundled Git browser plugin", () => {
     expect(invalidateFile).toHaveBeenCalledTimes(2);
     expect(invalidateFile).toHaveBeenCalledWith("src/main.ts", hashDiffSource(response.diffText), "git-unstaged");
     expect(invalidateFile).toHaveBeenCalledWith("src/main.ts", hashDiffSource("@@ -1 +1 @@\n-old value\n+new value"), "git-staged");
+    invalidateFile.mockClear();
+    backend.status.files = [];
+    await panel.onInvalidate?.(context);
+    expect(invalidateFile).toHaveBeenCalledWith("src/main.ts", hashDiffSource(""), "git-unstaged");
+    expect(invalidateFile).toHaveBeenCalledWith("src/main.ts", hashDiffSource(""), "git-staged");
   });
 
   it("contributes provider-owned actions and a panel that replacements suppress", async () => {

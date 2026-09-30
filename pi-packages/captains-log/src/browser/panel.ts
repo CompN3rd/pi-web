@@ -15,6 +15,7 @@ export interface CaptainPanelView {
   connected: boolean; connecting: boolean; pending: boolean;
   source?: SourceSession;
   notice?: string;
+  failedReadId?: string;
   machineName: string;
   onTranslate: () => void;
   onReconnect: () => void;
@@ -44,6 +45,7 @@ export function renderCaptainPanel(html: Html, view: CaptainPanelView) {
       </p>
       ${!view.connected && !view.connecting ? html`<p class="captain-notice">Reconnect to see the result. The captain may still be working; your request will not be sent again.</p>` : null}
       ${view.notice !== undefined && view.notice !== "" ? html`<p class="captain-notice" role="alert">${view.notice}</p>` : null}
+      ${view.failedReadId !== undefined ? html`<button ?disabled=${!view.connected || view.connecting} @click=${() => { if (view.failedReadId !== undefined) view.onRead(view.failedReadId); }}>Retry loading translation</button>` : null}
       ${selected ? html`<article class="captain-reply" aria-label="Pirate translation">
         <div class="captain-reply-heading"><strong>${selected.status === "running" ? "Translating…" : selected.id === view.entries[0]?.id ? "Last translation" : "Earlier translation"}</strong><time datetime=${selected.createdAt}>${dateLabel(selected.createdAt)}</time></div>
         ${selected.status === "completed" ? html`<div class="captain-answer">${selected.text ? renderCaptainMarkdown(html, selected.text) : "Receiving the captain's reply…"}</div>`

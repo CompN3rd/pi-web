@@ -4,11 +4,17 @@ import "../components/MarkdownImage";
 
 /** Local Markdown destinations are filesystem references, not website routes. */
 export function localMarkdownImage(reference: string, root: string): { path: string; outside: boolean } | undefined {
-  if (reference === "" || /^[#?]/u.test(reference) || reference.startsWith("//") || /^[a-z][a-z\d+.-]*:/iu.test(reference)) return undefined;
+  const driveReference = /^[a-z]:[\\/]/iu.test(reference);
+  if (reference === "" || /^[#?]/u.test(reference) || reference.startsWith("//")
+    || (!driveReference && /^[a-z][a-z\d+.-]*:/iu.test(reference))) return undefined;
   let path: string;
   try { path = decodeURIComponent(reference.split(/[?#]/u, 1)[0] ?? ""); } catch { return undefined; }
   // eslint-disable-next-line no-control-regex -- Filesystem references cannot contain control characters.
-  if (path === "" || /[\\\u0000-\u001f\u007f]/u.test(path)) return undefined;
+  if (path === "" || /[\u0000-\u001f\u007f]/u.test(path)) return undefined;
+  // Native absolute paths are never URL schemes. Require approval and let the
+  // server resolve volume/UNC identities and traversal using its own platform.
+  if (/^[a-z]:[\\/]/iu.test(path) || path.startsWith("\\\\") || path.startsWith("~\\")) return { path, outside: true };
+  if (path.includes("\\")) return undefined;
   if (path.startsWith("~/")) return { path, outside: true };
   const isAbsolute = path.startsWith("/");
   const segments: string[] = [];
@@ -23,7 +29,7 @@ export function localMarkdownImage(reference: string, root: string): { path: str
   if (!isAbsolute) {
     const relative = segments.join("/");
     const outside = segments[0] === ".." || segments[0] === "~" || /^[a-z]:/iu.test(relative);
-    return relative === "" ? undefined : { path: relative, outside };
+    return { path: relative || ".", outside };
   }
   const absolute = `/${segments.join("/")}`;
   const prefix = `${root.replace(/\/+$/u, "")}/`;

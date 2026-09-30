@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { piWebDataDir } from "../../config.js";
 import {
   SESSION_UNREAD_CATALOG_ID_MAX_LENGTH,
@@ -222,15 +222,17 @@ export class SessionUnreadStore {
   /** Retain exact canonical workspace members without changing session identity spelling. */
   reconcileWorkspaces(cwds: Iterable<string>): SessionUnreadMutation[] {
     this.requireLoaded();
-    const retained = new Set([...cwds].map((cwd) => resolve(
-      requireBoundedNonEmptyString(cwd, "cwd", SESSION_UNREAD_CWD_MAX_LENGTH),
-    )));
+    const retained = new Set([...cwds]
+      .map((cwd) => requireBoundedNonEmptyString(cwd, "cwd", SESSION_UNREAD_CWD_MAX_LENGTH))
+      .filter((cwd) => isAbsolute(cwd))
+      .map((cwd) => resolve(cwd)));
+    const isRetained = (cwd: string): boolean => isAbsolute(cwd) && retained.has(resolve(cwd));
     const removed = [...this.unreadByIdentity.entries()]
-      .filter(([, summary]) => !retained.has(resolve(summary.cwd)));
+      .filter(([, summary]) => !isRetained(summary.cwd));
     this.assertRevisionCapacity(removed.length);
 
     for (const [key, identity] of this.activeByIdentity) {
-      if (!retained.has(resolve(identity.cwd))) this.activeByIdentity.delete(key);
+      if (!isRetained(identity.cwd)) this.activeByIdentity.delete(key);
     }
     // Sub-session exclusions are separate lifecycle state, not unread garbage.
     const mutations: SessionUnreadMutation[] = [];

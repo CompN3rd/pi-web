@@ -50,6 +50,37 @@ describe("reviewCommentStorage", () => {
     expect(storage.raw("pi-web:review-comments:new")).toBe(before);
   });
 
+  it.each([false, true])("rolls back the destination when source removal fails (destination existed: %s)", (existed) => {
+    const storage = new MemoryStorage();
+    saveComments("old", [comment("source")], storage);
+    if (existed) saveComments("new", [comment("destination")], storage);
+    const before = storage.raw("pi-web:review-comments:new");
+    const remove = storage.removeItem.bind(storage);
+    vi.spyOn(storage, "removeItem").mockImplementation((key) => {
+      if (key.endsWith(":old")) throw new Error("cannot remove source");
+      remove(key);
+    });
+    expect(() => { moveComments("old", "new", storage); }).toThrow("migration was rolled back");
+    expect(loadComments("old", storage)).toEqual([comment("source")]);
+    expect(storage.raw("pi-web:review-comments:new")).toBe(before);
+  });
+
+  it("reports a failed rollback without discarding either copy", () => {
+    const storage = new MemoryStorage();
+    saveComments("old", [comment("source")], storage);
+    saveComments("new", [comment("destination")], storage);
+    const set = storage.setItem.bind(storage);
+    let writes = 0;
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (++writes > 1) throw new Error("rollback blocked");
+      set(key, value);
+    });
+    vi.spyOn(storage, "removeItem").mockImplementation(() => { throw new Error("removal blocked"); });
+    expect(() => { moveComments("old", "new", storage); }).toThrow("feedback remains in both sessions");
+    expect(loadComments("old", storage)).toEqual([comment("source")]);
+    expect(loadComments("new", storage).map((entry) => entry.id)).toEqual(["source", "destination"]);
+  });
+
   it("round-trips comments", () => {
     const storage = new MemoryStorage();
     saveComments("local:s1", [comment("a"), comment("b")], storage);

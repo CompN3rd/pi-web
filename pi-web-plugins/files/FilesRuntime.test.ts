@@ -37,6 +37,20 @@ describe("FilesRuntime tree and selection", () => {
     expect(scope.expandedDirs).toEqual({});
   });
 
+  it("commits a refreshed root and healthy expansions when an expanded directory disappears", async () => {
+    const listFiles = vi.fn<WorkspaceFilesCapabilityV1["listFiles"]>((path) => path === "removed"
+      ? Promise.reject(new Error("Directory not found")) : Promise.resolve(treeResponse(path, [fileEntry(`${path}new.ts`)])));
+    const context = createContext({ files: createFiles({ listFiles }) });
+    const runtime = new FilesRuntime();
+    const scope = runtime.snapshot(context);
+    scope.expandedDirs = { removed: [], kept: [] };
+    await runtime.refreshFiles(context);
+    expect(scope.fileTree).toEqual([fileEntry("new.ts")]);
+    expect(scope.expandedDirs).toEqual({ kept: [fileEntry("keptnew.ts")] });
+    expect(scope.error).toBe("removed: Directory not found");
+    expect(scope.treeLoading).toBe(false);
+  });
+
   it("aborts superseded refreshes and directory expansions before stale results can commit", async () => {
     const trees = deferredTrees();
     const context = createContext({ files: createFiles({ listFiles: trees.fn }) });
@@ -316,6 +330,27 @@ describe("FilesRuntime uploads", () => {
     expect(runtime.snapshot(context).uploadBatches["protected-batch"]?.status).toBe("uploading");
     runtime.cancelWorkspaceUpload(context, "protected-batch");
     await run?.done;
+  });
+
+  it("defers the uploaded file read when the panel disconnects during its refresh", async () => {
+    const uploads = controllableUploads();
+    const trees = deferredTrees();
+    const readFile = vi.fn<WorkspaceFilesCapabilityV1["readFile"]>((path) => Promise.resolve(fileResponse(path)));
+    const context = createContext({ files: createFiles({ uploadFile: uploads.fn, listFiles: trees.fn, readFile }) });
+    const runtime = new FilesRuntime({ createUploadBatchId: () => "batch-1" });
+    const unsubscribe = runtime.subscribe(context, vi.fn());
+    const run = runtime.startWorkspaceUpload(context, [new File(["a"], "a.txt")], { destinationFolder: "uploads" });
+    uploads.resolve(0, writeResponse("uploads/a.txt", 1));
+    await vi.waitFor(() => { expect(trees.fn).toHaveBeenCalledOnce(); });
+    unsubscribe();
+    await run?.done;
+    expect(readFile).not.toHaveBeenCalled();
+    expect(runtime.snapshot(context).selectedFilePath).toBe("uploads/a.txt");
+    const restored = { ...context, navigation: createNavigation({ file: "uploads/a.txt" }) };
+    runtime.subscribe(restored, vi.fn());
+    runtime.prepare(restored);
+    await vi.waitFor(() => { expect(readFile).toHaveBeenCalledWith("uploads/a.txt", expect.anything()); });
+    trees.request(1).resolve(treeResponse(""));
   });
 
   it("rejects traversal before starting transport", () => {

@@ -28,6 +28,11 @@ describe("content renderer registry", () => {
     expect(snapshot.languages).toEqual(["mermaid"]);
   });
 
+  it("accepts C# fence labels without relaxing file-extension validation", () => {
+    expect(snapshotContentRenderer({ ...contribution(), languages: ["C#"] }).languages).toEqual(["c#"]);
+    expect(() => snapshotContentRenderer({ ...contribution(), fileExtensions: ["c#"] })).toThrow("selectors");
+  });
+
   it("uses the existing portable/machine-specific precedence and effective-machine lifecycle gate", async () => {
     let enabled = true;
     const gate = vi.fn(() => enabled);

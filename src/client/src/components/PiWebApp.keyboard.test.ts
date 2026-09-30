@@ -9,6 +9,7 @@ import { ChatView } from "./ChatView";
 import { ModalSurface } from "./ModalSurface";
 import { PiWebApp } from "./PiWebApp";
 import { PromptEditor } from "./PromptEditor";
+import { mockNativeDialogModality } from "./nativeDialog.testSupport";
 
 const IMAGE_DATA = "iVBORw0KGgo=";
 
@@ -47,7 +48,10 @@ describe("PiWebApp global shortcut modality boundary", () => {
     editor.replaceText("Hello");
     const target = requiredElement(editor.view?.contentDOM, "composer input");
 
+    const scan = vi.spyOn(document, "querySelectorAll");
     dispatchShortcutThroughApp(app, target);
+    expect(scan).not.toHaveBeenCalled();
+    scan.mockRestore();
     expect(editor.onSend).toHaveBeenCalledOnce();
     expect(actionPaletteIsOpen(app)).toBe(false);
     dispatchShortcutThroughApp(app, target); // Empty composer still owns the combination.
@@ -207,6 +211,7 @@ function openComposedNativeDialog(): Promise<HTMLElement> {
   const host = document.createElement("div");
   const root = host.attachShadow({ mode: "open" });
   const dialog = document.createElement("dialog");
+  mockNativeDialogModality(dialog);
   const button = document.createElement("button");
   button.textContent = "Plugin modal action";
   dialog.append(button);

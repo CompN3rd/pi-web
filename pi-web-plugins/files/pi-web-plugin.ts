@@ -4,9 +4,8 @@ import { WorkspaceFilesPanel } from "./FilesPanel";
 import { FilesRuntime } from "./FilesRuntime";
 import { WorkspaceFileViewer } from "./FilesViewer";
 import filesIconUrl from "./files-icon.svg?url";
-import filesStyles from "./files.css?inline";
 
-export { FilesRuntime, filesIconUrl, filesStyles };
+export { FilesRuntime, filesIconUrl };
 export { loadFilesViewerDependencies } from "./viewerLoader";
 export type { FilesViewerDependencies } from "./viewerLoader";
 
@@ -91,6 +90,16 @@ export function activateFilesPlugin(context: PluginActivationContext, filesRunti
 
 export function defineFilesCustomElements(): void {
   if (typeof customElements === "undefined") throw new Error("Files requires browser Custom Elements support");
+  const owners = filesCustomElementOwners();
+  // Custom Element definitions cannot be rolled back after an activation fails.
+  for (const [name, constructor] of [
+    [FILES_CODE_VIEWER_ELEMENT, FilesCodeViewer], [FILES_VIEWER_ELEMENT, WorkspaceFileViewer], [FILES_PANEL_ELEMENT, WorkspaceFilesPanel],
+  ] as const) {
+    const existing = customElements.get(name);
+    if (existing !== undefined && existing !== constructor && owners.get(name) !== existing) {
+      throw new Error(`Files custom element name is already owned: ${name}`);
+    }
+  }
   defineCustomElement(FILES_CODE_VIEWER_ELEMENT, FilesCodeViewer);
   defineCustomElement(FILES_VIEWER_ELEMENT, WorkspaceFileViewer);
   defineCustomElement(FILES_PANEL_ELEMENT, WorkspaceFilesPanel);

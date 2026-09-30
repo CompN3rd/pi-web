@@ -179,7 +179,11 @@ class GitUiController {
           await this.refreshDiff(state, path, context, background);
         } else {
           state.error = undefined;
-          if (path !== undefined && !status.files.some((file) => file.path === path)) this.clearSelection(state, true);
+          if (path !== undefined && !status.files.some((file) => file.path === path)) {
+            state.context.review.invalidateFile?.(path, hashDiffSource(""), "git-unstaged");
+            state.context.review.invalidateFile?.(path, hashDiffSource(""), "git-staged");
+            this.clearSelection(state, true);
+          }
         }
       })
       .catch((error: unknown) => {

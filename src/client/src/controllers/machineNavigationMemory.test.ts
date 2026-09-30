@@ -85,6 +85,20 @@ describe("SessionStorageMachineNavigationMemory", () => {
     });
   });
 
+  it.each([null, 42, {}, [42]])("retains legacy selections when a canonical value is invalid: %j", (invalid) => {
+    const storage = memoryStorage({
+      "pi-web:machine-navigation:v1": JSON.stringify({ version: 1, entries: [["local", {
+        machineId: "local", surface: {
+          selectedFilePath: "legacy.ts", selectedTerminalId: "terminal-1",
+          contributionQuery: { "core.workspace.files--file": invalid, "core.workspace.terminal--terminal": invalid },
+        },
+      }]] }),
+    });
+    expect(new SessionStorageMachineNavigationMemory(storage).latest("local")?.surface.contributionQuery).toEqual({
+      "core.workspace.files--file": "legacy.ts", "core.workspace.terminal--terminal": "terminal-1",
+    });
+  });
+
   it.each(["core:workspace.git", "git:workspace.git", "retryable:workspace.panel", "git", "settings", "", null, 42])("rejects stored view %j without migrating it to a tool", (view) => {
     const storage = memoryStorage({
       "pi-web:machine-navigation:v1": JSON.stringify({ version: 1, entries: [["local", {

@@ -3,6 +3,10 @@ import type { ProjectStore } from "../storage/projectStore.js";
 import type { Project } from "../types.js";
 import { expandUserPath } from "./directorySuggestions.js";
 
+export class InvalidProjectPathError extends Error {
+  override name = "InvalidProjectPathError";
+}
+
 export class ProjectService {
   constructor(private readonly store: ProjectStore) {}
 
@@ -14,10 +18,18 @@ export class ProjectService {
     // Trim so stray whitespace cannot diverge the stored path from the
     // trimmed key the trust lookup (projectTrustRoutes) previews decisions for.
     const requestedPath = expandUserPath(input.path.trim());
-    if (input.create === true) await mkdir(requestedPath, { recursive: true });
-    const resolved = await realpath(requestedPath);
-    const s = await stat(resolved);
-    if (!s.isDirectory()) throw new Error("Project path must be a directory");
+    let resolved: string;
+    try {
+      if (input.create === true) await mkdir(requestedPath, { recursive: true });
+      resolved = await realpath(requestedPath);
+      if (!(await stat(resolved)).isDirectory()) throw new InvalidProjectPathError("Project path must be a directory");
+    } catch (cause) {
+      if (cause instanceof Error && "code" in cause && typeof cause.code === "string"
+        && ["ENOENT", "ENOTDIR", "EEXIST", "EACCES", "EPERM", "EINVAL", "ENAMETOOLONG", "ELOOP", "ERR_INVALID_ARG_VALUE"].includes(cause.code)) {
+        throw new InvalidProjectPathError(cause.message, { cause });
+      }
+      throw cause;
+    }
     return this.store.add(input.name === undefined ? { path: resolved } : { name: input.name, path: resolved });
   }
 

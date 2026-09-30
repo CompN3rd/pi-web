@@ -61,10 +61,10 @@ export class KeyboardShortcutDispatcher {
       return true;
     }
 
-    const editable = isEditableShortcutEvent(event);
+    const protectedInput = isShortcutInputEvent(event);
     // Filter by the first chord so modified sequences can still finish with plain keys.
     const shortcuts = resolveShortcutBindings(actions, options.shortcuts, { enabledOnly: true })
-      .filter((binding) => binding.active && (!editable || isShortcutSequenceStarter(binding.tokens[0] ?? "")))
+      .filter((binding) => binding.active && (!protectedInput || isShortcutSequenceStarter(binding.tokens[0] ?? "")))
       .map((binding) => ({ action: binding.action, tokens: binding.tokens }));
 
     if (this.pendingTokens.length > 0) {
@@ -74,6 +74,11 @@ export class KeyboardShortcutDispatcher {
     }
 
     return this.handleSequence([token], shortcuts);
+  }
+
+  /** Cheap hot-path test; modified sequences can still finish with plain keys. */
+  ignoresPlainInput(event: ShortcutKeyEvent): boolean {
+    return this.pendingTokens.length === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && isShortcutInputEvent(event);
   }
 
   reset(): void {
@@ -193,6 +198,12 @@ export function isEditableShortcutEvent(event: ShortcutKeyEvent): boolean {
     if (typeof HTMLElement === "undefined" || !(target instanceof HTMLElement)) return false;
     return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable;
   });
+}
+
+function isShortcutInputEvent(event: ShortcutKeyEvent): boolean {
+  return isEditableShortcutEvent(event) || (event.composedPath?.() ?? [event.target]).some((target) =>
+    typeof HTMLElement !== "undefined" && target instanceof HTMLElement
+    && target.matches("button, a[href], summary, audio[controls], video[controls]"));
 }
 
 export function isShortcutSequenceStarter(token: string): boolean {

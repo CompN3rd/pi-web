@@ -167,15 +167,19 @@ export class FilesRuntime {
     this.notify(scope);
     try {
       const root = await files.listFiles("", { signal: abort.signal });
-      const expandedEntries = await Promise.all(Object.keys(scope.expandedDirs).map(async (path) => {
+      const expandedPaths = Object.keys(scope.expandedDirs);
+      const expandedEntries = await Promise.allSettled(expandedPaths.map(async (path) => {
         const response = await files.listFiles(path, { signal: abort.signal });
         return [path, response.entries] as const;
       }));
       if (!this.isCurrentTreeRequest(scope, generation, abort)) return;
       scope.fileTree = root.entries;
-      scope.expandedDirs = Object.fromEntries(expandedEntries);
+      scope.expandedDirs = Object.fromEntries(expandedEntries.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : []));
       scope.treeStale = false;
-      delete scope.error;
+      const failures = expandedEntries.flatMap((entry, index) => entry.status === "rejected"
+        ? [`${expandedPaths[index] ?? "Folder"}: ${errorMessage(entry.reason)}`] : []);
+      if (failures.length > 0) scope.error = failures.join("; ");
+      else delete scope.error;
     } catch (error) {
       if (!this.isCurrentTreeRequest(scope, generation, abort) || isAbortError(error)) return;
       abort.abort();
@@ -563,6 +567,8 @@ export class FilesRuntime {
   ): Promise<void> {
     if (successful.length === 0 || scope.uploadBatches[batch.id] !== batch) return;
     const firstPath = successful[0]?.path;
+    if (!scope.suspended) await this.refreshFiles(scope.context);
+    if (scope.uploadBatches[batch.id] !== batch) return;
     if (scope.suspended) {
       scope.initialized = false;
       scope.treeStale = true;
@@ -576,8 +582,7 @@ export class FilesRuntime {
       }
       return;
     }
-    await this.refreshFiles(scope.context);
-    if (options.selectUploadedFile !== false && firstPath !== undefined && scope.uploadBatches[batch.id] === batch) {
+    if (options.selectUploadedFile !== false && firstPath !== undefined) {
       await this.selectFile(scope.context, firstPath);
     }
   }

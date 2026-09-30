@@ -66,11 +66,11 @@ export function registerRenderedModal(layer: RenderedModalLayer): RenderedModalR
 }
 
 /**
- * True while a registered app layer or an open native dialog in any composed
+ * True while a registered app layer or a native modal dialog in any composed
  * subtree owns interaction. Browser plugins cannot import the private modal
  * registry, so native `<dialog>.showModal()` is the public, framework-neutral
- * modality boundary. Treating every open native dialog conservatively avoids
- * missing that boundary in DOM implementations without `:modal` support.
+ * modality boundary. Modeless dialogs (`show()` or an `open` attribute) do not
+ * own modality; modern browsers expose that distinction through `:modal`.
  */
 export function hasRenderedModal(ownerDocument: Document | undefined): boolean {
   return ownerDocument !== undefined
@@ -78,7 +78,10 @@ export function hasRenderedModal(ownerDocument: Document | undefined): boolean {
 }
 
 function hasComposedOpenDialog(root: Document | ShadowRoot): boolean {
-  if (root.querySelector("dialog[open]") !== null) return true;
+  for (const dialog of root.querySelectorAll("dialog[open]")) {
+    try { if (dialog.matches(":modal")) return true; }
+    catch { /* Older selector engines still support explicitly registered app layers. */ }
+  }
   for (const element of root.querySelectorAll("*")) {
     if (element.shadowRoot !== null && hasComposedOpenDialog(element.shadowRoot)) return true;
   }
