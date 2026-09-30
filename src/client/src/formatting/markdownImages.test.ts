@@ -15,33 +15,44 @@ it.each([
   ["screenshots/a.png", "screenshots/a.png", false],
   ["/srv/work/a.png", "a.png", false],
   ["/srv/work/../outside.png", "/srv/outside.png", true],
-  ["../a%20b.png", "/srv/a b.png", true],
+  ["../a%20b.png", "../a b.png", true],
   ["/tmp/a.png", "/tmp/a.png", true],
   ["~/a.png", "~/a.png", true],
+  ["./~/a.png", "~/a.png", true],
+  ["./C:/outside.png", "C:/outside.png", true],
+  ["C%3A/outside.png", "C:/outside.png", true],
 ])("classifies %s", (input, path, outside) => {
   expect(localMarkdownImage(input, "/srv/work")).toEqual({ path, outside });
 });
 
-it.each(["https://example.com/a.png", "//example.com/a.png", "data:image/png,x", "bad%ZZ.png", "a%00.png"])("does not interpret %s as a local file", (input) => {
+it.each(["/srv/work", "C:\\repo", "C:/repo/", "\\\\server\\share\\repo", "//server/share/repo"])("keeps relative image paths independent of workspace root %s", (root) => {
+  expect(localMarkdownImage("./docs//draft/../a%20b.png?raw=1#preview", root)).toEqual({ path: "docs/a b.png", outside: false });
+  expect(localMarkdownImage("docs/../../outside.png", root)).toEqual({ path: "../outside.png", outside: true });
+  expect(localMarkdownImage("../../outside.png", root)).toEqual({ path: "../../outside.png", outside: true });
+});
+
+it.each(["https://example.com/a.png", "//example.com/a.png", "data:image/png,x", "bad%ZZ.png", "a%00.png", "a%5Cb.png"])("does not interpret %s as a local file", (input) => {
   expect(localMarkdownImage(input, "/srv/work")).toBeUndefined();
 });
 
-it("renders local images through machine-aware nested preview URLs without approving outside images", () => {
+it.each(["/srv/work", "C:\\repo", "\\\\server\\share\\repo"])("renders machine-aware nested image URLs without approving outside images for %s", (root) => {
   vi.stubEnv("BASE_URL", "/nested/pi/");
   const host = document.createElement("div");
-  host.innerHTML = toSafeMarkdownHtml("![inside](a.png) ![outside](/tmp/a.png) ![external](https://example.com/a.png)", {
-    machineId: "remote /1", projectId: "p", workspaceId: "w", root: "/srv/work",
+  host.innerHTML = toSafeMarkdownHtml("![inside](docs/a.png) ![outside](../outside.png) ![external](https://example.com/a.png)", {
+    machineId: "remote /1", projectId: "p", workspaceId: "w", root,
   });
   const images = host.querySelectorAll("pi-web-markdown-image");
   const first = required(images[0]);
   const second = required(images[1]);
   const inside = new URL(required(first.getAttribute("preview-url")));
   expect(inside.pathname).toBe("/nested/pi/api/machines/remote%20%2F1/projects/p/workspaces/w/file/preview");
-  expect(inside.searchParams.get("path")).toBe("a.png");
+  expect(inside.searchParams.get("path")).toBe("docs/a.png");
   expect(inside.searchParams.has("showImage")).toBe(false);
   expect(first.hasAttribute("outside")).toBe(false);
   expect(second.hasAttribute("outside")).toBe(true);
-  expect(new URL(required(second.getAttribute("preview-url"))).searchParams.get("showImage")).toBe("1");
+  const outside = new URL(required(second.getAttribute("preview-url")));
+  expect(outside.searchParams.get("path")).toBe("../outside.png");
+  expect(outside.searchParams.get("showImage")).toBe("1");
   expect(host.querySelector("img")?.src).toBe("https://example.com/a.png");
 });
 

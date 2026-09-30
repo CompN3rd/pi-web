@@ -703,6 +703,19 @@ describe("session routes", () => {
     }
   });
 
+  it.each(["GET", "POST"] as const)("returns 404 for %s defaults when the session is missing", async (method) => {
+    const url = "/sessions/missing-session/defaults";
+    const cwd = resolve("/repo");
+    const response = await app.inject(method === "GET"
+      ? { method, url: `${url}?cwd=${encodeURIComponent(cwd)}` }
+      : { method, url, payload: { cwd, thinkingLevel: "high" } });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "Session not found" });
+    expect(sessionManager.calls.create).toBe(0);
+    expect(sessionManager.calls.open).toBe(0);
+  });
+
   it("serves the full model catalog with per-model enabled state, forwarding workspace context", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);

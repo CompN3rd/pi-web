@@ -257,7 +257,7 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     try {
       return await sessions.getSessionDefaults(sessionRefFromQuery(request.params.sessionId, request.query));
     } catch (error) {
-      return reply.code(400).send({ error: errorMessage(error) });
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
     }
   });
 
@@ -266,7 +266,7 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
       const body = requireRecord(request.body);
       return await sessions.setSessionDefaults(sessionRefFromBody(request.params.sessionId, body), parseSessionDefaultsUpdate(body));
     } catch (error) {
-      return reply.code(400).send({ error: errorMessage(error) });
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
     }
   });
 

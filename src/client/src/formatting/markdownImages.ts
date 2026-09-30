@@ -10,10 +10,20 @@ export function localMarkdownImage(reference: string, root: string): { path: str
   // eslint-disable-next-line no-control-regex -- Filesystem references cannot contain control characters.
   if (path === "" || /[\\\u0000-\u001f\u007f]/u.test(path)) return undefined;
   if (path.startsWith("~/")) return { path, outside: true };
+  const isAbsolute = path.startsWith("/");
   const segments: string[] = [];
-  for (const segment of (path.startsWith("/") ? path : `${root}/${path}`).split("/")) {
-    if (segment === "..") segments.pop();
-    else if (segment !== "" && segment !== ".") segments.push(segment);
+  for (const segment of path.split("/")) {
+    if (segment === "..") {
+      if (segments.length > 0 && segments.at(-1) !== "..") segments.pop();
+      else if (!isAbsolute) segments.push(segment);
+    } else if (segment !== "" && segment !== ".") segments.push(segment);
+  }
+  // Keep URL-style relative paths independent of the server's POSIX/Windows/UNC root.
+  // Traversal and normalized home/drive prefixes require opt-in before native server resolution.
+  if (!isAbsolute) {
+    const relative = segments.join("/");
+    const outside = segments[0] === ".." || segments[0] === "~" || /^[a-z]:/iu.test(relative);
+    return relative === "" ? undefined : { path: relative, outside };
   }
   const absolute = `/${segments.join("/")}`;
   const prefix = `${root.replace(/\/+$/u, "")}/`;

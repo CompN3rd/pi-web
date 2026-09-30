@@ -1,5 +1,5 @@
 import { mkdir, truncate, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_INLINE_PREVIEW_BYTES } from "../shared/workspaceFiles.js";
 import type { Project, WorkspaceProviderResolution } from "./types.js";
@@ -54,7 +54,7 @@ describe("buildApp workspace file routes", () => {
     expect(tooLargeResponse.json()).toEqual({ error: "File is too large to preview (limit 10 MB)" });
   });
 
-  it("wires showImage=1 to outside-image previews with safe headers, not downloads or ordinary previews", async () => {
+  it.each(["absolute", "relative"])("wires showImage=1 to %s outside-image paths with safe headers, not downloads or ordinary previews", async (referenceKind) => {
     const added = await appTestContext.app.inject({ method: "POST", url: "/api/projects", payload: { name: "Images", path: appTestContext.projectDir, create: true } });
     const project = added.json<Project>();
     const listed = await appTestContext.app.inject({ method: "GET", url: `/api/projects/${project.id}/workspaces` });
@@ -63,8 +63,9 @@ describe("buildApp workspace file routes", () => {
     const target = join(appTestContext.tempDir, "outside.svg");
     await writeFile(target, "<svg></svg>");
     const policy = workspaceFilePreviewResponsePolicy(target);
+    const requestedPath = referenceKind === "absolute" ? target : relative(workspace.path, target).replaceAll("\\", "/");
     for (const prefix of ["/api", "/api/machines/local"]) {
-      const url = `${prefix}/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent(target)}`;
+      const url = `${prefix}/projects/${project.id}/workspaces/${workspace.id}/file/preview?path=${encodeURIComponent(requestedPath)}`;
       const response = await appTestContext.app.inject({ method: "GET", url: `${url}&showImage=1` });
       expect(response.statusCode).toBe(200);
       expect(response.body).toBe("<svg></svg>");
