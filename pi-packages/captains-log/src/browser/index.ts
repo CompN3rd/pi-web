@@ -3,6 +3,8 @@ import { isLogEntry, MAX_FINDINGS, type LogEntry } from "./protocol.js";
 import { renderCaptainPanel, selectedSourceSession } from "./panel.js";
 import { LOG_CHANNEL, isCaptainServerFrame, type CaptainClientFrame } from "./channelProtocol.js";
 
+const CONNECTING_STATUS = "Connecting to Captain's Log…";
+
 interface PanelState {
   entries: LogEntry[]; selected?: LogEntry; status: string;
   notice?: string; readError?: string; readingId?: string;
@@ -32,6 +34,8 @@ const plugin: PiWebPlugin = {
     function stop(state: PanelState) {
       state.revision++;
       delete state.readingId;
+      delete state.readError;
+      delete state.failedReadId;
       state.controller?.abort();
       state.channel?.close();
       delete state.channel;
@@ -45,7 +49,7 @@ const plugin: PiWebPlugin = {
       const key = JSON.stringify([context.machine.id, context.workspace.projectId, context.workspace.id]);
       let state = states.get(key);
       if (!state) {
-        state = { entries: [], status: "Connecting to Captain's Log…", connecting: false, revision: 0, readRevision: 0, updates: new Map() };
+        state = { entries: [], status: CONNECTING_STATUS, connecting: false, revision: 0, readRevision: 0, updates: new Map() };
         states.set(key, state);
       }
       if (current !== state) { if (current) stop(current); current = state; }
@@ -102,7 +106,8 @@ const plugin: PiWebPlugin = {
       state.connecting = true;
       state.updates.clear();
       const live = () => revision === state.revision && !controller.signal.aborted && !lifetimeSignal.aborted;
-      state.status = "Connecting to Captain's Log…";
+      state.status = CONNECTING_STATUS;
+      delete state.notice;
       context.host.requestRender();
       try {
         if (!context.peer?.openChannel || !context.peer.request) throw new Error("Captain backend channels unavailable on this machine");
@@ -160,9 +165,10 @@ const plugin: PiWebPlugin = {
         if (loaded) {
           delete state.failedReadId;
           delete state.readError;
-          state.status = "Connected. Live updates arrive from the backend.";
-          delete state.notice;
         }
+        // Connection readiness is independent of a saved-read failure. Preserve
+        // any status published by the channel while the snapshot/read was pending.
+        if (state.status === CONNECTING_STATUS) state.status = "Connected. Live updates arrive from the backend.";
         state.connecting = false;
         context.host.requestRender();
       } catch (error) {

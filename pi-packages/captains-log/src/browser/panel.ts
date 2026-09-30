@@ -35,7 +35,7 @@ export function renderCaptainPanel(html: Html, view: CaptainPanelView) {
   const selected = view.selected;
   const sourceSessionId = selected?.sourceSessionId;
   const failedReadId = view.failedReadId;
-  const status = view.connecting ? "Connecting…" : !view.connected ? "Connection lost" : view.pending ? "Fetching the last reply…"
+  const status = view.reading === true ? "Loading translation…" : view.connecting ? "Connecting…" : !view.connected ? "Connection lost" : view.pending ? "Fetching the last reply…"
     : working ? "The captain is translating…" : !view.source ? "Select a session in this workspace first." : pirateSelected ? "Select a different session — this one is the pirate."
       : "Ready to translate";
   return html`<style>${styles}</style>

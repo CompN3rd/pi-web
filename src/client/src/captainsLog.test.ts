@@ -137,7 +137,39 @@ it("preserves a saved-read error and provides a working explicit retry", async (
     await flush();
     expect(document.querySelector(".captain-answer")?.textContent).toBe(completed.text);
     expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector(".captain-diagnostics")?.textContent).toContain("Connected. Live updates");
   } finally { await app.dispose(); }
+});
+
+it("replaces saved-read errors with current connection failures", async () => {
+  const app = await setup((operation) => operation === "list" ? Promise.resolve([{ ...entry, status: "completed", text: "" }]) : Promise.reject(new Error("old read failure")));
+  try {
+    expect(document.body.textContent).toContain("old read failure");
+    required(app.channels[0]).finish({ code: 1006, reason: "lost", wasClean: false });
+    await flush();
+    expect(document.body.textContent).not.toContain("old read failure");
+    expect(document.querySelector(".captain-diagnostics")?.textContent).toContain("Channel closed");
+    app.openChannel.mockRejectedValue(new Error("reconnect refused"));
+    button("Reconnect").click(); await flush();
+    expect(document.querySelector(".captain-diagnostics")?.textContent).toContain("reconnect refused");
+    expect(document.body.textContent).not.toContain("Retry loading translation");
+  } finally { await app.dispose(); }
+});
+
+it("announces history reads without requiring a prior read failure", async () => {
+  const completed = { ...entry, status: "completed" as const, text: "Saved result" };
+  const second = { ...completed, id: "22222222-2222-4222-8222-222222222222", text: "Older result" };
+  const read = deferred<JsonValue>();
+  const app = await setup((operation) => Promise.resolve(operation === "list" ? [completed, second] : completed));
+  try {
+    app.request.mockImplementation(() => read.promise);
+    required(app.container.querySelectorAll<HTMLButtonElement>(".captain-history button")[1]).click();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain("Loading translation");
+    expect(document.body.textContent).not.toContain("Retry loading translation");
+    read.resolve(second); await flush();
+    expect(document.querySelector('[role="status"]')?.textContent).not.toContain("Loading translation");
+    expect(document.querySelector(".captain-answer")?.textContent).toBe(second.text);
+  } finally { read.resolve(second); await app.dispose(); }
 });
 
 it("deduplicates pending retries and retires them when translation takes ownership", async () => {

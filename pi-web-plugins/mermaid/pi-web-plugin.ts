@@ -1,4 +1,5 @@
 import type { ContentRendererInput, ContentRenderingCapability, PluginCapability, PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
+import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
 import { loadMermaidEngine, MermaidPreview } from "./MermaidPreview";
 
 const contentRenderingCapability: PluginCapability<ContentRenderingCapability> = {
@@ -19,6 +20,7 @@ function isContentRenderingCapability(value: unknown): value is ContentRendering
 // A new tag lets long-lived tabs retain legacy unmarked constructors without
 // trusting them or mounting them as this implementation after a package update.
 const elementName = "pi-web-mermaid-preview-v2";
+const previewTag = unsafeStatic(elementName);
 const ownerKey = Symbol.for("pi-web.mermaid.custom-element-owner.v2");
 
 function defineMermaidPreview(): void {
@@ -49,7 +51,7 @@ const plugin: PiWebPlugin = {
           id: "diagram",
           languages: ["mermaid"],
           fileExtensions: ["mmd", "mermaid"],
-          render: (input: ContentRendererInput) => html`<pi-web-mermaid-preview-v2 .input=${input} .loadEngine=${loadMermaidEngine}></pi-web-mermaid-preview-v2>`,
+          render: (input: ContentRendererInput) => html`${staticHtml`<${previewTag} .input=${input} .loadEngine=${loadMermaidEngine}></${previewTag}>`}`,
         }],
       },
     };

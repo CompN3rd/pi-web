@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe("Terminal browser runtime", () => {
   it.each(["mutation", "panel"])("resumes polling when a %s supersedes a hanging badge request", async (source) => {
-    let complete!: (value: JsonValue) => void;
+    let complete: ((value: JsonValue) => void) | undefined;
     let signal: AbortSignal | undefined;
     const request = vi.fn<NonNullable<PluginPeer["request"]>>()
       .mockImplementationOnce((_operation, _input, options) => {
@@ -30,12 +30,13 @@ describe("Terminal browser runtime", () => {
       expect(signal?.aborted).toBe(true);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(request).toHaveBeenCalledTimes(2);
+      if (complete === undefined) throw new Error("Expected the first terminal list request");
       complete([{ id: "old", cwd: "/repo", name: "Old", createdAt: "now", exited: false }]);
       await old;
       expect(runtime.activeTerminalBadge(context)).toBeUndefined();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(request).toHaveBeenCalledTimes(3);
-    } finally { complete([]); runtime.dispose(); }
+    } finally { complete?.([]); runtime.dispose(); }
   });
 
   it("shows peer-unavailable failures with the same retry window as transport errors", async () => {
