@@ -16,8 +16,10 @@ function isContentRenderingCapability(value: unknown): value is ContentRendering
     && "renderMarkdown" in value && typeof value.renderMarkdown === "function";
 }
 
-const elementName = "pi-web-mermaid-preview";
-const ownerKey = Symbol.for("pi-web.mermaid.custom-element-owner.v1");
+// A new tag lets long-lived tabs retain legacy unmarked constructors without
+// trusting them or mounting them as this implementation after a package update.
+const elementName = "pi-web-mermaid-preview-v2";
+const ownerKey = Symbol.for("pi-web.mermaid.custom-element-owner.v2");
 
 function defineMermaidPreview(): void {
   const existing = customElements.get(elementName);
@@ -47,7 +49,7 @@ const plugin: PiWebPlugin = {
           id: "diagram",
           languages: ["mermaid"],
           fileExtensions: ["mmd", "mermaid"],
-          render: (input: ContentRendererInput) => html`<pi-web-mermaid-preview .input=${input} .loadEngine=${loadMermaidEngine}></pi-web-mermaid-preview>`,
+          render: (input: ContentRendererInput) => html`<pi-web-mermaid-preview-v2 .input=${input} .loadEngine=${loadMermaidEngine}></pi-web-mermaid-preview-v2>`,
         }],
       },
     };

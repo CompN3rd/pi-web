@@ -6,7 +6,10 @@ import plugin from "./pi-web-plugin";
 const context = () => ({ apiVersion: 4 as const, pluginId: "mermaid", runtimePluginId: "mermaid", html, svg,
   signal: new AbortController().signal, lifetimeSignal: new AbortController().signal });
 
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => {
+  Reflect.deleteProperty(globalThis, Symbol.for("pi-web.mermaid.custom-element-owner.v2"));
+  vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
 
 function registry() {
   const elements = new Map<string, CustomElementConstructor>();
@@ -14,6 +17,16 @@ function registry() {
   vi.stubGlobal("customElements", { get: (name: string) => elements.get(name), define });
   return { elements, define };
 }
+
+it("activates alongside an unmarked legacy preview without adopting its constructor", async () => {
+  const { elements, define } = registry();
+  class Legacy extends HTMLElement {}
+  elements.set("pi-web-mermaid-preview", Legacy);
+  await plugin.activate(context());
+  expect(elements.get("pi-web-mermaid-preview")).toBe(Legacy);
+  expect(elements.get("pi-web-mermaid-preview-v2")).not.toBe(Legacy);
+  expect(define).toHaveBeenCalledOnce();
+});
 
 it("resolves and validates the renderer capability during start", async () => {
   registry();
@@ -37,7 +50,7 @@ it("reuses portable same-source constructors but refuses unrelated tag owners", 
   await copy.activate(context());
   expect(define).toHaveBeenCalledOnce();
   class Unrelated extends HTMLElement {}
-  elements.set("pi-web-mermaid-preview", Unrelated);
+  elements.set("pi-web-mermaid-preview-v2", Unrelated);
   await expect(Promise.resolve().then(() => copy.activate(context()))).rejects.toThrow("already owned");
   expect(define).toHaveBeenCalledOnce();
 });

@@ -37,9 +37,12 @@ export function workspaceMarkdownFilePath(href: string, context: MarkdownWorkspa
     const root = context.root.replace(/\\/g, "/");
     if (!/^[a-z]:\//i.test(root) && !root.startsWith("//")) return undefined;
     path = path.replace(/\\/g, "/");
-    const prefix = `${trimTrailingSlashes(root)}/`;
-    if (!path.toLowerCase().startsWith(prefix.toLowerCase())) return undefined;
-    path = path.slice(prefix.length);
+    // Case folding can change UTF-16 length (e.g. İ). Match complete segments
+    // and remove original segments, never slice using the folded prefix length.
+    const prefix = trimTrailingSlashes(root).split("/");
+    const segments = path.split("/");
+    if (!prefix.every((part, index) => part.toLowerCase() === segments[index]?.toLowerCase())) return undefined;
+    path = segments.slice(prefix.length).join("/");
   } else if (path.includes("\\")) return undefined;
   else if (path.startsWith("/")) {
     const prefix = `${trimTrailingSlashes(context.root)}/`;

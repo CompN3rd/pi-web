@@ -12,6 +12,32 @@ afterEach(() => {
 });
 
 describe("Terminal browser runtime", () => {
+  it.each(["mutation", "panel"])("resumes polling when a %s supersedes a hanging badge request", async (source) => {
+    let complete!: (value: JsonValue) => void;
+    let signal: AbortSignal | undefined;
+    const request = vi.fn<NonNullable<PluginPeer["request"]>>()
+      .mockImplementationOnce((_operation, _input, options) => {
+        signal = options?.signal;
+        return new Promise<JsonValue>((resolve) => { complete = resolve; });
+      }).mockResolvedValue([]);
+    const context = workspaceContext("local", request);
+    const runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
+    try {
+      runtime.activeTerminalBadge(context);
+      const old = runtime.refresh(context);
+      if (source === "mutation") runtime.updateTerminals(context, []);
+      else runtime.beginTerminalList(context);
+      expect(signal?.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(request).toHaveBeenCalledTimes(2);
+      complete([{ id: "old", cwd: "/repo", name: "Old", createdAt: "now", exited: false }]);
+      await old;
+      expect(runtime.activeTerminalBadge(context)).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally { complete([]); runtime.dispose(); }
+  });
+
   it("shows peer-unavailable failures with the same retry window as transport errors", async () => {
     const context = workspaceContext("local", vi.fn());
     delete context.peer;

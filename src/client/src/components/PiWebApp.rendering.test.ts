@@ -69,6 +69,8 @@ describe("application rendering boundaries", () => {
     if (dialog == null) throw new Error("Expected navigation dialog");
     expect(dialog.tabs.some((tab) => tab.id === "conditional:panel")).toBe(false);
     expect(dialog.pinUniverse).toContain("conditional:panel");
+    // Empty preferences implicitly pin everything. Clicking this pressed pin
+    // unpins Test and materializes the remaining set, including the hidden panel.
     dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Test"]')?.click();
     await settle(app);
     expect(loadNavigationPreferences().pinnedIds).toContain("conditional:panel");

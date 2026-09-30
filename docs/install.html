@@ -204,6 +204,19 @@
                 From a PI WEB checkout, <code>pi-web install --dev</code> installs the split development services on supported user-service platforms.
                 <code>pi-web uninstall</code> removes both production and development service files; no uninstall flags are needed.
               </p>
+              <h3 id="split-development">Split development startup</h3>
+              <p>
+                For manually managed processes, start <code>npm run dev:web</code> in the first terminal
+                and wait for that run's API listening message before starting <code>npm run dev:sessiond</code>
+                in a second terminal. Start <code>npm run dev:client</code> in a third terminal.
+                The web process owns the plugin build; an old <code>dist/.plugins-ready</code> file is not
+                evidence that the new build is ready. Repeat this web-first order when starting both owners again.
+              </p>
+              <p>
+                <code>dev:sessiond</code> watches daemon source and can interrupt sessions on reload;
+                use <code>npm run start:sessiond</code> for a non-watching daemon. The combined
+                <code>npm run dev</code> command clears old build readiness before launching its processes.
+              </p>
               <h3 id="development-restarts">Development restarts</h3>
               <p>
                 Run <code>pi-web restart</code> to restart the installed development services. It handles

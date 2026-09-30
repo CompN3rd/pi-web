@@ -98,14 +98,14 @@ export class TerminalBrowserRuntime {
   /** Panel and badge requests share ordering; direct mutations supersede both. */
   beginTerminalList(context: WorkspacePanelContext): number {
     this.requireActive();
-    return ++this.workspaceState(context).generation;
+    return this.advanceGeneration(this.workspaceState(context));
   }
 
   updateTerminals(context: WorkspacePanelContext, terminals: readonly TerminalInfo[], generation?: number): void {
     if (this.disposed) return;
     const state = this.workspaceState(context);
     if (generation !== undefined && generation !== state.generation) return;
-    if (generation === undefined) state.generation += 1;
+    if (generation === undefined) this.advanceGeneration(state);
     const activeCount = terminals.reduce((count, terminal) => count + (terminal.exited ? 0 : 1), 0);
     const changed = state.activeCount !== activeCount || state.refreshFailed;
     state.activeCount = activeCount;
@@ -174,6 +174,20 @@ export class TerminalBrowserRuntime {
       state.wakeTimer = undefined;
       state.wakeAt = 0;
     }
+  }
+
+  private advanceGeneration(state: WorkspaceRuntimeState): number {
+    state.generation += 1;
+    const superseded = state.refreshController;
+    state.refresh = undefined;
+    state.refreshController = undefined;
+    if (superseded !== undefined) {
+      superseded.abort(new DOMException("Terminal snapshot superseded", "AbortError"));
+      // A peer may ignore cancellation. Release the coalesced promise and keep
+      // polling alive even if the replacement panel list also takes a long time.
+      this.scheduleBadgeWake(state, Math.max(state.retryAt, this.now() + ACTIVE_TERMINAL_REFRESH_MS));
+    }
+    return state.generation;
   }
 
   private requireActive(): void {

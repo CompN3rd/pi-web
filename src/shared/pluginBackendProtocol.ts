@@ -226,13 +226,23 @@ export function requirePluginBackendChannelCloseReason(value: unknown): string {
 
 export function boundedPluginBackendChannelCloseReason(value: unknown): string {
   const input = typeof value === "string" ? value : String(value);
-  if (utf8ByteLength(input) <= PLUGIN_BACKEND_CHANNEL_CLOSE_REASON_MAX_BYTES) return input;
+  return boundedUtf8(input, PLUGIN_BACKEND_CHANNEL_CLOSE_REASON_MAX_BYTES);
+}
+
+/** Truncate at code point boundaries, reserving suffix bytes only when needed. */
+export function boundedUtf8(value: string, maxBytes: number, suffix = ""): string {
+  if (!Number.isInteger(maxBytes) || maxBytes < 0) throw new Error("UTF-8 byte limit must be a nonnegative integer");
+  if (utf8ByteLength(value) <= maxBytes) return value;
+  const budget = maxBytes - utf8ByteLength(suffix);
+  if (budget < 0) throw new Error("UTF-8 truncation suffix exceeds the byte limit");
   let output = "";
-  for (const character of input) {
-    if (utf8ByteLength(`${output}${character}`) > PLUGIN_BACKEND_CHANNEL_CLOSE_REASON_MAX_BYTES) break;
+  let bytes = 0;
+  for (const character of value) {
+    bytes += utf8ByteLength(character);
+    if (bytes > budget) break;
     output += character;
   }
-  return output;
+  return output + suffix;
 }
 
 export function utf8ByteLength(value: string): number {

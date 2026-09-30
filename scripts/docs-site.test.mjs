@@ -117,10 +117,11 @@ describe("compact documentation contents menu", () => {
     }
   });
 
-  it("keeps the source navigation available when native dialogs are unsupported", () => {
+  it.each(["missing constructor", "missing showModal"])("keeps source navigation available with %s", (missing) => {
     const window = new Window();
     try {
-      window.HTMLDialogElement.prototype.showModal = undefined;
+      if (missing === "missing constructor") window.HTMLDialogElement = undefined;
+      else window.HTMLDialogElement.prototype.showModal = undefined;
       window.document.write('<nav class="toc"><a href="#section">Section</a></nav><section id="section"></section>');
       window.eval(siteScript);
       expect(window.document.querySelector(".docs-toc-toggle")).toBeNull();

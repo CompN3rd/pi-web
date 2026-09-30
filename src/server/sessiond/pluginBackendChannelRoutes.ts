@@ -19,6 +19,7 @@ import {
   serializePluginBackendChannelErrorEnvelope,
   serializePluginBackendChannelReadyEnvelope,
   utf8ByteLength,
+  boundedUtf8,
 } from "../../shared/pluginBackendProtocol.js";
 import {
   PluginBackendChannelError,
@@ -458,13 +459,7 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: s
 }
 
 function boundedChannelErrorMessage(value: string): string {
-  if (utf8ByteLength(value) <= PLUGIN_BACKEND_CHANNEL_ERROR_MESSAGE_MAX_BYTES) return value || "Plugin backend channel failed";
-  let output = "";
-  for (const character of value) {
-    if (utf8ByteLength(`${output}${character}`) > PLUGIN_BACKEND_CHANNEL_ERROR_MESSAGE_MAX_BYTES) break;
-    output += character;
-  }
-  return output || "Plugin backend channel failed";
+  return boundedUtf8(value, PLUGIN_BACKEND_CHANNEL_ERROR_MESSAGE_MAX_BYTES) || "Plugin backend channel failed";
 }
 
 function boundedErrorMessage(error: unknown): string {

@@ -5,7 +5,7 @@ import { LOG_CHANNEL, isCaptainServerFrame, type CaptainClientFrame } from "./ch
 
 interface PanelState {
   entries: LogEntry[]; selected?: LogEntry; status: string;
-  notice?: string;
+  notice?: string; readError?: string; readingId?: string;
   connecting: boolean; channel?: PluginPeerChannel; controller?: AbortController;
   pending?: string; admittedId?: string; failedReadId?: string; revision: number; readRevision: number; updates: Map<string, LogEntry>;
 }
@@ -31,6 +31,7 @@ const plugin: PiWebPlugin = {
     let current: PanelState | undefined;
     function stop(state: PanelState) {
       state.revision++;
+      delete state.readingId;
       state.controller?.abort();
       state.channel?.close();
       delete state.channel;
@@ -54,15 +55,19 @@ const plugin: PiWebPlugin = {
       state.updates.set(entry.id, entry);
       state.entries = [entry, ...state.entries.filter((item) => item.id !== entry.id)].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       if (!state.selected || state.selected.id === entry.id || entry.id === state.admittedId || entry.status === "running") {
-        if (state.selected?.id !== entry.id) state.readRevision++;
+        if (state.selected?.id !== entry.id) { state.readRevision++; delete state.readingId; }
         state.selected = entry;
       }
       if (entry.id === state.admittedId) delete state.admittedId;
+      if (entry.id === state.failedReadId) { delete state.failedReadId; delete state.readError; }
     }
     async function readEntry(context: WorkspacePanelContext, state: PanelState, id: string): Promise<boolean> {
+      if (state.readingId === id || (!state.connecting && (state.pending !== undefined || state.admittedId !== undefined))) return false;
       const revision = state.revision;
       const readRevision = ++state.readRevision;
       const before = state.updates.get(id);
+      state.readingId = id;
+      context.host.requestRender();
       try {
         if (!context.peer?.request) throw new Error("Captain saved records unavailable");
         const entry: unknown = await context.peer.request("read", id, { signal: state.controller?.signal ?? lifetimeSignal });
@@ -73,17 +78,19 @@ const plugin: PiWebPlugin = {
         state.updates.set(id, record);
         state.entries = state.entries.map((item) => item.id === id ? record : item);
         delete state.failedReadId;
-        delete state.notice;
-        state.status = "Saved translation loaded.";
+        delete state.readError;
         context.host.requestRender();
         return true;
       } catch (error) {
         if (revision !== state.revision || readRevision !== state.readRevision || lifetimeSignal.aborted) return false;
         state.failedReadId = id;
-        state.notice = `Could not load the saved translation: ${String(error)}`;
-        state.status = state.notice;
-        context.host.requestRender();
+        state.readError = `Could not load the saved translation: ${String(error)}`;
         return false;
+      } finally {
+        if (revision === state.revision && readRevision === state.readRevision) {
+          delete state.readingId;
+          context.host.requestRender();
+        }
       }
     }
     async function connect(context: WorkspacePanelContext, state: PanelState) {
@@ -152,6 +159,7 @@ const plugin: PiWebPlugin = {
         delete state.admittedId;
         if (loaded) {
           delete state.failedReadId;
+          delete state.readError;
           state.status = "Connected. Live updates arrive from the backend.";
           delete state.notice;
         }
@@ -167,6 +175,11 @@ const plugin: PiWebPlugin = {
       const source = selectedSourceSession(context);
       if (!source || !state.channel || state.connecting || state.pending !== undefined || state.admittedId !== undefined || lifetimeSignal.aborted || state.entries.some((entry) => entry.status === "running" || entry.sessionId === source.id)) return;
       state.pending = crypto.randomUUID();
+      // A new roundtrip owns selection/status; late history reads must not win.
+      state.readRevision++;
+      delete state.readingId;
+      delete state.failedReadId;
+      delete state.readError;
       delete state.notice;
       state.status = `Translation queued for source session ${source.id}; waiting for backend admission.`;
       const frame: CaptainClientFrame = { type: "translate", requestId: state.pending, sourceSessionId: source.id };
@@ -191,6 +204,7 @@ const plugin: PiWebPlugin = {
                 ...state,
                 connected: state.channel !== undefined && context.peer?.openChannel !== undefined,
                 pending: state.pending !== undefined || state.admittedId !== undefined,
+                reading: state.readingId !== undefined,
                 machineName: context.machine.name,
                 ...(source ? { source } : {}),
                 onTranslate() { translate(context, state); },

@@ -17,6 +17,8 @@ describe("workspace Markdown path normalization", () => {
   });
 
   it.each([
+    ["C:/i\u0307", "C:/\u0130/docs/a.md"],
+    ["C:/\u0130", "C:/i\u0307/docs/a.md"],
     ["C:\\repo", "C:/repo/docs/a.md"],
     ["C:/repo/", "c:\\repo\\docs\\a.md"],
     ["C:\\repo", "C%3A%5Crepo%5Cdocs%5Ca.md"],

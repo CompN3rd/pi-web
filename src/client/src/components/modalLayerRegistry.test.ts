@@ -20,6 +20,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("models native dialog mode transitions without silently switching an open dialog", () => {
+  const dialog = document.createElement("dialog");
+  document.body.append(dialog);
+  mockNativeDialogModality(dialog);
+  dialog.showModal();
+  dialog.showModal();
+  expect(() => { dialog.show(); }).toThrow(expect.objectContaining({ name: "InvalidStateError" }));
+  expect(dialog.matches(":modal")).toBe(true);
+  dialog.close();
+  dialog.open = true;
+  expect(dialog.matches(":modal")).toBe(false);
+  dialog.show();
+  expect(() => { dialog.showModal(); }).toThrow(expect.objectContaining({ name: "InvalidStateError" }));
+});
+
 describe("rendered modal layer visibility", () => {
   it("stops counting a layer that its view hides, and counts it again when the view returns", () => {
     const trigger = appendTrigger("Open review");

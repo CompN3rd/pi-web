@@ -140,6 +140,42 @@ it("preserves a saved-read error and provides a working explicit retry", async (
   } finally { await app.dispose(); }
 });
 
+it("deduplicates pending retries and retires them when translation takes ownership", async () => {
+  const completed = { ...entry, status: "completed" as const, text: "Old saved result" };
+  const retry = deferred<JsonValue>();
+  const app = await setup((operation) => operation === "list" ? Promise.resolve([{ ...completed, text: "" }]) : Promise.reject(new Error("read failed")));
+  try {
+    app.request.mockImplementation(() => retry.promise);
+    const control = button("Retry loading translation");
+    control.click(); control.click();
+    expect(control.disabled).toBe(true);
+    expect(document.body.textContent).toContain("Loading translation");
+    expect(app.request.mock.calls.filter(([operation]) => operation === "read")).toHaveLength(2);
+    button().click();
+    expect(document.body.textContent).not.toContain("Retry loading translation");
+    retry.resolve(completed); await flush();
+    expect(document.querySelector(".captain-diagnostics")?.textContent).toContain("waiting for backend admission");
+    expect(document.querySelector(".captain-answer")).toBeNull();
+  } finally { retry.resolve(completed); await app.dispose(); }
+});
+
+it("does not let successful history reads erase a backend rejection", async () => {
+  const completed = { ...entry, status: "completed" as const, text: "Saved result" };
+  const second = { ...completed, id: "22222222-2222-4222-8222-222222222222" };
+  const app = await setup((operation) => Promise.resolve(operation === "list" ? [completed, second] : completed));
+  try {
+    button().click();
+    const channel = required(app.channels[0]);
+    const sent: unknown = channel.send.mock.calls[0]?.[0];
+    if (!isCaptainClientFrame(sent)) throw new Error("Expected request");
+    channel.options.onData({ type: "rejected", requestId: sent.requestId, message: "Captain is already working." });
+    required(app.container.querySelector<HTMLButtonElement>(".captain-history button")).click();
+    await flush();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Captain is already working.");
+    expect(document.querySelector(".captain-diagnostics")?.textContent).toContain("Captain is already working.");
+  } finally { await app.dispose(); }
+});
+
 it("selects the admitted translation after losing the channel before its first entry frame", async () => {
   const old = { ...entry, status: "completed" as const, text: "Old translation" };
   const next = { ...old, id: "22222222-2222-4222-8222-222222222222", createdAt: "2026-09-02", text: "Recovered translation" };

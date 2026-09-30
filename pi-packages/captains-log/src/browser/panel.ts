@@ -16,6 +16,8 @@ export interface CaptainPanelView {
   source?: SourceSession;
   notice?: string;
   failedReadId?: string;
+  readError?: string;
+  reading?: boolean;
   machineName: string;
   onTranslate: () => void;
   onReconnect: () => void;
@@ -32,6 +34,7 @@ export function renderCaptainPanel(html: Html, view: CaptainPanelView) {
   const disabled = !view.connected || view.connecting || view.pending || working || !view.source || pirateSelected;
   const selected = view.selected;
   const sourceSessionId = selected?.sourceSessionId;
+  const failedReadId = view.failedReadId;
   const status = view.connecting ? "Connecting…" : !view.connected ? "Connection lost" : view.pending ? "Fetching the last reply…"
     : working ? "The captain is translating…" : !view.source ? "Select a session in this workspace first." : pirateSelected ? "Select a different session — this one is the pirate."
       : "Ready to translate";
@@ -45,7 +48,8 @@ export function renderCaptainPanel(html: Html, view: CaptainPanelView) {
       </p>
       ${!view.connected && !view.connecting ? html`<p class="captain-notice">Reconnect to see the result. The captain may still be working; your request will not be sent again.</p>` : null}
       ${view.notice !== undefined && view.notice !== "" ? html`<p class="captain-notice" role="alert">${view.notice}</p>` : null}
-      ${view.failedReadId !== undefined ? html`<button ?disabled=${!view.connected || view.connecting} @click=${() => { if (view.failedReadId !== undefined) view.onRead(view.failedReadId); }}>Retry loading translation</button>` : null}
+      ${view.readError !== undefined ? html`<p class="captain-notice" role="alert">${view.readError}</p>` : null}
+      ${failedReadId !== undefined ? html`<button ?disabled=${!view.connected || view.connecting || view.pending || view.reading} @click=${() => { view.onRead(failedReadId); }}>${view.reading === true ? "Loading translation…" : "Retry loading translation"}</button>` : null}
       ${selected ? html`<article class="captain-reply" aria-label="Pirate translation">
         <div class="captain-reply-heading"><strong>${selected.status === "running" ? "Translating…" : selected.id === view.entries[0]?.id ? "Last translation" : "Earlier translation"}</strong><time datetime=${selected.createdAt}>${dateLabel(selected.createdAt)}</time></div>
         ${selected.status === "completed" ? html`<div class="captain-answer">${selected.text ? renderCaptainMarkdown(html, selected.text) : "Receiving the captain's reply…"}</div>`
@@ -55,12 +59,12 @@ export function renderCaptainPanel(html: Html, view: CaptainPanelView) {
       </article>` : html`<p class="captain-empty muted">Pick a conversation, then translate its latest finished assistant reply. The original stays untouched.</p>`}
       <div class="captain-secondary">
         ${view.entries.length > 1 ? html`<details><summary>Previous translations <span class="muted">(${view.entries.length})</span></summary>
-          <div class="captain-history">${view.entries.map((entry) => html`<button class=${entry.id === selected?.id ? "selected" : ""} ?disabled=${!view.connected} @click=${() => { view.onRead(entry.id); }}>
+          <div class="captain-history">${view.entries.map((entry) => html`<button class=${entry.id === selected?.id ? "selected" : ""} ?disabled=${!view.connected || view.connecting || view.pending} @click=${() => { view.onRead(entry.id); }}>
             <span>${dateLabel(entry.createdAt)} · ${entry.status === "completed" ? "Translated" : entry.status === "running" ? "Working" : "Not completed"}</span>
           </button>`)}</div>
         </details>` : null}
         <details class="captain-diagnostics"><summary>Diagnostics</summary>
-          <p>${view.status}</p>
+          <p>${view.readError ?? view.status}</p>
           ${selected ? html`<dl><dt>Machine</dt><dd>${view.machineName}</dd><dt>Source session</dt><dd>${selected.sourceSessionId ?? "Unknown"}</dd><dt>Pirate session</dt><dd>${selected.sessionId || "Not created"}</dd><dt>Request</dt><dd>${selected.id}</dd></dl>
             <p>${selected.question}</p><ol>${selected.stages.map((stage) => html`<li>${stage}</li>`)}</ol>` : null}
         </details>

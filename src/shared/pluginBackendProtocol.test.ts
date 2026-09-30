@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   boundedPluginBackendChannelCloseReason,
+  boundedUtf8,
   cloneBoundedPluginBackendJson,
   parseBoundedPluginBackendJson,
   parsePluginBackendChannelClientEnvelope,
@@ -15,6 +16,22 @@ import {
   serializePluginBackendChannelOpenEnvelope,
   serializePluginBackendChannelReadyEnvelope,
 } from "./pluginBackendProtocol.js";
+
+it.each([
+  ["abc", 3, "…", "abc"],
+  ["abcdef", 4, "…", "a…"],
+  ["🙂🙂", 5, "", "🙂"],
+  ["🙂🙂", 5, "…", "…"],
+  ["\ud800abc", 3, "", "\ud800"],
+  ["abc", 0, "", ""],
+] as const)("bounds UTF-8 code points and optional suffix: %j, %i", (input, bytes, suffix, expected) => {
+  expect(boundedUtf8(input, bytes, suffix)).toBe(expected);
+});
+
+it("rejects impossible truncation budgets", () => {
+  expect(() => boundedUtf8("abc", -1)).toThrow("nonnegative integer");
+  expect(() => boundedUtf8("abcdef", 1, "…")).toThrow("suffix exceeds");
+});
 
 describe("plugin backend JSON contract", () => {
   it("round-trips __proto__ as an own JSON key without mutating object prototypes", () => {

@@ -150,13 +150,7 @@ Open the Vite URL, usually:
 http://localhost:8505
 ```
 
-For the split development setup:
-
-```bash
-npm run dev:sessiond
-npm run dev:web
-npm run dev:client
-```
+For separate development processes, follow the [web-first split startup](https://pi-web.dev/install#split-development).
 
 Validate changes with:
 

@@ -38,6 +38,6 @@ npm run check:artifacts
 git diff -- test-fixtures/plugin-api-baseline
 ```
 
-The refresh command copies declarations from the existing `dist`; it does not rebuild. Commit the reviewed baseline with the corresponding change rather than refreshing it merely to silence a failing check.
+The refresh command stages declarations from the existing `dist`; it does not rebuild. Replacements are atomic per file, not across the set: if the command fails, inspect the Git diff before retrying. Commit the reviewed baseline with the corresponding change rather than refreshing it merely to silence a failing check.
 
 CI and the publish workflow run artifact checks after their build. On Linux they also run `npm run smoke:package-install`, which checks an actual global installation, public API consumer resolution, and native PTY execution. That installed-package boundary is distinct from inspecting build output.
