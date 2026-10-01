@@ -22,6 +22,7 @@ import {
   type EditToolDetails,
   type ExtensionUIDialogOptions,
   type ExtensionUIContext,
+  type MarkdownTransformer,
   type ModelRuntime,
   type ProjectTrustContext,
   type ProjectTrustEvent,
@@ -98,6 +99,7 @@ import {
   type SessionNotificationMutation,
 } from "./sessionNotificationStore.js";
 import { plainTextTheme } from "./plainTextTheme.js";
+import { projectTranscriptMarkdown } from "./transcriptMarkdown.js";
 import { SessionUnreadStore, type SessionUnreadMutation } from "./sessionUnreadStore.js";
 import { applyEnabledModelToggle, catalogWithEnabledFirst, modelScopeId, persistedEnabledModelPatterns, resolveEnabledModelIds, resolveSessionModelOptions, scopedModelsFromEnabledIds, type EnabledModelCatalogEntry } from "./sessionModelScope.js";
 
@@ -477,6 +479,7 @@ export interface PiAgentSession {
   pendingMessageCount: number;
   extensionRunner: {
     getRegisteredCommands(): readonly { invocationName: string; description?: string }[];
+    getMarkdownTransformers(): MarkdownTransformer[];
     getUIContext(): ExtensionUIContext;
     setUIContext(uiContext?: ExtensionUIContext, mode?: "rpc"): void;
   };
@@ -2360,9 +2363,16 @@ export class PiSessionService implements SessionRouteService {
     );
   }
 
+  private browserTranscriptMessage(session: PiAgentSession, message: unknown): unknown {
+    return projectTranscriptMarkdown(message, session.extensionRunner.getMarkdownTransformers(), (error, transformerIndex) => {
+      this.logger.info({ err: error, sessionId: session.sessionId, transformerIndex }, "Transcript Markdown transformer failed");
+    });
+  }
+
   async messages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage> {
     const session = await this.getOrOpen(ref);
-    return pageMessagesAtSafeBoundary(historyMessagesFromEntries(await this.readableSessionBranch(ref, session)), page);
+    const result = pageMessagesAtSafeBoundary(historyMessagesFromEntries(await this.readableSessionBranch(ref, session)), page);
+    return { ...result, messages: result.messages.map((message) => this.browserTranscriptMessage(session, message)) };
   }
 
   async status(ref: PiSessionRef): Promise<ClientSessionStatus> {
@@ -2620,7 +2630,7 @@ export class PiSessionService implements SessionRouteService {
 
   private beginPromptSubmission(session: PiAgentSession, text: string, behavior: QueuedPromptKind | undefined, images: ImageContent[] = [], echoUserMessage = true): Promise<void> {
     this.publishActivity(session, behavior === "steer" ? "steering queued" : behavior === "followUp" ? "message queued" : "prompt accepted", "active");
-    if (behavior === undefined && echoUserMessage) this.events.publish(session.sessionId, { type: "message.append", message: userMessage(text, images) });
+    if (behavior === undefined && echoUserMessage) this.events.publish(session.sessionId, { type: "message.append", message: this.browserTranscriptMessage(session, userMessage(text, images)) });
     const promptOptions = buildPromptOptions(behavior, images);
     const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions));
     void promptPromise.catch((error: unknown) => {
@@ -4028,7 +4038,11 @@ export class PiSessionService implements SessionRouteService {
       }
     }
     const unsubscribe = session.subscribe((event) => {
-      this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
+      const clientEvent = toClientEvent(event, session.thinkingLevel);
+      if ((clientEvent.type === "message.end" || clientEvent.type === "message.append") && clientEvent.message !== undefined) {
+        clientEvent.message = this.browserTranscriptMessage(session, clientEvent.message);
+      }
+      this.events.publish(session.sessionId, clientEvent);
       this.publishActivityForEvent(session, event);
       const eventType = getString(event, "type");
       // Queued messages can reach the model after an ask opened, even though

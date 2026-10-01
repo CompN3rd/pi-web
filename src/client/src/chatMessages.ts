@@ -28,7 +28,7 @@ export function appendText(messages: ChatLine[], role: ChatLine["role"], text: s
   if (last?.role === role && lastPart?.type === "text") {
     return [
       ...messages.slice(0, -1),
-      { ...last, parts: [...last.parts.slice(0, -1), { ...lastPart, text: lastPart.text + text }] },
+      { ...last, parts: [...last.parts.slice(0, -1), { type: "text", text: lastPart.text + text }] },
     ];
   }
   if (last?.role === role) return [...messages.slice(0, -1), { ...last, parts: [...last.parts, { type: "text", text }] }];
@@ -42,7 +42,7 @@ export function appendThinking(messages: ChatLine[], text: string): ChatLine[] {
   if (last?.role === "assistant" && lastPart?.type === "thinking") {
     return [
       ...messages.slice(0, -1),
-      { ...last, parts: [...last.parts.slice(0, -1), { ...lastPart, text: lastPart.text + text }] },
+      { ...last, parts: [...last.parts.slice(0, -1), { type: "thinking", text: lastPart.text + text }] },
     ];
   }
   if (last?.role === "assistant") return [...messages.slice(0, -1), { ...last, parts: [...last.parts, { type: "thinking", text }] }];
@@ -168,16 +168,21 @@ function normalizeRole(role: unknown): ChatLine["role"] {
 function normalizeContent(content: unknown, message: unknown): ChatPart[] {
   const askUserRecord = askUserRecordPart(message);
   if (askUserRecord !== undefined) return [askUserRecord];
-  if (typeof content === "string") return content !== "" ? [{ type: "text", text: content }] : [];
+  if (typeof content === "string") {
+    const displayText = getString(message, "displayText");
+    return content !== "" ? [{ type: "text", text: content, ...(displayText === undefined ? {} : { displayText }) }] : [];
+  }
   if (!Array.isArray(content)) return objectFallback(content);
 
   return content.flatMap((part): ChatPart[] => {
     const type = getString(part, "type");
     const text = getString(part, "text");
-    if (type === "text") return text !== undefined && text !== "" ? [{ type: "text", text }] : [];
+    const displayText = getString(part, "displayText");
+    const display = displayText === undefined ? {} : { displayText };
+    if (type === "text") return text !== undefined && text !== "" ? [{ type: "text", text, ...display }] : [];
     if (type === "thinking") {
       const thinking = getString(part, "thinking") ?? text;
-      return thinking !== undefined && thinking !== "" ? [{ type: "thinking", text: thinking }] : [];
+      return thinking !== undefined && thinking !== "" ? [{ type: "thinking", text: thinking, ...display }] : [];
     }
     if (type === "toolCall") {
       const toolName = getString(part, "name") ?? "tool";
