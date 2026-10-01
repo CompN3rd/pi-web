@@ -172,11 +172,25 @@ export interface PluginMachine {
   kind: MachineKind;
 }
 
-/** Basic registered project information on the selected machine. */
+/** Basic registered project information on a host-bound machine. */
 export interface PluginProject {
   readonly id: string;
   readonly name: string;
   readonly path: string;
+}
+
+/** A directory suggested by the target machine's project directory search. */
+export interface PluginProjectDirectorySuggestion {
+  readonly path: string;
+}
+
+/** Read-only project discovery with a fixed machine target, independent of later selection. */
+export interface PluginProjects {
+  readonly machineId: string;
+  /** List registered projects, not every directory on the machine. */
+  listProjects(): Promise<readonly PluginProject[]>;
+  /** Suggest directories matching a path query using the host's project picker rules. */
+  suggestDirectories(query: string): Promise<readonly PluginProjectDirectorySuggestion[]>;
 }
 
 /** Selected conversation snapshot, scoped to PluginRuntimeState.selectedMachine. */
@@ -247,6 +261,8 @@ export interface PluginRuntimeContext {
   /** Navigate using host restoration defaults. Route failures appear in the host UI. */
   navigate: (destination: PluginNavigationDestination) => Promise<void>;
   state: PluginRuntimeState;
+  /** Read-only discovery on this context's machine. Omitted by older hosts. */
+  projects?: PluginProjects;
   prompt: PluginPromptEditor;
   openActionPalette: () => void;
   focusPrompt: () => void;
@@ -417,6 +433,8 @@ export interface WorkspaceContext {
   workspace: Workspace;
   state?: PluginRuntimeState;
   files: WorkspaceFilesContextValue;
+  /** Read-only discovery on this context's machine. Omitted by older hosts. */
+  projects?: PluginProjects;
   /** Exact package-paired request/channel capabilities, independent of workspace ownership. */
   peer?: PluginPeer;
   host: WorkspaceHost;
@@ -456,6 +474,8 @@ export interface WorkspacePanelContext extends WorkspaceContext {
 export interface ApplicationPanelContext {
   machine: PluginMachine;
   state: PluginRuntimeState;
+  /** Read-only discovery on this context's machine. Omitted by older hosts. */
+  projects?: PluginProjects;
   /** Present only when a workspace is selected on this machine. */
   workspace?: Workspace;
   /** Workspace-bound terminal; present only with a selected workspace and an available Terminal provider. */

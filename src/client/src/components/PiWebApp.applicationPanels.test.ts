@@ -2,9 +2,10 @@
 
 import { LitElement, html } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ApplicationPanelContext, PiWebPlugin, PiWebStatusResponse, PluginSelectionService, WorkspacePanelTerminal } from "../../../plugin-api";
+import type { ApplicationPanelContext, PiWebPlugin, PiWebStatusResponse, PluginProjects, PluginSelectionService, WorkspacePanelContext, WorkspacePanelTerminal } from "../../../plugin-api";
 import infoPlugin from "../../../../pi-web-plugins/info/pi-web-plugin";
 import updatesPlugin from "../../../../pi-web-plugins/updates/pi-web-plugin";
+import type { PluginRuntimeContext as InternalPluginRuntimeContext } from "../plugins/types";
 import type { RequiredTerminalBrowserComposition, RequiredTerminalBrowserFacadeV1 } from "../plugins/requiredTerminalFacade";
 import { initialAppState, type AppState } from "../appState";
 import { PI_WEB_PLUGIN_LIFECYCLE_VERSION } from "../../../shared/apiTypes";
@@ -198,6 +199,174 @@ it("supplies an external plugin live selection while its panel is closed, with e
   expect(late).not.toHaveBeenCalled();
 });
 
+it("discovers registered projects and directories through a portable public panel with captured machine targets", async () => {
+  const contexts: ApplicationPanelContext[] = [];
+  const workspaceContexts: WorkspacePanelContext[] = [];
+  let actionProjects: PluginProjects | undefined;
+  let discovery = "";
+  const activate = vi.fn<PiWebPlugin["activate"]>(() => ({ contributions: {
+    applicationPanels: [{
+      id: "workspace.discovery", title: "Discovery",
+      render: (context) => {
+        contexts.push(context);
+        return html`<button @click=${async () => {
+          if (context.projects === undefined) throw new Error("Missing public project discovery");
+          const projects = await context.projects.listProjects();
+          const directories = await context.projects.suggestDirectories("/repo & docs");
+          discovery = `${projects[0]?.name ?? "No projects"}: ${directories[0]?.path ?? "No directories"}`;
+          context.host.requestRender();
+        }}>Discover projects</button><p>${discovery}</p>`;
+      },
+    }],
+    actions: [{ id: "discover", title: "Discover", run: (context) => { actionProjects = context.projects; } }],
+    workspacePanels: [{ id: "workspace-only", title: "Workspace discovery", render: (context) => {
+      workspaceContexts.push(context); return html`Workspace discovery`;
+    } }],
+  } }));
+  const app = await mount({ apiVersion: 4, name: "Discovery", activate }, { id: "discovery" });
+  const fetch = projectDiscoveryTransport();
+  const localProjects = contexts.at(-1)?.projects;
+  if (localProjects === undefined) throw new Error("Expected public projects on the host context");
+  expect(localProjects.machineId).toBe("local");
+  expect(Object.isFrozen(localProjects)).toBe(true);
+  expect(localProjects).not.toHaveProperty("addProject");
+  toolSurface(app).shadowRoot?.querySelector<HTMLButtonElement>(".panel-content button")?.click();
+  await vi.waitFor(() => {
+    expect(toolSurface(app).shadowRoot?.textContent).toContain("local project: /local/directory");
+  });
+  expect(fetch.mock.calls.map(([url]) => discoveryRequestUrl(url))).toEqual([
+    "http://localhost:3000/api/machines/local/projects",
+    "http://localhost:3000/api/machines/local/project-directories?q=%2Frepo%20%26%20docs",
+  ]);
+  expect(await localProjects.listProjects()).toEqual([{ id: "project", name: "local project", path: "/local/repo" }]);
+
+  let resolveLocal: (response: Response) => void = () => { throw new Error("Missing pending request"); };
+  fetch.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveLocal = resolve; }));
+  const pendingLocal = localProjects.listProjects();
+  patchState(app, { selectedMachine: remote });
+  await settle(app);
+  const remoteProjects = contexts.at(-1)?.projects;
+  if (remoteProjects === undefined) throw new Error("Expected remote public projects");
+  expect(remoteProjects.machineId).toBe("remote");
+  resolveLocal(new Response(JSON.stringify([{ ...project, name: "Pending local project" }])));
+  expect(await pendingLocal).toEqual([{ id: "project", name: "Pending local project", path: "/repo" }]);
+  expect(await remoteProjects.listProjects()).toEqual([{ id: "project", name: "remote project", path: "/remote/repo" }]);
+  expect(await remoteProjects.suggestDirectories("/remote/query")).toEqual([{ path: "/remote/directory" }]);
+  expect(await localProjects.listProjects()).toEqual([{ id: "project", name: "local project", path: "/local/repo" }]);
+  expect(localProjects.machineId).toBe("local"); // Capturing a service never captures live selection.
+  expect(activate).toHaveBeenCalledOnce();
+
+  // Action and workspace callbacks receive the same direct, host-bound public service.
+  const createRuntime: unknown = Reflect.get(app, "createPluginRuntimeContext");
+  if (typeof createRuntime !== "function") throw new Error("Expected runtime context creation");
+  const runtime: unknown = Reflect.apply(createRuntime, app, []);
+  if (!isRuntimeContext(runtime)) throw new Error("Expected runtime context");
+  const actions = registryFor(app).getActions(runtime);
+  await actions.find(({ id }) => id === "discovery:discover")?.run();
+  expect(actionProjects?.machineId).toBe("remote");
+  expect(await actionProjects?.listProjects()).toEqual([{ id: "project", name: "remote project", path: "/remote/repo" }]);
+  patchState(app, { selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace] });
+  await settle(app);
+  toolSurface(app).shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Workspace discovery"]')?.click();
+  await settle(app);
+  expect(workspaceContexts.at(-1)?.projects?.machineId).toBe("remote");
+  expect(await workspaceContexts.at(-1)?.projects?.suggestDirectories("/workspace/query"))
+    .toEqual([{ path: "/remote/directory" }]);
+
+  fetch.mockClear();
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: "Remote unavailable" }), { status: 502 }));
+  await expect(remoteProjects.listProjects()).rejects.toThrow("Remote unavailable");
+  fetch.mockRejectedValueOnce(new TypeError("Network failure"));
+  await expect(remoteProjects.suggestDirectories("/failed")).rejects.toThrow("Network failure");
+  expect(fetch.mock.calls.map(([url]) => new URL(discoveryRequestUrl(url)).pathname)).toEqual([
+    "/api/machines/remote/projects", "/api/machines/remote/project-directories",
+  ]); // No gateway retry and no substitution from the host's loaded project state.
+});
+
+it.each([false, true])("keeps machine-specific discovery bound under existing loading and visibility rules (gateway specific: %s)", async (gatewaySpecific) => {
+  const gatewayContexts: ApplicationPanelContext[] = [];
+  const remoteContexts: ApplicationPanelContext[] = [];
+  const plugin = (contexts: ApplicationPanelContext[], label: string): PiWebPlugin => ({
+    apiVersion: 4, name: "Discovery", activate: () => ({ contributions: { applicationPanels: [{
+      id: "workspace.discovery", title: "Discovery", render: (context) => { contexts.push(context); return html`<p>${label}</p>`; },
+    }] } }),
+  });
+  const app = await mount(plugin(gatewayContexts, "Gateway discovery"), { id: "discovery", machineSpecific: gatewaySpecific });
+  const fetch = projectDiscoveryTransport();
+  const registry = registryFor(app);
+  const moduleLoader = vi.fn(() => Promise.resolve({ default: plugin(remoteContexts, "Remote discovery") }));
+  const manifest = (machineSpecific: boolean) => new Response(JSON.stringify({
+    lifecycleVersion: PI_WEB_PLUGIN_LIFECYCLE_VERSION, terminalMode: "recovery-disabled",
+    plugins: [{ id: "discovery", module: "discovery/pi-web-plugin.js", machineSpecific }],
+  }));
+  const loadRemote = () => loadExternalPlugins(undefined, {
+    machineId: "remote", moduleLoader,
+    shouldLoadPlugin: (entry) => registry.shouldLoadRemotePlugin(entry.id, entry.machineSpecific),
+  });
+  if (!gatewaySpecific) {
+    fetch.mockResolvedValueOnce(manifest(false));
+    expect((await loadRemote()).registrations).toEqual([]); // Gateway portable duplicates are not imported.
+    expect(moduleLoader).not.toHaveBeenCalled();
+  }
+  fetch.mockResolvedValueOnce(manifest(true));
+  const loaded = await loadRemote();
+  expect(loaded.failures).toEqual([]);
+  expect((await registry.registerBatch(loaded.registrations, { declarations: loaded.declarations })).failures).toEqual([]);
+  const gatewayProjects = gatewayContexts.at(-1)?.projects;
+  const gatewayRenders = gatewayContexts.length;
+
+  Reflect.set(app, "verifiedPluginModeByMachine", new Map([["local", "recovery-disabled"]]));
+  patchState(app, { selectedMachine: remote });
+  await settle(app);
+  expect(toolSurface(app).shadowRoot?.textContent).not.toContain("Remote discovery");
+  expect(remoteContexts).toHaveLength(0); // No callbacks until the selected machine's loading gate opens.
+  Reflect.set(app, "verifiedPluginModeByMachine", new Map([["local", "recovery-disabled"], ["remote", "recovery-disabled"]]));
+  invalidateToolSurface(app);
+  await settle(app);
+  toolSurface(app).shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Discovery"]')?.click();
+  await settle(app);
+  expect(toolSurface(app).shadowRoot?.textContent).toContain("Remote discovery");
+  expect(toolSurface(app).shadowRoot?.textContent).not.toContain("Gateway discovery");
+  expect(gatewayContexts).toHaveLength(gatewayRenders);
+  const remoteProjects = remoteContexts.at(-1)?.projects;
+  expect(remoteProjects?.machineId).toBe("remote");
+  expect(await remoteProjects?.listProjects()).toEqual([{ id: "project", name: "remote project", path: "/remote/repo" }]);
+  expect(await gatewayProjects?.listProjects()).toEqual([{ id: "project", name: "local project", path: "/local/repo" }]);
+
+  const remoteRenders = remoteContexts.length;
+  patchState(app, { selectedMachine: undefined });
+  await settle(app);
+  toolSurface(app).shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Discovery"]')?.click();
+  await settle(app);
+  expect(toolSurface(app).shadowRoot?.textContent).toContain("Gateway discovery");
+  expect(remoteContexts).toHaveLength(remoteRenders);
+  expect(await remoteProjects?.suggestDirectories("/retained/remote"))
+    .toEqual([{ path: "/remote/directory" }]); // Retained machine-specific access cannot drift to local.
+  expect(gatewayContexts.at(-1)?.projects?.machineId).toBe("local");
+});
+
+function projectDiscoveryTransport() {
+  const fetch = vi.fn<typeof globalThis.fetch>((input) => {
+    const url = new URL(discoveryRequestUrl(input));
+    const match = /^\/api\/machines\/([^/]+)\/(projects|project-directories)$/u.exec(url.pathname);
+    if (match === null) throw new Error(`Unexpected discovery URL: ${url.href}`);
+    const machineId = decodeURIComponent(match[1] ?? "");
+    return Promise.resolve(new Response(JSON.stringify(match[2] === "projects"
+      ? [{ ...project, name: `${machineId} project`, path: `/${machineId}/repo` }]
+      : [{ path: `/${machineId}/directory`, kind: "other" }])));
+  });
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
+function isRuntimeContext(value: unknown): value is InternalPluginRuntimeContext {
+  return typeof value === "object" && value !== null && "navigate" in value && typeof value.navigate === "function";
+}
+
+function discoveryRequestUrl(input: Parameters<typeof fetch>[0]): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+}
+
 it("opens an application tab through existing navigation without a workspace and retains invalid-tool errors", async () => {
   const app = await mount(infoPlugin);
   const tabs = app.shadowRoot?.querySelector("app-mobile-main-tabs");
@@ -347,21 +516,25 @@ function installTerminal(app: PiWebApp, machineId: string) {
   const compositions: unknown = Reflect.get(app, "requiredTerminalByMachine");
   if (!(compositions instanceof Map)) throw new Error("Expected Terminal compositions");
   compositions.set(machineId, composition);
+  invalidateToolSurface(app);
+  return { createWorkspaceTerminal, runCommand };
+}
+
+function invalidateToolSurface(app: PiWebApp): void {
   // Production plugin loading invalidates the guarded surface when composition becomes available.
   const invalidate: unknown = Reflect.get(app, "invalidateWorkspaceSurface");
   if (typeof invalidate !== "function") throw new Error("Expected workspace surface invalidation");
   Reflect.apply(invalidate, app, []);
-  return { createWorkspaceTerminal, runCommand };
 }
 
 function commandButtons(panel: WorkspacePanel, label: string): HTMLButtonElement[] {
   return [...panel.shadowRoot?.querySelectorAll<HTMLButtonElement>(".updates-command-actions button") ?? []].filter((button) => button.textContent === label);
 }
 
-async function mount(plugin: PiWebPlugin, { id = "info", state = {} }: { id?: string; state?: Partial<AppState> } = {}): Promise<ApplicationPanelsApp> {
+async function mount(plugin: PiWebPlugin, { id = "info", state = {}, machineSpecific = false }: { id?: string; state?: Partial<AppState>; machineSpecific?: boolean } = {}): Promise<ApplicationPanelsApp> {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
     lifecycleVersion: PI_WEB_PLUGIN_LIFECYCLE_VERSION, terminalMode: "recovery-disabled",
-    plugins: [{ id, module: `${id}/pi-web-plugin.js`, machineSpecific: false }],
+    plugins: [{ id, module: `${id}/pi-web-plugin.js`, machineSpecific }],
   }))));
   const app = new ApplicationPanelsApp();
   Reflect.set(app, "verifiedPluginModeByMachine", new Map([["local", "recovery-disabled"], ["remote", "recovery-disabled"]]));

@@ -1,5 +1,5 @@
 import type { TemplateResult } from "lit";
-import type { PluginSelectionService } from "../../../plugin-api";
+import type { PluginProjects, PluginSelectionService } from "../../../plugin-api";
 import type { AppAction } from "../actions";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
@@ -187,6 +187,7 @@ export interface WorkspaceContext {
   workspace: Workspace;
   state: AppState;
   files: WorkspaceFilesContextValue;
+  projects?: PluginProjects;
   peer?: PluginPeer;
   host: WorkspaceHost;
 }
@@ -218,6 +219,7 @@ export type { PluginNavigationDestination } from "../../../plugin-api";
 export interface PluginRuntimeContext {
   navigate: (destination: import("../../../plugin-api").PluginNavigationDestination) => Promise<void>;
   state: AppState;
+  projects?: PluginProjects;
   prompt: PluginPromptEditor;
   piWebUnstable?: PiWebUnstableRuntimeContext;
   openActionPalette: () => void;
@@ -290,6 +292,7 @@ export interface WorkspacePanelContext extends WorkspaceContext {
 export interface ApplicationPanelContext {
   machine: PluginMachine;
   state: AppState;
+  projects?: PluginProjects;
   workspace?: Workspace;
   terminal?: WorkspacePanelTerminal;
   navigate: (destination: import("../../../plugin-api").PluginNavigationDestination) => Promise<void>;
