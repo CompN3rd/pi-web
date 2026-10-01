@@ -31,6 +31,7 @@ import {
 import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionTranscriptSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
 import { isSessionMediaId } from "../../shared/sessionMedia.js";
+import { getBuiltinExtensionFactories } from "./builtinExtensionFactories.js";
 import type { SessionMedia } from "./sessionMediaIndex.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
@@ -992,6 +993,7 @@ function createDefaultRuntimeFactory(
     // (matching `pi` run without a UI). Projects without trust-requiring
     // resources skip resolution entirely and are trusted, as before.
     const eventBus = createEventBus();
+    const builtinFactories = await getBuiltinExtensionFactories();
     const projectTrustRequiring = hasTrustRequiringProjectResources(cwd);
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: !projectTrustRequiring });
     // Pre-session-creation trust failures (`project_trust` handler errors)
@@ -1003,7 +1005,7 @@ function createDefaultRuntimeFactory(
       agentDir,
       modelRuntime,
       settingsManager,
-      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus },
+      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus, extensionFactories: builtinFactories },
       ...(projectTrustRequiring
         ? {
             resourceLoaderReloadOptions: {

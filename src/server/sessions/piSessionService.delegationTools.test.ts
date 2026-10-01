@@ -1,11 +1,12 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPiWebCustomToolDefinitions, sessionAllowsDelegationTools, type PiSessionManager } from "./piSessionService.js";
 import type { SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { fakeSessionManager } from "./piSessionService.testSupport.js";
+import { stubExtensionToolContext } from "./piSessionService.testSupport.js";
 
 const tempDirs: string[] = [];
 
@@ -39,10 +40,15 @@ function manager(id: string, file: string | undefined, entries: readonly unknown
 
 const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
-function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unknown): ExtensionContext {
+function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unknown): ExtensionToolContext {
   // The delegation tools only read sessionManager and model from the context.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- test stub with the minimal surface the tools read.
-  return { sessionManager: manager(sessionId, sessionFile), ...(model === undefined ? {} : { model }) } as unknown as ExtensionContext;
+  return stubExtensionToolContext({
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: () => sessionFile,
+    },
+    model,
+  });
 }
 
 function findTool(definitions: ReturnType<typeof createPiWebCustomToolDefinitions>, name: string) {
