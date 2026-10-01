@@ -1,4 +1,4 @@
-import { normalize, join, resolve } from "node:path";
+import { basename, dirname, normalize, join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runPiWebUpdate, type PiWebUpdateDependencies } from "./piWebUpdate.js";
 import type { PiWebInstallationInfo } from "./shared/apiTypes.js";
@@ -295,9 +295,10 @@ describe("runPiWebUpdate", () => {
   it("pins global npm to the detected installation and restarts that CLI only afterwards", async () => {
     const deps = fixture(globalInstall);
     await runPiWebUpdate(["--yes"], deps);
-    expect(deps.capture).toHaveBeenCalledWith({ executable: "npm", args: ["root", "--global", "--prefix", resolve("/opt/node")], env: deps.env });
+    const npmPrefix = basename(dirname(globalInstall.npmRoot ?? "")) === "lib" ? dirname(dirname(globalInstall.npmRoot ?? "")) : dirname(globalInstall.npmRoot ?? "");
+    expect(deps.capture).toHaveBeenCalledWith({ executable: "npm", args: ["root", "--global", "--prefix", npmPrefix], env: deps.env });
     expect(deps.run.mock.calls.map(([command]) => [command.executable, command.args])).toEqual([
-      ["npm", ["install", "--global", "--prefix", resolve("/opt/node"), "@jmfederico/pi-web@latest", "--allow-scripts=node-pty"]],
+      ["npm", ["install", "--global", "--prefix", resolve(npmPrefix), "@jmfederico/pi-web@latest", "--allow-scripts=node-pty"]],
       ["/tools/node", [join("/opt/node/lib/node_modules/@jmfederico/pi-web", "dist", "cli.js"), "restart"]],
     ]);
   });
