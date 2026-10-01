@@ -3,14 +3,19 @@ import { runPiWebUpdate, type PiWebUpdateDependencies } from "./piWebUpdate.js";
 import type { PiWebInstallationInfo } from "./shared/apiTypes.js";
 
 function fixture(installation: PiWebInstallationInfo = { kind: "docker", dockerMode: "runtime" }, interactive = true, platform: NodeJS.Platform = "linux") {
+  const environment: NodeJS.ProcessEnv = { PATH: "/tools/bin" };
   const deps = {
-    env: { PATH: "/tools/bin" },
+    env: environment,
     nodeExecutable: "/tools/node",
     platform,
     home: "/home/test",
+    userId: 501,
     cwd: "/project with spaces",
     uniqueId: vi.fn(() => "unique-id"),
     exists: vi.fn((path: string) => !path.includes("ui-dev")),
+    mkdir: vi.fn<PiWebUpdateDependencies["mkdir"]>(() => Promise.resolve()),
+    writeFile: vi.fn<PiWebUpdateDependencies["writeFile"]>(() => Promise.resolve()),
+    removeFile: vi.fn<PiWebUpdateDependencies["removeFile"]>(() => Promise.resolve()),
     piCliPath: "/owned/pi/dist/cli.js",
     interactive,
     agentDir: vi.fn(() => Promise.resolve("/profiles/active agent")),
@@ -29,6 +34,19 @@ const globalInstall: PiWebInstallationInfo = {
 const piInstall: PiWebInstallationInfo = {
   kind: "pi-package", path: "/profiles/active agent/npm/node_modules/@jmfederico/pi-web", scope: "user", source: "npm:@jmfederico/pi-web",
 };
+const localInstall: PiWebInstallationInfo = { kind: "local", path: "/workspace/pi-web" };
+
+function configureLocalCheckout(deps: ReturnType<typeof fixture>, status = "", branch = "main", upstream = "origin/main") {
+  deps.capture.mockImplementation((command) => {
+    if (command.executable === "systemctl") return Promise.resolve("loaded");
+    if (command.executable !== "git") return Promise.resolve("");
+    if (command.args.includes("--show-toplevel")) return Promise.resolve("/workspace/pi-web");
+    if (command.args.includes("--porcelain=v1")) return Promise.resolve(status);
+    if (command.args.includes("--short")) return Promise.resolve(branch);
+    if (command.args.includes("@{upstream}")) return Promise.resolve(upstream);
+    return Promise.resolve("");
+  });
+}
 
 describe("runPiWebUpdate", () => {
   it.each([["--force"], ["--yes", "--yes"], ["latest"], ["--help", "--yes"], ["--dev"], ["--all"]])("rejects invalid arguments %j before inspecting or changing anything", async (...args) => {
@@ -83,21 +101,130 @@ describe("runPiWebUpdate", () => {
     expect(deps.log).toHaveBeenCalledWith("Update cancelled. Nothing changed.");
   });
 
-  it.each(["local", "unknown"] as const)("only prints instructions for %s", async (kind) => {
-    const deps = fixture({ kind });
+  it("only prints instructions for unknown installations", async () => {
+    const deps = fixture({ kind: "unknown" });
     await runPiWebUpdate(["--yes"], deps);
     expect(deps.run).not.toHaveBeenCalled();
     expect(deps.confirm).not.toHaveBeenCalled();
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("original tooling"));
   });
 
-  it.each([globalInstall, piInstall])("refuses nested macOS update even with --yes ($kind)", async (installation) => {
+  it("fast-forwards, installs, builds, and restarts a clean local checkout", async () => {
+    const deps = fixture(localInstall);
+    configureLocalCheckout(deps);
+
+    await runPiWebUpdate(["--yes"], deps);
+
+    expect(deps.run.mock.calls.map(([command]) => [command.executable, command.args])).toEqual([
+      ["git", ["-C", "/workspace/pi-web", "pull", "--ff-only"]],
+      ["npm", ["install"]],
+      ["npm", ["run", "build"]],
+      ["/tools/node", ["/workspace/pi-web/dist/cli.js", "restart"]],
+    ]);
+    expect(deps.run.mock.calls[0]?.[0].env).toEqual({ PATH: "/tools/bin", GIT_TERMINAL_PROMPT: "0" });
+  });
+
+  it("refuses a dirty local checkout before confirmation or mutation", async () => {
+    const deps = fixture(localInstall);
+    configureLocalCheckout(deps, " M src/cli.ts\\n?? scratch.txt");
+
+    await expect(runPiWebUpdate(["--yes"], deps)).rejects.toThrow("uncommitted or untracked changes");
+    expect(deps.confirm).not.toHaveBeenCalled();
+    expect(deps.run).not.toHaveBeenCalled();
+  });
+
+  it("refuses a local checkout without an upstream branch", async () => {
+    const deps = fixture(localInstall);
+    configureLocalCheckout(deps, "", "main", "");
+
+    await expect(runPiWebUpdate(["--yes"], deps)).rejects.toThrow("has no upstream branch");
+    expect(deps.run).not.toHaveBeenCalled();
+  });
+
+  it("does not pull a local checkout when confirmation is declined", async () => {
+    const deps = fixture(localInstall);
+    configureLocalCheckout(deps);
+    deps.confirm.mockResolvedValue(false);
+
+    await runPiWebUpdate([], deps);
+
+    expect(deps.run).not.toHaveBeenCalled();
+    expect(deps.log).toHaveBeenCalledWith("Update cancelled. Nothing changed.");
+  });
+
+  it("stops before install when a local checkout cannot fast-forward", async () => {
+    const deps = fixture(localInstall);
+    configureLocalCheckout(deps);
+    deps.run.mockRejectedValueOnce(new Error("non-fast-forward"));
+
+    await expect(runPiWebUpdate(["--yes"], deps)).rejects.toThrow("Could not fast-forward the local checkout");
+    expect(deps.run).toHaveBeenCalledOnce();
+    expect(deps.run.mock.calls[0]?.[0].args).toEqual(["-C", "/workspace/pi-web", "pull", "--ff-only"]);
+  });
+
+  it.each([globalInstall, piInstall])("hands off nested macOS update to a one-shot launchd agent ($kind)", async (installation) => {
     const deps = fixture(installation);
     deps.platform = "darwin";
-    deps.env = { ...deps.env, ...{ PI_WEB_SESSION: "1" } };
-    await expect(runPiWebUpdate(["--yes"], deps)).rejects.toThrow("Open a host terminal outside PI WEB");
-    expect(deps.capture).not.toHaveBeenCalled();
+    deps.env = {
+      ...deps.env,
+      PI_WEB_SESSION: "1",
+      PI_WEB_CONFIG: "relative/config.json",
+      PI_WEB_DATA_DIR: "/data/custom",
+      HOME: "/home/test",
+      SECRET_TOKEN: "do not forward",
+    };
+
+    await runPiWebUpdate(["--yes"], deps);
+
+    const handoffPath = "/home/test/.pi-web/update-handoffs/com.pi-web.update-unique-id.plist";
+    expect(deps.run).toHaveBeenCalledWith({
+      executable: "launchctl",
+      args: ["bootstrap", "gui/501", handoffPath],
+      env: {
+        PATH: "/tools/bin",
+        PI_WEB_CONFIG: "relative/config.json",
+        PI_WEB_DATA_DIR: "/data/custom",
+        HOME: "/home/test",
+      },
+    });
+    expect(deps.writeFile).toHaveBeenCalledWith(handoffPath, expect.stringContaining("<key>RunAtLoad</key>"));
+    const plist = deps.writeFile.mock.calls[0]?.[1] ?? "";
+    expect(plist).toContain(`<string>${deps.nodeExecutable}</string>`);
+    expect(plist).toContain(`<string>${installation.path ?? ""}/dist/cli.js</string>`);
+    expect(plist).toContain("<string>update</string>");
+    expect(plist).toContain("<string>--yes</string>");
+    expect(plist).toContain("<key>KeepAlive</key>\n  <false/>");
+    expect(plist).not.toContain("PI_WEB_SESSION");
+    expect(plist).not.toContain("SECRET_TOKEN");
+    expect(deps.removeFile).toHaveBeenCalledWith(handoffPath);
+    expect(deps.run).toHaveBeenCalledOnce();
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining("completion is not verified"));
+  });
+
+  it("does not create a macOS handoff when confirmation is declined", async () => {
+    const deps = fixture(piInstall);
+    deps.platform = "darwin";
+    deps.env = { ...deps.env, PI_WEB_SESSION: "1" };
+    deps.confirm.mockResolvedValue(false);
+
+    await runPiWebUpdate([], deps);
+
+    expect(deps.mkdir).not.toHaveBeenCalled();
+    expect(deps.writeFile).not.toHaveBeenCalled();
     expect(deps.run).not.toHaveBeenCalled();
+    expect(deps.log).toHaveBeenCalledWith("Update cancelled. Nothing changed.");
+  });
+
+  it("refuses a nested macOS handoff when launchd rejects the bootstrap", async () => {
+    const deps = fixture(piInstall);
+    deps.platform = "darwin";
+    deps.env = { ...deps.env, PI_WEB_SESSION: "1" };
+    deps.run.mockRejectedValue(new Error("bootstrap failed"));
+
+    await expect(runPiWebUpdate(["--yes"], deps)).rejects.toThrow("Cannot safely dispatch a detached launchd update");
+    expect(deps.writeFile).toHaveBeenCalledOnce();
+    expect(deps.removeFile).toHaveBeenCalledWith(expect.stringContaining("update-handoffs"));
+    expect(deps.run).toHaveBeenCalledOnce();
   });
 
   it.each([globalInstall, piInstall])("dispatches nested Linux restart only after successful installation ($kind)", async (installation) => {

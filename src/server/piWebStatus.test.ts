@@ -368,7 +368,7 @@ describe("PI WEB status", () => {
     expect(hasCommand).not.toHaveBeenCalled();
   });
 
-  it("routes local checkouts to their CLI for unsupported-update instructions without PATH dependencies", () => {
+  it("routes local checkouts to their CLI without PATH dependencies", () => {
     const updateCommand = updateCommandFor(
       { kind: "local", path: "/tmp/pi web's checkout" },
       { activeAgentProfile: activeProfile("/opt/pi/state"), hasCommand: () => Promise.resolve(false) },
