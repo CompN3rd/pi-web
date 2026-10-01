@@ -17,6 +17,10 @@ const originalDockerInstallDir = process.env["PI_WEB_DOCKER_INSTALL_DIR"];
 const originalDockerDevRepoRoot = process.env["PI_WEB_DOCKER_DEV_REPO_ROOT"];
 const originalAgentDir = process.env["PI_WEB_AGENT_DIR"];
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 afterEach(() => {
   restoreEnv("PI_WEB_SKIP_VERSION_CHECK", originalSkipVersionCheck);
   restoreEnv("HOME", originalHome);
@@ -335,7 +339,7 @@ describe("PI WEB status", () => {
       },
     );
 
-    expect(updateCommand).toBe(`PI_CODING_AGENT_DIR='/tmp/profile'\\''s/state' '${process.execPath}' '/tmp/pi-web/dist/cli.js' update`);
+    expect(updateCommand).toBe(`PI_CODING_AGENT_DIR=${shellQuote(dir)} ${shellQuote(process.execPath)} ${shellQuote(join("/tmp/pi-web", "dist", "cli.js"))} update`);
   });
 
   it("delegates npm-global updates to the interactive shared CLI", () => {
@@ -344,7 +348,7 @@ describe("PI WEB status", () => {
       { activeAgentProfile: undefined, hasCommand: (candidate) => Promise.resolve(candidate === "pi-web") },
     );
 
-    expect(updateCommand).toBe(`'${process.execPath}' '/opt/npm/@jmfederico/pi-web/dist/cli.js' update`);
+    expect(updateCommand).toBe(`${shellQuote(process.execPath)} ${shellQuote(join("/opt/npm/@jmfederico/pi-web", "dist", "cli.js"))} update`);
   });
 
   it("targets the same npm installation even when pi-web is unavailable on PATH", () => {
@@ -353,7 +357,7 @@ describe("PI WEB status", () => {
       { activeAgentProfile: undefined, hasCommand: () => Promise.resolve(false) },
     );
 
-    expect(updateCommand).toBe(`'${process.execPath}' '/opt/npm/@jmfederico/pi-web/dist/cli.js' update`);
+    expect(updateCommand).toBe(`${shellQuote(process.execPath)} ${shellQuote(join("/opt/npm/@jmfederico/pi-web", "dist", "cli.js"))} update`);
   });
 
   it("suppresses Pi-package updates when the active state profile cannot be represented safely", () => {
@@ -374,7 +378,7 @@ describe("PI WEB status", () => {
       { activeAgentProfile: activeProfile("/opt/pi/state"), hasCommand: () => Promise.resolve(false) },
     );
 
-    expect(updateCommand).toBe(`PI_CODING_AGENT_DIR='/opt/pi/state' '${process.execPath}' '/tmp/pi web'\\''s checkout/dist/cli.js' update`);
+    expect(updateCommand).toBe(`PI_CODING_AGENT_DIR=${shellQuote("/opt/pi/state")} ${shellQuote(process.execPath)} ${shellQuote(join("/tmp/pi web's checkout", "dist", "cli.js"))} update`);
   });
 
   it.each([undefined, "relative/pi-web"])("suppresses Pi-package commands without an absolute installation path: %s", (path) => {
@@ -388,7 +392,7 @@ describe("PI WEB status", () => {
     expect(updateCommandFor(
       { kind: "npm-global", path: "/opt/pi-web" },
       { activeAgentProfile: activeProfile("/opt/pi/state"), hasCommand: () => Promise.resolve(true) },
-    )).toBe(`PI_CODING_AGENT_DIR='/opt/pi/state' '${process.execPath}' '/opt/pi-web/dist/cli.js' update`);
+    )).toBe(`PI_CODING_AGENT_DIR=${shellQuote("/opt/pi/state")} ${shellQuote(process.execPath)} ${shellQuote(join("/opt/pi-web", "dist", "cli.js"))} update`);
   });
 
   it.skipIf(process.platform !== "linux")("suggests native systemd commands for local development services", async () => {

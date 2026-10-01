@@ -1,3 +1,4 @@
+import { normalize, join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runPiWebUpdate, type PiWebUpdateDependencies } from "./piWebUpdate.js";
 import type { PiWebInstallationInfo } from "./shared/apiTypes.js";
@@ -20,7 +21,7 @@ function fixture(installation: PiWebInstallationInfo = { kind: "docker", dockerM
     interactive,
     agentDir: vi.fn(() => Promise.resolve("/profiles/active agent")),
     detectInstallation: vi.fn(() => Promise.resolve(installation)),
-    realpath: vi.fn((path: string) => Promise.resolve(path)),
+    realpath: vi.fn((path: string) => Promise.resolve(normalize(path))),
     capture: vi.fn<PiWebUpdateDependencies["capture"]>((command) => Promise.resolve(command.executable === "npm" ? "/opt/node/lib/node_modules" : command.executable === "systemctl" ? "loaded" : "")),
     run: vi.fn<PiWebUpdateDependencies["run"]>(() => Promise.resolve()),
     confirm: vi.fn(() => Promise.resolve(true)),
@@ -119,7 +120,7 @@ describe("runPiWebUpdate", () => {
       ["git", ["-C", "/workspace/pi-web", "pull", "--ff-only"]],
       ["npm", ["install"]],
       ["npm", ["run", "build"]],
-      ["/tools/node", ["/workspace/pi-web/dist/cli.js", "restart"]],
+      ["/tools/node", [join("/workspace/pi-web", "dist", "cli.js"), "restart"]],
     ]);
     expect(deps.run.mock.calls[0]?.[0].env).toEqual({ PATH: "/tools/bin", GIT_TERMINAL_PROMPT: "0" });
   });
@@ -176,7 +177,7 @@ describe("runPiWebUpdate", () => {
 
     await runPiWebUpdate(["--yes"], deps);
 
-    const handoffPath = "/home/test/.pi-web/update-handoffs/com.pi-web.update-unique-id.plist";
+    const handoffPath = join("/home/test", ".pi-web", "update-handoffs", "com.pi-web.update-unique-id.plist");
     expect(deps.run).toHaveBeenCalledWith({
       executable: "launchctl",
       args: ["bootstrap", "gui/501", handoffPath],
@@ -190,7 +191,7 @@ describe("runPiWebUpdate", () => {
     expect(deps.writeFile).toHaveBeenCalledWith(handoffPath, expect.stringContaining("<key>RunAtLoad</key>"));
     const plist = deps.writeFile.mock.calls[0]?.[1] ?? "";
     expect(plist).toContain(`<string>${deps.nodeExecutable}</string>`);
-    expect(plist).toContain(`<string>${installation.path ?? ""}/dist/cli.js</string>`);
+    expect(plist).toContain(`<string>${join(installation.path ?? "", "dist", "cli.js")}</string>`);
     expect(plist).toContain("<string>update</string>");
     expect(plist).toContain("<string>--yes</string>");
     expect(plist).toContain("<key>KeepAlive</key>\n  <false/>");
@@ -238,7 +239,7 @@ describe("runPiWebUpdate", () => {
     expect(restart?.executable).toBe("systemd-run");
     expect(restart?.args).toEqual(expect.arrayContaining(["--user", "--collect", "--expand-environment=no", "--working-directory=/project with spaces", "--setenv=PI_WEB_CONFIG", "--setenv=PI_WEB_DATA_DIR", "--setenv=PI_WEB_SESSIOND_SOCKET", "--setenv=HOME", "--setenv=XDG_RUNTIME_DIR", "--unit=pi-web-update-restart-unique-id"]));
     expect(restart?.env).toEqual(deps.env);
-    expect(restart?.args.slice(-4)).toEqual(["--", "/tools/node", `${installation.path ?? ""}/dist/cli.js`, "restart"]);
+    expect(restart?.args.slice(-4)).toEqual(["--", "/tools/node", join(installation.path ?? "", "dist", "cli.js"), "restart"]);
     expect(restart?.args).not.toContain("--wait");
     expect(restart?.args).not.toContain("--scope");
     expect(restart?.args).not.toContain("--setenv=SECRET_TOKEN");
@@ -294,10 +295,10 @@ describe("runPiWebUpdate", () => {
   it("pins global npm to the detected installation and restarts that CLI only afterwards", async () => {
     const deps = fixture(globalInstall);
     await runPiWebUpdate(["--yes"], deps);
-    expect(deps.capture).toHaveBeenCalledWith({ executable: "npm", args: ["root", "--global", "--prefix", "/opt/node"], env: deps.env });
+    expect(deps.capture).toHaveBeenCalledWith({ executable: "npm", args: ["root", "--global", "--prefix", resolve("/opt/node")], env: deps.env });
     expect(deps.run.mock.calls.map(([command]) => [command.executable, command.args])).toEqual([
-      ["npm", ["install", "--global", "--prefix", "/opt/node", "@jmfederico/pi-web@latest", "--allow-scripts=node-pty"]],
-      ["/tools/node", ["/opt/node/lib/node_modules/@jmfederico/pi-web/dist/cli.js", "restart"]],
+      ["npm", ["install", "--global", "--prefix", resolve("/opt/node"), "@jmfederico/pi-web@latest", "--allow-scripts=node-pty"]],
+      ["/tools/node", [join("/opt/node/lib/node_modules/@jmfederico/pi-web", "dist", "cli.js"), "restart"]],
     ]);
   });
 
@@ -309,7 +310,7 @@ describe("runPiWebUpdate", () => {
   });
 
   it("refuses a package nested inside a global package", async () => {
-    const deps = fixture({ ...globalInstall, path: `${globalInstall.path ?? ""}/nested` });
+    const deps = fixture({ ...globalInstall, path: join(globalInstall.path ?? "", "nested") });
     await expect(runPiWebUpdate(["--yes"], deps)).rejects.toThrow("does not match");
     expect(deps.run).not.toHaveBeenCalled();
   });
@@ -322,7 +323,7 @@ describe("runPiWebUpdate", () => {
       executable: "/tools/node", args: ["/owned/pi/dist/cli.js", "update", "--no-approve", "--extension", "npm:@jmfederico/pi-web"],
       env: { PATH: "/tools/bin", PI_CODING_AGENT_DIR: "/profiles/active agent" },
     }]);
-    expect(deps.run.mock.calls[1]?.[0].args).toEqual([`${piInstall.path ?? ""}/dist/cli.js`, "restart"]);
+    expect(deps.run.mock.calls[1]?.[0].args).toEqual([join(piInstall.path ?? "", "dist", "cli.js"), "restart"]);
   });
 
   it.each([{ scope: "project" as const }, { source: "/local/checkout" }, { source: "" }])("refuses unsafe Pi package metadata %j", async (override) => {
