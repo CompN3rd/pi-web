@@ -61,9 +61,9 @@ export type ChatImagePart =
   | (SessionMediaReference & { data?: never });
 
 export type ChatPart =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; displayText?: string }
   | ChatImagePart
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; text: string; displayText?: string }
   | { type: "skillInvocation"; name: string; location: string; content: string }
   | { type: "skillRead"; name: string; path: string; toolCallId?: string }
   | { type: "askUserRecord"; outcome: AskUserOutcome }

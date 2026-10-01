@@ -22,6 +22,7 @@ import {
   type EditToolDetails,
   type ExtensionUIDialogOptions,
   type ExtensionUIContext,
+  type MarkdownTransformer,
   type ModelRuntime,
   type ProjectTrustContext,
   type ProjectTrustEvent,
@@ -101,6 +102,7 @@ import {
   type SessionNotificationMutation,
 } from "./sessionNotificationStore.js";
 import { plainTextTheme } from "./plainTextTheme.js";
+import { projectTranscriptMarkdown } from "./transcriptMarkdown.js";
 import { SessionUnreadStore, type SessionUnreadMutation } from "./sessionUnreadStore.js";
 import { applyEnabledModelToggle, catalogWithEnabledFirst, modelScopeId, persistedEnabledModelPatterns, resolveEnabledModelIds, resolveSessionModelOptions, scopedModelsFromEnabledIds, type EnabledModelCatalogEntry } from "./sessionModelScope.js";
 
@@ -482,6 +484,7 @@ export interface PiAgentSession {
   pendingMessageCount: number;
   extensionRunner: {
     getRegisteredCommands(): readonly { invocationName: string; description?: string }[];
+    getMarkdownTransformers(): MarkdownTransformer[];
     getUIContext(): ExtensionUIContext;
     setUIContext(uiContext?: ExtensionUIContext, mode?: "rpc"): void;
   };
@@ -2373,6 +2376,12 @@ export class PiSessionService implements SessionRouteService {
     );
   }
 
+  private browserTranscriptMessage(session: PiAgentSession, message: unknown): unknown {
+    return projectTranscriptMarkdown(message, session.extensionRunner.getMarkdownTransformers(), (error, transformerIndex) => {
+      this.logger.info({ err: error, sessionId: session.sessionId, transformerIndex }, "Transcript Markdown transformer failed");
+    });
+  }
+
   async transcriptSnapshot(ref: PiSessionRef, page?: { limit?: number }): Promise<SessionTranscriptSnapshot> {
     const session = await this.getOrOpen(ref);
     const seqBeforeRead = this.events.currentSeq(session.sessionId);
@@ -2387,8 +2396,9 @@ export class PiSessionService implements SessionRouteService {
     const userCount = messages.filter((message) => isRecord(message) && message["role"] === "user").length;
     const echoes = (this.pendingPromptEchoes.get(session) ?? []).filter((echo) => echo.userIndex >= userCount);
     messages.push(...echoes.map((echo) => echo.message));
+    const messagePage = pageMessagesAtSafeBoundary(messages, page);
     return {
-      page: pageMessagesAtSafeBoundary(messages, page),
+      page: { ...messagePage, messages: messagePage.messages.map((message) => this.browserTranscriptMessage(session, message)) },
       status: this.statusFromSession(session, transcriptMessageCount(branch) + echoes.length),
       seq: this.events.currentSeq(session.sessionId),
       partial: this.publishedAssistantPartials.get(session) ?? null,
@@ -2397,7 +2407,8 @@ export class PiSessionService implements SessionRouteService {
 
   async messages(ref: PiSessionRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage> {
     const session = await this.getOrOpen(ref);
-    return pageMessagesAtSafeBoundary(historyMessagesFromEntries(await this.readableSessionBranch(ref, session)), page);
+    const result = pageMessagesAtSafeBoundary(historyMessagesFromEntries(await this.readableSessionBranch(ref, session)), page);
+    return { ...result, messages: result.messages.map((message) => this.browserTranscriptMessage(session, message)) };
   }
 
   async media(ref: PiSessionRef, mediaId: string): Promise<SessionMedia | undefined> {
@@ -2698,7 +2709,7 @@ export class PiSessionService implements SessionRouteService {
       // SDK input hooks may await before appending the user message. Keep the
       // already-published echo visible in snapshots until that append occurs.
       this.pendingPromptEchoes.set(session, [...echoes, echo]);
-      this.events.publish(session.sessionId, { type: "message.append", message: echo.message }, { id: session.sessionId, cwd: session.sessionManager.getCwd() });
+      this.events.publish(session.sessionId, { type: "message.append", message: this.browserTranscriptMessage(session, echo.message) }, { id: session.sessionId, cwd: session.sessionManager.getCwd() });
     }
     const promptOptions = buildPromptOptions(behavior, images);
     const commandName = text.startsWith("/") ? text.slice(1).split(" ")[0] : undefined;
@@ -4141,7 +4152,11 @@ export class PiSessionService implements SessionRouteService {
       } else if (eventType === "message_start" || eventType === "message_end" || eventType === "agent_end") {
         this.publishedAssistantPartials.delete(session);
       }
-      this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel), { id: session.sessionId, cwd: session.sessionManager.getCwd() });
+      const clientEvent = toClientEvent(event, session.thinkingLevel);
+      if ((clientEvent.type === "message.end" || clientEvent.type === "message.append") && clientEvent.message !== undefined) {
+        clientEvent.message = this.browserTranscriptMessage(session, clientEvent.message);
+      }
+      this.events.publish(session.sessionId, clientEvent, { id: session.sessionId, cwd: session.sessionManager.getCwd() });
       this.publishActivityForEvent(session, event);
       // Queued messages can reach the model after an ask opened, even though
       // there was no ask to dismiss when the user originally submitted them.
