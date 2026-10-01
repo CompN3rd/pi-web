@@ -1,5 +1,6 @@
 import { ASK_USER_ANSWERS_CUSTOM_TYPE } from "../../shared/apiTypes";
 import { parseAskUserOutcome } from "./api/parsers";
+import { isSessionMediaId } from "../../shared/sessionMedia";
 import type { ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./components/shared";
 
 export function normalizeMessages(messages: unknown[]): ChatLine[] {
@@ -50,7 +51,10 @@ export function appendThinking(messages: ChatLine[], text: string): ChatLine[] {
 }
 
 export function normalizeMessage(message: unknown): ChatLine[] {
-  if (isChatLine(message)) return [message];
+  if (isChatLine(message)) {
+    if (!message.parts.some((part) => getString(part, "type") === "image")) return [message];
+    return [{ ...message, parts: message.parts.flatMap((part) => getString(part, "type") === "image" ? normalizeImage(part) : [part]) }];
+  }
   if (getString(message, "role") === "bashExecution") return [withMessageMeta(normalizeBashExecution(message), message)];
   const rawRole = getString(message, "role");
   const role = normalizeRole(rawRole);
@@ -192,16 +196,28 @@ function normalizeContent(content: unknown, message: unknown): ChatPart[] {
       if (skillRead !== undefined) return [{ type: "skillRead", ...skillRead, ...(toolCallId === undefined ? {} : { toolCallId }) }];
       return [{ type: "toolCall", ...(toolCallId === undefined ? {} : { toolCallId }), toolName, summary: summarizeArgs(args), ...(args === undefined ? {} : { args }) }];
     }
-    if (type === "image") {
-      const data = getString(part, "data");
-      const mimeType = getString(part, "mimeType");
-      if (data !== undefined && data !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, data }];
-      return [{ type: "text", text: "[image]" }];
-    }
+    if (type === "image") return normalizeImage(part);
     return objectFallback(part);
   }).map((part) => part.type === "text" && getString(message, "role") === "toolResult"
     ? toolResultPartFromText(part.text, message)
     : part);
+}
+
+function normalizeImage(part: unknown): ChatPart[] {
+  const mimeType = getString(part, "mimeType");
+  const mediaId = getProperty(part, "mediaId");
+  if (mediaId !== undefined) {
+    const byteSize = getNumber(part, "byteSize");
+    if (isSessionMediaId(mediaId)
+      && mimeType !== undefined && /^image\/[a-z0-9][a-z0-9.+-]*$/iu.test(mimeType)
+      && byteSize !== undefined && Number.isSafeInteger(byteSize) && byteSize >= 0) {
+      return [{ type: "image", mediaId, mimeType, byteSize }];
+    }
+  } else {
+    const data = getString(part, "data");
+    if (data !== undefined && data !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, data }];
+  }
+  return [{ type: "text", text: "[image]" }];
 }
 
 function askUserRecordPart(message: unknown): Extract<ChatPart, { type: "askUserRecord" }> | undefined {

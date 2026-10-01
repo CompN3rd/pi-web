@@ -1,13 +1,15 @@
 import { LitElement, html } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
+import { keyed } from "lit/directives/keyed.js";
 import { ChatDisclosureController } from "../chatDisclosure";
+import { machineSessionKey } from "../machineKeys";
 import { groupChatMessages, summarizeChatGroup, type ChatGroup } from "../chatGroups";
 import { writeClipboardText } from "../clipboard";
 import { capturePrependScrollAnchor, PREPEND_RESTORE_SETTLE_FRAMES, restorePrependScrollAnchor, type PrependScrollAnchor } from "../chatScrollAnchoring";
 import { shouldRequestEarlierMessages } from "../chatHistoryLoading";
 import { ChatScrollController, distanceFromScrollBottom, findFirstVisibleArticle, isNearScrollBottom, type ChatAnchorScrollPosition, type ChatScrollRestoreResult } from "../chatScrollPosition";
-import type { AskUserSubmission, PendingAskUser, PendingExtensionDialog, QueuedSessionMessage, SessionActivity, SessionStatus, SessionWarningSeverity } from "../api";
+import type { AskUserSubmission, PendingAskUser, PendingExtensionDialog, QueuedSessionMessage, SessionActivity, SessionRef, SessionStatus, SessionWarningSeverity } from "../api";
 import type { ClosedExtensionDialog } from "../appState";
 import {
   notificationAnnouncementLabel,
@@ -35,6 +37,9 @@ import "./ConversationMeter";
 import "./FormattedText";
 import type { MarkdownWorkspaceContext } from "../formatting/workspaceLinks";
 import "./ToolExecutionView";
+import { transcriptImageSource } from "./TranscriptImage";
+import type { ImageOpenDetail } from "./ImagePresentation";
+import { ImageLayoutScrollController } from "./ImageLayoutScrollController";
 
 const messageTimestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
 const notificationTimestampFormatter = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
@@ -95,8 +100,8 @@ export function chatQueuedMessageSections(clientQueued: QueuedSessionMessage[], 
 export type ChatImagePart = Extract<ChatPart, { type: "image" }>;
 
 /** Derive the `<img>` source URL and alt text for a rendered image part. */
-export function chatImagePartSource(part: ChatImagePart): { src: string; alt: string } {
-  return { src: `data:${part.mimeType};base64,${part.data}`, alt: "attached image" };
+export function chatImagePartSource(part: ChatImagePart, session?: SessionRef, machineId = "local"): { src: string; alt: string } | undefined {
+  return transcriptImageSource(part, session, machineId);
 }
 
 /** The message-header label used when a tool message renders as an image output. */
@@ -187,6 +192,7 @@ function chatMessageModelLabel(message: ChatLine): string | undefined {
 export class ChatView extends LitElement {
   @property({ attribute: false }) messages: ChatLine[] = [];
   @property() sessionId = "";
+  @property() sessionCwd = "";
   @property({ attribute: false }) workspaceContext: MarkdownWorkspaceContext | undefined;
   @property({ attribute: false }) contentRendering: import("../formatting/contentRendering").ChatContentRendering | undefined;
   @property() machineId = "local";
@@ -234,6 +240,7 @@ export class ChatView extends LitElement {
   private imageZoomModalRegistration: RenderedModalRegistration | undefined;
   private readonly disclosures = new ChatDisclosureController();
   private readonly scrollController = new ChatScrollController();
+  private readonly imageLayoutScroll = new ImageLayoutScrollController(this.scrollController);
   private suppressScrollSave = false;
   private suppressLoadMoreRequests = false;
   private loadMoreCheckFrame: number | undefined;
@@ -258,7 +265,21 @@ export class ChatView extends LitElement {
     if (this.pinnedToBottom) this.scrollToBottom();
     else this.lastClientHeight = this.chat?.clientHeight ?? 0;
   };
-  private readonly onImageLoad = (): void => {
+  private imageLayoutScrollContext(image: unknown) {
+    return {
+      sessionKey: machineSessionKey(this.machineId, this.sessionId),
+      scroller: this.chat,
+      pinnedToBottom: this.pinnedToBottom,
+      imageViewport: image instanceof HTMLElement ? image : undefined,
+    };
+  }
+  private readonly onImageWillLayout = (event: Event): void => {
+    const image = event.composedPath()[0];
+    if (image !== undefined) this.imageLayoutScroll.capture(image, this.imageLayoutScrollContext(image), this.scrollAnchorElements());
+  };
+  private readonly onImageLayout = (event: Event): void => {
+    const image = event.composedPath()[0];
+    if (image !== undefined && this.imageLayoutScroll.restore(image, this.imageLayoutScrollContext(image), this.scrollAnchorElements())) this.syncScrollMetrics();
     if (this.pinnedToBottom) this.scrollToBottom();
   };
   private readonly openImageZoom = (src: string, alt: string): void => {
@@ -294,6 +315,7 @@ export class ChatView extends LitElement {
   override disconnectedCallback(): void {
     this.saveScrollPosition();
     this.scrollController.dispose();
+    this.imageLayoutScroll.reset();
     this.releaseImageZoomModal();
     this.prependRestoreToken += 1;
     if (this.restoreScrollFrame !== undefined) cancelAnimationFrame(this.restoreScrollFrame);
@@ -344,6 +366,7 @@ export class ChatView extends LitElement {
   }
 
   protected override willUpdate(changed: Map<string, unknown>): void {
+    if (changed.has("sessionId") || changed.has("machineId")) this.imageLayoutScroll.reset();
     if (changed.has("sessionId")) {
       this.savePreviousSessionScrollPosition(changed.get("sessionId"));
       this.prepareSessionUiState();
@@ -421,14 +444,19 @@ export class ChatView extends LitElement {
 
   override render() {
     const groups = this.groupedMessages();
+    // Keep incremental updates within one transcript, but dispose the whole
+    // repeat part when the transcript changes. Besides preventing cross-session
+    // DOM reuse, clearing the part reclaims the end markers that the current Lit
+    // build retains when repeat items are removed.
+    const transcriptIdentity = machineSessionKey(this.machineId, this.sessionId);
     return html`
       ${this.renderTopNotices()}
       ${this.renderNotificationLiveRegions()}
       <div class="chat-wrap">
         ${this.renderConversationRail()}
-        <div class="chat" @scroll=${() => { this.onScroll(); }} @wheel=${(event: WheelEvent) => { this.onWheel(event); }} @touchstart=${(event: TouchEvent) => { this.onTouchStart(event); }} @touchmove=${(event: TouchEvent) => { this.onTouchMove(event); }}>
+        <div class="chat" data-image-scroll-root @image-will-layout=${this.onImageWillLayout} @image-layout=${this.onImageLayout} @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }} @scroll=${() => { this.onScroll(); }} @wheel=${(event: WheelEvent) => { this.onWheel(event); }} @touchstart=${(event: TouchEvent) => { this.onTouchStart(event); }} @touchmove=${(event: TouchEvent) => { this.onTouchMove(event); }}>
           ${this.renderHistoryBoundary()}
-          ${repeat(
+          ${keyed(transcriptIdentity, repeat(
             groups,
             (group) => group.kind === "group" ? this.groupRenderKey(group.startIndex) : this.messageAnchorKey(group.index),
             (group, index) => {
@@ -436,7 +464,7 @@ export class ChatView extends LitElement {
               if (group.kind === "tool-image") return this.renderToolImageOutput(group.message, group.index, group.toolName);
               return this.renderMessage(group.message, group.index);
             },
-          )}
+          ))}
           ${this.renderQueuedMessages()}
           ${this.renderSessionActivity()}
           ${this.renderOpenAsk()}
@@ -677,9 +705,9 @@ export class ChatView extends LitElement {
     }
     const state = this.activityState();
     if (state === undefined) return null;
-    const active = state !== "idle" || this.activity?.phase === "active";
+    if (state === "idle" && this.activity?.phase !== "active") return null;
     return html`
-      <div class=${active ? "activity-dock active" : "activity-dock"} aria-live="polite">
+      <div class="activity-dock active" aria-live="polite">
         <span class="dot"></span>
         <span class="activity-text">${this.activityText(state)}</span>
       </div>
@@ -1020,8 +1048,9 @@ export class ChatView extends LitElement {
       ></ask-user-card>
     `;
     if (part.type === "image") {
-      const { src, alt } = chatImagePartSource(part);
-      return html`<img class="part chat-image" src=${src} alt=${alt} loading="lazy" role="button" tabindex="0" title="Click to enlarge" @load=${this.onImageLoad} @click=${() => { this.openImageZoom(src, alt); }} @keydown=${(event: KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); this.openImageZoom(src, alt); } }} />`;
+      return html`<pi-web-transcript-image class="part chat-image" .imagePart=${part}
+        .session=${{ id: this.sessionId, cwd: this.sessionCwd }} .machineId=${this.machineId}
+      ></pi-web-transcript-image>`;
     }
     if (part.type === "toolCall") return html`<div class="part tool-line">▶ ${part.toolName}<span class="summary">${part.summary}</span></div>`;
     if (part.type === "toolExecution") return html`<tool-execution-view class="part" .execution=${part}></tool-execution-view>`;
@@ -1041,6 +1070,7 @@ export class ChatView extends LitElement {
   }
 
   private onScroll() {
+    this.imageLayoutScroll.reset();
     this.requestLoadMoreIfNeeded();
     this.updatePinnedToBottomFromScroll();
     this.scheduleConversationRailUpdate();

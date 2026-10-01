@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { WebSocket, WebSocketServer } from "ws";
@@ -58,6 +59,47 @@ describe("machine-scoped session proxy routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true });
     expect(daemon.requests).toEqual([{ method: "GET", path: "/sessions?cwd=/repo", body: undefined }]);
+  });
+
+  it("forwards transcript snapshot queries and the atomic response unchanged", async () => {
+    const snapshot = { page: { start: 0, total: 0, messages: [] }, status: { sessionId: "session-1" }, seq: 12, partial: null };
+    daemon.respondWith({ statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify(snapshot) });
+    const response = await app.inject({ method: "GET", url: "/api/machines/local/sessions/session-1/transcript-snapshot?cwd=%2Frepo&limit=25" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(snapshot);
+    expect(daemon.requests).toEqual([{ method: "GET", path: "/sessions/session-1/transcript-snapshot?cwd=%2Frepo&limit=25", body: undefined }]);
+  });
+
+  it.each(["/api", "/api/machines/local"])("preserves binary image bytes and cache headers through %s", async (prefix) => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00, 0xc3, 0x28]);
+    daemon.respondWith({
+      statusCode: 200,
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(bytes.length),
+        "cache-control": "private, max-age=31536000, immutable",
+        "x-content-type-options": "nosniff",
+        "set-cookie": "must-not-cross=1",
+      },
+      body: bytes,
+    });
+    const path = `/sessions/s1/media/${"a".repeat(64)}?cwd=%2Frepo`;
+    const response = await app.inject({ url: `${prefix}${path}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload).toEqual(bytes);
+    expect(response.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
+    expect(response.headers["content-type"]).toBe("image/png");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(daemon.requests).toEqual([{ method: "GET", path, body: undefined }]);
+  });
+
+  it("preserves media error status and JSON error bodies", async () => {
+    daemon.respondWith({ statusCode: 404, headers: { "content-type": "application/json" }, body: JSON.stringify({ error: "Media not found" }) });
+    const response = await app.inject({ url: `/api/machines/local/sessions/s1/media/${"a".repeat(64)}?cwd=%2Frepo` });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "Media not found" });
+    expect(response.headers["cache-control"]).toBeUndefined();
   });
 
   it("forwards the machine status snapshot request to the daemon", async () => {
@@ -163,6 +205,14 @@ describe("machine-scoped session proxy routes", () => {
     expect(daemon.requests).toEqual([{ method: "DELETE", path: "/sessions/session-1", body: undefined }]);
   });
 
+  it("reports media transport failure rather than returning a successful image", async () => {
+    daemon.failWith(new Error("connection refused"));
+    const response = await app.inject({ url: `/api/machines/local/sessions/s1/media/${"a".repeat(64)}?cwd=%2Frepo` });
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({ error: "Session daemon unavailable: connection refused" });
+    expect(response.headers["cache-control"]).toBeUndefined();
+  });
+
   it("returns a 502 response when the daemon request fails", async () => {
     daemon.failWith(new Error("connection refused"));
 
@@ -189,7 +239,7 @@ describe("machine-scoped session proxy routes", () => {
 interface FakeSessionDaemonResponse {
   statusCode: number;
   headers: Record<string, string>;
-  body: string;
+  body: string | Buffer;
 }
 
 class FakeSessionDaemon {
@@ -219,11 +269,22 @@ class FakeSessionDaemon {
     this.queuedResponses.push(error);
   }
 
-  request(method: string, path: string, body?: unknown): Promise<FakeSessionDaemonResponse> {
+  request(method: string, path: string, body?: unknown) {
     this.requests.push({ method, path, body });
-    const queuedResponse = this.queuedResponses.shift();
-    if (queuedResponse instanceof Error) return Promise.reject(queuedResponse);
-    return Promise.resolve(queuedResponse ?? { statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ ok: true }) });
+    const response = this.takeResponse();
+    return Promise.resolve({ ...response, body: response.body.toString() });
+  }
+
+  requestStream(path: string) {
+    this.requests.push({ method: "GET", path, body: undefined });
+    const response = this.takeResponse();
+    return Promise.resolve({ ...response, body: Readable.from([response.body]) });
+  }
+
+  private takeResponse(): FakeSessionDaemonResponse {
+    const response = this.queuedResponses.shift();
+    if (response instanceof Error) throw response;
+    return response ?? { statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ ok: true }) };
   }
 
   connectWebSocket(path: string): WebSocket {

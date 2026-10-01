@@ -360,6 +360,15 @@ function fakeSessionDaemon(projects: ProjectService): SessionProxyDaemon & { clo
   registerProjectMutationRoutes(daemonApp, projects);
   return {
     close: () => daemonApp.close(),
+    requestStream: async (path) => {
+      sessionDaemonRequests.push({ method: "GET", path });
+      const response = await daemonApp.inject({ method: "GET", url: path });
+      return {
+        statusCode: response.statusCode,
+        headers: { "content-type": "application/json" },
+        body: Readable.from([response.rawPayload]),
+      };
+    },
     request: async (method, path, body) => {
       const captured = { method, path, ...(body === undefined ? {} : { body }) } satisfies CapturedSessionDaemonRequest;
       sessionDaemonRequests.push(captured);

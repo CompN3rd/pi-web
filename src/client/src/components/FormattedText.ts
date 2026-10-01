@@ -19,8 +19,8 @@ export class FormattedText extends LitElement {
     const content = this.contentRendering?.renderMarkdown({
       text: this.text,
       machineId: this.workspaceContext?.machineId ?? this.machineId,
-      toSafeHtml: (text) => toSafeMarkdownHtml(text, this.workspaceContext),
-    }, this.intentKey) ?? unsafeHTML(toSafeMarkdownHtml(this.text, this.workspaceContext));
+      toSafeHtml: (text) => toSafeMarkdownHtml(text, this.workspaceContext, this.intentKey),
+    }, this.intentKey) ?? unsafeHTML(toSafeMarkdownHtml(this.text, this.workspaceContext, this.intentKey));
     return html`<div class="formatted" dir="auto" @click=${this.onFormattedClick}>${content}</div>`;
   }
 

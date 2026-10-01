@@ -47,6 +47,7 @@ import {
   parseSessionStatus,
   parseSessionUnreadCatalogSnapshot,
   parseSessionStreamSnapshot,
+  parseSessionTranscriptSnapshot,
   parseSessionTreeForkResult,
   parseSessionTreeNavigateResult,
   parseSlashCommand,
@@ -57,7 +58,7 @@ import {
   parseWorkspaceTrustResponse,
   requireMachineStatusSnapshot,
 } from "./parsers";
-import { messagePath } from "./urls";
+import { messagePath, streamSnapshotPath, transcriptSnapshotPath } from "./urls";
 
 const machinePrefix = (machineId = "local") => `api/machines/${encodeURIComponent(machineId)}`;
 
@@ -248,7 +249,8 @@ export const sessionsApi = {
   deleteArchivedMany: (sessions: readonly SessionRef[], machineId = "local") => request(`${machinePrefix(machineId)}/sessions/bulk/delete-archived`, parseSessionBulkDeleteArchivedResponse, { method: "POST", body: sessionBulkMutationBody(sessions) }),
   messages: (session: SessionRef, options?: { limit?: number; before?: number }, machineId = "local") => request(messagePath(session, options, machineId), parseMessagePage),
   status: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "status", machineId), parseSessionStatus),
-  streamSnapshot: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "stream-snapshot", machineId), parseSessionStreamSnapshot),
+  streamSnapshot: (session: SessionRef, machineId = "local") => request(streamSnapshotPath(session, machineId), parseSessionStreamSnapshot),
+  transcriptSnapshot: (session: SessionRef, options?: { limit?: number }, machineId = "local") => request(transcriptSnapshotPath(session, options, machineId), parseSessionTranscriptSnapshot),
   clearQueue: (session: SessionRef, machineId = "local") => request(sessionPath(session, "queue/clear", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session) }),
   dismissWarning: (session: SessionRef, dismissId: string, machineId = "local") => request(sessionPath(session, "warnings/dismiss", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { dismissId }) }),
   submitAsk: (session: SessionRef, askId: string, submission: AskUserSubmission, machineId = "local") => request(sessionPath(session, "ask/submit", machineId), parseAskUserCloseResponse, { method: "POST", body: sessionBody(session, { askId, answers: submission.answers }) }),

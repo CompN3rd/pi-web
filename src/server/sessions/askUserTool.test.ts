@@ -1,13 +1,17 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { createAskUserToolDefinition, type AskUserInvocation } from "./askUserTool.js";
 import { PendingAskStore, PendingAskValidationError } from "./pendingAskStore.js";
+import { stubExtensionToolContext } from "./piSessionService.testSupport.js";
 
-function ctxFor(sessionId: string): ExtensionContext {
-  const sessionManager = { getSessionId: () => sessionId, getSessionFile: () => undefined };
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- test stub with the minimal surface the tool uses.
-  return { sessionManager } as unknown as ExtensionContext;
+function ctxFor(sessionId: string): ExtensionToolContext {
+  return stubExtensionToolContext({
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: () => undefined,
+    },
+  });
 }
 
 function firstText(content: readonly (TextContent | ImageContent)[]): string {

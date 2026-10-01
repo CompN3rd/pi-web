@@ -761,28 +761,43 @@ export class PiWebApp extends LitElement {
         }
         return;
       }
-      await this.loadPluginsForSelectedMachine();
+      // Machine/project loading may finish after navigation has selected a
+      // newer destination, including after switching away and back.
       if (!selectionNavigation.isCurrent()) return;
-      const route = resolveAppRoute(parsedRoute, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state)));
-      const unavailableToolRoute = parsedRoute.tool !== undefined && route.tool === undefined;
+      // Only resolving a `tool` route value needs plugin contributions. The
+      // project/workspace/session selection never does, so it restores while
+      // plugins load; a tool route waits for them only before finalization, so
+      // opening a session never waits on every plugin module over slow links.
+      const pluginsReady = this.loadPluginsForSelectedMachine();
+      // Awaited only for tool routes; the load reports its own failures.
+      pluginsReady.catch(() => undefined);
+      const route = resolveAppRoute({ ...parsedRoute, tool: undefined }, () => undefined);
       const unavailablePanelViewRoute = parsedRoute.view !== undefined && route.view === undefined;
       const restoredWorkspaceIdentity = workspaceRouteIdentity(route);
-      const finishOptions: WorkspaceRouteFinishOptions = {
+      const baseFinishOptions: WorkspaceRouteFinishOptions = {
         updateUrl,
         urlPublication,
-        unavailableToolRoute,
+        unavailableToolRoute: false,
         unavailablePanelViewRoute,
-        requestedTool: route.tool,
+        requestedTool: undefined,
         requestedRoute: parsedRoute,
         restoreSeq,
         navigation,
         ...(restoredWorkspaceIdentity === undefined ? {} : { restoredWorkspaceIdentity }),
       };
+      const resolveToolRoute = async (): Promise<WorkspaceRouteFinishOptions | undefined> => {
+        if (parsedRoute.tool === undefined) return baseFinishOptions;
+        await pluginsReady;
+        if (!this.isCurrentRouteRestore(restoreSeq, navigation)) return undefined;
+        const tool = resolveAppRoute(parsedRoute, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state))).tool;
+        this.setState({ workspaceTool: tool });
+        return { ...baseFinishOptions, unavailableToolRoute: tool === undefined, requestedTool: tool };
+      };
       // A newer surface may retire route finalization without retiring the
       // hierarchy load needed by that same workspace/session destination.
       if (this.isCurrentRouteRestore(restoreSeq, navigation)) {
         this.setState({
-          workspaceTool: route.tool,
+          ...(parsedRoute.tool === undefined ? { workspaceTool: undefined } : {}),
           mainView: restoredMainView ?? route.view ?? this.defaultRouteView(),
         });
       }
@@ -790,11 +805,13 @@ export class PiWebApp extends LitElement {
         const error = this.state.error;
         this.workspaces.clearSelection({ updateUrl: false });
         if (error !== "") this.setState({ error });
-        await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
+        const finishOptions = await resolveToolRoute();
+        if (finishOptions !== undefined) await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
         return;
       }
       if (this.routeMatchesCurrentSelection(route)) {
-        await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
+        const finishOptions = await resolveToolRoute();
+        if (finishOptions !== undefined) await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
         return;
       }
       const project = this.state.projects.find((p) => p.id === route.projectId);
@@ -838,7 +855,8 @@ export class PiWebApp extends LitElement {
       }
       if (selectionNavigation.isCurrent()) this.setContentError(parsedRoute, loadError ?? "");
       if (!this.isCurrentRouteRestore(restoreSeq, navigation)) return;
-      await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
+      const finishOptions = await resolveToolRoute();
+      if (finishOptions !== undefined) await this.finishWorkspaceRouteRestore(routeSurface, finishOptions);
     } finally {
       this.routeRestoreDepth = Math.max(0, this.routeRestoreDepth - 1);
       if (selectedMachineId(this.state) !== machineBeforeRestore) this.schedulePiWebStatusRefresh();
@@ -3342,7 +3360,7 @@ export class PiWebApp extends LitElement {
       this.notificationView = selectedNotificationView(state.selectedNotificationInbox);
     }
     return html`
-      <chat-view .contentRendering=${this.plugins.chatContentRendering} .machineId=${selectedMachineId(state)} @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${markdownWorkspaceContext(selectedMachineId(state), state.selectedWorkspace, session)} .sessionId=${session.id} .onMessageAction=${this.handleMessageAction} .messageActionsDisabled=${session.archived === true || state.sendingPrompts[session.id] === true || isSessionActive(state.status, state.activity)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .activity=${state.activity} .pendingAsk=${state.pendingAsk} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages}></chat-view>
+      <chat-view .contentRendering=${this.plugins.chatContentRendering} .machineId=${selectedMachineId(state)} @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${markdownWorkspaceContext(selectedMachineId(state), state.selectedWorkspace, session)} .sessionId=${session.id} .sessionCwd=${session.cwd} .onMessageAction=${this.handleMessageAction} .messageActionsDisabled=${session.archived === true || state.sendingPrompts[session.id] === true || isSessionActive(state.status, state.activity)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .activity=${state.activity} .pendingAsk=${state.pendingAsk} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages}></chat-view>
     `;
   }
 
