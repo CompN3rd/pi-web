@@ -169,8 +169,5 @@
       "./extensions"
     ],
     "image": "https://raw.githubusercontent.com/jmfederico/pi-web/main/docs/assets/pi-web-banner.png"
-  },
-  "overrides": {
-    "@earendil-works/pi-ai": "0.99.2"
   }
 }
