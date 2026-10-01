@@ -171,13 +171,26 @@
 <li><strong>Capabilities</strong> let a plugin declare the host or plugin functionality it requires. Dependencies must be available at the requested version before the plugin starts.</li>
 </ul>
 <p>Plugins declare contributions in <code>activate()</code>, initialize dependency-backed work in <code>start()</code>, and release resources in <code>dispose()</code>. Long-lived work follows the plugin&#39;s <code>lifetimeSignal</code>. Simple browser plugins only need to return their contributions.</p>
+<h3 id="tabs-without-a-workspace">Tabs without a workspace</h3>
+<p>Use <code>applicationPanels</code> for machine dashboards and other tabs that should remain usable before a project, workspace, or session is selected. They share the third-column tool tabs and existing navigation with <code>workspacePanels</code>; workspace panels still require a selected workspace.</p>
+<pre><code>activate: ({ html }) =&gt; ({
+  contributions: {
+    applicationPanels: [{
+      id: "dashboard",
+      title: "Dashboard",
+      render: (context) =&gt; html`&lt;p&gt;${context.machine.name}: ${context.state.selectedProject?.name ?? "No project selected"}&lt;/p&gt;`,
+    }],
+  },
+})</code></pre>
+<p><code>ApplicationPanelContext</code> supplies the current <code>machine</code>, basic selection <code>state</code>, <code>navigate</code>, <code>prompt</code>, and <code>host.requestRender()</code>. <code>state.selectedProject</code>, <code>state.selectedWorkspace</code>, and <code>state.selectedSession</code> are optional snapshots, refreshed as selections change without reactivating the plugin. <code>workspace</code> and its workspace-bound <code>terminal</code> are available only when a workspace is selected. Render callbacks may run repeatedly; an inactive tab need not stay mounted. Portable gateway panels follow the selected machine, while machine-specific panels use the existing per-machine availability rules.</p>
+<p>Browser API v4 remains unchanged. No capability requirement is needed for application panels. Older hosts may omit the tab silently; update PI WEB to use it. Current hosts warn at registration about unknown contribution names, attributing the warning to the plugin, and ignore them while keeping recognized contributions.</p>
 <h3 id="opening-workspace-files-from-chat">Opening workspace files from chat</h3>
 <p>Chat Markdown links to relative files (including <code>./file</code>) or absolute paths inside the session workspace open in the bundled Files panel. The link retains a download URL for modifier/new-tab clicks and when no panel accepts it. File access still uses server-side workspace containment checks.</p>
 <p>A workspace panel can opt in with <code>fileOpenQuery(context, path)</code>. This synchronous hook receives its contribution-scoped context and a decoded workspace-relative path; return a navigation query such as <code>{ file: path }</code>, or <code>undefined</code> to decline. Keep the hook free of side effects: the host opens the first accepting visible, enabled panel for the selected machine, ordered by panel <code>order</code> then title, and applies its namespaced query through normal panel navigation. The panel reads the selection from <code>context.navigation.query</code>; no Files-plugin dependency is required.</p>
 <h3 id="panel-and-tab-navigation">Panel and tab navigation</h3>
-<p>The URL's <code>view</code> selects a responsive panel: <code>navigation</code>, <code>chat</code>, or <code>workspace</code>. The independent <code>tool</code> parameter selects a workspace tab by contribution ID. Opening a workspace tool sets <code>view=workspace</code> and <code>tool</code> to its ID; switching to chat keeps the selected tool. Contribution IDs are not accepted in <code>view</code>. Browser plugins use <code>selectMainView("workspace")</code> to show the workspace panel without changing its selected tab, or <code>selectWorkspaceTool(panelId)</code> to select and show a particular tool.</p>
+<p>The URL's <code>view</code> selects a responsive panel: <code>navigation</code>, <code>chat</code>, or <code>workspace</code>. The independent <code>tool</code> parameter selects an application or workspace tab by contribution ID. Opening a workspace tool sets <code>view=workspace</code> and <code>tool</code> to its ID; switching to chat keeps the selected tool. Contribution IDs are not accepted in <code>view</code>. Browser plugins use <code>selectMainView("workspace")</code> to show the workspace panel without changing its selected tab, or <code>selectWorkspaceTool(panelId)</code> to select and show a particular tool.</p>
 <p>Invalid values remain in the URL rather than triggering a redirect. An invalid <code>view</code> shows a warning and displays navigation on mobile; on two-column layouts, navigation remains alongside a valid requested tool or, otherwise, chat. Desktop keeps its normal columns. A valid workspace view with an invalid tool shows an unavailable-tab message inside the workspace panel, without selecting another tab or adding a duplicate warning. Omitted parameters use defaults and are not errors.</p>
-<p>Action and workspace-panel contexts expose <code>navigate(destination): Promise&lt;void&gt;</code> for complete destinations:</p>
+<p>Action, application-panel, and workspace-panel contexts expose <code>navigate(destination): Promise&lt;void&gt;</code> for complete destinations. For a selected workspace:</p>
 <pre><code>await context.navigate({
   machineId: context.machine.id,
   projectId: context.workspace.projectId,
@@ -252,7 +265,7 @@ ln -s /path/to/plugin-folder ~/.pi-web/plugins/my-plugin</code></pre></div>
 <li><strong>Files</strong> supplies file browsing, previews, and uploads. Disabling its panel does not remove other plugins&#39; file helpers.</li>
 <li><strong>Git</strong> discovers Git workspaces and provides status/diff. Disabling it leaves the project-folder workspace available unless another provider takes over.</li>
 <li><strong>Mermaid</strong> uses the default manual mode: choose <strong>Render</strong> to preview <code>mermaid</code> fences and <code>.mmd</code>/<code>.mermaid</code> text files. Its bundled engine runs locally in an opaque-origin sandbox with network access blocked; no diagram service receives your source. Interactive links and external resources are intentionally unavailable. Disable Mermaid in plugin Settings to keep plain code rendering. Only a browser reload is needed after changing this browser-only plugin.</li>
-<li><strong>Info</strong> displays PI WEB status and copyable diagnostics.</li>
+<li><strong>Info</strong> displays machine and PI WEB status without requiring a workspace, adds workspace details when selected, and provides copyable diagnostics.</li>
 <li><strong>Updates</strong> shows update/restart guidance when relevant and offers a manual update check.</li>
 <li><strong>Workspace Tasks</strong> turns project commands into runnable buttons.</li>
 </ul>

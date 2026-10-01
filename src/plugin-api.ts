@@ -157,6 +157,7 @@ export interface ContentRenderingCapability {
 export interface PluginContributions {
   contentRenderers?: ContentRendererContribution[];
   actions?: PluginAction[];
+  applicationPanels?: ApplicationPanelContribution[];
   workspacePanels?: WorkspacePanelContribution[];
   workspaceLabels?: WorkspaceLabelContribution[];
   themes?: ThemeContribution[];
@@ -167,6 +168,13 @@ export interface PluginMachine {
   id: string;
   name: string;
   kind: MachineKind;
+}
+
+/** Basic registered project information on the selected machine. */
+export interface PluginProject {
+  readonly id: string;
+  readonly name: string;
+  readonly path: string;
 }
 
 /** Selected conversation snapshot, scoped to PluginRuntimeState.selectedMachine. */
@@ -183,6 +191,7 @@ export interface PluginSelectedSession {
 export interface PluginRuntimeState {
   /** Identity of the currently selected machine. Undefined only on older hosts or before machines load. */
   selectedMachine?: PluginMachine;
+  selectedProject?: PluginProject;
   selectedWorkspace?: Workspace;
   selectedSession?: PluginSelectedSession;
   workspaceTool?: string;
@@ -418,6 +427,31 @@ export interface WorkspacePanelContext extends WorkspaceContext {
   terminal: WorkspacePanelTerminal;
   /** Contribution-scoped address-bar state for deep links and browser history. */
   navigation?: WorkspacePanelNavigationV1;
+}
+
+/** Fresh selection context; available even when no project, workspace, or session is selected. */
+export interface ApplicationPanelContext {
+  machine: PluginMachine;
+  state: PluginRuntimeState;
+  /** Present only when a workspace is selected on this machine. */
+  workspace?: Workspace;
+  /** Workspace-bound terminal; absent without a selected workspace. */
+  terminal?: WorkspacePanelTerminal;
+  navigate: (destination: PluginNavigationDestination) => Promise<void>;
+  prompt: PluginPromptEditor;
+  host: WorkspaceHost;
+}
+
+/** A third-column tool tab that does not require a workspace. */
+export interface ApplicationPanelContribution {
+  id: LocalContributionId;
+  title: string;
+  icon?: TemplateResult;
+  order?: number;
+  routeAliases?: string[];
+  visible?: (context: ApplicationPanelContext) => boolean;
+  badge?: (context: ApplicationPanelContext) => string | number | TemplateResult | undefined;
+  render: (context: ApplicationPanelContext) => TemplateResult;
 }
 
 export type WorkspacePanelIcon = TemplateResult;

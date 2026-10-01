@@ -47,6 +47,26 @@ A plugin package declares a browser entry, a server entry, or both:
 
 Plugins declare contributions in `activate()`, initialize dependency-backed work in `start()`, and release resources in `dispose()`. Long-lived work follows the plugin's `lifetimeSignal`. Simple browser plugins only need to return their contributions.
 
+### Tabs without a workspace
+
+Use `applicationPanels` for machine dashboards and other tabs that should remain usable before a project, workspace, or session is selected. They share the third-column tool tabs and existing navigation with `workspacePanels`; workspace panels still require a selected workspace.
+
+```ts
+activate: ({ html }) => ({
+  contributions: {
+    applicationPanels: [{
+      id: "dashboard",
+      title: "Dashboard",
+      render: (context) => html`<p>${context.machine.name}: ${context.state.selectedProject?.name ?? "No project selected"}</p>`,
+    }],
+  },
+})
+```
+
+`ApplicationPanelContext` supplies the current `machine`, basic selection `state`, `navigate`, `prompt`, and `host.requestRender()`. `state.selectedProject`, `state.selectedWorkspace`, and `state.selectedSession` are optional snapshots, refreshed as selections change without reactivating the plugin. `workspace` and its workspace-bound `terminal` are available only when a workspace is selected. Render callbacks may run repeatedly; an inactive tab need not stay mounted. Portable gateway panels follow the selected machine, while machine-specific panels use the existing per-machine availability rules.
+
+Browser API v4 remains unchanged. No capability requirement is needed for application panels. Older hosts may omit the tab silently; update PI WEB to use it. Current hosts warn at registration about unknown contribution names, attributing the warning to the plugin, and ignore them while keeping recognized contributions.
+
 ### Opening workspace files from chat
 
 Chat Markdown links to relative files (including `./file`) or absolute paths inside the session workspace open in the bundled Files panel. The link retains a download URL for modifier/new-tab clicks and when no panel accepts it. File access still uses server-side workspace containment checks.
@@ -55,11 +75,11 @@ A workspace panel can opt in with `fileOpenQuery(context, path)`. This synchrono
 
 ### Panel and tab navigation
 
-The URL's `view` selects a responsive panel: `navigation`, `chat`, or `workspace`. The independent `tool` parameter selects a workspace tab by contribution ID. Opening a workspace tool sets `view=workspace` and `tool` to its ID; switching to chat keeps the selected tool. Contribution IDs are not accepted in `view`. Browser plugins use `selectMainView("workspace")` to show the workspace panel without changing its selected tab, or `selectWorkspaceTool(panelId)` to select and show a particular tool.
+The URL's `view` selects a responsive panel: `navigation`, `chat`, or `workspace`. The independent `tool` parameter selects an application or workspace tab by contribution ID. Opening a workspace tool sets `view=workspace` and `tool` to its ID; switching to chat keeps the selected tool. Contribution IDs are not accepted in `view`. Browser plugins use `selectMainView("workspace")` to show the workspace panel without changing its selected tab, or `selectWorkspaceTool(panelId)` to select and show a particular tool.
 
 Invalid values remain in the URL rather than triggering a redirect. An invalid `view` shows a warning and displays navigation on mobile; on two-column layouts, navigation remains alongside a valid requested tool or, otherwise, chat. Desktop keeps its normal columns. A valid workspace view with an invalid tool shows an unavailable-tab message inside the workspace panel, without selecting another tab or adding a duplicate warning. Omitted parameters use defaults and are not errors.
 
-Action and workspace-panel contexts expose `navigate(destination): Promise<void>` for complete destinations:
+Action, application-panel, and workspace-panel contexts expose `navigate(destination): Promise<void>` for complete destinations. For a selected workspace:
 
 ```ts
 await context.navigate({
@@ -153,7 +173,7 @@ Keep gateways and targets compatible. During this plugin API transition, upgrade
 - **Files** supplies file browsing, previews, and uploads. Disabling its panel does not remove other plugins' file helpers.
 - **Git** discovers Git workspaces and provides status/diff. Disabling it leaves the project-folder workspace available unless another provider takes over.
 - **Mermaid** uses the default manual mode: choose **Render** to preview `mermaid` fences and `.mmd`/`.mermaid` text files. Its bundled engine runs locally in an opaque-origin sandbox with network access blocked; no diagram service receives your source. Interactive links and external resources are intentionally unavailable. Disable Mermaid in plugin Settings to keep plain code rendering. Only a browser reload is needed after changing this browser-only plugin.
-- **Info** displays PI WEB status and copyable diagnostics.
+- **Info** displays machine and PI WEB status without requiring a workspace, adds workspace details when selected, and provides copyable diagnostics.
 - **Updates** shows update/restart guidance when relevant and offers a manual update check.
 - **Workspace Tasks** turns project commands into runnable buttons.
 

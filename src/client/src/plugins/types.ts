@@ -78,6 +78,7 @@ export interface PluginActivationResult {
 export interface PluginContributions {
   contentRenderers?: import("../../../plugin-api").ContentRendererContribution[];
   actions?: PluginAction[];
+  applicationPanels?: ApplicationPanelContribution[];
   workspacePanels?: WorkspacePanelContribution[];
   workspaceLabels?: WorkspaceLabelContribution[];
   themes?: ThemeContribution[];
@@ -282,6 +283,35 @@ export interface WorkspacePanelContext extends WorkspaceContext {
   terminal: WorkspacePanelTerminal;
   /** Contribution-scoped address-bar state for deep links and browser history. */
   navigation?: WorkspacePanelNavigationV1;
+}
+
+export interface ApplicationPanelContext {
+  machine: PluginMachine;
+  state: AppState;
+  workspace?: Workspace;
+  terminal?: WorkspacePanelTerminal;
+  navigate: (destination: import("../../../plugin-api").PluginNavigationDestination) => Promise<void>;
+  prompt: PluginPromptEditor;
+  host: WorkspaceHost;
+}
+
+export interface ApplicationPanelContribution {
+  id: LocalContributionId;
+  title: string;
+  icon?: TemplateResult;
+  order?: number;
+  routeAliases?: string[];
+  visible?: (context: ApplicationPanelContext) => boolean;
+  badge?: (context: ApplicationPanelContext) => string | number | TemplateResult | undefined;
+  render: (context: ApplicationPanelContext) => TemplateResult;
+}
+
+export interface QualifiedApplicationPanelContribution extends ApplicationPanelContribution {
+  id: QualifiedContributionId;
+  pluginId: PluginId;
+  localId: LocalContributionId;
+  machineId?: string;
+  sourcePluginId?: PluginId;
 }
 
 export type WorkspacePanelIcon = TemplateResult;
