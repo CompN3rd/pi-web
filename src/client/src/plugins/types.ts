@@ -1,4 +1,5 @@
 import type { TemplateResult } from "lit";
+import type { PluginSelectionService } from "../../../plugin-api";
 import type { AppAction } from "../actions";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
@@ -57,6 +58,7 @@ export interface PluginActivationContext {
   readonly signal: AbortSignal;
   /** Aborted before failed-start rollback or browser-host shutdown disposal. */
   readonly lifetimeSignal: AbortSignal;
+  readonly selection?: PluginSelectionService;
 }
 
 export interface PluginCapabilityResolver {

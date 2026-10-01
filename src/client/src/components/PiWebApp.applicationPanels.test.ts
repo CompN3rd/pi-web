@@ -2,7 +2,7 @@
 
 import { LitElement, html } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ApplicationPanelContext, PiWebPlugin, PiWebStatusResponse, WorkspacePanelTerminal } from "../../../plugin-api";
+import type { ApplicationPanelContext, PiWebPlugin, PiWebStatusResponse, PluginSelectionService, WorkspacePanelTerminal } from "../../../plugin-api";
 import infoPlugin from "../../../../pi-web-plugins/info/pi-web-plugin";
 import updatesPlugin from "../../../../pi-web-plugins/updates/pi-web-plugin";
 import type { RequiredTerminalBrowserComposition, RequiredTerminalBrowserFacadeV1 } from "../plugins/requiredTerminalFacade";
@@ -117,6 +117,85 @@ it("gives public callbacks fresh basic selections and keeps workspace-only tabs 
   contexts.at(-1)?.host.requestRender();
   await settle(app);
   expect(contexts.at(-1)).not.toBe(context);
+});
+
+it("supplies an external plugin live selection while its panel is closed, with early and lifetime unsubscribe", async () => {
+  let selection: PluginSelectionService | undefined;
+  const received = vi.fn();
+  const early = vi.fn();
+  let unsubscribe: () => void = () => undefined;
+  const render = vi.fn(() => html`<p>Selection observer</p>`);
+  const activate = vi.fn<PiWebPlugin["activate"]>((context) => {
+    expect(context.apiVersion).toBe(4);
+    selection = context.selection;
+    if (selection === undefined) throw new Error("Missing public selection service");
+    selection.subscribe(received);
+    unsubscribe = selection.subscribe(early);
+    return { contributions: { applicationPanels: [
+      { id: "workspace.selection", title: "Selection", render },
+      { id: "other", title: "Other", render: () => html`<p>Other tab</p>` },
+    ] } };
+  });
+  const app = await mount({ apiVersion: 4, name: "Selection observer", activate }, {
+    id: "selection", state: { workspaceTool: "selection:other" },
+  });
+  expect(selection?.getSnapshot()).toEqual({});
+  expect(received).not.toHaveBeenCalled(); // subscribe is not an initial notification.
+  expect(toolSurface(app).shadowRoot?.textContent).toContain("Other tab");
+  expect(render).not.toHaveBeenCalled();
+
+  patchState(app, { selectedMachine: remote });
+  expect(selection?.getSnapshot().selectedMachine).toEqual({ id: "remote", name: "Remote box", kind: "remote" });
+  await settle(app);
+  expect(received).toHaveBeenLastCalledWith({ selectedMachine: { id: "remote", name: "Remote box", kind: "remote" } });
+  unsubscribe();
+  unsubscribe();
+  patchState(app, { selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace] });
+  await settle(app);
+  expect(received).toHaveBeenLastCalledWith({
+    selectedMachine: { id: "remote", name: "Remote box", kind: "remote" },
+    selectedProject: { id: "project", name: "Project", path: "/repo" },
+    selectedWorkspace: { id: "workspace", projectId: "project", path: "/repo", label: "main", isMain: true },
+  });
+  expect(early).toHaveBeenCalledOnce();
+
+  const session = { id: "session", name: "Conversation", cwd: "/repo", path: "/private/session.jsonl",
+    created: "now", modified: "now", messageCount: 1, firstMessage: "private" };
+  // Exercise the same state commit used by host controllers, not a service-only publish.
+  const setState: unknown = Reflect.get(app, "setState");
+  if (typeof setState !== "function") throw new Error("Expected host state commit");
+  Reflect.apply(setState, app, [{ selectedSession: session }]);
+  expect(selection?.getSnapshot().selectedSession).toEqual({ id: "session", name: "Conversation", cwd: "/repo", archived: false, pending: false });
+  await settle(app);
+  expect(received).toHaveBeenLastCalledWith(expect.objectContaining({
+    selectedSession: { id: "session", name: "Conversation", cwd: "/repo", archived: false, pending: false },
+  }));
+  patchState(app, { selectedSession: { ...session, name: "Renamed", archived: true } });
+  await settle(app);
+  expect(selection?.getSnapshot().selectedSession).toEqual({ id: "session", name: "Renamed", cwd: "/repo", archived: true, pending: false });
+  const notifications = received.mock.calls.length;
+  patchState(app, { error: "Unrelated update", mainView: "chat", piWebStatus: updatesStatus });
+  await settle(app);
+  expect(received).toHaveBeenCalledTimes(notifications);
+  expect(selection?.getSnapshot()).not.toHaveProperty("mainView");
+  expect(selection?.getSnapshot()).not.toHaveProperty("piWebStatus");
+  expect(render).not.toHaveBeenCalled();
+
+  patchState(app, { selectedMachine: undefined, selectedProject: undefined, selectedWorkspace: undefined, selectedSession: undefined });
+  await settle(app);
+  expect(received).toHaveBeenLastCalledWith({});
+  toolSurface(app).shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Selection"]')?.click();
+  await settle(app);
+  expect(render).toHaveBeenCalled();
+  expect(activate).toHaveBeenCalledOnce();
+  const beforeShutdown = received.mock.calls.length;
+  app.remove(); // Real host disconnect aborts the plugin lifetime before disposal.
+  const late = vi.fn();
+  selection?.subscribe(late);
+  patchState(app, { selectedMachine: remote });
+  registryFor(app).notifySelectionChanged();
+  expect(received).toHaveBeenCalledTimes(beforeShutdown);
+  expect(late).not.toHaveBeenCalled();
 });
 
 it("opens an application tab through existing navigation without a workspace and retains invalid-tool errors", async () => {

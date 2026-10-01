@@ -1,5 +1,6 @@
 import { html, svg } from "lit";
-import type { ContentRenderRequest } from "../../../plugin-api";
+import type { ContentRenderRequest, PluginSelectionSnapshot } from "../../../plugin-api";
+import { PluginSelectionHost } from "./selection";
 import { compareContentRenderers, contentRendererMatches, snapshotContentRenderer, type ContentRendererChoice, type RegisteredContentRenderer } from "./contentRenderers";
 import { createContentRenderingService, contentRenderingCapabilityToken } from "../formatting/contentRendering";
 import { requirePluginBackendRevision } from "../../../shared/pluginBackendProtocol";
@@ -20,6 +21,8 @@ const applicationPanelScopes = new WeakMap<ApplicationPanelContext, (pluginId: s
 const workspaceLabelScopes = new WeakMap<WorkspaceLabelContext, (binding: WorkspacePluginBinding) => WorkspaceLabelContext>();
 
 export interface PluginRegistryOptions {
+  /** Live public selection projection; standalone registries default to no selection. */
+  getSelection?: () => PluginSelectionSnapshot;
   /** Host lifecycle gate for the machine a contribution will act against. */
   isContributionEnabled?: (pluginId: string, effectiveMachineId: string | undefined) => boolean;
   /** Cooperative deadline applied independently to activate, start, and dispose. */
@@ -142,10 +145,12 @@ export class PluginRegistry {
   private stagedPlugins: StagedBrowserPlugin[] = [];
   private registrationTail: Promise<void> = Promise.resolve();
   private readonly lifecycleTimeoutMs: number;
+  private readonly selection: PluginSelectionHost;
   private shuttingDown = false;
   private disposePromise: Promise<void> | undefined;
 
   constructor(private readonly options: PluginRegistryOptions = {}) {
+    this.selection = new PluginSelectionHost(options.getSelection ?? (() => ({})));
     this.lifecycleTimeoutMs = positiveInteger(options.lifecycleTimeoutMs, DEFAULT_LIFECYCLE_TIMEOUT_MS, "lifecycleTimeoutMs");
     for (const provision of snapshotCapabilityProvisions([{ capability: contentRenderingCapabilityToken, value: this.contentRendering }, ...(options.hostCapabilities ?? [])], undefined, "Browser host capability provisions")) {
       const internal = internalCapabilityProvision(provision);
@@ -154,6 +159,11 @@ export class PluginRegistry {
       }
       this.hostCapabilitiesByKey.set(internal.key, internal);
     }
+  }
+
+  /** Publish host selection changes independently of contribution rendering. */
+  notifySelectionChanged(): void {
+    this.selection.notifyChanged();
   }
 
   /** Registers one plugin as a serialized single-entry batch and throws its attributed failure. */
@@ -357,6 +367,7 @@ export class PluginRegistry {
           svg,
           signal,
           lifetimeSignal: lifetimeController.signal,
+          selection: this.selection.forPlugin(registration.id, lifetimeController.signal),
         })),
       );
       rollbackDispose = activationDisposeForRollback(activationValue);

@@ -64,6 +64,8 @@ export interface PluginActivationContext {
   readonly signal: AbortSignal;
   /** Aborted before failed-start rollback or browser-host shutdown disposal. */
   readonly lifetimeSignal: AbortSignal;
+  /** Current browser selection, independent of panel mounting. Omitted by older hosts. */
+  readonly selection?: PluginSelectionService;
 }
 
 /** Resolver containing only the exact capability requirements declared by a plugin. */
@@ -186,6 +188,27 @@ export interface PluginSelectedSession {
   archived: boolean;
   /** True while the browser is waiting for session creation to finish. */
   pending: boolean;
+}
+
+/** Basic selection only; no transcript, route query, or status data. */
+export interface PluginSelectionSnapshot {
+  /** Undefined before machines load. */
+  readonly selectedMachine?: Readonly<PluginMachine>;
+  readonly selectedProject?: PluginProject;
+  readonly selectedWorkspace?: Readonly<Workspace>;
+  readonly selectedSession?: Readonly<PluginSelectedSession>;
+}
+
+export interface PluginSelectionService {
+  /** Read a fresh, detached snapshot synchronously. */
+  getSnapshot(): PluginSelectionSnapshot;
+  /**
+   * Notify after host UI commits that change basic selection; does not call immediately.
+   * Multiple changes within one commit may be coalesced.
+   * Works while panels are closed. Ends at plugin lifetime abort, or earlier via
+   * the returned idempotent unsubscribe. Subscriber failures are logged in isolation.
+   */
+  subscribe(listener: (snapshot: PluginSelectionSnapshot) => void | Promise<void>): () => void;
 }
 
 export interface PluginRuntimeState {

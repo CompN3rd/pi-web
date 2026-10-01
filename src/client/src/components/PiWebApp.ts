@@ -37,6 +37,7 @@ import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemeP
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
+import { publicPluginSelection } from "../plugins/publicContext";
 import { REQUIRED_TERMINAL_PLUGIN_ID, type TerminalPluginMode } from "../../../shared/requiredTerminalPlugin";
 import { PluginRegistry, installApplicationPanelScope, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope, type BrowserPluginLifecyclePhase, type PluginRegistrationFailure } from "../plugins/registry";
 import { createPluginPeer } from "../plugins/pluginPeer";
@@ -302,8 +303,10 @@ export class PiWebApp extends LitElement {
   private remoteRouteRestoreTimer: number | undefined;
   private remoteRouteRestoreAttempt = 0;
   private remoteRouteRestoreInProgress = false;
-  private readonly plugins = createPluginRegistry((pluginId, machineId) =>
-    this.pluginContributionAvailable(pluginId, machineId));
+  private readonly plugins = new PluginRegistry({
+    isContributionEnabled: (pluginId, machineId) => this.pluginContributionAvailable(pluginId, machineId),
+    getSelection: () => publicPluginSelection(this.state),
+  });
   private readonly builtInPluginsReady = this.plugins.registerBatch([
     { id: "core", plugin: corePlugin },
     { id: "themes", plugin: themePackPlugin },
@@ -380,6 +383,7 @@ export class PiWebApp extends LitElement {
     // deduplicates acknowledgements for the observed completion order.
     this.committedChatIdentity = selectedChatIdentity(this.state);
     this.syncSelectedSessionReadState();
+    this.plugins.notifySelectionChanged();
   }
 
   private syncSessionWarningVisibility(): void {
@@ -3596,10 +3600,6 @@ function modelValueFromStatus(status: AppState["status"]): string | undefined {
   const provider = status?.model?.provider;
   const id = status?.model?.id;
   return provider !== undefined && id !== undefined ? `${provider}/${id}` : undefined;
-}
-
-function createPluginRegistry(isContributionEnabled: (pluginId: string, machineId: string | undefined) => boolean): PluginRegistry {
-  return new PluginRegistry({ isContributionEnabled });
 }
 
 function coreWorkspacePluginBinding(): WorkspacePluginBinding {

@@ -1,9 +1,9 @@
-import type { PluginRuntimeState } from "../../../plugin-api";
+import type { PluginRuntimeState, PluginSelectionSnapshot } from "../../../plugin-api";
 import type { AppState } from "../appState";
 import type { PiWebPlugin } from "./types";
 
-/** Copy only documented state; plugins never receive the selected SessionInfo object. */
-export function publicPluginState(state: AppState): PluginRuntimeState {
+/** Copy only documented selection; plugins never receive the selected SessionInfo object. */
+export function publicPluginSelection(state: AppState): PluginSelectionSnapshot {
   const session = state.selectedSession;
   const machine = state.selectedMachine;
   const project = state.selectedProject;
@@ -23,6 +23,12 @@ export function publicPluginState(state: AppState): PluginRuntimeState {
       archived: session.archived === true,
       pending: "clientPendingStart" in session && session.clientPendingStart === true,
     } }),
+  };
+}
+
+export function publicPluginState(state: AppState): PluginRuntimeState {
+  return {
+    ...publicPluginSelection(state),
     ...(state.workspaceTool === undefined ? {} : { workspaceTool: state.workspaceTool }),
     mainView: state.mainView,
     ...(state.piWebStatus === undefined ? {} : { piWebStatus: state.piWebStatus }),

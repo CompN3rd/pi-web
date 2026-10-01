@@ -65,7 +65,27 @@ activate: ({ html }) => ({
 
 `ApplicationPanelContext` supplies the current `machine`, basic selection `state`, `navigate`, `prompt`, and `host.requestRender()`. `state.selectedProject`, `state.selectedWorkspace`, and `state.selectedSession` are optional snapshots, refreshed as selections change without reactivating the plugin. `workspace` is available only when a workspace is selected; its workspace-bound `terminal` is supplied only when that machine also has an available Terminal provider (not in Terminal-disabled recovery mode). Render callbacks may run repeatedly; an inactive tab need not stay mounted. Portable gateway panels follow the selected machine, while machine-specific panels use the existing per-machine availability rules.
 
-Browser API v4 remains unchanged. No capability requirement is needed for application panels. Older hosts may omit the tab silently; update PI WEB to use it. Current hosts warn at registration about unknown contribution names, attributing the warning to the plugin, and ignore them while keeping recognized contributions.
+### Follow selection while a tab is closed
+
+Capture `selection` from the public activation context to observe basic machine, project, workspace, and session information independently of panel mounting. `getSnapshot()` reads the current selection synchronously. `subscribe(listener)` reports changes after the host commits its UI state; several changes in one commit may be coalesced. It does not call the listener immediately, and unrelated status updates, tool changes, and route queries are not selection notifications. Snapshots are detached from host state and other subscribers; they contain no transcript or private session-file path.
+
+```ts
+export default {
+  apiVersion: 4,
+  name: "Selection observer",
+  activate: ({ selection }) => {
+    console.log("Current selection", selection?.getSnapshot());
+    const unsubscribe = selection?.subscribe((snapshot) => {
+      console.log("Selection changed", snapshot.selectedMachine?.name, snapshot.selectedProject?.path);
+    });
+    return { contributions: {}, dispose: () => unsubscribe?.() };
+  },
+};
+```
+
+The returned unsubscribe function is idempotent and can be called as soon as observation is no longer needed. The host also stops subscriptions when the plugin lifetime ends, including failed activation/start rollback; retaining the service cannot start a new subscription after that point. A throwing or rejected subscriber is logged with its plugin identity without blocking other subscribers. For rendering alone, use the panel's fresh `state` instead of subscribing. `selection` is optional on older hosts; update PI WEB when the service is needed.
+
+Browser API v4 remains unchanged. No capability requirement is needed for application panels or selection observation. Older hosts may omit the tab silently; update PI WEB to use it. Current hosts warn at registration about unknown contribution names, attributing the warning to the plugin, and ignore them while keeping recognized contributions.
 
 ### Opening workspace files from chat
 
