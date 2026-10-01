@@ -1,58 +1,93 @@
-import { describe, expect, it } from "vitest";
-import { getBuiltinExtensionFactories } from "./builtinExtensionFactories.js";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-function isInlineExtensionObject(
-  input: unknown,
-): input is { name: string; factory: (pi: unknown) => void | Promise<void> } & {
-  builtin?: boolean;
-  replaceable?: boolean;
-} {
-  if (
-    typeof input !== "object" ||
-    input === null ||
-    !("name" in input) ||
-    !("factory" in input)
-  ) {
-    return false;
-  }
-  const factoryValue = Reflect.get(input, "factory");
-  return typeof factoryValue === "function";
+beforeEach(() => {
+  vi.resetModules();
+});
+
+afterEach(() => {
+  vi.doUnmock("@earendil-works/pi-coding-agent");
+  vi.resetModules();
+});
+
+async function loadFactories(sdkExports: Record<string, unknown> = {}) {
+  // Undefined exports model older SDK namespaces; non-function values model
+  // the untyped runtime boundary independently of our development SDK types.
+  vi.doMock("@earendil-works/pi-coding-agent", () => ({
+    createMcpExtension: undefined,
+    createCodemodeExtension: undefined,
+    createToolSearchExtension: undefined,
+    ...sdkExports,
+  }));
+  return (await import("./builtinExtensionFactories.js")).getBuiltinExtensionFactories;
+}
+
+function builtinCreators() {
+  const mcp: ExtensionFactory = () => undefined;
+  const codemode: ExtensionFactory = () => undefined;
+  const toolSearch: ExtensionFactory = () => undefined;
+  return {
+    factories: { mcp, codemode, toolSearch },
+    exports: {
+      createMcpExtension: vi.fn(() => mcp),
+      createCodemodeExtension: vi.fn(() => codemode),
+      createToolSearchExtension: vi.fn(() => toolSearch),
+    },
+  };
 }
 
 describe("getBuiltinExtensionFactories", () => {
-  it("returns an array of InlineExtension entries", async () => {
-    const factories = await getBuiltinExtensionFactories();
-    expect(Array.isArray(factories)).toBe(true);
+  it("registers the available builtins as named, replaceable extensions", async () => {
+    const { factories, exports } = builtinCreators();
+    const getFactories = await loadFactories(exports);
+
+    expect(await getFactories()).toEqual([
+      { name: "mcp", factory: factories.mcp, builtin: true, replaceable: true },
+      { name: "codemode", factory: factories.codemode, builtin: true, replaceable: true },
+      { name: "tool-search", factory: factories.toolSearch, builtin: true, replaceable: true },
+    ]);
   });
 
-  it("includes mcp, codemode, and tool-search when exports exist", async () => {
-    const factories = await getBuiltinExtensionFactories();
-    const names = factories.map((f) => f.name);
-    expect(names).toContain("mcp");
-    expect(names).toContain("codemode");
-    expect(names).toContain("tool-search");
-  });
+  it("creates factories once for concurrent and subsequent callers", async () => {
+    const { exports } = builtinCreators();
+    const getFactories = await loadFactories(exports);
 
-  it("each entry has builtin: true and replaceable: true", async () => {
-    const factories = await getBuiltinExtensionFactories();
-    for (const entry of factories) {
-      if (!isInlineExtensionObject(entry)) {
-        throw new Error("Expected object InlineExtension");
-      }
-      expect(entry.builtin).toBe(true);
-      expect(entry.replaceable).toBe(true);
+    const [first, concurrent] = await Promise.all([getFactories(), getFactories()]);
+    expect(concurrent).toBe(first);
+    expect(await getFactories()).toBe(first);
+    for (const create of Object.values(exports)) {
+      expect(create).toHaveBeenCalledTimes(1);
     }
   });
 
-  it("is memoised: two calls in the same test return the same promise", async () => {
-    // Both calls happen in the same test function, same module evaluation,
-    // so the module-level cache must return the same Promise reference.
-    const p1 = getBuiltinExtensionFactories();
-    const p2 = getBuiltinExtensionFactories();
-    // toCheck: both must resolve to the identical array (same factories).
-    await p1;
-    // p2 must resolve to the identical array (same reference from cache)
-    const result2 = await p2;
-    expect(result2).toHaveLength(3);
+  it("returns an empty array when an older SDK has no builtin exports", async () => {
+    const getFactories = await loadFactories();
+    expect(await getFactories()).toEqual([]);
+  });
+
+  it("ignores non-function exports", async () => {
+    const getFactories = await loadFactories({
+      createMcpExtension: null,
+      createCodemodeExtension: {},
+      createToolSearchExtension: "not a factory",
+    });
+    expect(await getFactories()).toEqual([]);
+  });
+
+  it("registers supported builtins independently when only some exports exist", async () => {
+    const { factories, exports } = builtinCreators();
+    const getFactories = await loadFactories({ createMcpExtension: exports.createMcpExtension });
+
+    expect(await getFactories()).toEqual([
+      { name: "mcp", factory: factories.mcp, builtin: true, replaceable: true },
+    ]);
+  });
+
+  it("propagates factory initialization errors instead of silently disabling builtins", async () => {
+    const error = new Error("MCP factory initialization failed");
+    const getFactories = await loadFactories({
+      createMcpExtension: () => { throw error; },
+    });
+    await expect(getFactories()).rejects.toBe(error);
   });
 });

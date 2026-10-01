@@ -5,8 +5,8 @@ import { DefaultResourceLoader, createEventBus } from "@earendil-works/pi-coding
 import { describe, expect, it } from "vitest";
 import { getBuiltinExtensionFactories } from "./builtinExtensionFactories.js";
 
-// Verify that the builtin extension factories wired through piWebResourceLoaderOptions
-// actually load built-in extensions (e.g. /mcp command present) in the resource loader.
+// Exercise the real SDK loader separately from the session wiring test, without
+// binding a session or opening MCP connections.
 describe("builtin extension factories load through DefaultResourceLoader", () => {
   let directory: string;
 
@@ -14,7 +14,7 @@ describe("builtin extension factories load through DefaultResourceLoader", () =>
     directory = await mkdtemp(join(tmpdir(), "pi-web-builtin-integration-"));
     try {
       // Create an empty mcp.json so MCP servers don't try to connect to the network.
-      await writeFile(join(directory, "mcp.json"), JSON.stringify({ servers: {} }), "utf-8");
+      await writeFile(join(directory, "mcp.json"), JSON.stringify({ mcpServers: {} }), "utf-8");
 
       const factories = await getBuiltinExtensionFactories();
       expect(factories).toHaveLength(3);

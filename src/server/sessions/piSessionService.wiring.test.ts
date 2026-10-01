@@ -1,134 +1,71 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { type CreateAgentSessionServicesOptions } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionServices, CreateAgentSessionServicesOptions, InlineExtension } from "@earendil-works/pi-coding-agent";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiSessionManagerGateway } from "./piSessionManagerGateway.js";
 import { PiSessionService } from "./piSessionService.js";
 import { CapturingSessionEventHub, createTestModelRuntime } from "./piSessionService.testSupport.js";
 
-// Capture the real createAgentSessionServices implementation via importActual,
-// then replace it with a spy that records the first argument and re-throws
-// so no live agent session is created.
-await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
-  "@earendil-works/pi-coding-agent",
-);
+const { captureServices, builtinFactories } = vi.hoisted(() => ({
+  captureServices: vi.fn<(options: CreateAgentSessionServicesOptions) => Promise<AgentSessionServices>>(),
+  builtinFactories: [
+    { name: "__wiring-test-mcp__", factory: () => undefined, builtin: true, replaceable: true },
+    { name: "__wiring-test-codemode__", factory: () => undefined, builtin: true, replaceable: true },
+    { name: "__wiring-test-tool-search__", factory: () => undefined, builtin: true, replaceable: true },
+  ] satisfies InlineExtension[],
+}));
 
-/** Mutation-safe container for captured call args. */
-const capture: { opts: CreateAgentSessionServicesOptions | null } = { opts: null };
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@earendil-works/pi-coding-agent")>(),
+  createAgentSessionServices: captureServices,
+}));
 
-vi.mock("@earendil-works/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
-    "@earendil-works/pi-coding-agent",
-  );
-  return {
-    ...actual,
-    createAgentSessionServices(opts: CreateAgentSessionServicesOptions) {
-      capture.opts = opts;
-      throw new Error("__capture-only__: createAgentSessionServices called");
-    },
-  };
+vi.mock("./builtinExtensionFactories.js", () => ({
+  getBuiltinExtensionFactories: () => Promise.resolve(builtinFactories),
+}));
+
+beforeEach(() => {
+  // Stop at the SDK boundary after recording the options, without starting
+  // an agent or any MCP connections.
+  captureServices.mockReset().mockRejectedValue(new Error("capture-only session services"));
 });
-
-vi.mock("./builtinExtensionFactories.js", async () => {
-  const actual = await vi.importActual<typeof import("./builtinExtensionFactories.js")>(
-    "./builtinExtensionFactories.js",
-  );
-  return {
-    ...actual,
-    getBuiltinExtensionFactories() {
-      return Promise.resolve([
-        { name: "__wiring-test-mcp__", factory: () => undefined, builtin: true, replaceable: true },
-        { name: "__wiring-test-codemode__", factory: () => undefined, builtin: true, replaceable: true },
-        { name: "__wiring-test-tool-search__", factory: () => undefined, builtin: true, replaceable: true },
-      ]);
-    },
-  };
-});
-
-/** Reset captured state between tests. */
-afterEach(() => {
-  capture.opts = null;
-});
-
-/**
- * Verify that the factories array contains exactly the sentinel entries and
- * that every entry is a named object (not a bare function factory). Named
- * entries from the builtin factory always carry the `builtin` flag, so
- * confirming they are all named objects is sufficient for this wiring test.
- */
-function expectAllNamed(factoryCount: number, factoryNames: string[]): void {
-  expect(factoryNames).toHaveLength(factoryCount);
-  // Unique check doubles as a non-empty-array guard.
-  const uniqueNames = new Set(factoryNames);
-  expect(uniqueNames.size).toBe(factoryCount);
-}
 
 describe("PiSessionService builtin extension factory wiring", () => {
-  it("passes builtin extension factories to createAgentSessionServices via resourceLoaderOptions", async () => {
+  it.each([
+    { label: "without prompt additions", sections: [] },
+    { label: "with prompt additions", sections: ["PI WEB deployment facts"] },
+  ])("preserves factories, event bus, and prompt options $label", async ({ sections }) => {
     const directory = await mkdtemp(join(tmpdir(), "pi-web-wiring-"));
     const modelRuntime = await createTestModelRuntime();
-    const hub = new CapturingSessionEventHub();
-
-    const service = new PiSessionService(hub, {
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
       agentDir: directory,
       modelRuntime,
       sessionManager: createPiSessionManagerGateway({ agentDir: directory, env: {} }),
       heartbeatIntervalMs: 60_000,
+      appendSystemPromptSections: sections,
     });
 
     try {
-      await service.start(directory);
-      throw new Error("expected start() to fail via captured createAgentSessionServices");
-    } catch (err: unknown) {
-      if (!(err instanceof Error) || err.message !== "__capture-only__: createAgentSessionServices called") {
-        throw err;
+      await expect(service.start(directory)).rejects.toThrow("capture-only session services");
+      expect(captureServices).toHaveBeenCalledTimes(1);
+      const options = captureServices.mock.calls[0]?.[0].resourceLoaderOptions;
+      expect(options?.extensionFactories).toBe(builtinFactories);
+      expect(options?.eventBus).toBeDefined();
+      if (sections.length === 0) {
+        expect(options?.appendSystemPromptOverride).toBeUndefined();
+      } else {
+        expect(options?.appendSystemPromptOverride?.(["Existing prompt section"])).toEqual([
+          "Existing prompt section",
+          ...sections,
+        ]);
+      }
+    } finally {
+      try {
+        await service.dispose();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
       }
     }
-
-    const opts = capture.opts;
-    if (opts === null) throw new Error("Expected capture to have opts");
-    if (opts.resourceLoaderOptions === undefined) throw new Error("Expected resourceLoaderOptions");
-    expect(opts.resourceLoaderOptions.extensionFactories).toBeDefined();
-
-    const factories = opts.resourceLoaderOptions.extensionFactories ?? [];
-    const factoryNames = factories.map((f) => f.name);
-    expect(factories).toHaveLength(3);
-    expect(factoryNames).toEqual(
-      expect.arrayContaining(["__wiring-test-mcp__", "__wiring-test-codemode__", "__wiring-test-tool-search__"]),
-    );
-    expectAllNamed(3, factoryNames);
-
-    await service.dispose();
-  });
-
-  it("passes eventBus alongside builtin extension factories", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "pi-web-wiring-"));
-    const modelRuntime = await createTestModelRuntime();
-    const hub = new CapturingSessionEventHub();
-
-    const service = new PiSessionService(hub, {
-      agentDir: directory,
-      modelRuntime,
-      sessionManager: createPiSessionManagerGateway({ agentDir: directory, env: {} }),
-      heartbeatIntervalMs: 60_000,
-    });
-
-    try {
-      await service.start(directory);
-      throw new Error("expected start() to fail via captured createAgentSessionServices");
-    } catch (err: unknown) {
-      if (!(err instanceof Error) || err.message !== "__capture-only__: createAgentSessionServices called") {
-        throw err;
-      }
-    }
-
-    const opts = capture.opts;
-    if (opts === null) throw new Error("Expected capture to have opts");
-    if (opts.resourceLoaderOptions === undefined) throw new Error("Expected resourceLoaderOptions");
-    expect(opts.resourceLoaderOptions.eventBus).toBeDefined();
-    expect(opts.resourceLoaderOptions.extensionFactories).toBeDefined();
-
-    await service.dispose();
   });
 });
