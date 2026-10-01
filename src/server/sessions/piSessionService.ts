@@ -1197,8 +1197,8 @@ export class PiSessionService implements SessionRouteService {
   private readonly subsessionHydratedParents = new Set<string>();
   /**
    * Tracked subsession id -> whether a completion notification is armed.
-   * Armed when the child's agent starts a run (not for commands or compaction);
-   * firing on completion disarms it for the next run.
+   * Armed when the child's agent starts a run or a prompt fails before starting
+   * one (not for standalone commands or compaction); completion disarms it.
    */
   private readonly subsessionNotifyArmed = new Map<string, boolean>();
   private readonly archiveStore: SessionArchiveRepository;
@@ -2293,8 +2293,8 @@ export class PiSessionService implements SessionRouteService {
 
   /**
    * Arm on a tracked child's agent_start, then notify the parent once it stops
-   * working. Commands and compactions can be busy without starting an agent run,
-   * so they must not arm a completion notice.
+   * working. Prompt failures before agent_start explicitly arm the same latch.
+   * Standalone commands and compactions must not arm a completion notice.
    */
   private updateSubsessionTracking(session: PiAgentSession, agentStarted = false): void {
     const link = this.subsessionLinkForActiveChild(session);
@@ -2307,14 +2307,16 @@ export class PiSessionService implements SessionRouteService {
     if (this.hasActiveWork(session)) return;
     if (this.subsessionNotifyArmed.get(childId) !== true) return;
     this.subsessionNotifyArmed.set(childId, false);
-    const status: SubsessionStatus = this.activities.get(childId)?.phase === "error" ? "error" : "idle";
+    const activity = this.activities.get(childId);
+    const status: SubsessionStatus = activity?.phase === "error" ? "error" : "idle";
+    const errorSection = status === "error" && activity?.detail !== undefined ? `Error: ${activity.detail}\n\n` : "";
     const finalText = finalAssistantText(historyMessages(session));
     const outputSection = formatSubsessionNotificationOutput(childId, finalText);
     const workingIds = this.workingSubsessionIds(link.parentSessionId);
     const next = workingIds.length === 0
       ? "No other tracked subsessions are working."
       : `Still working: ${workingIds.join(", ")}. Continue working, or call yield_to_subsessions alone and last at the next join point. Further completion notices arrive automatically; do not poll.`;
-    const text = `Subsession ${childId} stopped working (${status}).\n${next}\n\n${outputSection}`;
+    const text = `Subsession ${childId} stopped working (${status}).\n${next}\n\n${errorSection}${outputSection}`;
     void this.notifyParentOfSubsession(link.parentSessionId, childId, text);
   }
 
@@ -2699,7 +2701,16 @@ export class PiSessionService implements SessionRouteService {
       this.events.publish(session.sessionId, { type: "message.append", message: echo.message }, { id: session.sessionId, cwd: session.sessionManager.getCwd() });
     }
     const promptOptions = buildPromptOptions(behavior, images);
+    const commandName = text.startsWith("/") ? text.slice(1).split(" ")[0] : undefined;
+    const trackEarlyFailure = behavior === undefined
+      && this.subsessionLinkForActiveChild(session) !== undefined
+      && !session.extensionRunner.getRegisteredCommands().some((command) => command.invocationName === commandName);
+    let agentStarted = false;
+    const unsubscribe = !trackEarlyFailure ? undefined : session.subscribe((event) => {
+      if (getString(event, "type") === "agent_start") agentStarted = true;
+    });
     const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions)).finally(() => {
+      unsubscribe?.();
       if (echo !== undefined) {
         const remaining = (this.pendingPromptEchoes.get(session) ?? []).filter((pending) => pending !== echo);
         if (remaining.length === 0) this.pendingPromptEchoes.delete(session);
@@ -2710,6 +2721,13 @@ export class PiSessionService implements SessionRouteService {
       const message = error instanceof Error ? error.message : String(error);
       this.publishActivity(session, "error", "error", message);
       this.events.publish(session.sessionId, { type: "session.error", message });
+      if (this.isCurrentActiveSession(session)) {
+        const link = this.subsessionLinkForActiveChild(session);
+        // Model/auth validation can reject without any agent event. Wake the
+        // parent, but do not re-arm a run that already emitted agent_start.
+        if (trackEarlyFailure && !agentStarted && link !== undefined) this.subsessionNotifyArmed.set(link.childSessionId, true);
+        this.updateSubsessionTracking(session);
+      }
     });
     return promptPromise;
   }

@@ -1323,16 +1323,18 @@ export class SessionController {
     const key = machineSessionKey(target.machineId, target.session.id);
     // Start buffering synchronously, including the coordinator's queued phase.
     this.bufferRefreshEvents(target);
-    return this.selectedSessionRefreshes.request(key, async () => {
+    // The notification controller coalesces its own refreshes. Keep that work
+    // outside the transcript coordinator so a slow inbox never blocks replay
+    // or a subsequent snapshot, while callers still await both results.
+    const notificationsRefresh = Promise.resolve().then(() => {
+      if (!this.isCurrentRefreshTarget(target)) return;
+      return this.notifications?.refreshSelectedSession(target.session, target.machineId);
+    });
+    notificationsRefresh.catch(() => undefined);
+    const transcriptRefresh = this.selectedSessionRefreshes.request(key, async () => {
       if (!this.isCurrentRefreshTarget(target)) return;
       const buffer = this.bufferRefreshEvents(target);
-      let notificationsRefresh: Promise<void>;
       try {
-        // Notifications run alongside the snapshot but must not delay either
-        // transcript display or buffered-event replay. Await them afterwards
-        // so refresh completion and error reporting still include their result.
-        notificationsRefresh = this.notifications?.refreshSelectedSession(target.session, target.machineId) ?? Promise.resolve();
-        notificationsRefresh.catch(() => undefined);
         const snapshot = await this.api.transcriptSnapshot(target.session, { limit: MESSAGE_PAGE_SIZE }, target.machineId);
         if (!this.isCurrentRefreshTarget(target)) return;
         const { page, status } = snapshot;
@@ -1362,8 +1364,8 @@ export class SessionController {
           for (const event of buffer.events) this.applyEvent(event);
         }
       }
-      await notificationsRefresh;
     });
+    return transcriptRefresh.then(() => notificationsRefresh);
   }
 
   private preserveBufferedDialogOutcomes(buffer: SelectedSessionRefreshBuffer, seq: number): void {
