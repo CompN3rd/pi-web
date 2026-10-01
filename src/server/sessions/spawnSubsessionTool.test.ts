@@ -1,17 +1,21 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { Check } from "typebox/value";
 import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
+import { stubExtensionToolContext } from "./piSessionService.testSupport.js";
 import { createSubsessionToolDefinitions, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 
 const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
-function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unknown, thinkingLevel?: string): ExtensionContext {
-  const sessionManager = { getSessionId: () => sessionId, getSessionFile: () => sessionFile };
+function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unknown, thinkingLevel?: string): ExtensionToolContext {
   // The subsession tools only read sessionManager.getSessionId/getSessionFile, model, and thinkingLevel.
   // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- test stub with the minimal surface the tools use.
-  return { sessionManager, ...(model === undefined ? {} : { model }), ...(thinkingLevel === undefined ? {} : { thinkingLevel }) } as unknown as ExtensionContext;
+  return stubExtensionToolContext({
+    sessionManager: { getSessionId: () => sessionId, getSessionFile: () => sessionFile },
+    model,
+    thinkingLevel,
+  });
 }
 
 function tools(deps: Partial<SubsessionToolDeps>) {
