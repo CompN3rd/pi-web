@@ -10,7 +10,6 @@ const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
 function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unknown, thinkingLevel?: string): ExtensionToolContext {
   // The subsession tools only read sessionManager.getSessionId/getSessionFile, model, and thinkingLevel.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- test stub with the minimal surface the tools use.
   return stubExtensionToolContext({
     sessionManager: { getSessionId: () => sessionId, getSessionFile: () => sessionFile },
     model,

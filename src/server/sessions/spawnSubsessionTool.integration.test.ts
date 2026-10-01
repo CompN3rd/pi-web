@@ -22,7 +22,6 @@ const model: Model<Api> = {
 
 function extensionContext(): ExtensionToolContext {
   // The wrapped yield definition only reads the two session-manager methods above.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal integration boundary for a Pi tool definition.
   return stubExtensionToolContext({
     sessionManager: {
       getSessionId: () => "parent-1",

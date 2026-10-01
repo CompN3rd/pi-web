@@ -9,7 +9,6 @@ const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
 function ctxFor(sessionId: string, model?: unknown, thinkingLevel?: string): ExtensionToolContext {
   // The spawn tool only reads sessionManager.getSessionId, model, and thinkingLevel.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- test stub with the minimal surface the tool reads.
   return stubExtensionToolContext({
     sessionManager: { getSessionId: () => sessionId },
     model,

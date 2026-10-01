@@ -42,7 +42,6 @@ const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
 function ctxFor(sessionId: string, sessionFile: string | undefined, model?: unknown): ExtensionToolContext {
   // The delegation tools only read sessionManager and model from the context.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- test stub with the minimal surface the tools read.
   return stubExtensionToolContext({
     sessionManager: {
       getSessionId: () => sessionId,
