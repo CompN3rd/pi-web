@@ -1,16 +1,19 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { Check } from "typebox/value";
 import { KNOWN_THINKING_LEVELS } from "../../shared/thinkingLevels.js";
 import { createSpawnSessionToolDefinition } from "./spawnSessionTool.js";
+import { stubExtensionToolContext } from "./piSessionService.testSupport.js";
 
 const dispatchModel = { provider: "anthropic", id: "claude-sonnet" };
 
-function ctxFor(sessionId: string, model?: unknown, thinkingLevel?: string): ExtensionContext {
-  const sessionManager = { getSessionId: () => sessionId };
+function ctxFor(sessionId: string, model?: unknown, thinkingLevel?: string): ExtensionToolContext {
   // The spawn tool only reads sessionManager.getSessionId, model, and thinkingLevel.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- test stub with the minimal surface the tool reads.
-  return { sessionManager, ...(model === undefined ? {} : { model }), ...(thinkingLevel === undefined ? {} : { thinkingLevel }) } as unknown as ExtensionContext;
+  return stubExtensionToolContext({
+    sessionManager: { getSessionId: () => sessionId },
+    model,
+    thinkingLevel,
+  });
 }
 
 describe("createSpawnSessionToolDefinition", () => {
