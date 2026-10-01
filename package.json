@@ -109,7 +109,7 @@
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
     "@earendil-works/pi-agent-core": "^0.87.0",
-    "@earendil-works/pi-ai": "^0.87.0",
+    "@earendil-works/pi-ai": "0.99.2",
     "@earendil-works/pi-coding-agent": "^0.99.2",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
@@ -169,5 +169,8 @@
       "./extensions"
     ],
     "image": "https://raw.githubusercontent.com/jmfederico/pi-web/main/docs/assets/pi-web-banner.png"
+  },
+  "overrides": {
+    "@earendil-works/pi-ai": "0.99.2"
   }
 }
