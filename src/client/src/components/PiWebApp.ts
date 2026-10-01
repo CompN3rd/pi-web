@@ -2226,8 +2226,8 @@ export class PiWebApp extends LitElement {
       return installApplicationPanelScope({
         machine,
         state: this.state,
-        ...(workspace === undefined ? {} : {
-          workspace,
+        ...(workspace === undefined ? {} : { workspace }),
+        ...(workspace === undefined || !this.terminalAvailableForMachine(machine.id) ? {} : {
           terminal: this.workspaceTerminal(pluginId, workspace, machine.id, navigation),
         }),
         navigate: (destination) => this.navigate(destination),

@@ -2,8 +2,10 @@
 
 import { LitElement, html } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ApplicationPanelContext, PiWebPlugin, PiWebStatusResponse } from "../../../plugin-api";
+import type { ApplicationPanelContext, PiWebPlugin, PiWebStatusResponse, WorkspacePanelTerminal } from "../../../plugin-api";
 import infoPlugin from "../../../../pi-web-plugins/info/pi-web-plugin";
+import updatesPlugin from "../../../../pi-web-plugins/updates/pi-web-plugin";
+import type { RequiredTerminalBrowserComposition, RequiredTerminalBrowserFacadeV1 } from "../plugins/requiredTerminalFacade";
 import { initialAppState, type AppState } from "../appState";
 import { PI_WEB_PLUGIN_LIFECYCLE_VERSION } from "../../../shared/apiTypes";
 import { loadExternalPlugins } from "../plugins/external";
@@ -26,10 +28,6 @@ beforeEach(() => {
   // Layout/scroll scheduling is not the behavior under test.
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
-    lifecycleVersion: PI_WEB_PLUGIN_LIFECYCLE_VERSION, terminalMode: "recovery-disabled",
-    plugins: [{ id: "info", module: "info/pi-web-plugin.js", machineSpecific: false }],
-  }))));
 });
 
 afterEach(() => {
@@ -107,7 +105,8 @@ it("gives public callbacks fresh basic selections and keeps workspace-only tabs 
   expect(context?.state.selectedSession).toEqual({ id: "session", name: "Conversation", cwd: "/repo", archived: false, pending: false });
   expect(context?.state).not.toHaveProperty("messages");
   expect(context?.state.selectedSession).not.toHaveProperty("path");
-  expect(context?.terminal).toBeDefined();
+  expect(context?.workspace?.id).toBe("workspace");
+  expect(context?.terminal).toBeUndefined(); // Terminal-disabled recovery still supplies workspace information.
   expect(toolSurface(app).shadowRoot?.textContent).toContain("Conversation");
   expect(toolSurface(app).shadowRoot?.textContent).toContain("Workspace only");
   expect(toolSurface(app).shadowRoot?.querySelector('[aria-label="Info, Project"]')).not.toBeNull();
@@ -139,13 +138,158 @@ it("opens an application tab through existing navigation without a workspace and
   expect(toolSurface(app).shadowRoot?.querySelector(".panel-content")?.textContent).toContain("Machine");
 });
 
-async function mount(plugin: PiWebPlugin): Promise<ApplicationPanelsApp> {
+it("shows bundled Updates guidance and Copy without selections, retaining visibility, badges and identity", async () => {
+  const activate = vi.fn(updatesPlugin.activate);
+  const app = await mount({ ...updatesPlugin, activate }, { id: "updates", state: { piWebStatus: updatesStatus } });
+  const panel = toolSurface(app);
+  const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  expect(panel.shadowRoot?.textContent).toContain("PI WEB update available");
+  expect(panel.shadowRoot?.textContent).toContain("Installed services");
+  expect(panel.shadowRoot?.querySelector('[aria-label="Updates, 1"]')).not.toBeNull();
+  expect(commandButtons(panel, "Run")).toHaveLength(0);
+  commandButtons(panel, "Copy")[0]?.click();
+  expect(writeText).toHaveBeenCalledExactlyOnceWith("pi-web-docker update");
+  expect(registryFor(app).resolveWorkspacePanelRouteId("updates:workspace.updates", "local")).toBe("updates:workspace.updates");
+  expect(registryFor(app).getWorkspacePanels()).toEqual([]);
+  patchState(app, { selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace] });
+  await settle(app);
+  expect(commandButtons(panel, "Run")).toHaveLength(0); // Workspace selection alone cannot enable Terminal-disabled recovery.
+  patchState(app, { selectedProject: undefined, selectedWorkspace: undefined });
+  await settle(app);
+
+  panel.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Updates, 1"]')?.click();
+  await settle(app);
+  expect(new URL(window.location.href).searchParams.get("tool")).toBe("updates:workspace.updates");
+
+  patchState(app, { piWebStatus: { ...updatesStatus, messages: [] } });
+  await settle(app);
+  expect(panel.shadowRoot?.querySelector('[aria-label="Updates"]')).not.toBeNull();
+  const managed = { kind: "pi-package" as const };
+  patchState(app, { piWebStatus: {
+    ...updatesStatus, messages: [],
+    components: {
+      web: { ...updatesStatus.components.web, installation: managed },
+      sessiond: { ...updatesStatus.components.sessiond, installation: managed },
+    },
+  } });
+  await settle(app);
+  expect(panel.shadowRoot?.querySelector('[aria-label="Updates"]')).toBeNull();
+  expect(activate).toHaveBeenCalledOnce();
+});
+
+it("offers Updates Run only with a selected-workspace Terminal on the current machine and rejects stale clicks", async () => {
+  const app = await mount(updatesPlugin, { id: "updates", state: { piWebStatus: updatesStatus } });
+  const panel = toolSurface(app);
+  const { createWorkspaceTerminal, runCommand } = installTerminal(app, "local");
+  app.requestUpdate();
+  await settle(app);
+  expect(commandButtons(panel, "Run")).toHaveLength(0); // A provider alone is not a machine command facility.
+
+  window.history.replaceState(null, "", "?project=project&workspace=workspace&tool=updates%3Aworkspace.updates&view=workspace");
+  patchState(app, { selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace] });
+  await settle(app);
+  const run = commandButtons(panel, "Run")[0];
+  if (run === undefined) throw new Error("Expected Updates Run with a workspace Terminal");
+  run.click();
+  expect(createWorkspaceTerminal).toHaveBeenCalledOnce();
+  expect(createWorkspaceTerminal.mock.calls[0]?.[0]).toMatchObject({
+    origin: "updates", registrationPluginId: "pi-web.terminal", workspace,
+  });
+  expect(runCommand).toHaveBeenCalledExactlyOnceWith({
+    title: "Update & restart everything", command: "pi-web-docker update", open: true, metadata: { "pi.plugin": "updates" },
+  });
+
+  const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  window.history.replaceState(null, "", "?machine=remote&project=project&workspace=workspace&tool=updates%3Aworkspace.updates&view=workspace");
+  patchState(app, { selectedMachine: remote });
+  run.click(); // A retained local callback must not run after selection changed, even before rerender.
+  await vi.waitFor(() => {
+    expect(error).toHaveBeenCalledWith(
+      'Updates plugin failed to run "Update & restart everything"', expect.objectContaining({ message: "Workspace panel context is no longer current" }),
+    );
+  });
+  expect(createWorkspaceTerminal).toHaveBeenCalledOnce();
+  await settle(app);
+  expect(commandButtons(panel, "Run")).toHaveLength(0); // Never borrow the gateway Terminal.
+  expect(commandButtons(panel, "Copy").length).toBeGreaterThan(0);
+
+  const { createWorkspaceTerminal: remoteTerminal } = installTerminal(app, "remote");
+  app.requestUpdate();
+  await settle(app);
+  const remoteRun = commandButtons(panel, "Run")[0];
+  expect(remoteRun).toBeDefined();
+  expect(new URL(window.location.href).searchParams.get("machine")).toBe("remote");
+  remoteRun?.click();
+  expect(remoteTerminal).toHaveBeenCalledOnce();
+  expect(remoteTerminal.mock.calls[0]?.[0]).toMatchObject({
+    origin: "updates", registrationPluginId: "remote-terminal", workspace,
+  });
+  expect(createWorkspaceTerminal).toHaveBeenCalledOnce();
+
+  patchState(app, { selectedProject: undefined, selectedWorkspace: undefined });
+  await settle(app);
+  expect(commandButtons(panel, "Run")).toHaveLength(0);
+  expect(commandButtons(panel, "Copy").length).toBeGreaterThan(0);
+});
+
+const updatesStatus: PiWebStatusResponse = {
+  packageName: "@jmfederico/pi-web", generatedAt: "now",
+  components: {
+    web: { component: "web", label: "Web/UI", stale: false, available: true, installation: { kind: "docker" } },
+    sessiond: { component: "sessiond", label: "Session daemon", stale: false, available: true, installation: { kind: "docker" } },
+  },
+  release: { packageName: "@jmfederico/pi-web", updateAvailable: true },
+  commands: { update: "pi-web-docker update" },
+  messages: [{ id: "update", severity: "info", title: "PI WEB update available", body: "Update and restart to use the new release." }],
+};
+
+// Inject only Terminal's command boundary; the shell, public loader, registry and freshness facade remain real.
+function installTerminal(app: PiWebApp, machineId: string) {
+  const runCommand = vi.fn<WorkspacePanelTerminal["runCommand"]>((input) => {
+    const run = {
+      id: "run", origin: "updates", projectId: workspace.projectId, workspaceId: workspace.id,
+      terminalId: "terminal", title: input.title, command: input.command, status: "succeeded" as const, createdAt: "now", metadata: {},
+    };
+    return Promise.resolve({ run, completed: Promise.resolve(run) });
+  });
+  const createWorkspaceTerminal = vi.fn<RequiredTerminalBrowserFacadeV1["createWorkspaceTerminal"]>(() => ({
+    open: () => undefined, runCommand,
+  }));
+  const composition: RequiredTerminalBrowserComposition = {
+    binding: {
+      registrationPluginId: machineId === "local" ? "pi-web.terminal" : "remote-terminal",
+      sourcePluginId: "pi-web.terminal", backendRevision: `${machineId}-revision`, pairedRequestVersion: 1, pairedChannelVersion: 1,
+    },
+    facade: {
+      version: 1, createWorkspaceTerminal, listCommandRuns: () => Promise.resolve([]),
+      parseCommandRun: () => { throw new Error("Unexpected command parsing"); },
+    },
+  };
+  const compositions: unknown = Reflect.get(app, "requiredTerminalByMachine");
+  if (!(compositions instanceof Map)) throw new Error("Expected Terminal compositions");
+  compositions.set(machineId, composition);
+  // Production plugin loading invalidates the guarded surface when composition becomes available.
+  const invalidate: unknown = Reflect.get(app, "invalidateWorkspaceSurface");
+  if (typeof invalidate !== "function") throw new Error("Expected workspace surface invalidation");
+  Reflect.apply(invalidate, app, []);
+  return { createWorkspaceTerminal, runCommand };
+}
+
+function commandButtons(panel: WorkspacePanel, label: string): HTMLButtonElement[] {
+  return [...panel.shadowRoot?.querySelectorAll<HTMLButtonElement>(".updates-command-actions button") ?? []].filter((button) => button.textContent === label);
+}
+
+async function mount(plugin: PiWebPlugin, { id = "info", state = {} }: { id?: string; state?: Partial<AppState> } = {}): Promise<ApplicationPanelsApp> {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    lifecycleVersion: PI_WEB_PLUGIN_LIFECYCLE_VERSION, terminalMode: "recovery-disabled",
+    plugins: [{ id, module: `${id}/pi-web-plugin.js`, machineSpecific: false }],
+  }))));
   const app = new ApplicationPanelsApp();
   Reflect.set(app, "verifiedPluginModeByMachine", new Map([["local", "recovery-disabled"], ["remote", "recovery-disabled"]]));
   const loaded = await loadExternalPlugins(undefined, { moduleLoader: () => Promise.resolve({ default: plugin }) });
   expect(loaded.failures).toEqual([]);
   await registryFor(app).registerBatch(loaded.registrations, { declarations: loaded.declarations });
-  Reflect.set(app, "state", { ...initialAppState(), workspaceTool: "info:workspace.info" });
+  Reflect.set(app, "state", { ...initialAppState(), workspaceTool: `${id}:workspace.${id}`, ...state });
   document.body.append(app);
   await settle(app);
   return app;

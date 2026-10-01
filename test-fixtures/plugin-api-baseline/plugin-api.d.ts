@@ -372,7 +372,7 @@ export interface ApplicationPanelContext {
     state: PluginRuntimeState;
     /** Present only when a workspace is selected on this machine. */
     workspace?: Workspace;
-    /** Workspace-bound terminal; absent without a selected workspace. */
+    /** Workspace-bound terminal; present only with a selected workspace and an available Terminal provider. */
     terminal?: WorkspacePanelTerminal;
     navigate: (destination: PluginNavigationDestination) => Promise<void>;
     prompt: PluginPromptEditor;
