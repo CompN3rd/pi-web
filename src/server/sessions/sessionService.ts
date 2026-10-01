@@ -38,6 +38,7 @@ import type {
   SessionTranscriptSnapshot,
 } from "../types.js";
 import type { NormalizedSessionCleanupRequest } from "./sessionCleanup.js";
+import type { SessionMedia } from "./sessionMediaIndex.js";
 
 export type SessionRouteRef = ClientSessionRef;
 
@@ -57,6 +58,8 @@ export interface SessionRouteService {
    */
   start(cwd: string, options?: { startupToken?: string }): Promise<ClientSession>;
   messages(ref: SessionRouteRef, page?: { before?: number; limit?: number }): Promise<ClientMessagePage>;
+  /** Resolve image bytes without modifying the Pi transcript or runtime. */
+  media(ref: SessionRouteRef, mediaId: string): Promise<SessionMedia | undefined>;
   status(ref: SessionRouteRef): Promise<ClientSessionStatus>;
   streamSnapshot(ref: SessionRouteRef): Promise<SessionStreamSnapshot>;
   transcriptSnapshot(ref: SessionRouteRef, page?: { limit?: number }): Promise<SessionTranscriptSnapshot>;

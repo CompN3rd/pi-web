@@ -124,6 +124,7 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "POST", path: "/sessions/bulk/archive" },
   { method: "POST", path: "/sessions/bulk/delete-archived" },
   { method: "GET", path: "/sessions/:sessionId/messages" },
+  { method: "GET", path: "/sessions/:sessionId/media/:mediaId", propagateCancellation: true },
   { method: "GET", path: "/sessions/:sessionId/notifications" },
   { method: "POST", path: "/sessions/:sessionId/notifications/dismiss" },
   { method: "POST", path: "/sessions/:sessionId/notifications/dismiss-all" },

@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatView } from "./ChatView";
 import { ModalSurface } from "./ModalSurface";
 import { hasRenderedModal } from "./modalLayerRegistry";
+import { TranscriptImage } from "./TranscriptImage";
+import { imagePresentation, settleImage } from "./imagePresentation.testSupport";
 
 const IMAGE_DATA = "iVBORw0KGgo=";
 
@@ -11,6 +13,7 @@ afterEach(() => {
   document.body.replaceChildren();
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("ChatView native image modal", () => {
@@ -31,7 +34,7 @@ describe("ChatView native image modal", () => {
     await view.updateComplete;
     expect(cancel.defaultPrevented).toBe(false);
     expect(firstDialog.open).toBe(false);
-    expect(view.shadowRoot?.activeElement).toBe(image);
+    expect(image.getRootNode()).toHaveProperty("activeElement", image);
     expect(hasRenderedModal(document)).toBe(false);
 
     image.click();
@@ -41,7 +44,7 @@ describe("ChatView native image modal", () => {
     await view.updateComplete;
 
     expect(secondDialog.open).toBe(false);
-    expect(view.shadowRoot?.activeElement).toBe(image);
+    expect(image.getRootNode()).toHaveProperty("activeElement", image);
     expect(hasRenderedModal(document)).toBe(false);
   });
 
@@ -82,16 +85,22 @@ describe("ChatView native image modal", () => {
 });
 
 async function mountImageView(): Promise<ChatView> {
+  vi.stubGlobal("IntersectionObserver", undefined);
   const view = new ChatView();
   view.sessionId = "session-image";
   view.messages = [{ role: "user", parts: [{ type: "image", mimeType: "image/png", data: IMAGE_DATA }] }];
   document.body.append(view);
   await view.updateComplete;
+  const transcript = requiredElement(view.renderRoot.querySelector<TranscriptImage>("pi-web-transcript-image"), "transcript image");
+  const presentation = await settleImage(transcript);
+  requiredElement(presentation.renderRoot.querySelector("img"), "native image").dispatchEvent(new Event("load"));
+  await presentation.updateComplete;
   return view;
 }
 
 function chatImage(view: ChatView): HTMLElement {
-  return requiredElement(view.shadowRoot?.querySelector<HTMLElement>(".chat-image"), "chat image");
+  const transcript = requiredElement(view.renderRoot.querySelector<TranscriptImage>("pi-web-transcript-image"), "transcript image");
+  return requiredElement(imagePresentation(transcript).renderRoot.querySelector<HTMLElement>(".image-button"), "image trigger");
 }
 
 function imageDialog(view: ChatView): HTMLDialogElement {

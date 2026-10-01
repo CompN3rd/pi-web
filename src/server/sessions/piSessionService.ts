@@ -30,6 +30,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionModelCatalogEntry, ClientSessionStatus, ClientSessionTreeForkRequest, ClientSessionTreeForkResult, ClientSessionTreeNavigateRequest, ClientSessionTreeNavigateResult, ClientThinkingLevel, SessionStreamSnapshot, SessionTranscriptSnapshot, SessionUiEvent } from "../types.js";
 import { projectBrowserMessage } from "../browserMessageProjection.js";
+import { isSessionMediaId } from "../../shared/sessionMedia.js";
+import type { SessionMedia } from "./sessionMediaIndex.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import { clientSessionFirstMessagePreview } from "./clientSessionPreview.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
@@ -411,6 +413,8 @@ export interface PiSessionManagerGateway {
    * stays authoritative.
    */
   readBranch?(path: string): Promise<unknown[] | undefined>;
+  /** Read all branches, sharing the read-only parsed snapshot with readBranch. */
+  readEntries?(path: string): Promise<readonly unknown[] | undefined>;
   create(cwd: string, options?: { parentSession?: string }): PiSessionManager;
   /**
    * Cross-project listing of Pi's session stores (the default store plus any
@@ -1449,7 +1453,10 @@ export class PiSessionService implements SessionRouteService {
       } finally {
         await active.runtime.dispose();
       }
-    })).finally(() => this.activityMarker.dispose());
+    })).finally(async () => {
+      this.events.mediaIndex.clear();
+      await this.activityMarker.dispose();
+    });
     await this.publishUnreadMutations([]);
   }
 
@@ -2389,6 +2396,40 @@ export class PiSessionService implements SessionRouteService {
     return pageMessagesAtSafeBoundary(historyMessagesFromEntries(await this.readableSessionBranch(ref, session)), page);
   }
 
+  async media(ref: PiSessionRef, mediaId: string): Promise<SessionMedia | undefined> {
+    if (!isSessionMediaId(mediaId)) throw new Error("Invalid media id");
+    const index = this.events.mediaIndex;
+    const session = this.activeForRef(ref)?.runtime.session ?? this.startupSessionForRef(ref);
+    // Verify session/cwd ownership before consulting the session-scoped cache.
+    // Cold binary reads do not construct an SDK runtime (which can migrate files).
+    const archived = session === undefined ? await this.getArchived(ref) : undefined;
+    const resolved = session === undefined && archived?.archivePath === undefined
+      ? await this.sessionManager.resolveSessionFile(ref.cwd, ref.id)
+      : undefined;
+    const sessionId = session?.sessionId ?? archived?.sessionId ?? resolved?.id;
+    if (sessionId === undefined || (resolved !== undefined && !cwdPathsEqual(resolved.cwd, ref.cwd))) throw new Error("Session not found");
+    const scope = { id: sessionId, cwd: canonicalizeStoredCwd(session?.sessionManager.getCwd() ?? archived?.cwd ?? resolved?.cwd ?? ref.cwd) };
+    const cached = index.get(scope, mediaId);
+    if (cached !== undefined) return cached;
+    if (session !== undefined) {
+      const live = index.find(scope, mediaId, [
+        session.sessionManager.getEntries?.() ?? session.sessionManager.getBranch(),
+        session.messages,
+        session.state.streamingMessage,
+        this.publishedAssistantPartials.get(session),
+        ...(this.pendingPromptEchoes.get(session) ?? []).map((echo) => echo.message),
+      ]);
+      if (live !== undefined) return live;
+    }
+    // Read disk on misses even for a cached idle runtime: other processes can
+    // append images on any branch without emitting events through this daemon.
+    const path = session?.sessionFile ?? session?.sessionManager.getSessionFile() ?? archived?.archivePath ?? resolved?.path
+      ?? (session === undefined ? undefined : (await this.sessionManager.resolveSessionFile(ref.cwd, sessionId))?.path);
+    if (path === undefined) return undefined;
+    const entries = await this.sessionManager.readEntries?.(path);
+    return entries === undefined ? undefined : index.find(scope, mediaId, entries);
+  }
+
   async status(ref: PiSessionRef): Promise<ClientSessionStatus> {
     const session = await this.sessionForStatusOrDialogClose(ref);
     await this.activityMarker.refresh(session.sessionFile, this.hasActiveWork(session));
@@ -2653,7 +2694,7 @@ export class PiSessionService implements SessionRouteService {
       // SDK input hooks may await before appending the user message. Keep the
       // already-published echo visible in snapshots until that append occurs.
       this.pendingPromptEchoes.set(session, [...echoes, echo]);
-      this.events.publish(session.sessionId, { type: "message.append", message: echo.message });
+      this.events.publish(session.sessionId, { type: "message.append", message: echo.message }, { id: session.sessionId, cwd: session.sessionManager.getCwd() });
     }
     const promptOptions = buildPromptOptions(behavior, images);
     const promptPromise = this.runSessionEntryMutation(session, "send a prompt", () => session.prompt(text, promptOptions)).finally(() => {
@@ -3453,6 +3494,7 @@ export class PiSessionService implements SessionRouteService {
     // Promises inside the dying runtime: settle them rather than dropping them.
     this.endSessionExtensionDialogs(sessionId);
     this.active.delete(sessionId);
+    this.events.mediaIndex.forgetSession({ id: sessionId, cwd: active.runtime.session.sessionManager.getCwd() });
     this.activities.delete(sessionId);
     this.workspaceActivity?.removeSession(sessionId, active.runtime.session.sessionManager.getCwd());
     this.clearAuthLossWarningsForSession(sessionId);
@@ -4079,7 +4121,7 @@ export class PiSessionService implements SessionRouteService {
       } else if (eventType === "message_start" || eventType === "message_end" || eventType === "agent_end") {
         this.publishedAssistantPartials.delete(session);
       }
-      this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel));
+      this.events.publish(session.sessionId, toClientEvent(event, session.thinkingLevel), { id: session.sessionId, cwd: session.sessionManager.getCwd() });
       this.publishActivityForEvent(session, event);
       // Queued messages can reach the model after an ask opened, even though
       // there was no ask to dismiss when the user originally submitted them.

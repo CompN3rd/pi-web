@@ -3,7 +3,9 @@ import { WebSocket, type RawData } from "ws";
 import {
   SessionDaemonClient,
   type SessionDaemonRequestOptions,
+  type SessionDaemonStreamResponse,
 } from "../../sessiond/sessionDaemonClient.js";
+import { requestCancellation } from "../requestCancellation.js";
 
 export interface SessionProxyDaemon {
   request(
@@ -12,6 +14,7 @@ export interface SessionProxyDaemon {
     body?: unknown,
     options?: SessionDaemonRequestOptions,
   ): Promise<{ statusCode: number; headers: Record<string, string>; body: string }>;
+  requestStream(path: string, options?: SessionDaemonRequestOptions): Promise<SessionDaemonStreamResponse>;
   connectWebSocket(path: string): WebSocket;
 }
 
@@ -28,6 +31,25 @@ export function registerSessionProxyRoutes(app: FastifyInstance, daemon: Session
       return undefined;
     }
   };
+
+  // Image responses cross this boundary as bytes, never as JSON or UTF-8 text.
+  app.get(`${prefix}/sessions/:sessionId/media/:mediaId`, async (request, reply) => {
+    const cancellation = requestCancellation(request, reply);
+    try {
+      const upstream = await daemon.requestStream(stripPrefix(request.url, prefix), { signal: cancellation.signal });
+      reply.code(upstream.statusCode);
+      for (const name of ["content-type", "content-length", "cache-control", "x-content-type-options"]) {
+        const value = upstream.headers[name];
+        if (value !== undefined && value !== "") reply.header(name, value);
+      }
+      return await reply.send(upstream.body);
+    } catch (error) {
+      requestFailed(reply, error);
+      return await reply;
+    } finally {
+      cancellation.dispose();
+    }
+  });
 
   app.get(`${prefix}/sessiond/health`, (_request, reply) => proxy({ method: "GET", url: `${prefix}/health` }, reply));
   app.get(`${prefix}/sessiond/runtime`, (_request, reply) => proxy({ method: "GET", url: `${prefix}/runtime` }, reply));

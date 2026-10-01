@@ -58,7 +58,7 @@ import {
   parseWorkspaceTrustResponse,
   requireMachineStatusSnapshot,
 } from "./parsers";
-import { messagePath } from "./urls";
+import { messagePath, streamSnapshotPath, transcriptSnapshotPath } from "./urls";
 
 const machinePrefix = (machineId = "local") => `api/machines/${encodeURIComponent(machineId)}`;
 
@@ -72,12 +72,6 @@ function sessionPath(session: SessionRef, endpoint: string, machineId = "local")
 
 function sessionQueryPath(session: SessionRef, endpoint: string, machineId = "local"): string {
   return `${sessionPath(session, endpoint, machineId)}${sessionQuery(session)}`;
-}
-
-function transcriptSnapshotPath(session: SessionRef, options?: { limit?: number }, machineId = "local"): string {
-  const query = new URLSearchParams({ cwd: session.cwd });
-  if (options?.limit !== undefined) query.set("limit", String(options.limit));
-  return `${sessionPath(session, "transcript-snapshot", machineId)}?${query.toString()}`;
 }
 
 function sessionQuery(session: SessionRef): string {
@@ -255,7 +249,7 @@ export const sessionsApi = {
   deleteArchivedMany: (sessions: readonly SessionRef[], machineId = "local") => request(`${machinePrefix(machineId)}/sessions/bulk/delete-archived`, parseSessionBulkDeleteArchivedResponse, { method: "POST", body: sessionBulkMutationBody(sessions) }),
   messages: (session: SessionRef, options?: { limit?: number; before?: number }, machineId = "local") => request(messagePath(session, options, machineId), parseMessagePage),
   status: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "status", machineId), parseSessionStatus),
-  streamSnapshot: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "stream-snapshot", machineId), parseSessionStreamSnapshot),
+  streamSnapshot: (session: SessionRef, machineId = "local") => request(streamSnapshotPath(session, machineId), parseSessionStreamSnapshot),
   transcriptSnapshot: (session: SessionRef, options?: { limit?: number }, machineId = "local") => request(transcriptSnapshotPath(session, options, machineId), parseSessionTranscriptSnapshot),
   clearQueue: (session: SessionRef, machineId = "local") => request(sessionPath(session, "queue/clear", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session) }),
   dismissWarning: (session: SessionRef, dismissId: string, machineId = "local") => request(sessionPath(session, "warnings/dismiss", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { dismissId }) }),

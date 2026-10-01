@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { localMarkdownImage } from "./markdownImages";
 import { toSafeMarkdownHtml } from "./markdown";
 import { MarkdownImage } from "../components/MarkdownImage";
+import { imagePresentation, settleImage } from "../components/imagePresentation.testSupport";
 
-afterEach(() => { document.body.replaceChildren(); localStorage.clear(); vi.unstubAllEnvs(); vi.useRealTimers(); });
+beforeEach(() => { vi.stubGlobal("IntersectionObserver", undefined); });
+afterEach(() => { document.body.replaceChildren(); localStorage.clear(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
 function required<T>(value: T | null | undefined): T {
   if (value === null || value === undefined) throw new Error("Expected rendered image control");
@@ -56,17 +58,17 @@ it("restores only a clicked image on revisit within the code-block intent lifeti
     host.innerHTML = toSafeMarkdownHtml(text, context, identity);
     document.body.append(host);
     const images = [...host.querySelectorAll<MarkdownImage>("pi-web-markdown-image")];
-    await Promise.all(images.map(async (image) => image.updateComplete));
+    await Promise.all(images.map(settleImage));
     return images;
   }
   function isShown(images: MarkdownImage[], index = 0): boolean {
-    return required(required(images[index]).shadowRoot).querySelector("img") !== null;
+    return imagePresentation(required(images[index])).renderRoot.querySelector("img") !== null;
   }
   const initial = await visit();
   expect(initial).toHaveLength(2);
   const first = required(initial[0]);
-  required(required(first.shadowRoot).querySelector("button")).click();
-  await first.updateComplete;
+  required(imagePresentation(first).renderRoot.querySelector("button")).click();
+  await settleImage(first);
   expect(isShown(initial)).toBe(true);
 
   vi.setSystemTime(14 * 60_000);
@@ -79,8 +81,8 @@ it("restores only a clicked image on revisit within the code-block intent lifeti
   const expired = await visit();
   expect(isShown(expired)).toBe(false);
   const again = required(expired[0]);
-  required(required(again.shadowRoot).querySelector("button")).click();
-  await again.updateComplete;
+  required(imagePresentation(again).renderRoot.querySelector("button")).click();
+  await settleImage(again);
   expect(isShown(await visit("![changed](/tmp/new.png)"))).toBe(false);
   expect(isShown(await visit())).toBe(false);
   expect(localStorage.length).toBe(0);
@@ -92,21 +94,23 @@ it("replaces the placeholder with just the image, reports failures, and resets a
   image.path = "/tmp/example.png";
   image.previewUrl = "https://example.com/preview";
   document.body.append(image);
-  await image.updateComplete;
-  const root = required(image.shadowRoot);
+  const presentation = await settleImage(image);
+  const root = presentation.renderRoot;
   expect(root.querySelector("img")).toBeNull();
   expect(root.textContent).toContain("/tmp/example.png");
-  const click = async () => { required(root.querySelector("button")).click(); await image.updateComplete; };
-  await click();
+  required(root.querySelector("button")).click();
+  await settleImage(image);
   expect(root.querySelector("img")?.src).toBe(image.previewUrl);
-  expect(root.querySelector("button")).toBeNull();
+  required(root.querySelector("img")).dispatchEvent(new Event("load"));
+  await presentation.updateComplete;
+  expect(root.querySelector(".placeholder")).toBeNull();
   expect(root.querySelector("code")).toBeNull();
   expect(root.textContent.trim()).toBe("");
   required(root.querySelector("img")).dispatchEvent(new Event("error"));
-  await image.updateComplete;
+  await presentation.updateComplete;
   expect(root.querySelector('[role="status"]')?.textContent).toContain("Image unavailable");
   image.previewUrl = "https://example.com/another";
-  await image.updateComplete;
+  await settleImage(image);
   expect(root.querySelector("img")).toBeNull();
   expect(required(root.querySelector("button")).textContent).toContain("Show image");
 });

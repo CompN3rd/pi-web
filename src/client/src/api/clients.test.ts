@@ -434,11 +434,26 @@ describe("session API compatibility", () => {
     await expect(request).rejects.not.toBeInstanceOf(SessionTreeForkUnavailableError);
   });
 
+  it("requests reference images in paginated history while preserving reference and legacy inline payloads", async () => {
+    vi.stubEnv("BASE_URL", "./");
+    vi.stubGlobal("document", { baseURI: "https://pi.example.test/nested/pi-web/" });
+    const page = { messages: [{ role: "user", content: [
+      { type: "image", mediaId: "a".repeat(64), mimeType: "image/png", byteSize: 3 },
+      { type: "image", mimeType: "image/png", data: "QUJD" },
+    ] }], start: 5, total: 15 };
+    const fetchMock = stubJsonFetch(page);
+    await expect(sessionsApi.messages({ id: "s /?", cwd: "/repo with spaces" }, { limit: 10, before: 15 }, "remote /?")).resolves.toEqual(page);
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/nested/pi-web/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/messages?cwd=%2Frepo+with+spaces&limit=10&before=15&media=reference");
+  });
+
   it("reads a consistent transcript snapshot through a nested encoded machine route with cwd and limit", async () => {
     vi.stubEnv("BASE_URL", "./");
     vi.stubGlobal("document", { baseURI: "https://pi.example.test/nested/pi-web/" });
     const page = { messages: [{ role: "user", content: "hello", entryId: "entry-1" }], start: 10, total: 11 };
-    const partial = { role: "assistant", content: [{ type: "text", text: "streaming" }] };
+    const partial = { role: "assistant", content: [
+      { type: "text", text: "streaming" },
+      { type: "image", mediaId: "b".repeat(64), mimeType: "image/png", byteSize: 3 },
+    ] };
     const fetchMock = stubJsonFetch({ page, status: dialogStatusWire(), seq: 12, partial });
 
     await expect(sessionsApi.transcriptSnapshot({ id: "s /?", cwd: "/repo with spaces" }, { limit: 25 }, "remote /?")).resolves.toEqual({
@@ -447,7 +462,7 @@ describe("session API compatibility", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchCall(fetchMock, 0);
-    expect(url).toBe("https://pi.example.test/nested/pi-web/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/transcript-snapshot?cwd=%2Frepo+with+spaces&limit=25");
+    expect(url).toBe("https://pi.example.test/nested/pi-web/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/transcript-snapshot?cwd=%2Frepo+with+spaces&limit=25&media=reference");
     expect(init?.method ?? "GET").toBe("GET");
   });
 
@@ -456,7 +471,7 @@ describe("session API compatibility", () => {
 
     await sessionsApi.transcriptSnapshot({ id: "s-1", cwd: "/repo" }, options);
 
-    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/local/sessions/s-1/transcript-snapshot?cwd=%2Frepo");
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/local/sessions/s-1/transcript-snapshot?cwd=%2Frepo&media=reference");
   });
 
   it("rejects an incomplete transcript snapshot instead of returning a partial response", async () => {
@@ -475,7 +490,7 @@ describe("session API compatibility", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchCall(fetchMock, 0);
-    expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/stream-snapshot?cwd=%2Frepo+with+spaces");
+    expect(url).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/stream-snapshot?cwd=%2Frepo+with+spaces&media=reference");
     expect(init?.method ?? "GET").toBe("GET");
   });
 
