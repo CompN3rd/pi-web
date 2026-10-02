@@ -2,7 +2,7 @@ import { LitElement, html, type TemplateResult } from "lit";
 import { customElement, query, state } from "lit/decorators.js";
 import { guard } from "lit/directives/guard.js";
 import { markdownWorkspaceContext, type WorkspaceFileOpenRequest } from "../formatting/workspaceLinks";
-import { configApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploadFolder, sessionsApi, workspacesApi, workspaceEffectiveAttachmentsFolder, workspaceEffectiveUploadFolder, type AskUserSubmission, type CommandOption, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type Workspace } from "../api";
+import { configApi, projectsApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploadFolder, sessionsApi, workspacesApi, workspaceEffectiveAttachmentsFolder, workspaceEffectiveUploadFolder, type AskUserSubmission, type CommandOption, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type Workspace } from "../api";
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState, type ModelDialogOrigin } from "../appState";
 import { browserErrorContext, browserErrorScopeKey, BrowserErrorReporter, clearBrowserError, machineBrowserErrorScope, visibleBrowserErrors, workspaceBrowserErrorScope, type BrowserError, type BrowserErrorScope } from "../browserErrors";
@@ -32,13 +32,15 @@ import { initialSessionWarningVisibilityState, reconcileSessionWarningVisibility
 import { RealtimeSocket, type BrowserRealtimeEvent } from "../sessionSocket";
 import { ServerNoticesController, visibleServerNotices } from "../serverNotices";
 import type { ServerNotice } from "../../../shared/apiTypes";
-import type { PluginNavigationDestination, ContributionQueryValue, PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, WorkspaceFilesCapabilityV1, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelNavigationV1, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "../plugins/types";
+import type { ApplicationPanelContext, PluginNavigationDestination, ContributionQueryValue, PiWebPluginRegistration, PluginMachine, PluginPromptEditor, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, PluginRuntimeContext, WorkspaceFilesCapabilityV1, WorkspaceHost, WorkspaceInvalidation, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelNavigationV1, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "../plugins/types";
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
 import { loadExternalPlugins, type ExternalPluginLoadResult } from "../plugins/external";
+import { publicPluginSelection } from "../plugins/publicContext";
+import { createPluginProjects } from "../plugins/projects";
 import { REQUIRED_TERMINAL_PLUGIN_ID, type TerminalPluginMode } from "../../../shared/requiredTerminalPlugin";
-import { PluginRegistry, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope, type BrowserPluginLifecyclePhase, type PluginRegistrationFailure } from "../plugins/registry";
+import { PluginRegistry, installApplicationPanelScope, installPluginRuntimeScope, installWorkspaceLabelScope, installWorkspacePanelScope, type BrowserPluginLifecyclePhase, type PluginRegistrationFailure } from "../plugins/registry";
 import { createPluginPeer } from "../plugins/pluginPeer";
 import { REQUIRED_TERMINAL_BROWSER_FACADE_CAPABILITY, requiredTerminalUnavailableError, type RequiredTerminalBrowserComposition, type WorkspaceContributionNavigationV1 } from "../plugins/requiredTerminalFacade";
 import { createWorkspaceFiles as createPluginWorkspaceFiles } from "../plugins/workspaceFiles";
@@ -75,7 +77,7 @@ import type { MachineDialogSubmit } from "./MachineDialog";
 import { deepActiveElement, focusElement, hasRenderedModal } from "./modalLayerRegistry";
 import "./SettingsDialog";
 import "./WorkspacePanel";
-import type { WorkspacePanelEmptyState } from "./WorkspacePanel";
+import type { WorkspacePanelEmptyState, WorkspaceToolPanel } from "./WorkspacePanel";
 import "./appShell/AppContextBar";
 import "./appShell/AppMobileMainTabs";
 import type { AppMobileMainTab } from "./appShell/AppMobileMainTabs";
@@ -302,8 +304,10 @@ export class PiWebApp extends LitElement {
   private remoteRouteRestoreTimer: number | undefined;
   private remoteRouteRestoreAttempt = 0;
   private remoteRouteRestoreInProgress = false;
-  private readonly plugins = createPluginRegistry((pluginId, machineId) =>
-    this.pluginContributionAvailable(pluginId, machineId));
+  private readonly plugins = new PluginRegistry({
+    isContributionEnabled: (pluginId, machineId) => this.pluginContributionAvailable(pluginId, machineId),
+    getSelection: () => publicPluginSelection(this.state),
+  });
   private readonly builtInPluginsReady = this.plugins.registerBatch([
     { id: "core", plugin: corePlugin },
     { id: "themes", plugin: themePackPlugin },
@@ -380,6 +384,7 @@ export class PiWebApp extends LitElement {
     // deduplicates acknowledgements for the observed completion order.
     this.committedChatIdentity = selectedChatIdentity(this.state);
     this.syncSelectedSessionReadState();
+    this.plugins.notifySelectionChanged();
   }
 
   private syncSessionWarningVisibility(): void {
@@ -1361,6 +1366,7 @@ export class PiWebApp extends LitElement {
     if (selectionChanged) this.retireRouteRestoreForSynchronousNavigation();
     else this.routeRestoreSeq += 1;
     if (selectionChanged) this.setState({ workspaceTool: availableTool, mainView: "workspace" });
+    else this.requestUpdate();
     this.refreshSelectedWorkspaceTool(availableTool);
   }
 
@@ -1629,14 +1635,12 @@ export class PiWebApp extends LitElement {
 
   private renderWorkspacePanel() {
     const workspace = this.state.selectedWorkspace;
-    const panelContext = workspace === undefined ? undefined : this.createWorkspacePanelContext(workspace);
     const emptyState = workspace === undefined ? this.workspacePanelEmptyState() : undefined;
     const panels = this.visibleWorkspacePanels();
     return html`
       <workspace-panel
         id="workspace-panel"
         .workspace=${workspace}
-        .panelContext=${panelContext}
         .emptyState=${emptyState}
         .error=${this.workspaceContentError()}
         .tool=${this.effectiveWorkspaceTool(panels)}
@@ -2041,11 +2045,25 @@ export class PiWebApp extends LitElement {
     this.publishWorkspaceTool(navigation.contributionId, query);
   };
 
-  private visibleWorkspacePanels(): QualifiedWorkspacePanelContribution[] {
+  private visibleWorkspacePanels(): WorkspaceToolPanel[] {
+    const applicationContext = this.createApplicationPanelContext();
+    const panels: WorkspaceToolPanel[] = this.plugins.getApplicationPanels()
+      .filter((panel) => panel.visible?.(applicationContext) ?? true)
+      .map((panel) => ({
+        ...panel,
+        badge: () => panel.badge?.(applicationContext),
+        render: () => panel.render(applicationContext),
+      }));
     const workspace = this.state.selectedWorkspace;
-    if (workspace === undefined) return [];
-    const context = this.createWorkspacePanelContext(workspace);
-    return this.plugins.getWorkspacePanels().filter((panel) => panel.visible?.(context) ?? true);
+    if (workspace !== undefined) {
+      const context = this.createWorkspacePanelContext(workspace);
+      panels.push(...this.plugins.getWorkspacePanels().filter((panel) => panel.visible?.(context) ?? true).map((panel) => ({
+        ...panel,
+        badge: () => panel.badge?.(context),
+        render: () => panel.render(context),
+      })));
+    }
+    return panels.sort((left, right) => (left.order ?? 1000) - (right.order ?? 1000) || left.title.localeCompare(right.title));
   }
 
   private availableWorkspacePanelId(
@@ -2149,8 +2167,8 @@ export class PiWebApp extends LitElement {
   private readonly pluginLoadErrors = new Map<string, string>();
 
   private workspaceContentError(): string {
-    if (this.state.selectedWorkspace === undefined) return this.contentError();
     const route = readRoute();
+    if (this.state.selectedWorkspace === undefined && route.tool === undefined) return this.contentError();
     const requested = route.tool;
     const panel = requested === undefined ? this.effectiveWorkspaceTool()
       : resolveAppRoute({ ...route, tool: requested }, (value) => this.plugins.resolveWorkspacePanelRouteId(value, selectedMachineId(this.state))).tool;
@@ -2172,12 +2190,6 @@ export class PiWebApp extends LitElement {
     return "Select a project and workspace to start a session.";
   }
 
-  private mobilePanelBadge(panel: QualifiedWorkspacePanelContribution): unknown {
-    const workspace = this.state.selectedWorkspace;
-    if (workspace === undefined) return undefined;
-    return panel.badge?.(this.createWorkspacePanelContext(workspace));
-  }
-
   private workspaceLabelItems(workspace: Workspace): WorkspaceLabelItem[] {
     return this.plugins.getWorkspaceLabelItems(this.createWorkspaceLabelContext(workspace));
   }
@@ -2191,6 +2203,7 @@ export class PiWebApp extends LitElement {
         workspace,
         state: this.state,
         files: this.createWorkspaceFiles(workspace, machine),
+        projects: createPluginProjects(projectsApi, machine.id),
         ...(peer === undefined ? {} : { peer }),
         host: this.createWorkspaceHost(),
       }, createContext);
@@ -2209,6 +2222,27 @@ export class PiWebApp extends LitElement {
     return {
       requestRender: () => { this.invalidateWorkspaceSurface(); },
     };
+  }
+
+  private createApplicationPanelContext(): ApplicationPanelContext {
+    const machine = pluginMachineFromState(this.state);
+    const workspace = this.state.selectedWorkspace;
+    const createContext = (pluginId: string): ApplicationPanelContext => {
+      const navigation = this.beginNavigationOperation(WORKSPACE_SURFACE_SCOPE);
+      return installApplicationPanelScope({
+        machine,
+        state: this.state,
+        projects: createPluginProjects(projectsApi, machine.id),
+        ...(workspace === undefined ? {} : { workspace }),
+        ...(workspace === undefined || !this.terminalAvailableForMachine(machine.id) ? {} : {
+          terminal: this.workspaceTerminal(pluginId, workspace, machine.id, navigation),
+        }),
+        navigate: (destination) => this.navigate(destination),
+        prompt: this.createPromptEditor(),
+        host: this.createWorkspaceHost(),
+      }, createContext);
+    };
+    return createContext("core");
   }
 
   private createWorkspacePanelContext(
@@ -2232,6 +2266,7 @@ export class PiWebApp extends LitElement {
         workspace,
         state: this.state,
         files: this.createWorkspaceFiles(workspace, machine),
+        projects: createPluginProjects(projectsApi, machineId),
         ...(peer === undefined ? {} : { peer }),
         prompt: this.createPromptEditor(),
         terminal: this.workspaceTerminal(binding.registrationPluginId, workspace, machineId, navigation),
@@ -2697,6 +2732,7 @@ export class PiWebApp extends LitElement {
   private createPluginRuntimeContext(): PluginRuntimeContext {
     const createContext = (): PluginRuntimeContext => installPluginRuntimeScope({
       state: this.state,
+      projects: createPluginProjects(projectsApi, selectedMachineId(this.state)),
       prompt: this.createPromptEditor(),
       piWebUnstable: {
         openSettings: (section) => { this.openSettings(section); },
@@ -3479,7 +3515,7 @@ export class PiWebApp extends LitElement {
           id: panel.id,
           label: panel.title,
           ...(icon === undefined ? {} : { icon }),
-          badge: this.mobilePanelBadge(panel),
+          badge: panel.badge?.(),
         };
       }),
     ];
@@ -3569,10 +3605,6 @@ function modelValueFromStatus(status: AppState["status"]): string | undefined {
   const provider = status?.model?.provider;
   const id = status?.model?.id;
   return provider !== undefined && id !== undefined ? `${provider}/${id}` : undefined;
-}
-
-function createPluginRegistry(isContributionEnabled: (pluginId: string, machineId: string | undefined) => boolean): PluginRegistry {
-  return new PluginRegistry({ isContributionEnabled });
 }
 
 function coreWorkspacePluginBinding(): WorkspacePluginBinding {
