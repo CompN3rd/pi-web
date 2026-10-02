@@ -185,6 +185,15 @@ export interface PluginRuntimeState {
     mainView?: "navigation" | "chat" | "workspace";
     piWebStatus?: PiWebStatusResponse;
 }
+export interface PluginPromptChip {
+    /** Plugin-local identity; setting the same id replaces its data and callback. */
+    readonly id: string;
+    readonly label: string;
+    /** Non-empty text appended verbatim to the message, separated by blank lines. */
+    readonly text: string;
+    /** User removal or server-accepted submission; programmatic withdrawal is silent. */
+    readonly onRemove?: (reason: "user" | "submitted") => void | Promise<void>;
+}
 export interface PluginPromptEditor {
     /** Insert text at the current cursor position. Replaces any selection.
      *  If the editor is not focused, focuses it first.
@@ -198,6 +207,16 @@ export interface PluginPromptEditor {
         end: number;
         text: string;
     } | null;
+    /**
+     * Stage or replace this plugin's chip in the machine/conversation captured by
+     * this context. Requires a ready, non-archived selected conversation when the
+     * context is created. Throws when that target or plugin is unavailable.
+     * Browser memory only; survives panel closure/navigation, not page reload.
+     * Omitted by older hosts. Call from event handlers, not render callbacks.
+     */
+    setChip?(chip: PluginPromptChip): void;
+    /** Withdraw this plugin's chip from the captured conversation without notification. */
+    removeChip?(id: string): void;
 }
 /** A complete navigation destination, not a patch of the current route. */
 export interface PluginNavigationDestination {

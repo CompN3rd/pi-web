@@ -1,5 +1,5 @@
 import type { TemplateResult } from "lit";
-import type { PluginProjects, PluginSelectionService } from "../../../plugin-api";
+import type { PluginProjects, PluginPromptEditor, PluginSelectionService } from "../../../plugin-api";
 import type { AppAction } from "../actions";
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, JsonValue, Machine, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, TerminalCommandRunHandle, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, Workspace } from "../api";
 import type { PluginCapability, PluginCapabilityProvision } from "../../../shared/pluginApiTypes";
@@ -208,11 +208,7 @@ export interface PiWebUnstableRuntimeContext {
   openSettings?: (section?: SettingsSection) => void;
 }
 
-export interface PluginPromptEditor {
-  insertText(text: string): void;
-  getText(): string;
-  getSelection(): { start: number; end: number; text: string } | null;
-}
+export type { PluginPromptEditor } from "../../../plugin-api";
 
 export type { PluginNavigationDestination } from "../../../plugin-api";
 

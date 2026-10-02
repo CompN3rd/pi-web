@@ -104,6 +104,34 @@ Each service captures its `machineId` when the host creates the context. Retaini
 
 Browser API v4 remains unchanged. No capability requirement is needed for application panels, selection observation, or project discovery. Older hosts may omit the tab silently; update PI WEB to use it. Current hosts warn at registration about unknown contribution names, attributing the warning to the plugin, and ignore them while keeping recognized contributions.
 
+### Attach text context to a message
+
+Action, application-panel, and workspace-panel contexts provide optional `prompt.setChip(chip)` and `prompt.removeChip(id)` methods. Use them to stage labeled, removable text context in the existing composer. Feature-detect these methods on older hosts; browser API v4 is unchanged.
+
+Each prompt facade captures the machine and conversation when its context is created. Staging requires a ready, non-archived conversation at that point; calls throw when there is no such target or the owning plugin is unavailable. Retaining a facade never redirects its chips to a later selection. Call from an action or event handler, not from a render callback.
+
+```ts
+const prompt = context.prompt;
+if (!prompt.setChip) throw new Error("Update PI WEB to attach text context");
+prompt.setChip({
+  id: "selected-note", // local to this plugin and captured conversation
+  label: "Selected note",
+  text: savedNote.text,
+  onRemove: (reason) => {
+    // "user" means removal in the composer; "submitted" means server acceptance.
+    forgetSavedNote(savedNote.id);
+  },
+});
+// Withdraw without calling onRemove:
+// prompt.removeChip?.("selected-note");
+```
+
+Setting the same id replaces its text, label, and callback without notifying the old callback. Chips remain available when a panel closes or the user navigates away, and reappear on return to their conversation. **Send** appends their text verbatim after the user's message, separated by blank lines; chips alone can be sent. Chip-bearing messages are ordinary prompts, even when the typed text starts with `/` or `!`. Existing attachment delivery and steer/follow-up controls still apply.
+
+Server acceptance consumes the submitted versions and calls their `onRemove("submitted")` handlers. Failed sends retain chips and composition for retry. Acceptance means the server accepted the prompt, not that the agent finished answering; a browser-local pending-session queue is not acceptance. Updating a chip while Send is in flight retains the new version; the submitted version's callback still receives its notification. Callback failures are logged with the owner identity without blocking other owners.
+
+Host staging is browser-memory-only and clears on reload. Plugins own any saved chip data. To restore it, obtain a fresh context for the saved machine/conversation (navigate there first if needed), then call `setChip` with the saved id, label, text, and newly created callback. Store ordinary data, not callback functions or host objects; repeated restoration replaces rather than duplicates the same chip. No host persistence or callback reconstruction is performed.
+
 ### Opening workspace files from chat
 
 Chat Markdown links to relative files (including `./file`) or absolute paths inside the session workspace open in the bundled Files panel. The link retains a download URL for modifier/new-tab clicks and when no panel accepts it. File access still uses server-side workspace containment checks.

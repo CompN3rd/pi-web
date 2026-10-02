@@ -24,6 +24,7 @@ import { SessionStorageWorkspaceSelectionMemory } from "../controllers/workspace
 import { KeyboardShortcutDispatcher } from "../keyboardShortcuts";
 import { selectedMachineId, type NavigationDestinationOptions, type NavigationFreshness, type NavigationScope, type NavigationSelection } from "../controllers/types";
 import { machineSessionKey } from "../machineKeys";
+import { appendPromptChipText, samePromptChipTarget, type StagedPromptChip } from "../promptChips";
 import { HttpRequestError } from "../api/http";
 import { sessionCleanupRequestKey } from "../sessionCleanupUi";
 import { selectedNotificationView } from "../sessionNotifications";
@@ -305,6 +306,7 @@ export class PiWebApp extends LitElement {
   private remoteRouteRestoreAttempt = 0;
   private remoteRouteRestoreInProgress = false;
   private readonly plugins = new PluginRegistry({
+    onPromptChipsChanged: () => { this.requestUpdate(); },
     isContributionEnabled: (pluginId, machineId) => this.pluginContributionAvailable(pluginId, machineId),
     getSelection: () => publicPluginSelection(this.state),
   });
@@ -2238,7 +2240,7 @@ export class PiWebApp extends LitElement {
           terminal: this.workspaceTerminal(pluginId, workspace, machine.id, navigation),
         }),
         navigate: (destination) => this.navigate(destination),
-        prompt: this.createPromptEditor(),
+        prompt: this.createPromptEditor(pluginId, machine.id),
         host: this.createWorkspaceHost(),
       }, createContext);
     };
@@ -2268,7 +2270,7 @@ export class PiWebApp extends LitElement {
         files: this.createWorkspaceFiles(workspace, machine),
         projects: createPluginProjects(projectsApi, machineId),
         ...(peer === undefined ? {} : { peer }),
-        prompt: this.createPromptEditor(),
+        prompt: this.createPromptEditor(binding.registrationPluginId, machineId),
         terminal: this.workspaceTerminal(binding.registrationPluginId, workspace, machineId, navigation),
         ...(contributionId === undefined ? {} : {
           navigation: this.createWorkspacePanelNavigation(workspace, machine, contributionId, navigationAliases, contributionQueryRestore, navigation),
@@ -2704,8 +2706,12 @@ export class PiWebApp extends LitElement {
     return mode === "recovery-disabled" || (mode === "required" && this.terminalAvailableForMachine(machineId));
   }
 
-  private createPromptEditor(): PluginPromptEditor {
+  private createPromptEditor(pluginId = "core", machineId = selectedMachineId(this.state)): PluginPromptEditor {
+    const session = this.state.selectedSession;
+    const target = session !== undefined && session.archived !== true && !isCreatingSessionId(session.id) && machineId === selectedMachineId(this.state)
+      ? { machineId, sessionId: session.id } : undefined;
     return {
+      ...this.plugins.promptChipMethods(pluginId, target),
       insertText: (text: string) => {
         const editor = this.promptEditor?.view;
         if (!editor) return;
@@ -2730,10 +2736,10 @@ export class PiWebApp extends LitElement {
   }
 
   private createPluginRuntimeContext(): PluginRuntimeContext {
-    const createContext = (): PluginRuntimeContext => installPluginRuntimeScope({
+    const createContext = (pluginId = "core"): PluginRuntimeContext => installPluginRuntimeScope({
       state: this.state,
       projects: createPluginProjects(projectsApi, selectedMachineId(this.state)),
-      prompt: this.createPromptEditor(),
+      prompt: this.createPromptEditor(pluginId),
       piWebUnstable: {
         openSettings: (section) => { this.openSettings(section); },
       },
@@ -3274,17 +3280,41 @@ export class PiWebApp extends LitElement {
     if (value !== "") await this.sessions.setThinkingLevel(value);
   }
 
-  private sendPrompt(text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string): void {
+  private async sendPrompt(text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string, chips: readonly StagedPromptChip[] = []): Promise<boolean> {
     const hasAttachments = attachments !== undefined && attachments.length > 0;
-    if (!hasAttachments && streamingBehavior === undefined && this.auth.handleSlashCommand(text)) return;
-    void this.sessions.send(text, streamingBehavior, attachments, delivery, folder);
+    if (chips.length === 0) {
+      if (!hasAttachments && streamingBehavior === undefined && this.auth.handleSlashCommand(text)) return false;
+      return this.sessions.send(text, streamingBehavior, attachments, delivery, folder);
+    }
+    const target = chips[0]?.target;
+    if (target === undefined || chips.some((chip) => !samePromptChipTarget(chip.target, target) || !this.plugins.promptChipOwnerAvailable(chip.pluginId, target.machineId))) return false;
+    const accepted = await this.sessions.send(appendPromptChipText(text, chips), streamingBehavior, attachments, delivery, folder, target);
+    if (accepted) this.plugins.promptChips.consume(chips);
+    return accepted;
   }
 
   // Stable handler identities for child components. Inlined arrow closures
   // would be a fresh reference on every render, forcing Lit to re-commit the
   // bindings each time the app re-renders; bound class fields keep them constant.
-  private readonly handleSendPrompt = (text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string): void => {
-    this.sendPrompt(text, streamingBehavior, attachments, delivery, folder);
+  private readonly handleSendPrompt = (text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string, chips?: readonly StagedPromptChip[]): Promise<boolean> => {
+    return this.sendPrompt(text, streamingBehavior, attachments, delivery, folder, chips);
+  };
+
+  private visiblePromptChips: readonly StagedPromptChip[] = [];
+
+  private selectedPromptChips(): readonly StagedPromptChip[] {
+    const machineId = selectedMachineId(this.state);
+    const sessionId = this.state.selectedSession?.id;
+    const chips = sessionId === undefined ? [] : this.plugins.promptChips.list({ machineId, sessionId })
+      .filter((chip) => this.plugins.promptChipOwnerAvailable(chip.pluginId, machineId));
+    // Keep the property stable during per-token status updates; otherwise an
+    // empty chip list would undo the composer's render-churn protection.
+    if (chips.length !== this.visiblePromptChips.length || chips.some((chip, index) => chip !== this.visiblePromptChips[index])) this.visiblePromptChips = chips;
+    return this.visiblePromptChips;
+  }
+
+  private readonly handleRemovePromptChip = (chip: StagedPromptChip): void => {
+    this.plugins.promptChips.removeByUser(chip);
   };
 
   private readonly handleStopActiveWork = (): void => {
@@ -3568,7 +3598,7 @@ export class PiWebApp extends LitElement {
           <div class="mobile-navigation-panel">${this.appShell.isMobileNavigationLayout ? this.renderNavigationPanel() : null}</div>
           ${state.selectedSession ? html`
             ${this.renderChatView(state, state.selectedSession)}
-            <prompt-editor .shortcuts=${this.shortcutConfig} .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .machineId=${selectedMachineId(state)} .projectId=${state.selectedWorkspace?.projectId} .workspaceId=${state.selectedWorkspace?.id} .attachmentsFolder=${workspaceEffectiveAttachmentsFolder(state.selectedWorkspace?.effectiveConfig, this.workspaceAttachmentsDefaultFolder)} .disabled=${state.selectedSession.archived === true} .canSteer=${state.status?.isStreaming === true} .isCompacting=${state.status?.isCompacting === true} .canStop=${state.status?.isStreaming === true || state.status?.isBashRunning === true || state.status?.isCompacting === true || (state.status?.pendingMessageCount ?? 0) > 0} .status=${state.status} .availableThinkingLevels=${state.availableThinkingLevels} .sending=${state.sendingPrompts[state.selectedSession.id] === true} .onSend=${this.handleSendPrompt} .onStop=${this.handleStopActiveWork} .onSelectModel=${this.handleSelectModel} .onSelectThinking=${this.handleSelectThinking}></prompt-editor>
+            <prompt-editor .promptChips=${this.selectedPromptChips()} .onRemoveChip=${this.handleRemovePromptChip} .shortcuts=${this.shortcutConfig} .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .machineId=${selectedMachineId(state)} .projectId=${state.selectedWorkspace?.projectId} .workspaceId=${state.selectedWorkspace?.id} .attachmentsFolder=${workspaceEffectiveAttachmentsFolder(state.selectedWorkspace?.effectiveConfig, this.workspaceAttachmentsDefaultFolder)} .disabled=${state.selectedSession.archived === true} .canSteer=${state.status?.isStreaming === true} .isCompacting=${state.status?.isCompacting === true} .canStop=${state.status?.isStreaming === true || state.status?.isBashRunning === true || state.status?.isCompacting === true || (state.status?.pendingMessageCount ?? 0) > 0} .status=${state.status} .availableThinkingLevels=${state.availableThinkingLevels} .sending=${state.sendingPrompts[state.selectedSession.id] === true} .onSend=${this.handleSendPrompt} .onStop=${this.handleStopActiveWork} .onSelectModel=${this.handleSelectModel} .onSelectThinking=${this.handleSelectThinking}></prompt-editor>
             ${this.renderStatusBar(state)}
             ${state.commandDialog !== undefined ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog?.requestId ?? "", value)} .onCancel=${() => { this.sessions.cancelCommand(); }}></command-picker>` : null}
             ${state.modelDialog !== undefined ? html`<model-picker title=${state.modelDialog.title} .options=${state.modelDialog.options} .catalog=${state.modelDialog.catalog} .defaultValue=${state.modelDialog.defaultValue} .defaultsLoading=${state.modelDialog.defaultsLoading === true} .onSetDefault=${this.handleSetDefaultModel} .selectedValue=${state.modelDialog.selectedValue} .onPick=${(value: string) => { void this.pickModel(value); }} .onToggleEnabled=${this.handleToggleModelEnabled} .onSetScope=${this.handleSetModelScope} .onCancel=${() => { this.setState({ modelDialog: undefined }); }}></model-picker>` : null}

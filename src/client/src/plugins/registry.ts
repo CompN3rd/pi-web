@@ -1,6 +1,8 @@
 import { html, svg } from "lit";
 import type { ContentRenderRequest, PluginSelectionSnapshot } from "../../../plugin-api";
 import { PluginSelectionHost } from "./selection";
+import { PromptChipStore, type PromptChipTarget } from "../promptChips";
+import type { PluginPromptEditor } from "../../../plugin-api";
 import { compareContentRenderers, contentRendererMatches, snapshotContentRenderer, type ContentRendererChoice, type RegisteredContentRenderer } from "./contentRenderers";
 import { createContentRenderingService, contentRenderingCapabilityToken } from "../formatting/contentRendering";
 import { requirePluginBackendRevision } from "../../../shared/pluginBackendProtocol";
@@ -21,6 +23,8 @@ const applicationPanelScopes = new WeakMap<ApplicationPanelContext, (pluginId: s
 const workspaceLabelScopes = new WeakMap<WorkspaceLabelContext, (binding: WorkspacePluginBinding) => WorkspaceLabelContext>();
 
 export interface PluginRegistryOptions {
+  /** Request a composer refresh after browser-memory chip staging changes. */
+  onPromptChipsChanged?: () => void;
   /** Live public selection projection; standalone registries default to no selection. */
   getSelection?: () => PluginSelectionSnapshot;
   /** Host lifecycle gate for the machine a contribution will act against. */
@@ -116,6 +120,27 @@ interface StagedBrowserPlugin {
 const DEFAULT_LIFECYCLE_TIMEOUT_MS = 10_000;
 
 export class PluginRegistry {
+  readonly promptChips: PromptChipStore;
+
+  /** Plugin identity is host supplied; retained methods never follow later selection. */
+  promptChipMethods(pluginId: string, target: PromptChipTarget | undefined): Pick<PluginPromptEditor, "setChip" | "removeChip"> {
+    const requireTarget = (): PromptChipTarget => {
+      if (target === undefined) throw new Error("Select a ready, non-archived conversation to stage prompt chips");
+      if (!this.promptChipOwnerAvailable(pluginId, target.machineId)) throw new Error(`Prompt chips unavailable for plugin ${pluginId} on machine ${target.machineId}`);
+      return target;
+    };
+    return {
+      setChip: (chip) => { this.promptChips.set(pluginId, requireTarget(), chip); },
+      removeChip: (id) => { this.promptChips.remove(pluginId, requireTarget(), id); },
+    };
+  }
+
+  promptChipOwnerAvailable(pluginId: string, machineId: string): boolean {
+    const declaration = this.declarationsById.get(pluginId);
+    return this.hasPlugin(pluginId) && declaration !== undefined
+      && this.isContributionActive(pluginId, declaration.machineId, machineId, declaration.sourcePluginId);
+  }
+
   private readonly contentRenderers: RegisteredContentRenderer[] = [];
   readonly chatContentRendering = createContentRenderingService((request) => this.matchContentRenderers(request));
   readonly contentRendering = this.chatContentRendering.capability;
@@ -150,6 +175,7 @@ export class PluginRegistry {
   private disposePromise: Promise<void> | undefined;
 
   constructor(private readonly options: PluginRegistryOptions = {}) {
+    this.promptChips = new PromptChipStore(options.onPromptChipsChanged);
     this.selection = new PluginSelectionHost(options.getSelection ?? (() => ({})));
     this.lifecycleTimeoutMs = positiveInteger(options.lifecycleTimeoutMs, DEFAULT_LIFECYCLE_TIMEOUT_MS, "lifecycleTimeoutMs");
     for (const provision of snapshotCapabilityProvisions([{ capability: contentRenderingCapabilityToken, value: this.contentRendering }, ...(options.hostCapabilities ?? [])], undefined, "Browser host capability provisions")) {
@@ -196,6 +222,7 @@ export class PluginRegistry {
   beginShutdown(): void {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
+    this.promptChips.clear();
     const reason = new DOMException("Browser plugin host is shutting down", "AbortError");
     for (const controller of this.activatingLifetimes) abortLifetime(controller, reason);
     for (const plugin of [...this.activePlugins, ...this.stagedPlugins]) abortLifetime(plugin.lifetimeController, reason);
