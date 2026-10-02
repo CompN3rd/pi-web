@@ -42,6 +42,7 @@ describe("createAskUserToolDefinition", () => {
     const { tool } = toolOverStore();
 
     expect(tool.name).toBe("ask_user");
+    expect(tool.exposure).toBe("model-only");
     expect(tool.description).toBe("Post a set of questions to the user as a browser form and end this run. Answers arrive later as a follow-up message; the user may leave any question unanswered.");
     expect(tool.promptSnippet).toBe("ask_user: post a question set to the user; ends the run, answers return as a follow-up");
     expect(tool.promptGuidelines).toEqual([

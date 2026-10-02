@@ -49,6 +49,13 @@ function firstText(content: readonly (TextContent | ImageContent)[]): string {
 }
 
 describe("createSubsessionToolDefinitions", () => {
+  it("keeps run-ending yield model-only while other subsession tools remain callable", () => {
+    const definitions = tools({});
+    expect(definitions.yield.exposure).toBe("model-only");
+    for (const name of ["spawn", "list", "check", "read"] as const) {
+      expect(definitions[name].exposure ?? "direct").toBe("direct");
+    }
+  });
   it("spawn_subsession forwards parent identity and params from the live context", async () => {
     const spawn = vi.fn(() => Promise.resolve({ sessionId: "child-1", cwd: "/repos/a" }));
     const { spawn: spawnTool } = tools({ spawn });

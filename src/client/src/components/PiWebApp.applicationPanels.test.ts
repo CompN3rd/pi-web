@@ -396,7 +396,7 @@ it("shows bundled Updates guidance and Copy without selections, retaining visibi
   expect(panel.shadowRoot?.querySelector('[aria-label="Updates, 1"]')).not.toBeNull();
   expect(commandButtons(panel, "Run")).toHaveLength(0);
   commandButtons(panel, "Copy")[0]?.click();
-  expect(writeText).toHaveBeenCalledExactlyOnceWith("pi-web-docker update");
+  expect(writeText).toHaveBeenCalledExactlyOnceWith("node /workspace/dist/cli.js update");
   expect(registryFor(app).resolveWorkspacePanelRouteId("updates:workspace.updates", "local")).toBe("updates:workspace.updates");
   expect(registryFor(app).getWorkspacePanels()).toEqual([]);
   patchState(app, { selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace] });
@@ -444,7 +444,7 @@ it("offers Updates Run only with a selected-workspace Terminal on the current ma
     origin: "updates", registrationPluginId: "pi-web.terminal", workspace,
   });
   expect(runCommand).toHaveBeenCalledExactlyOnceWith({
-    title: "Update & restart everything", command: "pi-web-docker update", open: true, metadata: { "pi.plugin": "updates" },
+    title: "Update PI WEB", command: "node /workspace/dist/cli.js update", open: true, metadata: { "pi.plugin": "updates" },
   });
 
   const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -453,7 +453,7 @@ it("offers Updates Run only with a selected-workspace Terminal on the current ma
   run.click(); // A retained local callback must not run after selection changed, even before rerender.
   await vi.waitFor(() => {
     expect(error).toHaveBeenCalledWith(
-      'Updates plugin failed to run "Update & restart everything"', expect.objectContaining({ message: "Workspace panel context is no longer current" }),
+      'Updates plugin failed to run "Update PI WEB"', expect.objectContaining({ message: "Workspace panel context is no longer current" }),
     );
   });
   expect(createWorkspaceTerminal).toHaveBeenCalledOnce();
@@ -487,7 +487,7 @@ const updatesStatus: PiWebStatusResponse = {
     sessiond: { component: "sessiond", label: "Session daemon", stale: false, available: true, installation: { kind: "docker" } },
   },
   release: { packageName: "@jmfederico/pi-web", updateAvailable: true },
-  commands: { update: "pi-web-docker update" },
+  commands: { update: "node /workspace/dist/cli.js update" },
   messages: [{ id: "update", severity: "info", title: "PI WEB update available", body: "Update and restart to use the new release." }],
 };
 

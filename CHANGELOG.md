@@ -1,5 +1,18 @@
 # @jmfederico/pi-web
 
+## 1.202610.1
+
+### Patch Changes
+
+- 4c3574f: Enable Pi's built-in MCP, codemode, and tool-search extensions in PI WEB sessions, respecting built-in disable settings and replacement extensions.
+- a0a7c3b: Remove the extra bottom spacing below the compacting-history notice when it is the last card in the chat.
+- 134ce2e: Require Pi 1.x for all Pi SDK dependencies and bundled companions; Pi 0.x is no longer supported, and Pi 2.x is outside the supported range. Update Pi and PI WEB together, then restart the web/API service before the session daemon. Restarting the daemon interrupts active sessions.
+
+  Keep run-ending question and subsession-yield tools out of codemode scripts, preserve Pi's recorded thinking level, and keep nested tool calls attached to their parent transcript result across reconnects. Explicitly reject virtual-model routers because their session-bound context cannot safely use PI WEB's shared model runtime; select a physical model instead.
+
+- 77951f8: Apply Pi extension Markdown transformers to completed and historical transcript text without changing original messages. Live partial responses remain untransformed until completion.
+- d33a2fc: Add `pi-web update` as the shared update entry point for the CLI and Updates panel, with installation-aware handling, clean-checkout fast-forward updates, and explicit confirmation before disruptive updates. Keep nested Linux and macOS restarts detached from the initiating terminal. Add `pi-web version --check` to report the latest available npm release.
+
 ## 1.202610.0
 
 ### Patch Changes
