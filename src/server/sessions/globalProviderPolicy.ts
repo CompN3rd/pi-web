@@ -89,6 +89,28 @@ function logBootstrapDiagnostic(
   }
 }
 
+/**
+ * Pi routers close over an extension runtime's session-bound context. Sharing
+ * them would let another session replace a router or keep it after its context
+ * is invalidated. Bootstrap has no bound context either, so reject before load.
+ * Pi surfaces these throws as bootstrap diagnostics or hosted extension errors.
+ */
+function rejectVirtualModelMutations(runtime: ModelRuntime): void {
+  const reject = (operation: "registerVirtualModel" | "unregisterVirtualModel"): never => {
+    // Never echo model definitions or IDs: they may contain sensitive values.
+    throw new Error(
+      `PI WEB does not support ${operation}(): virtual-model routers capture session-bound context, `
+      + "but the model runtime is shared across sessions. Disable this extension's virtual-model feature "
+      + "and select a physical model instead.",
+    );
+  };
+  const rejectedMethods: Pick<ModelRuntime, "registerVirtualModel" | "unregisterVirtualModel"> = {
+    registerVirtualModel: () => reject("registerVirtualModel"),
+    unregisterVirtualModel: () => reject("unregisterVirtualModel"),
+  };
+  Object.assign(runtime, rejectedMethods);
+}
+
 function freezeProviderMutations(
   runtime: ModelRuntime,
   logger: GlobalProviderBootstrapLogger,
@@ -165,11 +187,12 @@ function freezeProviderMutations(
  * contamination guard, not a sandbox for otherwise trusted extensions.
  *
  * The temporary cwd is guaranteed to be empty, so Pi discovers agent-dir
- * extensions without loading project resources. Documented initialization-time
- * config and native registrations therefore reach the runtime through Pi's
+ * extensions without loading project resources. Virtual-model mutations are
+ * rejected before even that load: their session-bound routers cannot be shared.
+ * Documented initialization-time config and native registrations reach Pi's
  * public service factory. Pi exposes no provider-freeze hook, so the daemon
  * deliberately shadows the three public instance mutation methods afterward;
- * every registration replay or later call is then a logged no-op.
+ * every provider registration replay or later mutation is then a logged no-op.
  *
  * The one exception is a known config provider refreshing its own model
  * catalog: a `registerProvider` call whose config matches the recorded
@@ -183,6 +206,7 @@ export async function bootstrapAndFreezeGlobalExtensionProviders(
   agentDir: string,
   logger: GlobalProviderBootstrapLogger,
 ): Promise<void> {
+  rejectVirtualModelMutations(runtime);
   const services = await loadGlobalExtensionServices(runtime, agentDir);
   const providerIds = Object.freeze([...runtime.getRegisteredProviderIds()].sort());
 

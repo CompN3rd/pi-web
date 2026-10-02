@@ -308,6 +308,8 @@ Model providers are shared across all sessions on a machine. PI WEB loads them w
 
 Provider connection settings stay fixed until the daemon restarts. Project extensions and `/reload` cannot add, replace, or remove providers. Other Pi extension features continue to load and reload normally.
 
+Pi virtual models are unsupported in PI WEB, even from global extensions: their routers capture session-bound context that cannot safely be shared across sessions. Calls to `registerVirtualModel()` or `unregisterVirtualModel()` on the shared runtime raise explicit errors, reported in bootstrap diagnostics or session extension errors. Disable the extension's virtual-model feature and select a physical model instead; restarting the daemon does not enable it.
+
 #### Model list refresh for a known provider
 
 An extension may refresh an existing provider's **model list** without a restart, provided all other provider settings remain unchanged. Changes to credentials, connection settings, or provider implementation require a daemon restart. Accepted model-list updates are available to sessions immediately.

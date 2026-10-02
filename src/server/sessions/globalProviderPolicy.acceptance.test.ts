@@ -36,6 +36,7 @@ interface LogEntry {
 
 interface PolicyHarness {
   service: PiSessionService;
+  events: CapturingSessionEventHub;
   runtime: ModelRuntime;
   agentDir: string;
   logEntries: LogEntry[];
@@ -216,7 +217,8 @@ async function policyHarness(options: { runtime?: ModelRuntime; agentDir?: strin
 
   await bootstrapAndFreezeGlobalExtensionProviders(runtime, agentDir, logger);
 
-  const service = new PiSessionService(new CapturingSessionEventHub(), {
+  const events = new CapturingSessionEventHub();
+  const service = new PiSessionService(events, {
     agentDir,
     modelRuntime: runtime,
     sessionManager: createPiSessionManagerGateway({ agentDir, env: {} }),
@@ -224,7 +226,7 @@ async function policyHarness(options: { runtime?: ModelRuntime; agentDir?: strin
     logger,
   });
   services.push(service);
-  return { service, runtime, agentDir, logEntries: entries };
+  return { service, events, runtime, agentDir, logEntries: entries };
 }
 
 async function expectNoProviderMutationFeedback(service: PiSessionService, ref: PiSessionRef): Promise<void> {
@@ -245,6 +247,74 @@ function parseToolMarker(raw: string): { activeTools: string[]; allTools: string
 }
 
 describe("immutable global provider bootstrap acceptance", () => {
+  it("rejects a shared virtual router in two real sessions through reload and disposal without cross-session contamination", async () => {
+    const agentDir = await agentDirWithExtension(globalProvidersSource());
+    await writeFile(join(agentDir, "settings.json"), `${JSON.stringify({ defaultProjectTrust: "always" })}\n`);
+    const { service, events, runtime, logEntries } = await policyHarness({ agentDir });
+    const baselineConfig = runtime.getRegisteredProviderConfig("global-config");
+    const baselineNative = runtime.getRegisteredNativeProvider("global-native");
+    const source = (name: string): string => `
+      export default function (pi) {
+        const router = {
+          provider: "shared-router",
+          id: "auto",
+          name: ${JSON.stringify(name)},
+          route(request, ctx) {
+            return {
+              model: ctx.modelRegistry.find("global-config", ${JSON.stringify(modelId("global-config", "baseline"))}),
+              thinkingLevel: "off",
+              state: { cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() }
+            };
+          }
+        };
+        pi.registerVirtualModel(router);
+        pi.on("session_start", () => pi.registerVirtualModel(router));
+        pi.on("session_shutdown", () => pi.unregisterVirtualModel("shared-router", "auto"));
+      }
+    `;
+    const firstCwd = await projectWithExtension(source("first-secret-router"));
+    const secondCwd = await projectWithExtension(source("second-secret-router"));
+    const first = { id: (await service.start(firstCwd)).id, cwd: firstCwd };
+    const second = { id: (await service.start(secondCwd)).id, cwd: secondCwd };
+    expect(first.id).not.toBe(second.id);
+
+    const errorMessages = (ref: PiSessionRef): string[] => events.sessionEvents.flatMap(({ sessionId, event }) =>
+      sessionId === ref.id && event.type === "session.error" ? [event.message] : []);
+    for (const ref of [first, second]) {
+      const warnings = (await service.status(ref)).warnings ?? [];
+      expect(warnings.filter((warning) => warning.severity === "error").map((warning) => warning.message))
+        .toContainEqual(expect.stringContaining("PI WEB does not support registerVirtualModel()"));
+      expect(errorMessages(ref)).toContainEqual(expect.stringContaining("select a physical model instead"));
+      await expect(service.setModel(ref, "shared-router", "auto")).rejects.toThrow(/not found/i);
+    }
+    const secondCatalog = await service.availableModels(second);
+    const secondModel = (await service.status(second)).model;
+    const secondErrors = errorMessages(second);
+    expect(secondModel).toBeDefined();
+    expect(secondCatalog.some((model) => model.provider === "shared-router")).toBe(false);
+
+    const errorsBeforeReload = errorMessages(first).length;
+    await expect(service.runCommand(first, "/reload")).resolves.toMatchObject({ type: "done" });
+    const reloadErrors = errorMessages(first).slice(errorsBeforeReload);
+    expect(reloadErrors).toContainEqual(expect.stringContaining("PI WEB does not support unregisterVirtualModel()"));
+    expect(reloadErrors).toContainEqual(expect.stringContaining("PI WEB does not support registerVirtualModel()"));
+    expect(await service.availableModels(second)).toEqual(secondCatalog);
+    expect((await service.status(second)).model).toEqual(secondModel);
+
+    const errorsBeforeDisposal = errorMessages(first).length;
+    await service.stop(first);
+    expect(errorMessages(first).slice(errorsBeforeDisposal))
+      .toContainEqual(expect.stringContaining("PI WEB does not support unregisterVirtualModel()"));
+    expect(errorMessages(second)).toEqual(secondErrors);
+    expect(await service.availableModels(second)).toEqual(secondCatalog);
+    expect((await service.status(second)).model).toEqual(secondModel);
+    expect(runtime.getModel("shared-router", "auto")).toBeUndefined();
+    expect(runtime.getRegisteredProviderConfig("global-config")).toBe(baselineConfig);
+    expect(runtime.getRegisteredNativeProvider("global-native")).toBe(baselineNative);
+    expect(JSON.stringify(logEntries)).not.toContain("secret");
+    expect(JSON.stringify(events.sessionEvents)).not.toContain("secret");
+  });
+
   it("loads global config and native providers once, then treats normal session replay as a no-op", async () => {
     const agentDir = await agentDirWithExtension(globalProvidersSource());
     const { service, runtime, logEntries } = await policyHarness({ agentDir });

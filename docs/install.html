@@ -107,10 +107,11 @@
               <h2>Requirements</h2>
               <ul>
                 <li><strong>Node.js 22.19.0 or newer</strong> and npm.</li>
-                <li><strong>Pi Coding Agent <code>&gt;=0.87.0</code></strong> installed/configured so the <code>pi</code> command works for your user.</li>
+                <li><strong>Pi Coding Agent <code>1.x</code></strong> installed/configured so the <code>pi</code> command works for your user.</li>
                 <li>A shell login environment that exposes Node, npm, Pi, git, and any tools your agents need.</li>
                 <li>For the automatic installer: a supported per-user service manager.</li>
               </ul>
+              <p>PI WEB requires Pi 1.x; Pi 0.x and Pi 2.x are outside the supported dependency range. When upgrading from Pi 0.x, update Pi and PI WEB together, then restart the web/API service before the session daemon. Restarting the daemon interrupts active sessions.</p>
               <div class="callout warning">
                 <strong>Important PATH detail:</strong>
                 PI WEB services run through a non-interactive login shell with <code>-lc</code>. Setup that only lives in

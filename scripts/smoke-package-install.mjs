@@ -59,9 +59,10 @@ try {
   ], root);
 
   const packageRoot = join(globalPrefix, "lib", "node_modules", "@jmfederico", "pi-web");
+  await smokeInstalledPiSdk(packageRoot);
   await smokeInstalledPluginApi({ packageRoot, fixtureRoot: root, repoRoot });
   await smokeInstalledTerminalService(packageRoot);
-  console.log(`Installed-package plugin API and PTY smoke tests passed with npm ${NPM_VERSION}.`);
+  console.log(`Installed-package Pi 1.x, plugin API, and PTY smoke tests passed with npm ${NPM_VERSION}.`);
 } finally {
   await rm(root, { recursive: true, force: true });
 }
@@ -88,6 +89,31 @@ function packageTarballFilename(output) {
     }
   }
   throw new Error("npm pack returned an unexpected result");
+}
+
+async function smokeInstalledPiSdk(packageRoot) {
+  const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+  for (const name of ["pi-agent-core", "pi-ai", "pi-coding-agent"]) {
+    const specifier = `@earendil-works/${name}`;
+    if (manifest.peerDependencies?.[specifier] !== "^1.0.0") {
+      throw new Error(`Installed package must require ${specifier} ^1.0.0`);
+    }
+    const dependency = JSON.parse(await readFile(join(packageRoot, "node_modules", specifier, "package.json"), "utf8"));
+    if (!/^1\./.test(dependency.version)) {
+      throw new Error(`Installed package resolved unsupported ${specifier} ${dependency.version}`);
+    }
+  }
+  // Pi's barrels are import-only; resolve them through an ESM fixture inside the
+  // temporary installation rather than createRequire's CommonJS condition.
+  const runtimePath = join(packageRoot, "pi-sdk-smoke.mjs");
+  await writeFile(runtimePath, ["pi-agent-core", "pi-ai", "pi-coding-agent"]
+    .map((name) => `import "@earendil-works/${name}";`).join("\n"));
+  await import(pathToFileURL(runtimePath).href);
+  const factoriesUrl = pathToFileURL(join(packageRoot, "dist", "server", "sessions", "builtinExtensionFactories.js")).href;
+  const { getBuiltinExtensionFactories } = await import(factoriesUrl);
+  if ((await getBuiltinExtensionFactories()).length !== 3) {
+    throw new Error("Installed package did not resolve all three Pi built-in extension factories");
+  }
 }
 
 async function smokeInstalledTerminalService(packageRoot) {
