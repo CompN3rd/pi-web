@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { html, render, svg } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FileContentResponse, PluginActivationResult } from "@jmfederico/pi-web/plugin-api";
+import type { FileContentResponse, PluginActivationResult, PluginPromptChip } from "@jmfederico/pi-web/plugin-api";
 import plugin from "../src/browser/index.js";
 import { ReviewPanel } from "../src/browser/panel.js";
 import { renderReviewMarkdown } from "../src/browser/markdown.js";
@@ -89,17 +89,23 @@ describe("standalone Review panel", () => {
     host.remove(); window.dispatchEvent(new StorageEvent("storage", { key: null }));
     expect(panel.isConnected).toBe(false);
   });
-  it("works on LAN HTTP without randomUUID, SubtleCrypto, or clipboard access", async () => {
+  it("stages feedback on LAN HTTP without prompt insertion or clipboard access", async () => {
     const nativeCrypto = crypto;
     vi.stubGlobal("crypto", { getRandomValues: nativeCrypto.getRandomValues.bind(nativeCrypto) });
     vi.stubGlobal("navigator", {});
-    const { panel, ctx } = await mount(); await open(panel);
+    const ctx = context(); const setChip = vi.fn<(chip: PluginPromptChip) => void>(); ctx.prompt.setChip = setChip;
+    const { panel, host, contribution } = await mount(ctx); await open(panel);
     required(panel.shadowRoot?.querySelector<HTMLButtonElement>('[aria-label="Current line 1"]')).click(); await panel.updateComplete;
     await editBody(panel, "HTTP comment"); button(panel, "Save comment").click(); await panel.updateComplete;
     expect(new ReviewStore(localStorage).load(workspaceKey(ctx))[0]?.body).toBe("HTTP comment");
-    button(panel, "Copy feedback").click(); await panel.updateComplete;
-    expect(panel.shadowRoot?.querySelector('[role="alert"]')?.textContent).toContain("Clipboard unavailable");
-    expect(panel.shadowRoot?.querySelector<HTMLTextAreaElement>('[aria-label="Feedback Markdown"]')?.value).toContain("HTTP comment");
+    button(panel, "Attach review to composer").click(); await panel.updateComplete;
+    const chip = required(setChip.mock.calls[0]?.[0]);
+    expect(chip.text).toContain("HTTP comment");
+    render(null, host); // Submission callbacks outlive the Review tab's DOM.
+    await chip.onRemove?.("submitted");
+    expect(new ReviewStore(localStorage).load(workspaceKey(ctx))).toEqual([]);
+    render(contribution.render(ctx), host); await panel.updateComplete;
+    expect(panel.shadowRoot?.textContent).toContain("Saved comments (0)");
   });
   it("never renders executable Markdown or remote images", () => {
     const host = document.createElement("div");

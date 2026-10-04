@@ -2,9 +2,8 @@ import { LitElement, css, html, type PropertyValues } from "lit";
 import { renderReviewMarkdown } from "./markdown.js";
 import type { FileTreeEntry, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { isGitSource, isWorkspacePath, MAX_FILES, MAX_TEXT_LENGTH, parseDiff, parsePaths, type ReviewSource } from "../protocol.js";
-import { anchorInSnapshot, anchorLabel, randomId, ReviewStore, reviewMarkdown, snapshot, sourceLabel, storagePrefix, workspaceKey, type Anchor, type Comment, type Row, type Snapshot } from "./model.js";
-import { insertFeedback } from "./transfer.js";
-import type { SelectionService } from "./selection.js";
+import { anchorInSnapshot, anchorLabel, randomId, ReviewStore, reviewMarkdown, snapshot, sourceLabel, workspaceKey, type Anchor, type Comment, type Row, type Snapshot } from "./model.js";
+import type { ReviewChips } from "./chips.js";
 
 interface Editor extends Anchor { body: string; hash: string; id?: string; createdAt?: number }
 
@@ -12,7 +11,7 @@ export class ReviewPanel extends LitElement {
   static override properties = { context: { attribute: false }, revision: { type: Number } };
   declare context: WorkspacePanelContext;
   declare revision: number;
-  selection: SelectionService | undefined;
+  chips: ReviewChips | undefined;
   store: ReviewStore | undefined;
   lifetime: AbortSignal | undefined;
   private source: ReviewSource = "files";
@@ -25,26 +24,32 @@ export class ReviewPanel extends LitElement {
   private notice = "";
   private listLoading = false;
   private viewLoading = false;
-  private transferring = false;
   private listing: AbortController | undefined;
   private reading: AbortController | undefined;
-  private readonly onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === storagePrefix + workspaceKey(this.context)) { this.loadComments(); this.requestUpdate(); }
-  };
 
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener("storage", this.onStorage);
     this.loadComments();
     void this.refresh();
   }
   override disconnectedCallback(): void {
-    window.removeEventListener("storage", this.onStorage);
     this.listing?.abort(); this.reading?.abort();
     super.disconnectedCallback();
   }
   protected override updated(changed: PropertyValues<this>): void {
     if (changed.has("revision") && changed.get("revision") !== undefined) void this.refresh();
+  }
+  refreshFeedback(message?: string, error?: unknown): void {
+    this.loadComments();
+    if (message !== undefined) {
+      if (error === undefined) this.notice = message;
+      else this.fail(new Error(message, { cause: error }));
+    }
+    this.requestUpdate();
+  }
+  private requireChips(): ReviewChips {
+    if (this.chips === undefined) throw new Error("Composer integration is unavailable");
+    return this.chips;
   }
   private fail(error: unknown): void { this.error = error instanceof Error ? error.message : String(error); this.requestUpdate(); }
   private loadComments(): void {
@@ -138,14 +143,17 @@ export class ReviewPanel extends LitElement {
     try {
       const comment: Comment = { ...editor, id: editor.id ?? randomId(), createdAt: editor.createdAt ?? Date.now() };
       const store = this.requireStore(); const key = workspaceKey(this.context);
+      this.requireChips().withdrawWorkspace(key);
       this.comments = editor.id === undefined ? store.add(key, comment) : store.update(key, comment);
-      this.editor = undefined; this.error = ""; this.notice = "Comment saved in this browser.";
+      this.editor = undefined; this.error = ""; this.notice = "Comment saved. Attach the updated review when ready.";
       this.context.host.requestRender(); this.requestUpdate();
     } catch (error) { this.fail(error); }
   }
   private removeComment(comment: Comment): void {
     try {
+      this.requireChips().withdrawWorkspace(workspaceKey(this.context));
       this.comments = this.requireStore().remove(workspaceKey(this.context), comment.id);
+      this.notice = "Comment removed. Attach any remaining feedback again before sending.";
       if (this.editor?.id === comment.id) this.editor = undefined;
       this.context.host.requestRender(); this.requestUpdate();
     } catch (error) { this.fail(error); }
@@ -156,23 +164,10 @@ export class ReviewPanel extends LitElement {
     this.source = comment.source;
     void this.loadList(); void this.openFile(comment.path);
   }
-  private async transfer(copy: boolean): Promise<void> {
-    if (this.transferring) return;
-    this.transferring = true; this.error = ""; this.requestUpdate();
-    try {
-      const comments = this.requireStore().load(workspaceKey(this.context));
-      const markdown = reviewMarkdown(comments);
-      if (markdown === "") throw new Error("There are no saved comments");
-      if (copy) {
-        if (!("clipboard" in navigator)) throw new Error("Clipboard unavailable. Expand Feedback Markdown (manual copy) below to copy your feedback.");
-        await navigator.clipboard.writeText(markdown);
-        this.notice = "Feedback copied. Saved comments were retained.";
-      } else {
-        await insertFeedback(this.context, this.selection, comments, this.lifetime);
-        this.notice = "Feedback inserted, not sent. Saved comments were retained.";
-      }
-    } catch (error) { this.fail(error); }
-    finally { this.transferring = false; this.requestUpdate(); }
+  private attachReview(): void {
+    this.error = "";
+    try { this.requireChips().attach(this.context); }
+    catch (error) { this.fail(error); }
   }
   private changeEditor(field: "body" | "start" | "end", event: Event): void {
     if (this.editor === undefined || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
@@ -199,7 +194,7 @@ export class ReviewPanel extends LitElement {
     const view = this.view;
     return html`<section aria-label="Code Review">
       <h2>Code Review</h2>
-      <p>Saved comments belong to this workspace in this browser. Insert or copy them when ready; remove them after sending.</p>
+      <p>Save comments, then attach a review chip to the selected conversation. Failed sends retain feedback; server acceptance clears unchanged submitted comments.</p>
       <div class="toolbar"><label>Source <select .value=${this.source} @change=${(event: Event) => { if (event.target instanceof HTMLSelectElement) this.selectSource(event.target.value); }}>
         <option value="files">Files (including untracked)</option><option value="git-unstaged">Git unstaged</option><option value="git-staged">Git staged</option>
       </select></label><button @click=${() => { void this.refresh(); }}>Refresh</button></div>
@@ -231,14 +226,13 @@ export class ReviewPanel extends LitElement {
         })}</div>${view.rows.length === 0 ? html`<p>No text lines to review.</p>` : null}`}
       ${this.renderEditor()}
       <h3>Saved comments (${this.comments.length})</h3>
-      <div class="toolbar"><button ?disabled=${this.comments.length === 0 || this.transferring} @click=${() => { void this.transfer(false); }}>Insert into prompt</button>
-        <button ?disabled=${this.comments.length === 0 || this.transferring} @click=${() => { void this.transfer(true); }}>Copy feedback</button></div>
+      <div class="toolbar"><button ?disabled=${this.comments.length === 0} @click=${() => { this.attachReview(); }}>Attach review to composer</button></div>
       ${this.comments.map((comment) => html`<article><strong>${anchorLabel(comment)}</strong>
         ${comment.path === view?.path && comment.source === view.source && comment.hash !== view.hash ? html`<p class="stale">Source changed since this comment was saved. Verify its coordinates before sending.</p>` : null}
         <div class="markdown">${renderReviewMarkdown(html, comment.body)}</div>
         <div class="toolbar"><button @click=${() => { this.editComment(comment); }}>Edit comment</button><button @click=${() => { this.removeComment(comment); }}>Remove comment</button></div>
       </article>`)}
-      <details><summary>Feedback Markdown (manual copy)</summary><textarea aria-label="Feedback Markdown" readonly rows="8" .value=${reviewMarkdown(this.comments)}></textarea></details>
+      <details><summary>Feedback Markdown</summary><textarea aria-label="Feedback Markdown" readonly rows="8" .value=${reviewMarkdown(this.comments)}></textarea></details>
     </section>`;
   }
   static override styles = css`

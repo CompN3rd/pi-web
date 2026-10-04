@@ -1,6 +1,8 @@
-# Install and use Code Review
+# Intended Code Review workflow
 
-## Install the standalone package
+**Pending release verification:** this source targets main's composer-chip API, not the published PI WEB `1.202610.1` package. Do not install this revision yet. Complete the [release gate](composer-design.md#release-gate) first; the instructions below describe the intended workflow afterward.
+
+## Install the standalone package after verification
 
 Build from `plugins/code-review`:
 
@@ -48,17 +50,20 @@ Switching away from the tab preserves the current editor within this activation.
 
 Refreshing or host file invalidation reloads the current snapshot. A changed file does not silently delete feedback: saved comments remain in the list, are flagged as stale when that source is viewed, and are not attached to its new lines. Copy any unfinished text before cancelling a stale edit. Create a new comment against the current snapshot instead of automatically moving an old anchor. Sources you have not reopened have not been checked for staleness; verify coordinates before handing off.
 
-## Hand off feedback
+## Attach feedback to the composer
 
-- **Insert into prompt** navigates to the existing, unarchived selected session in this workspace and inserts Markdown at its cursor. It refuses pending sessions, selection changes during navigation, and highlighted prompt text that would otherwise be replaced. It verifies that insertion changed the prompt. This action requires upstream's optional selection service; PI WEB 1.202610.1 does not yet include it.
-- **Copy feedback** copies the same Markdown. If clipboard permissions are unavailable, expand **Feedback Markdown (manual copy)** and copy the text yourself.
+Choose a ready, unarchived conversation in this workspace, then select **Attach review to composer**. One removable **Review (N)** chip contains a snapshot of all saved comments. Repeating the action replaces that conversation's review chip, not the text at its cursor. You can inspect the payload under **Feedback Markdown**.
 
-Neither action sends a message. **Comments are retained after insertion or copying** because the public API does not expose send acknowledgement. Review and send the prompt normally, then remove the saved comments yourself. Repeated insertion deliberately inserts the feedback again.
+Send the chip with a message or by itself. Failed sends keep it and the saved comments for retry. Server acceptance clears only unchanged comments from the submitted snapshot; later edits and new comments survive. Acceptance does not mean the assistant has finished answering. Removing the composer chip only detaches it—saved comments remain available.
+
+Saving edits or removing comments withdraws this workspace's staged feedback; attach again when ready. Changes from another browser tab also withdraw this activation's copies. If withdrawal fails, remove the stale chip manually before sending. If clearing submitted comments fails, inspect the accepted conversation before reattaching to avoid duplicate feedback.
+
+Chips survive closing the panel or navigating away, but not reloading the page. Saved comments survive reloads; open the intended conversation and attach again. Different conversations can hold independent snapshots, so attach to multiple conversations only if you intend to send the feedback more than once.
 
 ## Differences from the former core UI
 
-This is an independent Review tab, not an extension of the bundled Files/Git tabs. Current upstream exposes neither inline decoration hooks for those panels nor composer-chip/send-completion contributions. There are no private DOM hooks, private HTTP routes, host-owned review services, or patches to PromptEditor.
+This is an independent Review tab, not an extension of the bundled Files/Git tabs: main does not expose inline decoration hooks for those panels. Composer integration uses main's public chip API, including removal and server-accepted callbacks. There are no private DOM hooks, private HTTP routes, host-owned review services, or patches to PromptEditor.
 
 Feedback is workspace-scoped rather than session-scoped, so it can be authored before choosing a session and requires no temporary-session migration hooks. The old branch's `pi-web:review-comments:` session stores are not automatically imported or deleted; copy any remaining feedback from the old UI before switching installations.
 
-When upstream ships composer contributions, the explicit handoff can be enhanced separately without moving comment ownership back into core.
+Comment ownership stays in the plugin; the host owns only the staged composer snapshot and its send lifecycle.

@@ -1,6 +1,7 @@
 {
   "name": "pi-web-code-review",
   "version": "0.1.0",
+  "private": true,
   "description": "Workspace file and Git review comments for PI WEB, without host modifications.",
   "type": "module",
   "license": "MIT",

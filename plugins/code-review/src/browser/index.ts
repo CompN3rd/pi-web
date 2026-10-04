@@ -1,12 +1,12 @@
 import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
 import { ReviewPanel } from "./panel.js";
-import type { ReviewActivationContext } from "./selection.js";
-import { randomId, ReviewStore, workspaceKey } from "./model.js";
+import { ReviewChips } from "./chips.js";
+import { randomId, ReviewStore, storagePrefix, workspaceKey } from "./model.js";
 
 const plugin: PiWebPlugin = {
   apiVersion: 4,
   name: "Code Review",
-  activate({ html, runtimePluginId, selection, lifetimeSignal }: ReviewActivationContext) {
+  activate({ html, runtimePluginId, lifetimeSignal }) {
     // Each activation owns its element constructor: different remote package
     // revisions never accidentally mount the first machine's implementation.
     class Panel extends ReviewPanel {}
@@ -17,6 +17,22 @@ const plugin: PiWebPlugin = {
     });
     let panel: Panel | undefined;
     let owner: string | undefined;
+    const notices = new Map<string, { message: string; error?: unknown }>();
+    const chips = new ReviewChips(store, (workspace, message, error) => {
+      if (error !== undefined) console.error(`[Code Review] ${message}`, error);
+      if (lifetimeSignal.aborted) return;
+      notices.set(workspace, { message, error });
+      if (owner === workspace) panel?.refreshFeedback(message, error);
+      panel?.context.host.requestRender();
+    });
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && !event.key.startsWith(storagePrefix)) return;
+      chips.storageChanged(event.key === null ? undefined : event.key.slice(storagePrefix.length));
+      panel?.refreshFeedback();
+      panel?.context.host.requestRender();
+    };
+    window.addEventListener("storage", onStorage);
+    lifetimeSignal.addEventListener("abort", () => { window.removeEventListener("storage", onStorage); }, { once: true });
     return {
       contributions: {
         actions: [{
@@ -39,14 +55,20 @@ const plugin: PiWebPlugin = {
             if (panel === undefined || owner !== key) {
               panel?.remove();
               panel = new Panel(); owner = key;
-              panel.store = store; panel.selection = selection; panel.lifetime = lifetimeSignal; panel.revision = 0;
+              panel.store = store; panel.chips = chips; panel.lifetime = lifetimeSignal; panel.revision = 0;
+              panel.context = context;
+              const notice = notices.get(key);
+              if (notice !== undefined) panel.refreshFeedback(notice.message, notice.error);
             }
             panel.context = context;
             return html`${panel}`;
           },
         }],
       },
-      dispose() { panel?.remove(); panel = undefined; },
+      dispose() {
+        window.removeEventListener("storage", onStorage);
+        chips.dispose(); notices.clear(); panel?.remove(); panel = undefined;
+      },
     };
   },
 };

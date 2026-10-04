@@ -75,10 +75,21 @@ export class ReviewStore {
   remove(key: string, id: string): Comment[] {
     return this.save(key, this.load(key).filter((item) => item.id !== id));
   }
+  /** Acknowledgements own a snapshot, not every comment now stored under its ids. */
+  removeUnchanged(key: string, submitted: readonly Comment[]): Comment[] {
+    const versions = new Map(submitted.map((comment) => [comment.id, commentVersion(comment)]));
+    const comments = this.load(key);
+    const kept = comments.filter((comment) => versions.get(comment.id) !== commentVersion(comment));
+    return kept.length === comments.length ? comments : this.save(key, kept);
+  }
   private save(key: string, comments: Comment[]): Comment[] {
     this.storage.setItem(storagePrefix + key, JSON.stringify({ version: 1, comments }));
     return comments;
   }
+}
+
+function commentVersion(comment: Comment): string {
+  return JSON.stringify([comment.id, comment.path, comment.source, comment.side, comment.start, comment.end, comment.body, comment.hash, comment.createdAt]);
 }
 
 export const sourceLabel = (source: ReviewSource): string => source === "files" ? "File" : source === "git-staged" ? "Git staged" : "Git unstaged";

@@ -20,7 +20,7 @@ export function context(): WorkspacePanelContext {
     peer: { request: vi.fn().mockResolvedValue([]) },
     host: { requestRender: vi.fn() },
     navigate: vi.fn().mockResolvedValue(undefined),
-    prompt: { insertText: vi.fn(), getText: () => "", getSelection: () => null },
+    prompt: { insertText: vi.fn(), getText: () => "", getSelection: () => null, setChip: vi.fn(), removeChip: vi.fn() },
     terminal: { open: vi.fn(), runCommand: vi.fn() },
   };
 }
