@@ -78,8 +78,7 @@ describe("PiWebApp plugin host", () => {
     const substitute = vi.fn(() => html`<p>Wrong panel</p>`);
     const panel = new WorkspacePanel();
     panel.workspace = workspace;
-    panel.panelContext = workspacePanelContextFromApp(app);
-    panel.panels = [{ id: "test:other", localId: "other", pluginId: "test", title: "Other", render: substitute }];
+    panel.panels = [{ id: "test:other", title: "Other", render: substitute }];
     panel.tool = "missing:panel";
     panel.error = error;
     const select = vi.fn((tool: typeof panel.tool) => {

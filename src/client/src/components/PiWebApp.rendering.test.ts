@@ -332,7 +332,7 @@ describe("application rendering boundaries", () => {
   });
 
   it("keeps the activity notice in the blocked composer until dismissal without losing drafts or attachments", async () => {
-    const send = vi.spyOn(SessionController.prototype, "send").mockResolvedValue(undefined);
+    const send = vi.spyOn(SessionController.prototype, "send").mockResolvedValue(true);
     const key = machineSessionKey("local", session.id);
     saveDraft(key, "Unsent draft");
     saveStagedAttachments(key, [{ id: "file", kind: "file", name: "notes.txt", mimeType: "text/plain", data: "aGk=", size: 2 }]);
