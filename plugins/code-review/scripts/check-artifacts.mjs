@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Window } from "happy-dom";
+import { IDBFactory } from "fake-indexeddb";
 
 // Consume existing artifacts, optionally from an extracted tarball. Never rebuild here.
 const root = resolve(process.argv[2] ?? ".");
@@ -24,8 +25,10 @@ const lifetime = new AbortController();
 assert.deepEqual(await serverActivation.peer.request({ workspace, operation: "changes", input: { source: "git-staged" }, signal: lifetime.signal }), ["a.ts"]);
 assert.equal(command.cwd, workspace.path);
 assert(command.args.includes("--cached"));
+assert(command.args.includes("--submodule=short"));
 
 const window = new Window();
+Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: new IDBFactory() });
 for (const key of ["window", "document", "customElements", "HTMLElement", "Document", "ShadowRoot", "CSSStyleSheet", "localStorage"]) {
   Object.defineProperty(globalThis, key, { configurable: true, value: key === "window" ? window : window[key] });
 }
@@ -42,8 +45,10 @@ try {
   };
   const host = window.document.createElement("div"); window.document.body.append(host);
   render(contribution.render(context), host);
+  await host.firstElementChild.store.load(JSON.stringify([context.machine.id, workspace.projectId, workspace.id]));
   await host.firstElementChild.updateComplete;
   await window.happyDOM.waitUntilComplete();
+  assert.equal(host.firstElementChild.shadowRoot.querySelector('[role="alert"]'), null);
   assert(host.firstElementChild.shadowRoot.textContent.includes("Saved comments (0)"));
   lifetime.abort();
   activation.dispose(new AbortController().signal);

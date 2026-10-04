@@ -13,7 +13,7 @@ export async function requestGit(execFile: ServerPluginActivationContext["execFi
   if (operation !== "changes" && operation !== "diff") throw new Error("Unknown review operation");
   const path = input["path"];
   if (operation === "diff" && !isWorkspacePath(path)) throw new Error("Invalid workspace-relative review path");
-  const args = ["--literal-pathspecs", "-C", workspace.path, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "--relative"];
+  const args = ["--literal-pathspecs", "-C", workspace.path, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "--submodule=short", "--relative"];
   if (input["source"] === "git-staged") args.push("--cached");
   if (operation === "changes") args.push("--name-only", "-z");
   else args.push("--unified=3");

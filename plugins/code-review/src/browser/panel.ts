@@ -6,6 +6,13 @@ import { anchorInSnapshot, anchorLabel, randomId, ReviewStore, reviewMarkdown, s
 import type { ReviewChips } from "./chips.js";
 
 interface Editor extends Anchor { body: string; hash: string; id?: string; createdAt?: number }
+export type FeedbackErrorKind = "acceptance" | "action" | "read";
+
+function selectionKey(context: WorkspacePanelContext): string {
+  const session = context.state?.selectedSession;
+  return JSON.stringify([workspaceKey(context), context.workspace.path, context.state?.selectedMachine?.id,
+    session?.id, session?.cwd, session?.pending, session?.archived]);
+}
 
 export class ReviewPanel extends LitElement {
   static override properties = { context: { attribute: false }, revision: { type: Number } };
@@ -21,6 +28,14 @@ export class ReviewPanel extends LitElement {
   private editor: Editor | undefined;
   private comments: Comment[] = [];
   private error = "";
+  // Accepted-but-not-cleared feedback must survive later action and read failures.
+  private feedbackErrors: Record<FeedbackErrorKind, string> = { acceptance: "", action: "", read: "" };
+  onFeedbackError: ((message: string, kind: FeedbackErrorKind) => void) | undefined;
+  private selection = "";
+  private selectionRevision = 0;
+  private feedbackRead = 0;
+  private connection = 0;
+  private saving = false;
   private notice = "";
   private listLoading = false;
   private viewLoading = false;
@@ -29,22 +44,26 @@ export class ReviewPanel extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.loadComments();
+    this.connection++;
+    void this.loadComments();
     void this.refresh();
   }
   override disconnectedCallback(): void {
+    this.connection++; this.feedbackRead++;
     this.listing?.abort(); this.reading?.abort();
     super.disconnectedCallback();
   }
   protected override updated(changed: PropertyValues<this>): void {
     if (changed.has("revision") && changed.get("revision") !== undefined) void this.refresh();
   }
-  refreshFeedback(message?: string, error?: unknown): void {
-    this.loadComments();
-    if (message !== undefined) {
-      if (error === undefined) this.notice = message;
-      else this.fail(new Error(message, { cause: error }));
-    }
+  updateContext(context: WorkspacePanelContext): void {
+    const selection = selectionKey(context);
+    if (selection !== this.selection) { this.selection = selection; this.selectionRevision++; }
+    this.context = context;
+  }
+  refreshFeedback(message?: string): void {
+    void this.loadComments();
+    if (message !== undefined) this.notice = message;
     this.requestUpdate();
   }
   private requireChips(): ReviewChips {
@@ -52,9 +71,26 @@ export class ReviewPanel extends LitElement {
     return this.chips;
   }
   private fail(error: unknown): void { this.error = error instanceof Error ? error.message : String(error); this.requestUpdate(); }
-  private loadComments(): void {
-    try { this.comments = this.requireStore().load(workspaceKey(this.context)); }
-    catch (error) { this.fail(error); }
+  // Activation-owned updates only display state; reporting is a separate path to avoid recursion.
+  setFeedbackError(message: string, kind: FeedbackErrorKind = "action"): void {
+    this.feedbackErrors[kind] = message; this.requestUpdate();
+  }
+  private reportFeedbackError(message: string, kind: FeedbackErrorKind): void {
+    this.setFeedbackError(message, kind); this.onFeedbackError?.(message, kind);
+  }
+  private feedbackFailed(error: unknown, kind: FeedbackErrorKind = "action"): void {
+    this.reportFeedbackError(error instanceof Error ? error.message : String(error), kind);
+  }
+  private async loadComments(): Promise<void> {
+    const read = ++this.feedbackRead;
+    const key = workspaceKey(this.context);
+    try {
+      const comments = await this.requireStore().load(key);
+      if (read !== this.feedbackRead || !this.isConnected || this.lifetime?.aborted === true || key !== workspaceKey(this.context)) return;
+      this.comments = comments; this.requestUpdate();
+    } catch (error) {
+      if (read === this.feedbackRead && this.lifetime?.aborted !== true) this.feedbackFailed(error, "read");
+    }
   }
   private requireStore(): ReviewStore {
     if (this.store === undefined) throw new Error("Review storage is unavailable");
@@ -127,7 +163,7 @@ export class ReviewPanel extends LitElement {
   }
   private selectLine(row: Row, extend: boolean): void {
     const view = this.view;
-    if (view === undefined || this.viewLoading || row.line === undefined || row.side === undefined) return;
+    if (this.saving || view === undefined || this.viewLoading || row.line === undefined || row.side === undefined) return;
     if (extend && this.editor !== undefined && this.editor.id === undefined && this.editor.path === view.path && this.editor.source === view.source && this.editor.side === row.side && this.editor.hash === view.hash) {
       this.editor = { ...this.editor, start: Math.min(this.editor.start, row.line), end: Math.max(this.editor.start, row.line) };
     } else if (this.editor === undefined) {
@@ -137,40 +173,60 @@ export class ReviewPanel extends LitElement {
     }
     this.requestUpdate();
   }
-  private saveEditor(): void {
+  private async saveEditor(): Promise<void> {
     const editor = this.editor;
-    if (editor === undefined || editor.body.trim() === "" || this.viewLoading || editor.hash !== this.view?.hash || !anchorInSnapshot(editor, this.view)) return;
+    if (this.saving || editor === undefined || editor.body.trim() === "" || this.viewLoading || editor.hash !== this.view?.hash || !anchorInSnapshot(editor, this.view)) return;
+    const context = this.context; const key = workspaceKey(context); const connection = this.connection;
+    this.saving = true; this.feedbackRead++; this.requestUpdate();
     try {
       const comment: Comment = { ...editor, id: editor.id ?? randomId(), createdAt: editor.createdAt ?? Date.now() };
-      const store = this.requireStore(); const key = workspaceKey(this.context);
+      const store = this.requireStore();
       this.requireChips().withdrawWorkspace(key);
-      this.comments = editor.id === undefined ? store.add(key, comment) : store.update(key, comment);
-      this.editor = undefined; this.error = ""; this.notice = "Comment saved. Attach the updated review when ready.";
-      this.context.host.requestRender(); this.requestUpdate();
-    } catch (error) { this.fail(error); }
+      await (editor.id === undefined ? store.add(key, comment) : store.update(key, comment));
+      if (this.editor === editor) this.editor = undefined;
+      if (connection !== this.connection || !this.isConnected || this.lifetime?.aborted === true) return;
+      this.notice = "Comment saved. Attach the updated review when ready.";
+      await this.loadComments(); context.host.requestRender();
+    } catch (error) { if (this.lifetime?.aborted !== true) this.feedbackFailed(error); }
+    finally { this.saving = false; this.requestUpdate(); }
   }
-  private removeComment(comment: Comment): void {
+  private async removeComment(comment: Comment): Promise<void> {
+    if (this.saving) return;
+    const context = this.context; const key = workspaceKey(context); const connection = this.connection;
+    this.saving = true; this.feedbackRead++; this.requestUpdate();
     try {
-      this.requireChips().withdrawWorkspace(workspaceKey(this.context));
-      this.comments = this.requireStore().remove(workspaceKey(this.context), comment.id);
-      this.notice = "Comment removed. Attach any remaining feedback again before sending.";
+      this.requireChips().withdrawWorkspace(key);
+      await this.requireStore().remove(key, comment.id);
       if (this.editor?.id === comment.id) this.editor = undefined;
-      this.context.host.requestRender(); this.requestUpdate();
-    } catch (error) { this.fail(error); }
+      if (connection !== this.connection || !this.isConnected || this.lifetime?.aborted === true) return;
+      this.notice = "Comment removed. Attach any remaining feedback again before sending.";
+      await this.loadComments(); context.host.requestRender();
+    } catch (error) { if (this.lifetime?.aborted !== true) this.feedbackFailed(error); }
+    finally { this.saving = false; this.requestUpdate(); }
   }
   private editComment(comment: Comment): void {
+    if (this.saving) return;
     if (this.editor !== undefined) { this.notice = "Save or cancel the current comment first."; this.requestUpdate(); return; }
     this.editor = { ...comment };
     this.source = comment.source;
     void this.loadList(); void this.openFile(comment.path);
   }
-  private attachReview(): void {
-    this.error = "";
-    try { this.requireChips().attach(this.context); }
-    catch (error) { this.fail(error); }
+  private async attachReview(): Promise<void> {
+    if (this.saving) return;
+    const context = this.context; const connection = this.connection;
+    const selection = selectionKey(context); const revision = this.selectionRevision;
+    const isCurrent = () => this.isConnected && this.connection === connection
+      && this.selectionRevision === revision && selectionKey(this.context) === selection
+      && !this.saving && this.lifetime?.aborted !== true;
+    try {
+      // Keep the captured prompt facade, but allow fresh host contexts for the same selection.
+      await this.requireChips().attach(context, isCurrent);
+    } catch (error) {
+      if (isCurrent()) this.feedbackFailed(error);
+    }
   }
   private changeEditor(field: "body" | "start" | "end", event: Event): void {
-    if (this.editor === undefined || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
+    if (this.saving || this.editor === undefined || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
     this.editor = { ...this.editor, [field]: field === "body" ? event.target.value : Number(event.target.value) };
     this.requestUpdate();
   }
@@ -180,14 +236,14 @@ export class ReviewPanel extends LitElement {
     const valid = !this.viewLoading && editor.hash === this.view?.hash && anchorInSnapshot(editor, this.view);
     return html`<section class="editor" aria-label="Comment editor">
       <strong>${anchorLabel(editor)}</strong>
-      <div class="toolbar"><label>Start line <input type="number" min="1" step="1" .value=${String(editor.start)} @input=${(event: Event) => { this.changeEditor("start", event); }}></label>
-      <label>End line <input type="number" min="1" step="1" .value=${String(editor.end)} @input=${(event: Event) => { this.changeEditor("end", event); }}></label></div>
+      <div class="toolbar"><label>Start line <input ?disabled=${this.saving} type="number" min="1" step="1" .value=${String(editor.start)} @input=${(event: Event) => { this.changeEditor("start", event); }}></label>
+      <label>End line <input ?disabled=${this.saving} type="number" min="1" step="1" .value=${String(editor.end)} @input=${(event: Event) => { this.changeEditor("end", event); }}></label></div>
       ${valid ? null : html`<p role="alert">Choose a valid range in the current snapshot on one side. Omitted diff lines cannot be selected. Changed snapshots cannot be re-anchored automatically.</p>`}
-      <label>Comment (Markdown)<textarea rows="4" .value=${editor.body} @input=${(event: Event) => { this.changeEditor("body", event); }} @keydown=${(event: KeyboardEvent) => {
-        if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); this.saveEditor(); }
+      <label>Comment (Markdown)<textarea ?disabled=${this.saving} rows="4" .value=${editor.body} @input=${(event: Event) => { this.changeEditor("body", event); }} @keydown=${(event: KeyboardEvent) => {
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); void this.saveEditor(); }
       }}></textarea></label>
-      <div class="toolbar"><button ?disabled=${!valid || editor.body.trim() === ""} @click=${() => { this.saveEditor(); }}>Save comment</button>
-      <button @click=${() => { this.editor = undefined; this.notice = ""; this.requestUpdate(); }}>Cancel edit</button></div>
+      <div class="toolbar"><button ?disabled=${this.saving || !valid || editor.body.trim() === ""} @click=${() => { void this.saveEditor(); }}>Save comment</button>
+      <button ?disabled=${this.saving} @click=${() => { this.editor = undefined; this.notice = ""; this.requestUpdate(); }}>Cancel edit</button></div>
     </section>`;
   }
   override render() {
@@ -205,6 +261,9 @@ export class ReviewPanel extends LitElement {
         }
       }}><label>File path <input name="path" placeholder="src/example.ts"></label><button>Open file</button></form>` : null}
       ${this.error === "" ? null : html`<p role="alert">${this.error}</p>`}
+      ${Object.values(this.feedbackErrors).every((message) => message === "") ? null : html`
+        ${Object.values(this.feedbackErrors).filter(Boolean).map((message) => html`<p role="alert">${message}</p>`)}
+        <button @click=${() => { this.reportFeedbackError("", "acceptance"); this.reportFeedbackError("", "action"); this.reportFeedbackError("", "read"); }}>Dismiss feedback warning</button>`}
       <p role="status" aria-live="polite">${this.listLoading || this.viewLoading ? "Loading…" : this.notice}</p>
       <details class="file-list" open><summary>${this.source === "files" ? this.directory || "Workspace files" : `${sourceLabel(this.source)} files`}</summary>
         ${this.source === "files" && this.directory !== "" ? html`<button @click=${() => { this.directory = this.directory.split("/").slice(0, -1).join("/"); void this.loadList(); }}>Parent directory</button>` : null}
@@ -226,11 +285,11 @@ export class ReviewPanel extends LitElement {
         })}</div>${view.rows.length === 0 ? html`<p>No text lines to review.</p>` : null}`}
       ${this.renderEditor()}
       <h3>Saved comments (${this.comments.length})</h3>
-      <div class="toolbar"><button ?disabled=${this.comments.length === 0} @click=${() => { this.attachReview(); }}>Attach review to composer</button></div>
+      <div class="toolbar"><button ?disabled=${this.saving || this.comments.length === 0} @click=${() => { void this.attachReview(); }}>Attach review to composer</button></div>
       ${this.comments.map((comment) => html`<article><strong>${anchorLabel(comment)}</strong>
         ${comment.path === view?.path && comment.source === view.source && comment.hash !== view.hash ? html`<p class="stale">Source changed since this comment was saved. Verify its coordinates before sending.</p>` : null}
         <div class="markdown">${renderReviewMarkdown(html, comment.body)}</div>
-        <div class="toolbar"><button @click=${() => { this.editComment(comment); }}>Edit comment</button><button @click=${() => { this.removeComment(comment); }}>Remove comment</button></div>
+        <div class="toolbar"><button ?disabled=${this.saving} @click=${() => { this.editComment(comment); }}>Edit comment</button><button ?disabled=${this.saving} @click=${() => { void this.removeComment(comment); }}>Remove comment</button></div>
       </article>`)}
       <details><summary>Feedback Markdown</summary><textarea aria-label="Feedback Markdown" readonly rows="8" .value=${reviewMarkdown(this.comments)}></textarea></details>
     </section>`;

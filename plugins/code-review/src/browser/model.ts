@@ -1,5 +1,6 @@
 import type { WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { sha256 } from "@noble/hashes/sha2.js";
+import type { ReviewStorage } from "./storage.js";
 import { isGitSource, isWorkspacePath, record, type ReviewSource } from "../protocol.js";
 
 export interface Anchor {
@@ -48,43 +49,49 @@ function isComment(value: unknown): value is Comment {
 
 /** Persist before exposing a mutation. Failed/corrupt storage never looks like an empty successful save. */
 export class ReviewStore {
-  constructor(private readonly storage: Pick<Storage, "getItem" | "setItem">) {}
-  load(key: string): Comment[] {
-    const raw = this.storage.getItem(storagePrefix + key);
-    if (raw === null) return [];
-    const value: unknown = JSON.parse(raw);
-    if (!record(value) || value["version"] !== 1 || !Array.isArray(value["comments"])) throw new Error("Unrecognized review storage; existing data was retained");
-    const comments: unknown[] = value["comments"];
-    if (!comments.every(isComment) || new Set(comments.map((comment) => comment.id)).size !== comments.length) {
-      throw new Error("Invalid review storage; existing data was retained");
-    }
-    return comments;
+  constructor(private readonly storage: ReviewStorage, private readonly legacy: Pick<Storage, "getItem">) {}
+
+  private change(key: string, mutate: (comments: Comment[]) => Comment[]): Promise<Comment[]> {
+    return this.storage.transact(key, (stored) => {
+      // Presence (including an empty record) is the migration marker. Import and
+      // marker commit together; never delete the legacy backup or overwrite IDB.
+      let value = stored;
+      if (value === undefined) {
+        const raw = this.legacy.getItem(storagePrefix + key);
+        value = raw === null ? { version: 1, comments: [] } : JSON.parse(raw) as unknown;
+      }
+      if (!record(value) || value["version"] !== 1 || !Array.isArray(value["comments"])) throw new Error("Unrecognized review storage; existing data was retained");
+      const items: unknown[] = value["comments"];
+      if (!items.every(isComment) || new Set(items.map((comment) => comment.id)).size !== items.length) {
+        throw new Error("Invalid review storage; existing data was retained");
+      }
+      const comments = mutate(items);
+      return { value: { version: 1, comments }, result: comments };
+    });
   }
-  add(key: string, comment: Comment): Comment[] {
-    if (!isComment(comment)) throw new Error("Invalid review comment");
-    const comments = this.load(key);
-    if (comments.some((item) => item.id === comment.id)) throw new Error("Duplicate review comment");
-    return this.save(key, [...comments, comment]);
+  load(key: string): Promise<Comment[]> { return this.change(key, (comments) => comments); }
+  add(key: string, comment: Comment): Promise<Comment[]> {
+    return this.change(key, (comments) => {
+      if (!isComment(comment)) throw new Error("Invalid review comment");
+      if (comments.some((item) => item.id === comment.id)) throw new Error("Duplicate review comment");
+      return [...comments, comment];
+    });
   }
-  update(key: string, comment: Comment): Comment[] {
-    if (!isComment(comment)) throw new Error("Invalid review comment");
-    const comments = this.load(key);
-    if (!comments.some((item) => item.id === comment.id)) throw new Error("This comment was removed in another tab");
-    return this.save(key, comments.map((item) => item.id === comment.id ? comment : item));
+  update(key: string, comment: Comment): Promise<Comment[]> {
+    return this.change(key, (comments) => {
+      if (!isComment(comment)) throw new Error("Invalid review comment");
+      if (!comments.some((item) => item.id === comment.id)) throw new Error("This comment was removed in another tab");
+      return comments.map((item) => item.id === comment.id ? comment : item);
+    });
   }
-  remove(key: string, id: string): Comment[] {
-    return this.save(key, this.load(key).filter((item) => item.id !== id));
+  remove(key: string, id: string): Promise<Comment[]> {
+    return this.change(key, (comments) => comments.filter((item) => item.id !== id));
   }
-  /** Acknowledgements own a snapshot, not every comment now stored under its ids. */
-  removeUnchanged(key: string, submitted: readonly Comment[]): Comment[] {
+  /** Check both snapshot versions and attachment ownership inside the transaction. */
+  removeUnchanged(key: string, submitted: readonly Comment[], stillOwned: () => boolean = () => true): Promise<Comment[]> {
     const versions = new Map(submitted.map((comment) => [comment.id, commentVersion(comment)]));
-    const comments = this.load(key);
-    const kept = comments.filter((comment) => versions.get(comment.id) !== commentVersion(comment));
-    return kept.length === comments.length ? comments : this.save(key, kept);
-  }
-  private save(key: string, comments: Comment[]): Comment[] {
-    this.storage.setItem(storagePrefix + key, JSON.stringify({ version: 1, comments }));
-    return comments;
+    return this.change(key, (comments) => stillOwned()
+      ? comments.filter((comment) => versions.get(comment.id) !== commentVersion(comment)) : comments);
   }
 }
 

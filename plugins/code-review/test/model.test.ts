@@ -1,37 +1,63 @@
 import { describe, expect, it } from "vitest";
+import { reviewStorage } from "./storageSupport.js";
 import { anchorInSnapshot, ReviewStore, reviewMarkdown, snapshot, storagePrefix, workspaceKey, type Comment } from "../src/browser/model.js";
 
-function storage() {
-  const data = new Map<string, string>();
-  return { data, getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
-}
 const comment = (id: string): Comment => ({ id, path: "src/a.ts", source: "files", side: "new", start: 1, end: 2, hash: "a".repeat(64), body: "**Check** this\n\n```ts\na();\n```", createdAt: 1 });
 
-describe("workspace review persistence", () => {
-  it("isolates machines, projects and workspaces, and reads fresh data before each mutation", () => {
-    const memory = storage(); const first = new ReviewStore(memory); const second = new ReviewStore(memory);
-    first.add("one", comment("a")); second.add("one", comment("b")); first.add("two", comment("c"));
-    expect(first.remove("one", "a").map((item) => item.id)).toEqual(["b"]);
-    expect(second.load("two").map((item) => item.id)).toEqual(["c"]);
+describe("workspace review persistence (prepared; release verification pending)", () => {
+  it("serializes concurrent tabs through separate connections without losing comments", async () => {
+    const first = reviewStorage(); const second = reviewStorage(first.factory);
+    await Promise.all([first.store.add("one", comment("a")), second.store.add("one", comment("b"))]);
+    expect((await first.store.load("one")).map((item) => item.id).sort()).toEqual(["a", "b"]);
+    await Promise.all([first.store.update("one", { ...comment("a"), body: "edited" }), second.store.remove("one", "b")]);
+    expect(await second.store.load("one")).toEqual([{ ...comment("a"), body: "edited" }]);
+    await first.store.add("two", comment("c"));
+    expect(await second.store.load("two")).toEqual([comment("c")]);
     const context = { machine: { id: "m", name: "M", kind: "local" as const }, workspace: { id: "w", projectId: "p", path: "/repo", label: "main", isMain: true } };
     const keys = [workspaceKey(context), workspaceKey({ ...context, machine: { ...context.machine, id: "other" } }), workspaceKey({ ...context, workspace: { ...context.workspace, projectId: "other" } }), workspaceKey({ ...context, workspace: { ...context.workspace, id: "other" } })];
     expect(new Set(keys).size).toBe(4);
   });
-  it("preserves corrupt/unknown data and surfaces persistence failures", () => {
-    const memory = storage(); const store = new ReviewStore(memory);
-    memory.data.set(storagePrefix + "one", '{"version":99,"comments":[]}');
-    expect(() => store.add("one", comment("a"))).toThrow("Unrecognized");
-    expect(memory.getItem(storagePrefix + "one")).toContain('"version":99');
-    const blocked = new ReviewStore({ ...memory, setItem: () => { throw new Error("quota"); } });
-    expect(() => blocked.add("two", comment("b"))).toThrow("quota");
-    expect(memory.getItem(storagePrefix + "two")).toBeNull();
+  it("migrates once atomically, retains backup, and never reimports after acknowledgement", async () => {
+    const first = reviewStorage(); const second = reviewStorage(first.factory);
+    const backup = JSON.stringify({ version: 1, comments: [comment("a")] });
+    first.legacyData.set(storagePrefix + "one", backup);
+    second.legacyData.set(storagePrefix + "one", backup);
+    await Promise.all([first.store.load("one"), second.store.load("one")]);
+    expect(await first.store.load("one")).toEqual([comment("a")]);
+    await first.store.removeUnchanged("one", [comment("a")]);
+    expect(await second.store.load("one")).toEqual([]);
+    expect(first.legacy.getItem(storagePrefix + "one")).toBe(backup);
+    expect(second.legacy.getItem(storagePrefix + "one")).toBe(backup);
   });
-  it("refuses duplicate IDs, malformed coordinates, and resurrection of a deleted comment", () => {
-    const store = new ReviewStore(storage()); store.add("one", comment("a"));
-    expect(() => store.add("one", comment("a"))).toThrow("Duplicate");
-    expect(() => store.add("one", { ...comment("b"), end: 0 })).toThrow("Invalid");
-    store.remove("one", "a");
-    expect(() => store.update("one", comment("a"))).toThrow("removed");
+  it("lets existing IDB data win over corrupt legacy data, including empty records", async () => {
+    const { store, legacyData } = reviewStorage();
+    await store.add("one", comment("a")); await store.load("empty");
+    legacyData.set(storagePrefix + "one", "broken"); legacyData.set(storagePrefix + "empty", "broken");
+    expect(await store.load("one")).toEqual([comment("a")]);
+    expect(await store.load("empty")).toEqual([]);
+  });
+  it.each(['{"version":99,"comments":[]}', '{"version":1,"comments":[{}]}', "broken"])("reports corrupt migration and permits retry without a marker: %s", async (raw) => {
+    const { store, legacyData } = reviewStorage();
+    legacyData.set(storagePrefix + "one", raw);
+    await expect(store.load("one")).rejects.toThrow();
+    expect(legacyData.get(storagePrefix + "one")).toBe(raw);
+    legacyData.set(storagePrefix + "one", JSON.stringify({ version: 1, comments: [comment("a")] }));
+    expect(await store.load("one")).toEqual([comment("a")]);
+  });
+  it("reports inaccessible legacy storage without committing an empty migration", async () => {
+    const { storage, store } = reviewStorage();
+    const blocked = new ReviewStore(storage, { getItem: () => { throw new Error("blocked"); } });
+    await expect(blocked.load("one")).rejects.toThrow("blocked");
+    await store.add("one", comment("a"));
+    expect(await blocked.load("one")).toEqual([comment("a")]);
+  });
+  it("refuses duplicate IDs, malformed coordinates, and resurrection of a deleted comment", async () => {
+    const { store } = reviewStorage(); await store.add("one", comment("a"));
+    await expect(store.add("one", comment("a"))).rejects.toThrow("Duplicate");
+    await expect(store.add("one", { ...comment("b"), end: 0 })).rejects.toThrow("Invalid");
+    expect(await store.load("one")).toEqual([comment("a")]);
+    await store.remove("one", "a");
+    await expect(store.update("one", comment("a"))).rejects.toThrow("removed");
   });
 });
 

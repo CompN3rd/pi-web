@@ -12,13 +12,16 @@ interface Attachment {
 /** Activation-owned chip bookkeeping; independent of panel mounting and current selection. */
 export class ReviewChips {
   private readonly attachments = new Map<string, Attachment>();
+  private readonly pending = new Map<string, object>();
+  private readonly epochs = new Map<string, number>();
+  private disposed = false;
 
   constructor(
     private readonly store: ReviewStore,
-    private readonly notify: (workspace: string, message: string, error?: unknown) => void,
+    private readonly notify: (workspace: string, message: string, error?: unknown, kind?: "action" | "acceptance") => void,
   ) {}
 
-  attach(context: WorkspacePanelContext): void {
+  async attach(context: WorkspacePanelContext, isCurrent: () => boolean = () => true): Promise<void> {
     const { state, prompt } = context;
     const session = state?.selectedSession;
     if (session === undefined || session.pending || session.archived || session.cwd !== context.workspace.path
@@ -29,12 +32,26 @@ export class ReviewChips {
       throw new Error("Code Review requires the PI WEB release containing main's composer-chip API");
     }
     const workspace = workspaceKey(context);
-    // Read persistent data at the event boundary, not an old rendered list.
-    const comments = this.store.load(workspace).map((comment) => ({ ...comment }));
+    const target = JSON.stringify([workspace, session.id]);
+    const token = {}; this.pending.set(target, token);
+    const epoch = this.epochs.get(workspace);
+    // Capture ownership before awaiting; never redirect to a new selection.
+    let comments: Comment[];
+    let latest: boolean;
+    try {
+      comments = (await this.store.load(workspace)).map((comment) => ({ ...comment }));
+      latest = this.pending.get(target) === token;
+    } finally {
+      if (this.pending.get(target) === token) this.pending.delete(target);
+    }
+    if (this.disposed || !isCurrent() || !latest || this.epochs.get(workspace) !== epoch
+      || workspaceKey(context) !== workspace || context.state?.selectedSession?.id !== session.id
+      || context.state.selectedSession.pending || context.state.selectedSession.archived
+      || context.state.selectedMachine?.id !== context.machine.id) return;
     if (comments.length === 0) throw new Error("There are no saved comments to attach");
     const attachment: Attachment = {
       workspace,
-      target: JSON.stringify([workspace, session.id]),
+      target,
       id: `review:${workspace}`,
       prompt,
       comments,
@@ -43,7 +60,7 @@ export class ReviewChips {
       id: attachment.id,
       label: `Review (${String(comments.length)})`,
       text: reviewMarkdown(comments),
-      onRemove: (reason) => { this.settle(attachment, reason); },
+      onRemove: (reason) => this.settle(attachment, reason),
     };
     // The host binds this facade to its original machine/conversation. No
     // navigation, prompt DOM access, or redirection through live selection.
@@ -54,6 +71,7 @@ export class ReviewChips {
 
   /** Called before a local edit/delete. Withdrawal is silent and never deletes durable feedback. */
   withdrawWorkspace(workspace: string): void {
+    this.epochs.set(workspace, (this.epochs.get(workspace) ?? 0) + 1);
     for (const [target, attachment] of this.attachments) {
       if (attachment.workspace !== workspace) continue;
       if (attachment.prompt.removeChip === undefined) throw new Error("Composer-chip withdrawal is unavailable");
@@ -77,6 +95,7 @@ export class ReviewChips {
   }
 
   dispose(): void {
+    this.disposed = true; this.pending.clear();
     for (const workspace of new Set([...this.attachments.values()].map((attachment) => attachment.workspace))) {
       try { this.withdrawWorkspace(workspace); }
       catch (error) { this.notify(workspace, "Could not withdraw review chips during plugin shutdown.", error); }
@@ -84,20 +103,25 @@ export class ReviewChips {
     this.attachments.clear();
   }
 
-  private settle(attachment: Attachment, reason: "user" | "submitted"): void {
+  private async settle(attachment: Attachment, reason: "user" | "submitted"): Promise<void> {
     // A replaced chip's submitted callback still belongs to its older snapshot.
     // Do not forget the newer attachment, or delete feedback edited in flight.
-    const current = this.attachments.get(attachment.target);
-    const replaced = current !== undefined && current !== attachment;
-    if (current === attachment) this.attachments.delete(attachment.target);
+    if (this.disposed) return;
+    let replaced = false;
     try {
-      if (reason === "submitted" && !replaced) this.store.removeUnchanged(attachment.workspace, attachment.comments);
+      if (reason === "submitted") await this.store.removeUnchanged(attachment.workspace, attachment.comments, () => {
+        const current = this.attachments.get(attachment.target);
+        replaced = current !== undefined && current !== attachment;
+        return !this.disposed && !replaced;
+      });
+      if (this.disposed) return;
+      if (this.attachments.get(attachment.target) === attachment) this.attachments.delete(attachment.target);
       this.notify(attachment.workspace, reason === "submitted"
         ? replaced ? "An earlier review was accepted. The newer attached review and saved comments were retained."
           : "Review accepted by the server. Unchanged submitted comments were cleared; later edits were retained."
         : "Review detached from the composer. Saved comments were retained.");
     } catch (error) {
-      this.notify(attachment.workspace, "The review was accepted, but saved feedback could not be cleared. Check the conversation before attaching it again.", error);
+      if (!this.disposed) this.notify(attachment.workspace, "The review was accepted, but saved feedback could not be cleared. Check the conversation before attaching it again.", error, "acceptance");
       throw error; // The host also logs callback failures with the plugin owner identity.
     }
   }

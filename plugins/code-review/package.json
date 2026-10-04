@@ -26,6 +26,7 @@
     "@noble/hashes": "^2.4.0",
     "@types/node": "^24.13.3",
     "eslint": "^10.6.0",
+    "fake-indexeddb": "^6.2.4",
     "globals": "^17.7.0",
     "happy-dom": "^20.11.1",
     "lit": "^3.3.3",

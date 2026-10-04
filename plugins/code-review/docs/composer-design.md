@@ -12,7 +12,7 @@ Reference: [upstream composer documentation](https://github.com/jmfederico/pi-we
 
 ## Ownership
 
-- **ReviewStore** owns durable comments in browser localStorage, keyed by machine/project/workspace. A comment is not deleted merely because it was attached to a conversation.
+- **ReviewStore** owns durable comments in browser IndexedDB transactions (with one-time, backup-retaining localStorage migration), keyed by machine/project/workspace. A comment is not deleted merely because it was attached to a conversation.
 - **ReviewChips** owns staging and callback bookkeeping for the plugin activation, independent of whether the Review panel is mounted. It retains the exact conversation-bound prompt facade used for each attachment, never a live-selection redirect.
 - **PI WEB** owns composer chips, send admission, failed-send retention, and callbacks. Staging happens only from the user's **Attach review to composer** action, never from render.
 - **ReviewPanel** owns file loading and unsaved edits. It delegates composer lifecycle decisions instead of reaching into the host DOM or sending messages itself.
@@ -37,7 +37,7 @@ A ready, unarchived conversation in the panel's workspace is required. The facad
 | Another tab changes saved review data | Withdraw this activation's copies, even while the panel is closed, and ask for reattachment. A request already in flight may still be accepted; its callback compares against current storage. |
 | Clearing submitted data fails | Preserve saved data, report the problem in the panel, and throw for the host's attributed callback logging. The user checks the conversation before reattaching. |
 | Browser reload | Host chips are gone; saved comments remain. Open the target conversation and attach again with a fresh facade/callback. |
-| Plugin disposal | Detach the storage listener and attempt silent chip withdrawal; report withdrawal failures. |
+| Plugin disposal | Close the notification channel/database and attempt silent chip withdrawal; suppress obsolete asynchronous UI work. Already-started durable writes may complete. |
 
 Acceptance means prompt admission by the server, not that the assistant completed its response. There is no automatic resend or inference from the disappearance of prompt text. A submitted callback always uses its captured workspace and snapshot, even after navigation. Attachments in different conversations are independent snapshots; intentionally attaching to multiple conversations can send the feedback more than once.
 
@@ -47,8 +47,8 @@ After upstream publishes the supporting package:
 
 1. Confirm its public declarations include `PluginPromptChip` and the documented `setChip`/`removeChip` lifecycle. Update the exact development dependency pin and lockfile to that real version.
 2. Re-read the published contract and reconcile any differences from the recorded main revision. Do not assume main's design is frozen.
-3. Run `npm run verify` in this directory, followed by an actual packed-package smoke check. Unit/DOM cases have been updated for the new contract but have **not** been run.
-4. In a separate test installation, exercise successful and failed sends, chips-only messages, steer/follow-up, selection changes, repeat attachment during an in-flight send, local edits/deletes, cross-tab edits, reload/restaging, disabled-plugin cleanup, and remote-machine scoping. Confirm the server-accepted callback clears only the correct saved feedback. Do not restart the developer's active session daemon as part of this check.
+3. Run `npm run verify` in this directory, followed by an actual packed-package smoke check. Unit/DOM cases have been converted to the async store and prepared for the new contract but have **not** been run. The dev-only `fake-indexeddb` factory exercises the actual adapter on two connections, transaction aborts, migration precedence/empty markers, and open retry/late-success cleanup. No dependencies were installed as part of preparing these tests; only package metadata/lockfile were updated.
+4. In a separate test installation, exercise successful and failed sends, chips-only messages, steer/follow-up, selection changes, repeat attachment during an in-flight send, local edits/deletes, simultaneous two-tab saves/acknowledgements, failed/blocked/corrupt migration, retained legacy backups, persistent storage/acknowledgement warnings across remounts, async navigation/disposal, LAN HTTP without Web Locks, BroadcastChannel failure, Git with `diff.submodule=diff`, reload/restaging, disabled-plugin cleanup, and remote-machine scoping. Confirm the server-accepted callback clears only the correct saved feedback. Do not restart the developer's active session daemon as part of this check.
 5. Document the minimum verified host release, remove the pending notices, and only then consider enabling publication by removing `private` and choosing an available package name.
 
 There is no scheduled release watcher or automatic installation/restart associated with this gate.

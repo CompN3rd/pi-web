@@ -1,11 +1,12 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerPluginActivationContext, ServerPluginPeerRequestContext } from "@jmfederico/pi-web/server-plugin-api";
 import { requestGit } from "../src/server.js";
+import { snapshot } from "../src/browser/model.js";
 
 function request(input: ServerPluginPeerRequestContext["input"], operation = "diff"): ServerPluginPeerRequestContext {
   return { operation, input, project: { id: "p", name: "P", path: "/repo" }, workspace: { id: "w", projectId: "p", path: "/repo", label: "main", isMain: true }, signal: new AbortController().signal };
@@ -19,7 +20,7 @@ describe("read-only Git peer", () => {
     expect(await requestGit(exec, input)).toBe("diff");
     const call = exec.mock.calls[0]?.[0];
     expect(call?.cwd).toBe("/repo"); expect(call?.signal).toBe(input.signal);
-    expect(call?.args).toEqual(["--literal-pathspecs", "-C", "/repo", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "--relative", "--cached", "--unified=3", "--", "odd ' $(touch nope).ts"]);
+    expect(call?.args).toEqual(["--literal-pathspecs", "-C", "/repo", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "--submodule=short", "--relative", "--cached", "--unified=3", "--", "odd ' $(touch nope).ts"]);
     expect(call?.unsetEnv).toContain("GIT_DIR"); expect(call?.unsetEnv).toContain("GIT_INDEX_FILE");
   });
   it.each(["../secret", "/secret", "C:/secret", "a\\b", "a\0b", "a/../b"])("rejects unsafe path %s before executing", async (path) => {
@@ -56,4 +57,28 @@ it("reads staged and unstaged snapshots from a real Git repository without modif
   expect(await requestGit(adapter, scope)).toContain("+staged");
   expect(await requestGit(adapter, { ...scope, input: { source: "git-unstaged", path: "a.ts" } })).toContain("+working");
   expect((await git("show", ":a.ts")).stdout).toBe("staged\n");
+}, 20_000);
+
+it("overrides diff.submodule=diff so nested file coordinates never enter the gitlink snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "review-submodule-")); temporary.push(root);
+  const child = join(root, "child"); await mkdir(child);
+  const exec = promisify(nodeExecFile);
+  const git = (cwd: string, ...args: string[]) => exec("git", ["-C", cwd, ...args]);
+  const commit = (cwd: string) => git(cwd, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "-m", "snapshot");
+  await git(root, "init"); await git(child, "init");
+  await writeFile(join(child, "nested.ts"), "before\n"); await git(child, "add", "."); await commit(child);
+  await git(root, "add", "child"); await commit(root);
+  await writeFile(join(child, "nested.ts"), "after\n"); await git(child, "add", "."); await commit(child);
+  await git(root, "config", "diff.submodule", "diff");
+  expect((await git(root, "diff")).stdout).toContain("nested.ts");
+  const adapter: ServerPluginActivationContext["execFile"] = async ({ file, args, signal }) => {
+    const result = await exec(file, [...args ?? []], { signal });
+    return { ...success, stdout: result.stdout, stderr: result.stderr };
+  };
+  const input = request({ source: "git-unstaged", path: "child" });
+  const output = await requestGit(adapter, { ...input, workspace: { ...input.workspace, path: root } });
+  expect(output).toEqual(expect.stringContaining("Subproject commit"));
+  expect(output).not.toContain("nested.ts");
+  if (typeof output !== "string") throw new Error("Expected a diff");
+  expect(snapshot("child", "git-unstaged", output).rows.filter((row) => row.line !== undefined).every((row) => row.line === 1)).toBe(true);
 }, 20_000);

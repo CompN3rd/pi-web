@@ -44,7 +44,15 @@ For remote workspaces, install and enable the package on each target machine. Gi
 
 Comments render safe Markdown: raw HTML is displayed as text, images do not load, and links are limited to HTTP/HTTPS. Binary, truncated, very large sources (over 200,000 characters or 5,000 lines), and directories/change lists with over 2,000 entries are rejected rather than displaying incomplete selectable coordinates. Git must be installed. Git views show tracked changes; inspect untracked files in Files. Submodules are shown as Git's gitlink diff, not recursively expanded into another repository's file changes.
 
-Saved comments are local to this browser origin, keyed by machine, project, and workspace. They survive reloads and session changes; they are not synchronized across browsers or machines. Other tabs' changes are re-read before saving. Storage errors are shown and an unsuccessful save leaves the editor text available. Corrupt or unrecognized storage is not overwritten automatically.
+Saved comments are local to this browser origin, keyed by machine, project, and workspace. They survive reloads and session changes; they are not synchronized across browsers or machines. IndexedDB transactions serialize concurrent saves and acknowledgements across tabs, so independent comments are not lost through competing read/modify/write operations. IndexedDB does not require HTTPS or Web Locks; LAN HTTP remains supported where the browser permits origin storage. Storage errors are shown and an unsuccessful save leaves the editor text available. Corrupt or unrecognized storage is not overwritten automatically. Feedback warnings remain separate from source-loading errors, survive panel/workspace remounts within the activation, and stay visible until explicitly dismissed.
+
+### Storage upgrade and recovery
+
+Reload **all old plugin tabs before using the upgraded plugin**. On first access to each workspace, the plugin imports its previous `pi-web-code-review:v1:` localStorage record into IndexedDB in one transaction. The record itself marks migration complete, including when its comment list is empty after removal or acknowledgement. Existing IndexedDB data always wins. Legacy localStorage is retained unchanged as a backup, not an active store after migration. Old plugin tabs still write only localStorage; their later edits cannot safely be merged automatically and will not appear in the upgraded plugin. Copy any such feedback before reloading those tabs.
+
+If migration is corrupt, blocked, or fails, the panel reports it and retains the original data for recovery; it does not substitute an empty successful save. Close older tabs if an upgrade is blocked, then reopen Review to retry. Browser storage clearing deletes active comments and may also delete the backup; clearing only IndexedDB can reimport the retained legacy snapshot. Export/copy needed feedback before clearing storage.
+
+Cross-tab chip withdrawal and live badges use BroadcastChannel notifications after durable commits. A notification failure cannot undo a saved comment. If the browser blocks BroadcastChannel, transaction safety remains, but other tabs may display stale feedback/chips until refreshed; reattach a fresh snapshot before sending.
 
 Switching away from the tab preserves the current editor within this activation. Switching workspace, reloading the browser, or disabling the plugin discards **unsaved** edits. Save before doing so.
 
@@ -56,7 +64,7 @@ Choose a ready, unarchived conversation in this workspace, then select **Attach 
 
 Send the chip with a message or by itself. Failed sends keep it and the saved comments for retry. Server acceptance clears only unchanged comments from the submitted snapshot; later edits and new comments survive. Acceptance does not mean the assistant has finished answering. Removing the composer chip only detaches it—saved comments remain available.
 
-Saving edits or removing comments withdraws this workspace's staged feedback; attach again when ready. Changes from another browser tab also withdraw this activation's copies. If withdrawal fails, remove the stale chip manually before sending. If clearing submitted comments fails, inspect the accepted conversation before reattaching to avoid duplicate feedback.
+Saving edits or removing comments withdraws this workspace's staged feedback; attach again when ready. Changes from another browser tab also withdraw this activation's copies. If withdrawal fails, remove the stale chip manually before sending. If clearing submitted comments fails, inspect the accepted conversation before reattaching to avoid duplicate feedback. This acceptance warning remains visible alongside later action or storage errors until you explicitly dismiss it, including after switching workspaces or reopening Review within the same activation.
 
 Chips survive closing the panel or navigating away, but not reloading the page. Saved comments survive reloads; open the intended conversation and attach again. Different conversations can hold independent snapshots, so attach to multiple conversations only if you intend to send the feedback more than once.
 
