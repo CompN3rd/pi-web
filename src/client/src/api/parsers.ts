@@ -309,9 +309,11 @@ function parseSessionWarning(value: unknown): SessionWarning {
   };
 }
 
-function optionalWarnings(value: unknown): Pick<SessionStatus, "warnings"> | object {
-  if (value === undefined) return {};
-  return { warnings: arrayOf(parseSessionWarning)(value) };
+/** Rolling compatibility for daemons that encoded this status fact as a warning. */
+function isLegacyOtherInstanceActivityWarning(warning: SessionWarning): boolean {
+  return warning.severity === "info"
+    && warning.source === "PI-WEB"
+    && warning.message === "Recently active in another PI-WEB instance. Avoid working on this session in both instances at once.";
 }
 
 function parseAskUserQuestionOption(value: unknown): AskUserQuestionOption {
@@ -553,9 +555,12 @@ function optionalNonEmptyString(record: Record<string, unknown>, key: string): s
 
 export function parseSessionStatus(value: unknown): SessionStatus {
   const record = requireRecord(value);
+  const warnings = record["warnings"] === undefined ? undefined : arrayOf(parseSessionWarning)(record["warnings"]);
+  const recentlyActiveElsewhere = parseOptionalBoolean(record["recentlyActiveElsewhere"], "recentlyActiveElsewhere");
   return {
     sessionId: requireString(record, "sessionId"),
     ...optionalField("persisted", parseOptionalBoolean(record["persisted"], "persisted")),
+    recentlyActiveElsewhere: recentlyActiveElsewhere ?? warnings?.some(isLegacyOtherInstanceActivityWarning) ?? false,
     isStreaming: requireBoolean(record, "isStreaming"),
     isCompacting: requireBoolean(record, "isCompacting"),
     isBashRunning: requireBoolean(record, "isBashRunning"),
@@ -567,7 +572,7 @@ export function parseSessionStatus(value: unknown): SessionStatus {
     ...optionalModel(record["model"]),
     ...optionalContextUsage(record["contextUsage"]),
     ...optionalField("thinkingLevel", optionalString(record, "thinkingLevel")),
-    ...optionalWarnings(record["warnings"]),
+    ...optionalField("warnings", warnings?.filter((warning) => !isLegacyOtherInstanceActivityWarning(warning))),
     ...optionalPendingAsk(record["pendingAsk"]),
     ...optionalPendingDialogs(record["pendingDialogs"]),
   };

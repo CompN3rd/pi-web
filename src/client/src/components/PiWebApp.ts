@@ -324,6 +324,8 @@ export class PiWebApp extends LitElement {
   @state() private workspaceUploadDefaultFolder = effectiveWorkspaceUploadFolder(undefined);
   @state() private workspaceAttachmentsDefaultFolder = effectiveWorkspaceAttachmentsFolder(undefined);
   private sessionWarningVisibility = initialSessionWarningVisibilityState();
+  /** Browser-local acknowledgement, retained per machine/session until activity elsewhere clears. */
+  private readonly dismissedActivityNotices = new Set<string>();
   private readonly onPopState = () => {
     this.invalidateNavigationSelection();
     this.syncNavigationFreshness();
@@ -372,6 +374,7 @@ export class PiWebApp extends LitElement {
   protected override willUpdate(): void {
     this.toggleAttribute("pwa-display-mode", this.appShell.isPwaDisplayMode);
     this.syncSessionWarningVisibility();
+    this.syncSessionActivityAcknowledgement();
   }
 
   protected override updated(): void {
@@ -387,8 +390,60 @@ export class PiWebApp extends LitElement {
     this.sessionWarningVisibility = reconcileSessionWarningVisibility(
       this.sessionWarningVisibility,
       session === undefined ? undefined : machineSessionKey(selectedMachineId(this.state), session.id),
-      this.state.status === undefined ? undefined : this.state.status.warnings ?? [],
+      this.state.status?.sessionId === session?.id ? this.state.status?.warnings ?? [] : undefined,
     );
+  }
+
+  private syncSessionActivityAcknowledgement(): void {
+    if (this.dismissedActivityNotices.size === 0) return;
+    const session = this.state.selectedSession;
+    const status = this.state.status;
+    const machineId = selectedMachineId(this.state);
+    // The cache belongs to the selected machine and receives global updates for
+    // unselected sessions too. Their activity may clear while another chat is open.
+    for (const cachedStatus of Object.values(this.state.sessionStatuses)) {
+      if (cachedStatus.sessionId !== session?.id && cachedStatus.recentlyActiveElsewhere === false) {
+        this.dismissedActivityNotices.delete(machineSessionKey(machineId, cachedStatus.sessionId));
+      }
+    }
+    if (session !== undefined && status?.sessionId === session.id && status.recentlyActiveElsewhere === false) {
+      this.dismissedActivityNotices.delete(machineSessionKey(machineId, session.id));
+    }
+  }
+
+  private unacknowledgedActivitySessionKey(state = this.state): string | undefined {
+    const session = state.selectedSession;
+    if (session === undefined || state.status?.sessionId !== session.id || state.status.recentlyActiveElsewhere !== true) return undefined;
+    const sessionKey = machineSessionKey(selectedMachineId(state), session.id);
+    return this.dismissedActivityNotices.has(sessionKey) ? undefined : sessionKey;
+  }
+
+  private readonly handleDismissActivityNotice = async (): Promise<void> => {
+    const sessionKey = this.unacknowledgedActivitySessionKey();
+    if (sessionKey === undefined) return;
+    this.dismissedActivityNotices.add(sessionKey);
+    this.requestUpdate();
+    await this.updateComplete;
+    await this.promptEditor?.updateComplete;
+    const session = this.state.selectedSession;
+    if (session !== undefined
+      && machineSessionKey(selectedMachineId(this.state), session.id) === sessionKey
+      && this.unacknowledgedActivitySessionKey() === undefined
+      && this.effectiveMainView() === "chat"
+      && this.promptEditor?.disabled === false
+      && !this.isRenderedModalOpen()) this.promptEditor.focusInput();
+  };
+
+  private renderSessionActivityNotice(): TemplateResult | null {
+    if (this.unacknowledgedActivitySessionKey() === undefined) return null;
+    return html`
+      <section class="composer-activity-notice" role="alert" aria-label="Recent activity in another instance">
+        <div class="composer-activity-notice-text">
+          <p>Recently active in another PI-WEB instance. Avoid working on this session in both instances at once.</p>
+        </div>
+        <button type="button" @click=${this.handleDismissActivityNotice}>Dismiss and continue</button>
+      </section>
+    `;
   }
 
   private syncSelectedSessionReadState(): void {
@@ -1991,6 +2046,10 @@ export class PiWebApp extends LitElement {
     // Recheck the rendered boundary at the final side-effect point so a newer
     // or surviving modal keeps visual and keyboard focus ownership.
     if (!isCurrent() || this.isRenderedModalOpen()) return;
+    if (this.unacknowledgedActivitySessionKey() !== undefined) {
+      this.renderRoot.querySelector<HTMLButtonElement>(".composer-activity-notice button")?.focus();
+      return;
+    }
     this.promptEditor?.focusInput();
   }
 
@@ -3239,6 +3298,7 @@ export class PiWebApp extends LitElement {
   }
 
   private sendPrompt(text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string): void {
+    if (this.unacknowledgedActivitySessionKey() !== undefined) return;
     const hasAttachments = attachments !== undefined && attachments.length > 0;
     if (!hasAttachments && streamingBehavior === undefined && this.auth.handleSlashCommand(text)) return;
     void this.sessions.send(text, streamingBehavior, attachments, delivery, folder);
@@ -3517,6 +3577,7 @@ export class PiWebApp extends LitElement {
   override render() {
     const state = this.state;
     const mainView = this.effectiveMainView();
+    const activityNoticeVisible = this.unacknowledgedActivitySessionKey(state) !== undefined;
     return html`
       <div class=${this.panelCollapse.shellClass(mainView)} style=${this.panelResize.shellStyle({ navigation: this.resizablePanelConstraints("navigation"), workspace: this.resizablePanelConstraints("workspace") })}>
         <aside id="navigation-panel">${this.appShell.isMobileNavigationLayout ? null : this.renderNavigationPanel()}</aside>
@@ -3532,7 +3593,10 @@ export class PiWebApp extends LitElement {
           <div class="mobile-navigation-panel">${this.appShell.isMobileNavigationLayout ? this.renderNavigationPanel() : null}</div>
           ${state.selectedSession ? html`
             ${this.renderChatView(state, state.selectedSession)}
-            <prompt-editor .shortcuts=${this.shortcutConfig} .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .machineId=${selectedMachineId(state)} .projectId=${state.selectedWorkspace?.projectId} .workspaceId=${state.selectedWorkspace?.id} .attachmentsFolder=${workspaceEffectiveAttachmentsFolder(state.selectedWorkspace?.effectiveConfig, this.workspaceAttachmentsDefaultFolder)} .disabled=${state.selectedSession.archived === true} .canSteer=${state.status?.isStreaming === true} .isCompacting=${state.status?.isCompacting === true} .canStop=${state.status?.isStreaming === true || state.status?.isBashRunning === true || state.status?.isCompacting === true || (state.status?.pendingMessageCount ?? 0) > 0} .status=${state.status} .availableThinkingLevels=${state.availableThinkingLevels} .sending=${state.sendingPrompts[state.selectedSession.id] === true} .onSend=${this.handleSendPrompt} .onStop=${this.handleStopActiveWork} .onSelectModel=${this.handleSelectModel} .onSelectThinking=${this.handleSelectThinking}></prompt-editor>
+            <div class="composer-area">
+              <prompt-editor ?inert=${activityNoticeVisible} .shortcuts=${this.shortcutConfig} .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .machineId=${selectedMachineId(state)} .projectId=${state.selectedWorkspace?.projectId} .workspaceId=${state.selectedWorkspace?.id} .attachmentsFolder=${workspaceEffectiveAttachmentsFolder(state.selectedWorkspace?.effectiveConfig, this.workspaceAttachmentsDefaultFolder)} .disabled=${state.selectedSession.archived === true || activityNoticeVisible} .canSteer=${state.status?.isStreaming === true} .isCompacting=${state.status?.isCompacting === true} .canStop=${state.status?.isStreaming === true || state.status?.isBashRunning === true || state.status?.isCompacting === true || (state.status?.pendingMessageCount ?? 0) > 0} .status=${state.status} .availableThinkingLevels=${state.availableThinkingLevels} .sending=${state.sendingPrompts[state.selectedSession.id] === true} .onSend=${this.handleSendPrompt} .onStop=${this.handleStopActiveWork} .onSelectModel=${this.handleSelectModel} .onSelectThinking=${this.handleSelectThinking}></prompt-editor>
+              ${this.renderSessionActivityNotice()}
+            </div>
             ${this.renderStatusBar(state)}
             ${state.commandDialog !== undefined ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog?.requestId ?? "", value)} .onCancel=${() => { this.sessions.cancelCommand(); }}></command-picker>` : null}
             ${state.modelDialog !== undefined ? html`<model-picker title=${state.modelDialog.title} .options=${state.modelDialog.options} .catalog=${state.modelDialog.catalog} .defaultValue=${state.modelDialog.defaultValue} .defaultsLoading=${state.modelDialog.defaultsLoading === true} .onSetDefault=${this.handleSetDefaultModel} .selectedValue=${state.modelDialog.selectedValue} .onPick=${(value: string) => { void this.pickModel(value); }} .onToggleEnabled=${this.handleToggleModelEnabled} .onSetScope=${this.handleSetModelScope} .onCancel=${() => { this.setState({ modelDialog: undefined }); }}></model-picker>` : null}

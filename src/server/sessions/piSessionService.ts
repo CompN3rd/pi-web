@@ -4586,6 +4586,7 @@ export class PiSessionService implements SessionRouteService {
     return {
       sessionId: session.sessionId,
       persisted: sessionFileExists(session.sessionFile),
+      recentlyActiveElsewhere: this.activityMarker.isActiveElsewhere(session.sessionFile),
       ...(model === undefined ? {} : { model }),
       thinkingLevel: session.thinkingLevel,
       isStreaming: session.isStreaming,
@@ -4612,13 +4613,6 @@ export class PiSessionService implements SessionRouteService {
   private warningsForSession(session: PiAgentSession): SessionWarning[] {
     const runtime = this.active.get(session.sessionId)?.runtime;
     const warnings = runtime === undefined ? [] : collectRuntimeWarnings(runtime);
-    if (this.activityMarker.isActiveElsewhere(session.sessionFile)) {
-      warnings.push({
-        severity: "info",
-        message: "Recently active in another PI-WEB instance. Avoid working on this session in both instances at once.",
-        source: "PI-WEB",
-      });
-    }
     const anthropic = anthropicSubscriptionWarning(session, join(this.agentDir, "auth.json"));
     if (anthropic !== undefined) warnings.push(anthropic);
     return warnings;
