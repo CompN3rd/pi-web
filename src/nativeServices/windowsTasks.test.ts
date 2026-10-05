@@ -116,12 +116,22 @@ describe("Windows per-user autostart", () => {
 
   it("uses quoted foreground execution, clears nested identity, and preserves Node exit status", () => {
     const runner = windowsTaskRunner(plan(), "web");
-    expect(runner).toContain("Get-ChildItem Env:PI_WEB_* | Remove-Item");
+    expect(runner).toContain("Remove-Item Env:PI_WEB_SESSION, Env:PI_WEB_SESSIOND_SOCKET");
+    expect(runner).not.toContain("Get-ChildItem Env:PI_WEB_* | Remove-Item");
     expect(runner).toContain("Set-Location -LiteralPath 'C:\\Users\\O''Brien'");
     expect(runner).toContain("& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\O''Brien\\pi-web\\dist\\server\\index.js'");
     expect(runner).toContain("*>> 'C:\\Users\\O''Brien\\.pi-web\\logs\\web.log'");
     expect(runner).toContain("exit $LASTEXITCODE");
     expect(runner).not.toContain("Start-Process");
+  });
+
+  it("removes inherited directory aliases only when install captured their canonical values", () => {
+    const captured = windowsTaskRunner(plan({ PI_WEB_AGENT_DIR: "C:\\profile", PI_WEB_AGENT_SESSION_DIR: "C:\\sessions" }), "web");
+    expect(captured).toContain("Remove-Item Env:PI_WEB_AGENT_DIR -ErrorAction SilentlyContinue");
+    expect(captured).toContain("Remove-Item Env:PI_WEB_AGENT_SESSION_DIR -ErrorAction SilentlyContinue");
+    const inherited = windowsTaskRunner(plan({}), "web");
+    expect(inherited).not.toContain("Remove-Item Env:PI_WEB_AGENT_DIR");
+    expect(inherited).not.toContain("Remove-Item Env:PI_WEB_AGENT_SESSION_DIR");
   });
 
   it("starts daemon first, but stops/restarts web before the daemon", () => {
@@ -268,7 +278,7 @@ try {
     const root = mkdtempSync(join(tmpdir(), "pi-web O'Brien ‘left’ ‚low‛ ü-"));
     try {
       const entrypoint = join(root, "fixture.js");
-      writeFileSync(entrypoint, "console.log(JSON.stringify({nested:process.env.PI_WEB_SESSION,config:process.env.PI_WEB_CONFIG,cwd:process.cwd()})); console.error('fixture stderr'); process.exit(17);\n");
+      writeFileSync(entrypoint, "console.log(JSON.stringify({nested:process.env.PI_WEB_SESSION,socket:process.env.PI_WEB_SESSIOND_SOCKET,docker:process.env.PI_WEB_DOCKER_MODE,config:process.env.PI_WEB_CONFIG,cwd:process.cwd(),offline:process.env.PI_WEB_OFFLINE,hosts:process.env.PI_WEB_ALLOWED_HOSTS,spawn:process.env.PI_WEB_SPAWN_SESSIONS,subsessions:process.env.PI_WEB_SUBSESSIONS,ask:process.env.PI_WEB_ASK_USER,facts:process.env.PI_WEB_ENVIRONMENT_FACTS,profile:process.env.PI_WEB_AGENT_DIR})); console.error('fixture stderr'); process.exit(17);\n");
       mkdirSync(join(root, "logs"));
       const fixture: WindowsTaskPlan = {
         ...plan(), node: process.execPath, home: root, logDirectory: join(root, "logs"),
@@ -279,7 +289,12 @@ try {
       writeFileSync(script, `\uFEFF${windowsTaskRunner(fixture, "web")}`);
       const result = spawnSync(fixture.powershell, ["-NoProfile", "-NonInteractive", "-File", script], {
         encoding: "utf8", windowsHide: true, timeout: 20_000,
-        env: { ...process.env, PI_WEB_SESSION: "1" },
+        env: {
+          ...process.env, PI_WEB_SESSION: "1", PI_WEB_SESSIOND_SOCKET: "foreign.sock", PI_WEB_DOCKER_MODE: "runtime",
+          PI_WEB_OFFLINE: "1", PI_WEB_ALLOWED_HOSTS: "example.test", PI_WEB_SPAWN_SESSIONS: "false",
+          PI_WEB_SUBSESSIONS: "false", PI_WEB_ASK_USER: "false", PI_WEB_ENVIRONMENT_FACTS: "false",
+          PI_WEB_AGENT_DIR: join(root, "inherited-profile"),
+        },
       });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(17);
@@ -288,6 +303,12 @@ try {
       expect(log).toContain(JSON.stringify(root));
       expect(log).toContain("fixture stderr");
       expect(log).not.toContain('"nested"');
+      expect(log).not.toContain('"socket"');
+      expect(log).not.toContain('"docker"');
+      expect(log).toContain('"offline":"1"');
+      expect(log).toContain('"hosts":"example.test"');
+      for (const key of ["spawn", "subsessions", "ask", "facts"]) expect(log).toContain(`"${key}":"false"`);
+      expect(log).toContain(`"profile":${JSON.stringify(join(root, "inherited-profile"))}`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

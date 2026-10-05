@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
-import { agentSessionDirEnvOverride, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV, PI_WEB_AGENT_DIR_ENV } from "../config.js";
+import { agentSessionDirEnvOverride, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV, PI_WEB_AGENT_DIR_ENV, PI_WEB_AGENT_SESSION_DIR_ENV } from "../config.js";
 
 export type WindowsServiceId = "sessiond" | "web";
 export type WindowsTaskAction = "start" | "stop" | "restart" | "uninstall";
@@ -53,7 +53,7 @@ export function windowsTaskPlan(input: {
     const value = Object.entries(env).find(([name]) => name.toUpperCase() === key)?.[1];
     if (value !== undefined && value !== "") environment[key] = value;
   }
-  // Match config.ts precedence before the runner clears PI_WEB_* aliases.
+  // Match config.ts precedence before the runner clears captured directory aliases.
   // Normalize Windows' case-insensitive environment names for plain-object callers.
   const directoryEnvironment = Object.fromEntries(Object.entries(env).map(([key, value]) => [key.toUpperCase(), value]));
   const agentDirectory = nonemptyEnvironment(directoryEnvironment, PI_WEB_AGENT_DIR_ENV)
@@ -144,7 +144,11 @@ $script:runnerStarted = $true
 ${taskJobScript}
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-Get-ChildItem Env:PI_WEB_* | Remove-Item
+# Keep runtime configuration inherited from Windows; remove only nested
+# identity, foreign deployment wiring, and aliases superseded at install.
+Remove-Item Env:PI_WEB_SESSION, Env:PI_WEB_SESSIOND_SOCKET -ErrorAction SilentlyContinue
+Get-ChildItem Env:PI_WEB_DOCKER_* | Remove-Item
+${([[PI_WEB_AGENT_DIR_ENV, PI_CODING_AGENT_DIR_ENV], [PI_WEB_AGENT_SESSION_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV]] as const).filter(([, canonical]) => plan.environment[canonical] !== undefined).map(([alias]) => `Remove-Item Env:${alias} -ErrorAction SilentlyContinue`).join("\n")}
 Remove-Item Env:PORT -ErrorAction SilentlyContinue
 ${Object.entries(plan.environment).map(([key, value]) => `[Environment]::SetEnvironmentVariable(${literal(key)}, ${literal(value)}, 'Process')`).join("\n")}
 Set-Location -LiteralPath ${literal(plan.home)} -ErrorAction Stop

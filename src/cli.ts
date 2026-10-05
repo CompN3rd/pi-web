@@ -1427,17 +1427,25 @@ async function installWindowsTasks(args: string[]): Promise<void> {
   console.log("Use pi-web status, logs, start, stop, restart, or uninstall. Uninstall preserves config and data.");
 }
 
-async function windowsServiceCommand(command: string, args: string[]): Promise<void> {
+export async function windowsServiceCommand(command: string, args: string[], dependencies = {
+  readStatus: readWindowsTaskStatus,
+  printVersion: printPiWebVersionReport,
+}): Promise<void> {
   if (command === "install") { await installWindowsTasks(args); return; }
-  if (args.length > 0) throw new Error(`Unexpected arguments for pi-web ${command}: ${args.join(" ")}`);
+  const versionOptions = command === "version" ? parseVersionOptions(args) : {};
+  if (command !== "version" && args.length > 0) throw new Error(`Unexpected arguments for pi-web ${command}: ${args.join(" ")}`);
   if (command === "start" || command === "stop" || command === "restart" || command === "uninstall") {
     await windowsLifecycle(command);
     console.log(command === "uninstall" ? "PI WEB Windows tasks removed; config, logs, and data were kept." : `PI WEB Windows tasks: ${command} completed.`);
     return;
   }
-  const tasks = readWindowsTaskStatus();
+  const tasks = dependencies.readStatus();
   const plan = tasks[0]?.plan;
-  if (command === "version") { await printPiWebVersionReport(plan === undefined ? {} : { configEnv: plan.environment }); return; }
+  if (command === "version") {
+    const report = await dependencies.printVersion({ ...versionOptions, ...(plan === undefined ? {} : { configEnv: plan.environment }) });
+    if (report.release?.status === "error") process.exitCode = 1;
+    return;
+  }
   if (plan === undefined) throw new Error("PI WEB Windows tasks are not installed. Run pi-web install from an external Windows terminal.");
   if (command === "logs") { console.log(runWindowsTaskScript(windowsTaskLogsScript(plan))); return; }
   console.log("Backend: Windows Task Scheduler (current user, at sign-in)");
