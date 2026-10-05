@@ -1139,6 +1139,12 @@ export interface SessionStatus {
   sessionId: string;
   /** True when the server has verified a backing session file exists; false when known transient. */
   persisted?: boolean;
+  /**
+   * Best-effort observation of recent activity on this session in another PI WEB
+   * instance, not an ownership lock. Current daemons report both true and false;
+   * optional for older producers. Browsers own acknowledgement and presentation.
+   */
+  recentlyActiveElsewhere?: boolean;
   model?: SessionModel;
   thinkingLevel?: string;
   isStreaming: boolean;

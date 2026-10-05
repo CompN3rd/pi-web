@@ -160,6 +160,7 @@ describe("notification socket guards", () => {
 function statusWire() {
   return {
     sessionId: "session-1",
+    recentlyActiveElsewhere: false,
     isStreaming: true,
     isCompacting: false,
     isBashRunning: false,

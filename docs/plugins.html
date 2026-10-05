@@ -209,6 +209,26 @@ if (registered[0]) {
 }</code></pre>
 <p>Each service captures its <code>machineId</code> when the host creates the context. Retaining it, or completing an in-flight request after selection changes, still targets that machine. A fresh context follows the selected machine for portable gateway plugins; machine-specific instances receive contexts only on their registration machine, under the existing loading and visibility rules. Remote request failures reject rather than substituting gateway projects. Results contain detached basic information, and the service exposes no project mutation or generic HTTP methods. <code>projects</code> is optional on older hosts; update PI WEB when it is needed.</p>
 <p>Browser API v4 remains unchanged. No capability requirement is needed for application panels, selection observation, or project discovery. Older hosts may omit the tab silently; update PI WEB to use it. Current hosts warn at registration about unknown contribution names, attributing the warning to the plugin, and ignore them while keeping recognized contributions.</p>
+<h3 id="attach-text-context-to-a-message">Attach text context to a message</h3>
+<p>Action, application-panel, and workspace-panel contexts provide optional <code>prompt.setChip(chip)</code> and <code>prompt.removeChip(id)</code> methods. Use them to stage labeled, removable text context in the existing composer. Feature-detect these methods on older hosts; browser API v4 is unchanged.</p>
+<p>Each prompt facade captures the machine and conversation when its context is created. Staging requires a ready, non-archived conversation at that point; calls throw when there is no such target or the owning plugin is unavailable. Retaining a facade never redirects its chips to a later selection. Call from an action or event handler, not from a render callback.</p>
+<pre><code>const prompt = context.prompt;
+if (!prompt.setChip) throw new Error("Update PI WEB to attach text context");
+prompt.setChip({
+  id: "selected-note", // local to this plugin and captured conversation
+  label: "Selected note",
+  text: savedNote.text,
+  onRemove: (reason) =&gt; {
+    // "user" means removal in the composer; "submitted" means server acceptance.
+    forgetSavedNote(savedNote.id);
+  },
+});
+// Withdraw without calling onRemove:
+// prompt.removeChip?.("selected-note");
+</code></pre>
+<p>Setting the same id replaces its text, label, and callback without notifying the old callback. Chips remain available when a panel closes or the user navigates away, and reappear on return to their conversation. <strong>Send</strong> appends their text verbatim after the user's message, separated by blank lines; chips alone can be sent. Chip-bearing messages are ordinary prompts, even when the typed text starts with <code>/</code> or <code>!</code>. Existing attachment delivery and steer/follow-up controls still apply.</p>
+<p>Server acceptance consumes the submitted versions and calls their <code>onRemove("submitted")</code> handlers. Failed sends retain chips and composition for retry. Acceptance means the server accepted the prompt, not that the agent finished answering; a browser-local pending-session queue is not acceptance. Updating a chip while Send is in flight retains the new version; the submitted version's callback still receives its notification. Callback failures are logged with the owner identity without blocking other owners.</p>
+<p>Host staging is browser-memory-only and clears on reload. Plugins own any saved chip data. To restore it, obtain a fresh context for the saved machine/conversation (navigate there first if needed), then call <code>setChip</code> with the saved id, label, text, and newly created callback. Store ordinary data, not callback functions or host objects; repeated restoration replaces rather than duplicates the same chip. No host persistence or callback reconstruction is performed.</p>
 <h3 id="opening-workspace-files-from-chat">Opening workspace files from chat</h3>
 <p>Chat Markdown links to relative files (including <code>./file</code>) or absolute paths inside the session workspace open in the bundled Files panel. The link retains a download URL for modifier/new-tab clicks and when no panel accepts it. File access still uses server-side workspace containment checks.</p>
 <p>A workspace panel can opt in with <code>fileOpenQuery(context, path)</code>. This synchronous hook receives its contribution-scoped context and a decoded workspace-relative path; return a navigation query such as <code>{ file: path }</code>, or <code>undefined</code> to decline. Keep the hook free of side effects: the host opens the first accepting visible, enabled panel for the selected machine, ordered by panel <code>order</code> then title, and applies its namespaced query through normal panel navigation. The panel reads the selection from <code>context.navigation.query</code>; no Files-plugin dependency is required.</p>
