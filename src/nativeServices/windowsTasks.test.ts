@@ -213,6 +213,57 @@ ${windowsTaskQueryScript()}
     expect(() => parseWindowsTaskStatus(output.replaceAll("-WindowStyle Hidden", "-WindowStyle Normal"))).toThrow("action was modified");
   });
 
+  it("waits for a previous runner's log handle before launching Node exactly once", { timeout: 30_000 }, () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-web-log-lock-"));
+    const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+    try {
+      const entrypoint = join(root, "fixture.cjs");
+      const launches = join(root, "launches.txt");
+      const retrySignal = join(root, "retry.txt");
+      const script = join(root, "runner.ps1");
+      const logDirectory = join(root, "logs");
+      mkdirSync(logDirectory);
+      const logPath = join(logDirectory, "web.log");
+      writeFileSync(entrypoint, `require('node:fs').appendFileSync(${JSON.stringify(launches)}, 'launch\\n'); console.log('fixture output'); process.exit(17);\n`);
+      const fixture: WindowsTaskPlan = {
+        ...plan(), node: process.execPath, home: root, logDirectory,
+        entrypoints: { sessiond: entrypoint, web: entrypoint },
+      };
+      // Signal from the generated runner's actual retry boundary lets the lock
+      // owner release the handle deterministically, without a timing guess.
+      const runner = windowsTaskRunner(fixture, "web").replace("Start-Sleep -Milliseconds 100", `Set-Content -LiteralPath ${quote(retrySignal)} -Value 'retry'\n  Start-Sleep -Milliseconds 100`);
+      writeFileSync(script, `\uFEFF${runner}`);
+      const output = runWindowsTaskScript(`
+$ErrorActionPreference = 'Stop'
+$handle = [IO.File]::Open(${quote(logPath)}, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+$child = [Diagnostics.Process]::new()
+try {
+  $child.StartInfo.FileName = ${quote(fixture.powershell)}
+  $child.StartInfo.Arguments = '-NoProfile -NonInteractive -File "' + ${quote(script)} + '"'
+  $child.StartInfo.UseShellExecute = $false
+  $child.StartInfo.CreateNoWindow = $true
+  $child.StartInfo.RedirectStandardError = $true
+  $child.Start() | Out-Null
+  $deadline = (Get-Date).AddSeconds(10)
+  while (-not (Test-Path -LiteralPath ${quote(retrySignal)}) -and -not $child.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
+  $retried = Test-Path -LiteralPath ${quote(retrySignal)}
+  $handle.Dispose()
+  if (-not $child.WaitForExit(10000)) { throw 'Fixture runner did not exit' }
+  [PSCustomObject]@{ retried = $retried; exitCode = $child.ExitCode; stderr = $child.StandardError.ReadToEnd() } | ConvertTo-Json -Compress
+} finally {
+  $handle.Dispose()
+  if ($child.Id -and -not $child.HasExited) { $child.Kill(); $child.WaitForExit() }
+  $child.Dispose()
+}
+`);
+      expect(JSON.parse(output)).toMatchObject({ retried: true, exitCode: 17, stderr: "" });
+      expect(readFileSync(launches, "utf8")).toBe("launch\n");
+      expect(readFileSync(logPath, "utf16le")).toContain("fixture output");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("executes a harmless Node fixture with spaces, Unicode, apostrophes, logs, and nonzero exit", { timeout: 30_000 }, () => {
     const root = mkdtempSync(join(tmpdir(), "pi-web O'Brien ‘left’ ‚low‛ ü-"));
     try {

@@ -67,8 +67,15 @@ setInterval(() => {}, 1000);
       expect(fixturePids()).toEqual(originalPids);
       expect(() => runWindowsTaskScript(isolated(windowsTaskInstallScript(plan)))).toThrow("already exist");
       runWindowsTaskScript(isolated(windowsTaskActionScript("restart")));
-      const restartDeadline = Date.now() + 10_000;
-      while (fixturePids().some((pid) => originalPids.includes(pid)) && Date.now() < restartDeadline) await setTimeout(100);
+      // Scheduler state changes precede process-tree teardown and runner startup.
+      // Wait for both observable outcomes, not just the replacement PID files.
+      const restartDeadline = Date.now() + 30_000;
+      while (Date.now() < restartDeadline) {
+        const currentPids = fixturePids();
+        if (currentPids.length === 4 && currentPids.every(alive)
+          && !currentPids.some((pid) => originalPids.includes(pid)) && !originalPids.some(alive)) break;
+        await setTimeout(100);
+      }
       const restartedPids = fixturePids();
       restartedPids.forEach((pid) => knownPids.add(pid));
       expect(restartedPids).toHaveLength(4);

@@ -131,8 +131,16 @@ public static class PiWebTaskJob {
 `;
 
 export function windowsTaskRunner(plan: WindowsTaskPlan, id: WindowsServiceId): string {
+  // Scheduler can report Ready while the terminated process tree still owns
+  // the log handle. Retry only a sharing/lock violation before the body starts;
+  // never relaunch Node or conceal a different runner failure.
   return `$ErrorActionPreference = 'Stop'
+$logDeadline = (Get-Date).AddSeconds(10)
+$script:runnerStarted = $false
+while ($true) {
+try {
 & {
+$script:runnerStarted = $true
 ${taskJobScript}
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -144,6 +152,12 @@ $global:LASTEXITCODE = 1
 & ${literal(plan.node)} ${literal(plan.entrypoints[id])}
 exit $LASTEXITCODE
 } *>> ${literal(win32.join(plan.logDirectory, `${id}.log`))}
+break
+} catch [IO.IOException] {
+  if ($script:runnerStarted -or ($_.Exception.HResult -band 0xFFFF) -notin @(32, 33) -or (Get-Date) -ge $logDeadline) { throw }
+  Start-Sleep -Milliseconds 100
+}
+}
 `;
 }
 
