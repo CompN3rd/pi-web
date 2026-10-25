@@ -1,0 +1,141 @@
+name: Container image
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream npm version (latest or an exact version)
+        default: latest
+        type: string
+      rebuild:
+        description: Rebuild even if the image version already exists
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - docker/Dockerfile
+      - docker/.dockerignore
+      - docker/internal/image/**
+      - docker/internal/bin/**
+      - docker/custom-image.d/**
+      - docker/pi-web-docker
+      - docker/compose.image.yml
+      - scripts/smoke-container-image.sh
+      - scripts/upstream-image-release*
+      - .github/workflows/container-image.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-image-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    # npm publication remains owned by upstream; this fork only mirrors releases.
+    if: github.repository != 'jmfederico/pi-web'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Resolve published upstream npm release
+        id: identity
+        env:
+          UPSTREAM_VERSION: ${{ inputs.version || 'latest' }}
+        run: node scripts/upstream-image-release.mjs
+
+      - name: Check whether an image is needed
+        id: candidate
+        uses: actions/github-script@v8
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+          IS_LATEST: ${{ steps.identity.outputs.is-latest }}
+          REBUILD: ${{ inputs.rebuild || false }}
+        with:
+          script: |
+            if (context.eventName === 'pull_request' || process.env.REBUILD === 'true') {
+              core.setOutput('build', 'true');
+              return;
+            }
+            const owner = context.repo.owner;
+            const packageName = context.repo.repo.toLowerCase();
+            const organization = context.payload.repository.owner.type === 'Organization';
+            let versions;
+            try {
+              versions = await github.paginate(
+                organization
+                  ? 'GET /orgs/{org}/packages/container/{package_name}/versions'
+                  : 'GET /users/{username}/packages/container/{package_name}/versions',
+                { org: owner, username: owner, package_name: packageName, per_page: 100 }
+              );
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              versions = [];
+            }
+            const existing = versions.find(v => v.metadata.container.tags.includes(process.env.VERSION));
+            const current = existing && (process.env.IS_LATEST !== 'true' || existing.metadata.container.tags.includes('latest'));
+            core.setOutput('build', String(!current));
+            if (current) core.notice('Upstream npm version is already published as an image.');
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.candidate.outputs.build == 'true'
+
+      - name: Build candidate
+        if: steps.candidate.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          target: runtime
+          pull: true
+          no-cache: ${{ inputs.rebuild || false }}
+          build-args: |
+            PI_WEB_VERSION=${{ steps.identity.outputs.version }}
+            CACHE_BUST=${{ steps.identity.outputs.version }}
+          load: true
+          platforms: linux/amd64
+          tags: pi-web:smoke
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.identity.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=Container packaging of the upstream @jmfederico/pi-web npm release
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test split services and persistent state
+        if: steps.candidate.outputs.build == 'true'
+        run: bash scripts/smoke-container-image.sh
+
+      - name: Log in to GHCR
+        if: steps.candidate.outputs.build == 'true' && github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Push the exact local image that passed the smoke test.
+      - name: Publish tested image
+        if: steps.candidate.outputs.build == 'true' && github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.identity.outputs.image }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          IS_LATEST: ${{ steps.identity.outputs.is-latest }}
+        run: |
+          docker tag pi-web:smoke "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION"
+          if [ "$IS_LATEST" = true ]; then
+            docker tag pi-web:smoke "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi

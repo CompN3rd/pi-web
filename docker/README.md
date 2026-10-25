@@ -2,7 +2,9 @@
 
 Run PI WEB in an Ubuntu 26.04 container with persistent configuration and agent-managed development tools. This setup is for trusted single-user or trusted-admin environments.
 
-PI WEB has two Docker modes:
+For a prebuilt GHCR image managed through Docker Compose or a compatible container manager, see the [registry-image guide](../docs/container-images.md). That deployment needs no Docker socket or host installer. The host-management setup below remains a separate option.
+
+This host-management setup has two Docker modes:
 
 - **Runtime/server mode** builds a local image from npm packages and runs split `sessiond` + `web` services. This is for users and servers.
 - **Development mode** builds from this checkout and runs the same split shape while letting the web/API/client services autoreload. This is for hacking on PI WEB.

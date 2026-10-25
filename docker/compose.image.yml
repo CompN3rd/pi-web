@@ -1,0 +1,71 @@
+# Prebuilt image deployment: select an image tag and host folders before starting.
+# No installer, local build, Docker socket or privileged host access is required.
+x-image: &image ${PI_WEB_IMAGE:-ghcr.io/compn3rd/pi-web:latest}
+x-environment: &environment
+  HOSTEXEC_MODE: disabled
+  PI_WEB_DOCKER_RUNTIME: "1"
+  PI_WEB_RUNTIME: node
+x-volumes: &volumes
+  - ${PI_WEB_DATA_DIR:-./data}:/data
+  - ${PI_WEB_PROJECTS_DIR:-./projects}:/projects
+
+services:
+  data-init:
+    image: *image
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mkdir -p /data/home /data/config /data/pi-web /data/pi-agent
+        chown 1000:1000 /data /data/home /data/config /data/pi-web /data/pi-agent
+    volumes:
+      - ${PI_WEB_DATA_DIR:-./data}:/data
+    restart: "no"
+
+  sessiond:
+    image: *image
+    command: ["pi-web-service", "/usr/local/lib/node_modules/@jmfederico/pi-web/dist/server/sessiond.js"]
+    working_dir: /projects
+    user: "1000:1000"
+    environment: *environment
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+    volumes: *volumes
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /data/pi-web/sessiond.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+  web:
+    image: *image
+    command: ["pi-web-service", "/usr/local/lib/node_modules/@jmfederico/pi-web/dist/server/index.js"]
+    working_dir: /projects
+    user: "1000:1000"
+    environment: *environment
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    depends_on:
+      sessiond:
+        condition: service_healthy
+    ports:
+      - "${PI_WEB_BIND_ADDR:-127.0.0.1}:${PI_WEB_PORT:-8504}:8504"
+    volumes: *volumes
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/lib/pi-web-node/bin/node
+        - --input-type=module
+        - -e
+        - |
+          const response = await fetch('http://127.0.0.1:8504/api/pi-web/runtime');
+          const runtime = await response.json();
+          if (!response.ok || runtime.components?.web?.available !== true || runtime.components?.sessiond?.available !== true) process.exit(1);
+      interval: 5s
+      timeout: 3s
+      retries: 24
