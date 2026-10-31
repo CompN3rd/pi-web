@@ -22,6 +22,7 @@ import { SessionCommandService } from "./sessionCommandService.js";
 import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
 import { findArchiveCandidateByIdOrPrefix, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
 import type { ActiveSession } from "./sessionRuntimeStore.js";
+import { SessionOperationGate } from "./sessionOperationGate.js";
 import type { AuthChange } from "./authService.js";
 import { fallbackSessionName, generateShortSessionName } from "./sessionNameGenerator.js";
 import { computeEditPreview, type EditPreviewResult } from "./editPreview.js";
@@ -167,6 +168,7 @@ function createPiWebEditToolDefinition(cwd: string) {
 }
 
 export interface PiSessionServiceDependencies {
+  operationGate?: SessionOperationGate;
   archiveStore?: SessionArchiveRepository;
   agentDir?: string;
   sessionManager?: PiSessionManagerGateway;
@@ -182,6 +184,7 @@ export class PiSessionService {
   private readonly opening = new Map<string, Promise<ActiveSession<PiSessionRuntime>>>();
   private readonly creating = new Set<Promise<ActiveSession<PiSessionRuntime>>>();
   private disposed = false;
+  private readonly operations: SessionOperationGate;
   private readonly activities = new Map<string, { phase: "active" | "idle" | "error"; label: string; detail?: string; at: string }>();
   private readonly heartbeat: NodeJS.Timeout;
   private readonly commandService: SessionCommandService<PiAgentSession>;
@@ -195,6 +198,7 @@ export class PiSessionService {
   private readonly workspaceActivity: Pick<WorkspaceActivityService, "applySessionStatus" | "applySessionActivity" | "removeSession" | "reconcileSessionActivity"> | undefined;
 
   constructor(private readonly events: SessionEventHub, deps: PiSessionServiceDependencies = {}) {
+    this.operations = deps.operationGate ?? new SessionOperationGate();
     this.archiveStore = deps.archiveStore ?? new SessionArchiveStore();
     this.agentDir = deps.agentDir ?? getAgentDir();
     this.sessionManager = deps.sessionManager ?? SessionManager;
@@ -218,6 +222,7 @@ export class PiSessionService {
         },
       },
       { listSessionNames: (cwd) => this.listSessionNames(cwd) },
+      this.operations,
     );
   }
 
@@ -361,6 +366,10 @@ export class PiSessionService {
   }
 
   async prompt(sessionId: string, text: string, streamingBehavior?: "steer" | "followUp"): Promise<void> {
+    return this.operations.run(() => this.promptAdmitted(sessionId, text, streamingBehavior));
+  }
+
+  private async promptAdmitted(sessionId: string, text: string, streamingBehavior?: "steer" | "followUp"): Promise<void> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     this.maybeGenerateSessionName(session, text);
@@ -373,7 +382,7 @@ export class PiSessionService {
     }
     this.publishActivity(session, session.isCompacting ? "message queued during compaction" : behavior === "steer" ? "steering queued" : behavior === "followUp" ? "message queued" : "prompt accepted", "active");
     if (!isQueued) this.events.publish(sessionId, { type: "message.append", message: userTextMessage(text) });
-    void session.prompt(text, behavior === undefined ? undefined : { streamingBehavior: behavior }).catch((error: unknown) => {
+    void this.operations.run(() => session.prompt(text, behavior === undefined ? undefined : { streamingBehavior: behavior })).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.publishActivity(session, "error", "error", message);
       this.events.publish(sessionId, { type: "session.error", message });
@@ -381,6 +390,10 @@ export class PiSessionService {
   }
 
   async shell(sessionId: string, text: string): Promise<void> {
+    return this.operations.run(() => this.shellAdmitted(sessionId, text));
+  }
+
+  private async shellAdmitted(sessionId: string, text: string): Promise<void> {
     await this.assertWritable(sessionId);
     const active = await this.getActive(sessionId);
     const { session } = active.runtime;
@@ -391,11 +404,11 @@ export class PiSessionService {
 
     this.publishActivity(session, "running bash", "active", command);
     this.events.publish(session.sessionId, { type: "shell.start", command, excludeFromContext: isExcluded });
-    void session.executeBash(command, (chunk) => {
+    void this.operations.run(() => session.executeBash(command, (chunk) => {
       this.events.publish(session.sessionId, { type: "shell.chunk", chunk });
       this.publishActivity(session, "running bash", "active", command);
       this.publishStatus(session);
-    }, { excludeFromContext: isExcluded }).then((result) => {
+    }, { excludeFromContext: isExcluded })).then((result) => {
       this.events.publish(session.sessionId, {
         type: "shell.end",
         output: result.output,
@@ -416,13 +429,17 @@ export class PiSessionService {
   }
 
   async runCommand(sessionId: string, text: string): Promise<ClientCommandResult> {
-    await this.assertWritable(sessionId);
-    return this.commandService.run(sessionId, text);
+    return this.operations.run(async () => {
+      await this.assertWritable(sessionId);
+      return this.commandService.run(sessionId, text);
+    });
   }
 
   async respondToCommand(sessionId: string, requestId: string, value: string): Promise<ClientCommandResult> {
-    await this.assertWritable(sessionId);
-    return this.commandService.respond(sessionId, requestId, value);
+    return this.operations.run(async () => {
+      await this.assertWritable(sessionId);
+      return this.commandService.respond(sessionId, requestId, value);
+    });
   }
 
   async archive(sessionId: string): Promise<void> {
@@ -580,6 +597,10 @@ export class PiSessionService {
   }
 
   private async getActive(sessionId: string): Promise<ActiveSession<PiSessionRuntime>> {
+    return this.operations.run(() => this.getActiveAdmitted(sessionId));
+  }
+
+  private async getActiveAdmitted(sessionId: string): Promise<ActiveSession<PiSessionRuntime>> {
     this.assertNotDisposed();
     const active = this.active.get(sessionId);
     if (active) {
@@ -620,7 +641,7 @@ export class PiSessionService {
 
   private async create(sessionManager: PiSessionManager, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
     this.assertNotDisposed();
-    const creating = this.createRuntimeSession(sessionManager, cwd);
+    const creating = this.operations.run(() => this.createRuntimeSession(sessionManager, cwd));
     this.creating.add(creating);
     try {
       return await creating;
@@ -668,10 +689,13 @@ export class PiSessionService {
     const model = session.model;
     if (model === undefined) return;
 
-    void generateShortSessionName(this.modelRegistry, model, firstMessage).then((name) => {
-      this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
-    }).catch(() => {
-      this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
+    void this.operations.run(async () => {
+      try {
+        const name = await generateShortSessionName(this.modelRegistry, model, firstMessage);
+        this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
+      } catch {
+        this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
+      }
     });
   }
 

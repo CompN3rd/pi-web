@@ -2,6 +2,7 @@ import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { GlobalSessionEvent, SessionUiEvent } from "../../shared/apiTypes.js";
 import { SessionEventHub } from "../realtime/sessionEventHub.js";
+import { SessionOperationGate } from "./sessionOperationGate.js";
 import { PiSessionService, type PiAgentSession, type PiSessionManager, type PiSessionRuntime, type PiSessionServiceDependencies } from "./piSessionService.js";
 
 class CapturingSessionEventHub extends SessionEventHub {
@@ -122,6 +123,91 @@ function sessionGateway(records: ReturnType<typeof sessionRecord>[]): SessionGat
 }
 
 describe("PiSessionService", () => {
+  it.each(["prompt", "shell", "compact"] as const)("retains admission for detached %s work even when SDK busy flags are false", async (kind) => {
+    const operations = new SessionOperationGate();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const fake = fakeRuntime("busy-session", {
+      prompt: () => pending,
+      executeBash: async () => { await pending; return { output: "", exitCode: 0, cancelled: false, truncated: false }; },
+      compact: async () => { await pending; return { summary: "", tokensBefore: 0 }; },
+    });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      operationGate: operations,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("busy-session")]),
+    });
+    try {
+      const accepted = kind === "prompt" ? service.prompt("busy-session", "hello")
+        : kind === "shell" ? service.shell("busy-session", "!echo hello")
+          : service.runCommand("busy-session", "/compact");
+      // Admission is already held before archive/catalog lookup completes.
+      await expect(operations.runExclusive(() => undefined)).rejects.toThrow("all session activity");
+      await accepted;
+      expect(fake.session.isStreaming || fake.session.isBashRunning || fake.session.isCompacting).toBe(false);
+      await expect(operations.runExclusive(() => undefined)).rejects.toThrow("all session activity");
+      release();
+      await vi.waitFor(async () => { await expect(operations.runExclusive(() => undefined)).resolves.toBeUndefined(); });
+    } finally {
+      release();
+      await service.dispose();
+    }
+  });
+
+  it("retains admission for background naming after the prompt has finished", async () => {
+    const operations = new SessionOperationGate();
+    const modelRegistry = ModelRegistry.create(AuthStorage.inMemory());
+    const model = modelRegistry.find("anthropic", "claude-3-5-sonnet-20241022");
+    expect(model).toBeDefined();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const auth = vi.spyOn(modelRegistry, "getApiKeyAndHeaders").mockImplementation(async () => {
+      await pending;
+      throw new Error("No credentials in this test");
+    });
+    const fake = fakeRuntime("naming-session", { model });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      operationGate: operations, modelRegistry,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("naming-session")]),
+    });
+    try {
+      await service.prompt("naming-session", "Name this session");
+      expect(auth).toHaveBeenCalledTimes(1);
+      await expect(operations.runExclusive(() => undefined)).rejects.toThrow("all session activity");
+      release();
+      await vi.waitFor(async () => { await expect(operations.runExclusive(() => undefined)).resolves.toBeUndefined(); });
+      expect(fake.session.sessionName).toBe("Name this session");
+    } finally {
+      release();
+      auth.mockRestore();
+      await service.dispose();
+    }
+  });
+
+  it("rejects prompt, shell, commands and saved-session opens during exclusive admission without starting a runtime", async () => {
+    const operations = new SessionOperationGate();
+    const fake = fakeRuntime();
+    const createAgentRuntime = vi.fn(runtimeCreator(fake.runtime));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      operationGate: operations, createAgentRuntime,
+      sessionManager: sessionGateway([sessionRecord("session-1")]),
+    });
+    try {
+      await operations.runExclusive(async () => {
+        await expect(service.prompt("session-1", "hello")).rejects.toThrow("reloading");
+        await expect(service.shell("session-1", "!echo hello")).rejects.toThrow("reloading");
+        await expect(service.runCommand("session-1", "/compact")).rejects.toThrow("reloading");
+        await expect(service.status("session-1")).rejects.toThrow("reloading");
+        expect(createAgentRuntime).not.toHaveBeenCalled();
+      });
+      await service.status("session-1");
+      expect(createAgentRuntime).toHaveBeenCalledTimes(1);
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("coalesces concurrent saved-session opens, including ID prefixes, before runtime creation finishes", async () => {
     const fake = fakeRuntime("saved-session");
     let release!: () => void;
