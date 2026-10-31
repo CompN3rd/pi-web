@@ -4,6 +4,8 @@ x-image: &image ${PI_WEB_IMAGE:-ghcr.io/compn3rd/pi-web:latest}
 x-environment: &environment
   HOSTEXEC_MODE: disabled
   PI_WEB_DOCKER_RUNTIME: "1"
+  # Installer-specific prompt facts assume host paths and update tooling absent here.
+  PI_WEB_ENVIRONMENT_FACTS: "false"
   PI_WEB_RUNTIME: node
 x-volumes: &volumes
   - ${PI_WEB_DATA_DIR:-./data}:/data

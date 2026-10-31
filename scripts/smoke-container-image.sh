@@ -48,6 +48,8 @@ for service in sessiond web; do
   "${compose[@]}" exec -T "$service" bash -ec '
     test "$(id -u)" = 1000
     test "$HOSTEXEC_MODE" = disabled
+    test "$PI_WEB_DOCKER_RUNTIME" = 1
+    test "$PI_WEB_ENVIRONMENT_FACTS" = false
     test ! -e /var/run/docker.sock
     grep -Eq "^CapEff:[[:space:]]+0+$" /proc/self/status
     grep -Eq "^NoNewPrivs:[[:space:]]+1$" /proc/self/status
