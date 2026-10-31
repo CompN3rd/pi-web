@@ -25,8 +25,8 @@
     "plugin-api.d.ts"
   ],
   "scripts": {
-    "dev": "bash -c 'trap \"kill 0\" EXIT; npm run dev:sessiond & npm run dev:web & npm run dev:client & wait'",
-    "dev:sessiond": "tsx watch src/server/sessiond.ts",
+    "dev": "bash -c 'trap \"kill 0\" EXIT; npm run dev:web & npm run dev:client & wait'",
+    "dev:sessiond": "tsx src/server/sessiond.ts",
     "dev:web": "bash -c 'set -e; npm run build:plugins; npm run build:plugin-packages; trap \"kill 0\" EXIT; npm run dev:plugins & npm run dev:plugin-packages & tsx watch src/server/index.ts & wait'",
     "dev:server": "npm run dev:web",
     "dev:client": "vite --host 0.0.0.0",

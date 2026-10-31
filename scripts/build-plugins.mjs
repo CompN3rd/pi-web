@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { watch } from "node:fs";
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 
@@ -16,10 +16,18 @@ if (watchMode) {
 }
 
 async function buildAll() {
-  await rm(outDir, { recursive: true, force: true });
-  const result = await buildDirectory(rootDir, outDir);
-  const suffix = result.transpiled === 1 ? "file" : "files";
-  console.log(`[plugins] built ${String(result.transpiled)} TypeScript plugin ${suffix} into ${relative(cwd, outDir)}`);
+  // Keep the last successful build available while compiling (including on errors).
+  await mkdir(dirname(outDir), { recursive: true });
+  const stagingDir = await mkdtemp(`${outDir}-build-`);
+  try {
+    const result = await buildDirectory(rootDir, stagingDir);
+    await rm(outDir, { recursive: true, force: true });
+    await rename(stagingDir, outDir);
+    const suffix = result.transpiled === 1 ? "file" : "files";
+    console.log(`[plugins] built ${String(result.transpiled)} TypeScript plugin ${suffix} into ${relative(cwd, outDir)}`);
+  } finally {
+    await rm(stagingDir, { recursive: true, force: true });
+  }
 }
 
 async function buildDirectory(sourceDir, targetDir) {
@@ -81,6 +89,12 @@ async function buildFile(file, outputPath) {
 }
 
 async function findPluginDirs(dir) {
+  try {
+    if (!(await stat(dir)).isDirectory()) return [];
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return [];
+    throw error;
+  }
   const entries = await readDirectory(dir);
   const dirs = [dir];
   for (const entry of entries) {
@@ -115,20 +129,48 @@ async function readDirectory(dir) {
 }
 
 async function watchAndBuild() {
-  let watchers = [];
+  const watchers = new Map();
   let timer;
   let building = false;
   let pending = false;
 
   const closeWatchers = () => {
-    for (const watcher of watchers) watcher.close();
-    watchers = [];
+    for (const watcher of watchers.values()) watcher.close();
+    watchers.clear();
   };
 
   const refreshWatchers = async () => {
-    closeWatchers();
-    const dirs = await findPluginDirs(rootDir);
-    watchers = dirs.map((dir) => watch(dir, () => scheduleBuild()));
+    const dirs = new Set([cwd, ...await findPluginDirs(rootDir)]);
+    for (const [dir, watcher] of watchers) {
+      if (dirs.has(dir)) continue;
+      watcher.close();
+      watchers.delete(dir);
+    }
+    for (const dir of dirs) {
+      if (watchers.has(dir)) continue;
+      try {
+        const watcher = watch(dir, (event, filename) => {
+          // Watch the parent too, so a missing/deleted root can be recreated.
+          if (dir === cwd && filename !== null && filename.toString() !== "pi-web-plugins") return;
+          // A renamed directory may now refer to a different inode.
+          if (event === "rename") {
+            watcher.close();
+            watchers.delete(dir);
+          }
+          scheduleBuild();
+        });
+        watcher.on("error", (error) => {
+          console.error(`[plugins] ${formatUnknownError(error)}`);
+          watcher.close();
+          watchers.delete(dir);
+          scheduleBuild();
+        });
+        watchers.set(dir, watcher);
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+        scheduleBuild();
+      }
+    }
   };
 
   const runBuild = async () => {
