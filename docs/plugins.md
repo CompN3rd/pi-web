@@ -125,7 +125,7 @@ mkdir -p ~/.pi-web/plugins
 ln -s /path/to/plugin-folder ~/.pi-web/plugins/plugin-id
 ```
 
-Reload the PI WEB browser tab. PI WEB serves plugin modules with an mtime-based `?v=` cache buster. After editing a plugin, hard reload the browser if you do not see changes.
+Use PI WEB's **Refresh app data** button/action after editing or installing a plugin. It rediscovers plugins and imports fresh entrypoint modules without restarting the daemon or interrupting sessions. A full page reload remains available for browser-module limitations described below.
 
 ## First-party separate plugin packages
 
@@ -269,7 +269,9 @@ export default {
 
 An activation may return a synchronous `dispose()` callback to release activation-owned listeners, timers, or subscriptions. The registry calls it once when that activation is removed/replaced, or if its returned contributions fail validation. A failed registration leaves no partial contributions behind; a failed replacement retains the previous activation. Cleanup errors are logged without preventing other plugins from being cleaned up. If `activate()` itself throws before returning, it must clean up its own partially created resources. Module-level side effects cannot be cleaned up by the registry, and custom elements must clean up instance resources in `disconnectedCallback()`.
 
-The registry supports replacement, but browser discovery currently still runs only at initial load: refresh the page to load changed plugin code. This lifecycle contract alone does not enable chat `/reload`.
+Browser discovery runs at startup and on **Refresh app data**. Successfully activated replacements replace previous contributions; import/activation failures keep the previous activation and log a warning in the browser console. Plugins removed from the manifest are disposed and unregistered. A failed manifest request leaves all current plugins intact. Concurrent refreshes share one load. This refresh affects only this browser tab and does not reload Pi session resources; chat `/reload` is not yet wired to this lifecycle.
+
+Reload cache-busts entrypoint modules, not their transitive imports. Bundle dependencies into the entrypoint (or use content-hashed dependency URLs) for reliable reload. Browser custom element definitions cannot be replaced: guarding `customElements.define()` avoids duplicate-definition errors but retains the old class, so class changes still require a full page reload. Module-level side effects and previously evaluated module instances remain until page reload; keep resources in activation-owned state with `dispose()`, and use a full page reload periodically during long development sessions.
 
 The plugin id comes from `package.json`, not from the JavaScript module. Contribution ids are local to the plugin and PI WEB qualifies them internally as:
 
@@ -603,7 +605,7 @@ If you are an AI agent building or editing a PI WEB plugin, follow this checklis
 12. Use stable context fields first; only `workspace`, `state.selectedWorkspace`, and `state.selectedSession` are documented as stable.
 13. Use `fetch()` against PI WEB APIs only for plugin-specific behavior not provided by runtime context helpers, and isolate those calls because HTTP endpoints are private for now.
 14. Treat plugins as trusted code and avoid reading or displaying secrets unless intentional.
-15. After local edits, tell the user to hard reload the browser and check the console for plugin errors.
+15. After local edits, tell the user to use **Refresh app data** and check the console for plugin errors. Use a full page reload for custom element class changes or unbundled dependency changes.
 
 ## Troubleshooting
 

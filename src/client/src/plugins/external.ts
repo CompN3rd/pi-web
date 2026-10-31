@@ -9,22 +9,67 @@ interface PluginManifest {
   plugins: PluginManifestEntry[];
 }
 
-export async function loadExternalPlugins(manifestUrl = "/pi-web-plugins/manifest.json"): Promise<PiWebPluginRegistration[]> {
-  const manifest = await fetchPluginManifest(manifestUrl);
-  if (manifest === undefined) return [];
+interface PluginRegistryTarget {
+  register(registration: PiWebPluginRegistration): void;
+  replace(registration: PiWebPluginRegistration): void;
+  unregister(id: string): void;
+}
 
-  const registrations: PiWebPluginRegistration[] = [];
-  for (const entry of manifest.plugins) {
-    try {
-      const moduleUrl = new URL(entry.module, new URL(manifestUrl, window.location.href)).toString();
-      const module: unknown = await import(/* @vite-ignore */ moduleUrl);
-      const plugin = parsePluginModule(module, moduleUrl);
-      registrations.push({ id: entry.id, plugin });
-    } catch (error) {
-      console.warn(`Failed to load PI WEB plugin ${entry.module}`, error);
+interface ExternalPluginDependencies {
+  fetchManifest: (url: string) => Promise<PluginManifest | undefined>;
+  importModule: (url: string) => Promise<unknown>;
+  baseUrl: () => string;
+  revision: () => string;
+  warn: (message: string, error: unknown) => void;
+}
+
+/** Owns only external registrations; concurrent refresh requests share one reload. */
+export class ExternalPluginLoader {
+  private readonly ids = new Set<string>();
+  private pending: Promise<void> | undefined;
+
+  constructor(
+    private readonly registry: PluginRegistryTarget,
+    private readonly dependencies: ExternalPluginDependencies = {
+      fetchManifest: fetchPluginManifest,
+      importModule: (url): Promise<unknown> => import(/* @vite-ignore */ url),
+      baseUrl: () => window.location.href,
+      revision: () => crypto.randomUUID(),
+      warn: (message, error) => { console.warn(message, error); },
+    },
+  ) {}
+
+  reload(manifestUrl = "/pi-web-plugins/manifest.json"): Promise<void> {
+    this.pending ??= this.load(manifestUrl).finally(() => { this.pending = undefined; });
+    return this.pending;
+  }
+
+  private async load(manifestUrl: string): Promise<void> {
+    const manifest = await this.dependencies.fetchManifest(manifestUrl);
+    const entries = manifest?.plugins ?? [];
+    const desiredIds = new Set(entries.map((entry) => entry.id));
+    if (desiredIds.size !== entries.length) throw new Error("Duplicate plugin manifest id");
+    const revision = this.dependencies.revision();
+    for (const entry of entries) {
+      try {
+        const moduleUrl = new URL(entry.module, new URL(manifestUrl, this.dependencies.baseUrl()));
+        moduleUrl.searchParams.set("pi-web-reload", revision);
+        const module = await this.dependencies.importModule(moduleUrl.toString());
+        const registration = { id: entry.id, plugin: parsePluginModule(module, moduleUrl.toString()) };
+        // Register first so an external manifest cannot overwrite a built-in plugin.
+        if (this.ids.has(entry.id)) this.registry.replace(registration);
+        else this.registry.register(registration);
+        this.ids.add(entry.id);
+      } catch (error) {
+        this.dependencies.warn(`Failed to reload PI WEB plugin ${entry.id} (${entry.module}); keeping any previous activation`, error);
+      }
+    }
+    for (const id of this.ids) {
+      if (desiredIds.has(id)) continue;
+      this.registry.unregister(id);
+      this.ids.delete(id);
     }
   }
-  return registrations;
 }
 
 async function fetchPluginManifest(manifestUrl: string): Promise<PluginManifest | undefined> {

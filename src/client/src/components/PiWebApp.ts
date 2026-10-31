@@ -18,7 +18,7 @@ import type { QualifiedContributionId, QualifiedThemeContribution, QualifiedThem
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
-import { loadExternalPlugins } from "../plugins/external";
+import { ExternalPluginLoader } from "../plugins/external";
 import { PluginRegistry } from "../plugins/registry";
 import { queryNamespace, readNamespacedString, setNamespacedQueryKey } from "../namespacedQueryArgs";
 import { createPwaDisplayModeMedia, detectPwaDisplayMode } from "../pwaDisplayMode";
@@ -110,6 +110,7 @@ export class PiWebApp extends LitElement {
   private routeRestoreInProgress = false;
   private restoringRouteTerminalId: string | undefined;
   private readonly plugins = createPluginRegistry();
+  private readonly externalPlugins = new ExternalPluginLoader(this.plugins);
   private themePreference: ThemePreference = readStoredThemePreference() ?? DEFAULT_THEME_PREFERENCE;
   private refreshLongPressTimer: number | undefined;
   private suppressNextRefreshClick = false;
@@ -273,6 +274,7 @@ export class PiWebApp extends LitElement {
         this.refreshPiWebStatus(),
         this.refreshWorkspaceActivity(),
         this.refreshCurrentWorkspaceSurface(),
+        this.loadExternalPlugins(),
       ]);
     } finally {
       this.isRefreshingApp = false;
@@ -668,14 +670,7 @@ export class PiWebApp extends LitElement {
 
   private async loadExternalPlugins(): Promise<void> {
     try {
-      const registrations = await loadExternalPlugins();
-      for (const registration of registrations) {
-        try {
-          this.plugins.register(registration);
-        } catch (error) {
-          console.warn(`Failed to register PI WEB plugin ${registration.id}`, error);
-        }
-      }
+      await this.externalPlugins.reload();
       this.applyPreferredTheme(false);
       this.requestUpdate();
     } catch (error) {
