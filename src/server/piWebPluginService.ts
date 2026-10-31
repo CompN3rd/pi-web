@@ -20,7 +20,7 @@ export interface ConfiguredPiPackage {
 }
 
 export interface PiPackageProvider {
-  listPackages(): ConfiguredPiPackage[];
+  listPackages(): ConfiguredPiPackage[] | Promise<ConfiguredPiPackage[]>;
   getInstalledPath(source: string, scope: "user" | "project"): string | undefined;
 }
 
@@ -59,16 +59,24 @@ type ArraylessPluginRecord = Omit<PluginRecord, "source" | "scope">;
 
 export class DefaultPiPackageProvider implements PiPackageProvider {
   private readonly packageManager: DefaultPackageManager;
+  private readonly settingsManager: SettingsManager;
 
   constructor(cwd = process.cwd(), agentDir = getAgentDir()) {
+    this.settingsManager = SettingsManager.create(cwd, agentDir);
     this.packageManager = new DefaultPackageManager({
       cwd,
       agentDir,
-      settingsManager: SettingsManager.create(cwd, agentDir),
+      settingsManager: this.settingsManager,
     });
   }
 
-  listPackages(): ConfiguredPiPackage[] {
+  async listPackages(): Promise<ConfiguredPiPackage[]> {
+    // Discovery must observe installs/removals made by another Pi process.
+    // Reload only configuration: do not install packages or affect session runtimes.
+    await this.settingsManager.reload();
+    for (const { scope, error } of this.settingsManager.drainErrors()) {
+      console.warn(`Failed to refresh ${scope} Pi package settings: ${error.message}`);
+    }
     return this.packageManager.listConfiguredPackages();
   }
 
@@ -135,7 +143,7 @@ export class PiWebPluginService {
 
   private async discoverPiPackagePlugins(packageProvider: PiPackageProvider): Promise<PluginRecord[]> {
     const plugins: PluginRecord[] = [];
-    for (const configuredPackage of packageProvider.listPackages()) {
+    for (const configuredPackage of await packageProvider.listPackages()) {
       const root = configuredPackage.installedPath ?? packageProvider.getInstalledPath(configuredPackage.source, configuredPackage.scope);
       if (root === undefined) continue;
       try {

@@ -168,6 +168,8 @@ PI WEB builds `/pi-web-plugins/manifest.json` from these sources:
 
 3. Installed Pi packages that expose PI WEB plugin metadata. Pi packages may be user or project scoped.
 
+Discovery rereads Pi package settings on each manifest or asset request, so adding or removing an installed package does not require restarting the web/API process or session daemon. Project settings here belong to the web/API process's working directory, not the currently selected browser workspace. Discovery does not install or update packages. Refresh the browser to activate the resulting plugin set; discovery alone does not replace plugins already running in a tab. Invalid settings edits are logged and retain the last successfully read settings until corrected.
+
 Plugin package directory names and plugin ids must be valid identifiers:
 
 ```text
