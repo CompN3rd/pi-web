@@ -122,6 +122,94 @@ function sessionGateway(records: ReturnType<typeof sessionRecord>[]): SessionGat
 }
 
 describe("PiSessionService", () => {
+  it("coalesces concurrent saved-session opens, including ID prefixes, before runtime creation finishes", async () => {
+    const fake = fakeRuntime("saved-session");
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const createAgentRuntime = vi.fn(async () => { await ready; return fake.runtime; });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      createAgentRuntime, sessionManager: sessionGateway([sessionRecord("saved-session")]),
+    });
+    try {
+      const requests = [service.status("saved-session"), service.commands("saved"), service.messages("saved-session")];
+      await vi.waitFor(() => { expect(createAgentRuntime).toHaveBeenCalledTimes(1); });
+      release();
+      await Promise.all(requests);
+      expect(createAgentRuntime).toHaveBeenCalledTimes(1);
+      expect(service.activeCount()).toBe(1);
+    } finally {
+      release();
+      await service.dispose();
+    }
+    expect(fake.calls.dispose).toBe(1);
+  });
+
+  it("allows retry after an open fails", async () => {
+    const fake = fakeRuntime("saved-session");
+    const createAgentRuntime = vi.fn()
+      .mockRejectedValueOnce(new Error("creation failed"))
+      .mockResolvedValue(fake.runtime);
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      createAgentRuntime, sessionManager: sessionGateway([sessionRecord("saved-session")]),
+    });
+    try {
+      await expect(service.status("saved-session")).rejects.toThrow("creation failed");
+      expect(createAgentRuntime).toHaveBeenCalledTimes(1);
+      await service.status("saved-session");
+      expect(createAgentRuntime).toHaveBeenCalledTimes(2);
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("drains creation before disposal and rejects new runtime admission", async () => {
+    const fake = fakeRuntime();
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const createAgentRuntime = vi.fn(async () => { await ready; return fake.runtime; });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      createAgentRuntime, sessionManager: sessionGateway([]),
+    });
+    const starting = service.start("/workspace");
+    const disposing = service.dispose();
+    try {
+      await expect(service.start("/workspace")).rejects.toThrow("disposed");
+      await expect(service.status("session-1")).rejects.toThrow("disposed");
+      expect(fake.calls.dispose).toBe(0);
+      release();
+      await starting;
+      await disposing;
+      expect(fake.calls.dispose).toBe(1);
+      expect(service.activeCount()).toBe(0);
+      expect(createAgentRuntime).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await disposing;
+    }
+  });
+
+  it("does not create a runtime if disposal overtakes catalog lookup", async () => {
+    const fake = fakeRuntime();
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const gateway = sessionGateway([sessionRecord("session-1")]);
+    const listAll = vi.fn(async () => { await ready; return [sessionRecord("session-1")]; });
+    const createAgentRuntime = vi.fn(runtimeCreator(fake.runtime));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      createAgentRuntime, sessionManager: { ...gateway, listAll },
+    });
+    const opening = service.status("session-1");
+    try {
+      await vi.waitFor(() => { expect(listAll).toHaveBeenCalledTimes(1); });
+      await service.dispose();
+      release();
+      await expect(opening).rejects.toThrow("disposed");
+      expect(createAgentRuntime).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await service.dispose();
+    }
+  });
   it("starts sessions through an injected runtime creator", async () => {
     const hub = new CapturingSessionEventHub();
     const fake = fakeRuntime();

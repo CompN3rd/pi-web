@@ -179,6 +179,9 @@ export interface PiSessionServiceDependencies {
 
 export class PiSessionService {
   private readonly active = new Map<string, ActiveSession<PiSessionRuntime>>();
+  private readonly opening = new Map<string, Promise<ActiveSession<PiSessionRuntime>>>();
+  private readonly creating = new Set<Promise<ActiveSession<PiSessionRuntime>>>();
+  private disposed = false;
   private readonly activities = new Map<string, { phase: "active" | "idle" | "error"; label: string; detail?: string; at: string }>();
   private readonly heartbeat: NodeJS.Timeout;
   private readonly commandService: SessionCommandService<PiAgentSession>;
@@ -223,7 +226,10 @@ export class PiSessionService {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     clearInterval(this.heartbeat);
+    // Creation may not have registered a session yet. Drain it before taking the snapshot.
+    await Promise.allSettled(this.creating);
     // Startup hooks can own resources; finish them before emitting shutdown.
     await Promise.allSettled(Array.from(this.active.values(), (active) => active.initializing ?? Promise.resolve()));
     const activeSessions = Array.from(new Set(this.active.values()));
@@ -257,6 +263,7 @@ export class PiSessionService {
   }
 
   async start(cwd: string): Promise<ClientSession> {
+    this.assertNotDisposed();
     const active = await this.create(this.sessionManager.create(cwd), cwd);
     const { session } = active.runtime;
     return {
@@ -573,6 +580,7 @@ export class PiSessionService {
   }
 
   private async getActive(sessionId: string): Promise<ActiveSession<PiSessionRuntime>> {
+    this.assertNotDisposed();
     const active = this.active.get(sessionId);
     if (active) {
       await active.initializing;
@@ -580,14 +588,48 @@ export class PiSessionService {
     }
 
     const archived = await this.archiveStore.get(sessionId);
-    if (archived?.archivePath !== undefined) return this.create(this.sessionManager.open(archived.archivePath), archived.cwd);
+    if (archived?.archivePath !== undefined) return this.openSaved(archived.sessionId, archived.archivePath, archived.cwd);
 
     const match = (await this.sessionManager.listAll()).find((s) => s.id === sessionId || s.id.startsWith(sessionId));
     if (!match) throw new Error("Session not found");
-    return this.create(this.sessionManager.open(match.path), match.cwd);
+    return this.openSaved(match.id, match.path, match.cwd);
+  }
+
+  private async openSaved(sessionId: string, path: string, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
+    this.assertNotDisposed();
+    // Resolve aliases before coalescing, and recheck after asynchronous catalog lookup.
+    const active = this.active.get(sessionId);
+    if (active) {
+      await active.initializing;
+      return active;
+    }
+    const pending = this.opening.get(sessionId);
+    if (pending) return pending;
+    const opening = this.create(this.sessionManager.open(path), cwd);
+    this.opening.set(sessionId, opening);
+    try {
+      return await opening;
+    } finally {
+      this.opening.delete(sessionId);
+    }
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new Error("Session service is disposed");
   }
 
   private async create(sessionManager: PiSessionManager, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
+    this.assertNotDisposed();
+    const creating = this.createRuntimeSession(sessionManager, cwd);
+    this.creating.add(creating);
+    try {
+      return await creating;
+    } finally {
+      this.creating.delete(creating);
+    }
+  }
+
+  private async createRuntimeSession(sessionManager: PiSessionManager, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
     const runtime = await this.createAgentRuntime(this.createRuntime, { cwd, agentDir: this.agentDir, sessionManager });
     const active: ActiveSession<PiSessionRuntime> = { runtime, unsubscribe: noop };
     runtime.setRebindSession(() => this.bindRuntime(active));
