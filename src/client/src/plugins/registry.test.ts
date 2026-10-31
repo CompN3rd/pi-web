@@ -31,6 +31,84 @@ function createContext(statePatch: Partial<AppState> = {}) {
 }
 
 describe("PluginRegistry", () => {
+  it("replaces a plugin only after validating its new activation", () => {
+    const registry = new PluginRegistry();
+    const oldDispose = vi.fn();
+    const failedDispose = vi.fn();
+    const newDispose = vi.fn();
+    const registration = (title: string, dispose: () => void, duplicate = false) => ({
+      id: "example",
+      plugin: {
+        apiVersion: 1 as const,
+        name: "Example",
+        activate: () => ({
+          dispose,
+          contributions: {
+            actions: [
+              { id: "action", title, run: () => undefined },
+              ...(duplicate ? [{ id: "action", title, run: () => undefined }] : []),
+            ],
+          },
+        }),
+      },
+    });
+    registry.register(registration("Old", oldDispose));
+    registry.register({ id: "core", plugin: corePlugin });
+    expect(() => { registry.replace(registration("Invalid", failedDispose, true)); }).toThrow("Duplicate contribution");
+    expect(failedDispose).toHaveBeenCalledOnce();
+    expect(oldDispose).not.toHaveBeenCalled();
+    expect(registry.getActions(createContext().context).find((action) => action.id === "example:action")?.title).toBe("Old");
+    registry.replace(registration("New", newDispose));
+    expect(oldDispose).toHaveBeenCalledOnce();
+    expect(registry.getActions(createContext().context).find((action) => action.id === "example:action")?.title).toBe("New");
+    expect(registry.getWorkspacePanels()).toHaveLength(3);
+    registry.unregister("example");
+    registry.unregister("example");
+    expect(newDispose).toHaveBeenCalledOnce();
+    expect(registry.getActions(createContext().context).some((action) => action.pluginId === "example")).toBe(false);
+    registry.register(registration("Again", vi.fn()));
+  });
+
+  it("rolls back failed registration and permits retrying the same id", () => {
+    const registry = new PluginRegistry();
+    const dispose = vi.fn();
+    expect(() => { registry.register({ id: "example", plugin: {
+      apiVersion: 1, name: "Invalid", activate: () => ({ dispose, contributions: {
+        actions: [{ id: "valid", title: "Valid", run: () => undefined }, { id: "INVALID", title: "Invalid", run: () => undefined }],
+      } }),
+    } }); }).toThrow("Invalid contribution id");
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(registry.getActions(createContext().context)).toEqual([]);
+    registry.register({ id: "example", plugin: corePlugin });
+    expect(registry.getWorkspacePanels()).toHaveLength(3);
+  });
+
+  it("removes every contribution kind and isolates cleanup failures", () => {
+    const onDisposeError = vi.fn();
+    const registry = new PluginRegistry(onDisposeError);
+    const error = new Error("cleanup failed");
+    const dispose = vi.fn(() => { throw error; });
+    registry.register({ id: "core", plugin: { ...corePlugin, activate: (context) => ({ ...corePlugin.activate(context), dispose }) } });
+    registry.register({ id: "themes", plugin: themePackPlugin });
+    registry.dispose();
+    registry.dispose();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(onDisposeError).toHaveBeenCalledWith("core", error);
+    expect(registry.getActions(createContext().context)).toEqual([]);
+    expect(registry.getWorkspacePanels()).toEqual([]);
+    expect(registry.getThemes()).toEqual([]);
+    expect(registry.getThemePairs()).toEqual([]);
+    expect(registry.getWorkspaceLabelItems(initialAppState(), testWorkspace())).toEqual([]);
+    registry.register({ id: "themes", plugin: themePackPlugin });
+  });
+
+  it("preserves the old plugin when replacement activation throws", () => {
+    const registry = new PluginRegistry();
+    registry.register({ id: "core", plugin: corePlugin });
+    expect(() => { registry.replace({ id: "core", plugin: { apiVersion: 1, name: "Broken", activate: () => { throw new Error("broken"); } } }); }).toThrow("broken");
+    expect(registry.getWorkspacePanels()).toHaveLength(3);
+  });
+
   it("namespaces contribution ids with the owning plugin id", () => {
     const registry = new PluginRegistry();
     registry.register({ id: "core", plugin: corePlugin });

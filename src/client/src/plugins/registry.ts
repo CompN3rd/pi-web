@@ -21,15 +21,67 @@ export class PluginRegistry {
   private readonly pluginIds = new Set<string>();
   private readonly contributionIds = new Set<QualifiedContributionId>();
 
-  register(registration: PiWebPluginRegistration): void {
-    const { id, plugin } = registration;
-    this.validatePluginId(id);
-    if (this.pluginIds.has(id)) throw new Error(`Duplicate plugin id: ${id}`);
-    this.pluginIds.add(id);
+  private readonly disposers = new Map<string, () => void>();
 
+  constructor(private readonly onDisposeError: (id: string, error: unknown) => void = (id, error) => {
+    console.warn(`Failed to dispose PI WEB plugin ${id}`, error);
+  }) {}
+
+  register(registration: PiWebPluginRegistration): void {
+    if (this.pluginIds.has(registration.id)) throw new Error(`Duplicate plugin id: ${registration.id}`);
+    this.replace(registration);
+  }
+
+  /** Validate a fresh activation before removing the previous plugin's contributions. */
+  replace(registration: PiWebPluginRegistration): void {
+    const staged = new PluginRegistry(this.onDisposeError);
+    try {
+      staged.activate(registration);
+    } catch (error) {
+      staged.dispose();
+      throw error;
+    }
+    this.unregister(registration.id);
+    this.pluginIds.add(registration.id);
+    for (const id of staged.contributionIds) this.contributionIds.add(id);
+    for (const [id, dispose] of staged.disposers) this.disposers.set(id, dispose);
+    this.actions.push(...staged.actions);
+    this.workspacePanels.push(...staged.workspacePanels);
+    this.workspaceLabels.push(...staged.workspaceLabels);
+    this.themes.push(...staged.themes);
+    this.themePairs.push(...staged.themePairs);
+  }
+
+  unregister(id: string): void {
+    this.pluginIds.delete(id);
+    for (const contributions of [this.actions, this.workspacePanels, this.workspaceLabels, this.themes, this.themePairs]) {
+      for (let index = contributions.length - 1; index >= 0; index--) {
+        if (contributions[index]?.pluginId === id) contributions.splice(index, 1);
+      }
+    }
+    for (const contributionId of this.contributionIds) {
+      if (contributionId.startsWith(`${id}:`)) this.contributionIds.delete(contributionId);
+    }
+    const dispose = this.disposers.get(id);
+    this.disposers.delete(id);
+    try {
+      dispose?.();
+    } catch (error) {
+      this.onDisposeError(id, error);
+    }
+  }
+
+  dispose(): void {
+    for (const id of [...this.pluginIds]) this.unregister(id);
+  }
+
+  private activate({ id, plugin }: PiWebPluginRegistration): void {
+    this.validatePluginId(id);
     const apiVersion: unknown = plugin.apiVersion;
     if (apiVersion !== 1) throw new Error(`Unsupported plugin API version for ${id}: ${String(apiVersion)}`);
     const result = plugin.activate({ apiVersion: 1, pluginId: id, html });
+    this.pluginIds.add(id);
+    if (result.dispose !== undefined) this.disposers.set(id, () => result.dispose?.());
     const contributions = result.contributions;
     for (const action of contributions.actions ?? []) this.actions.push(this.qualifyAction(id, action));
     for (const panel of contributions.workspacePanels ?? []) this.workspacePanels.push(this.qualifyWorkspacePanel(id, panel));

@@ -245,6 +245,7 @@ interface PluginActivationContext {
 
 interface PluginActivationResult {
   contributions: PluginContributions;
+  dispose?: () => void;
 }
 ```
 
@@ -264,7 +265,11 @@ export default {
 };
 ```
 
-`activate()` is called once when the UI loads the plugin. Keep it cheap: define contributions there, but move expensive or async work into actions, custom elements, or explicit user interactions.
+`activate()` is called when the UI loads the plugin. Keep it cheap: define contributions there, but move expensive or async work into actions, custom elements, or explicit user interactions.
+
+An activation may return a synchronous `dispose()` callback to release activation-owned listeners, timers, or subscriptions. The registry calls it once when that activation is removed/replaced, or if its returned contributions fail validation. A failed registration leaves no partial contributions behind; a failed replacement retains the previous activation. Cleanup errors are logged without preventing other plugins from being cleaned up. If `activate()` itself throws before returning, it must clean up its own partially created resources. Module-level side effects cannot be cleaned up by the registry, and custom elements must clean up instance resources in `disconnectedCallback()`.
+
+The registry supports replacement, but browser discovery currently still runs only at initial load: refresh the page to load changed plugin code. This lifecycle contract alone does not enable chat `/reload`.
 
 The plugin id comes from `package.json`, not from the JavaScript module. Contribution ids are local to the plugin and PI WEB qualifies them internally as:
 
