@@ -49,16 +49,25 @@ export interface PluginPeerChannel {
 
 /**
  * Exact revision-paired path to this package's active server entry.
- * A peer supplies a request handler, a channel handler, or both, but never neither.
+ * A peer supplies at least one request, channel, or resource capability.
+ * `resourceUrl` returns a browser-ready authenticated URL, not a public share link.
+ * Its small JSON selector is visible in URLs; keep secrets in ordinary requests.
  */
 export type PluginPeer =
   | {
       request(operation: string, input: JsonValue, options?: PluginPeerRequestOptions): Promise<JsonValue>;
+      resourceUrl?(operation: string, input: JsonValue): string;
       openChannel?(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
     }
   | {
       request?: undefined;
       openChannel(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
+      resourceUrl?(operation: string, input: JsonValue): string;
+    }
+  | {
+      request?: undefined;
+      openChannel?: undefined;
+      resourceUrl(operation: string, input: JsonValue): string;
     };
 
 /** Explicitly browser-public session data, keyed by owning package/plugin namespace. */
@@ -103,6 +112,8 @@ export interface WorkspaceProviderMetadata {
 export interface WorkspaceRemovalPresentation {
   readonly actionLabel: string;
   readonly confirmation: string;
+  /** Optional provenance for host-localized removal chrome; raw wording remains the fallback. */
+  readonly localization?: import("./workspaceRemovalPresentation.js").WorkspaceRemovalLocalization;
 }
 
 export interface FileTreeEntry {
@@ -170,6 +181,8 @@ interface TerminalCommandRunFields {
   id: string;
   origin: string;
   terminalId: string;
+  /** Generated title provenance; title remains the compatible fallback. */
+  titlePresentation?: import("./terminalTitlePresentation.js").TerminalTitlePresentation;
   title: string;
   command: string;
   status: TerminalCommandRunStatus;

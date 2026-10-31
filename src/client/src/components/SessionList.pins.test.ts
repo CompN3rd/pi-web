@@ -81,7 +81,7 @@ describe("session root pins", () => {
     expect(pinnedSessionRows(rows, []).rows).toEqual(rows);
   });
 
-  it("identifies pins by section headings without icons, preserving agent nesting and archive order", async () => {
+  it("groups pins under section headings, preserving agent nesting and archive order", async () => {
     const a = session("a");
     const agent = session("agent", { parentSessionPath: a.path, agentSubsession: true });
     const child = session("child", { parentSessionPath: agent.path });
@@ -90,14 +90,11 @@ describe("session root pins", () => {
     const list = await mount([b, a, agent, child, archived], ["a", "child", "archived"]);
     expect(rowIds(list)).toEqual(["a", "child", "b"]);
     expect([...shadow(list).querySelectorAll(".pin-heading")].map((item) => item.textContent)).toEqual(["Pinned", "Recent"]);
-    expect(shadow(list).querySelector('[aria-label="Pinned session"]')).toBeNull();
-    expect(shadow(list).textContent).not.toContain("📌");
     const contents = [...shadow(list).querySelectorAll(".pin-heading, .action-row")].map((item) => item.classList.contains("action-row") ? item.getAttribute("title") : item.textContent);
     expect(contents).toEqual(["Pinned", a.path, child.path, "Recent", b.path]);
     button(shadow(list), "▸ Agent subsessions (1)").click();
     await list.updateComplete;
     expect(rowIds(list)).toEqual(["a", "agent", "child", "b"]);
-    expect(row(list, "child").style.getPropertyValue("--depth")).toBe("2");
     button(shadow(list), "▸ Archived").click();
     await list.updateComplete;
     expect(rowIds(list)).toEqual(["a", "agent", "child", "b", "archived"]);

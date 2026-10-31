@@ -24,9 +24,24 @@ const run = {
 };
 
 describe("Terminal peer protocol", () => {
+  it("retains generated title provenance on runs and tabs, with cosmetic fallback", () => {
+    const titlePresentation = { kind: "workspaceRemoval", label: "feature/<img>" };
+    expect(parseTerminalInfo({ ...terminal, titlePresentation }).titlePresentation).toEqual(titlePresentation);
+    expect(parseTerminalCommandRun({ ...run, titlePresentation }).titlePresentation).toEqual(titlePresentation);
+    for (const invalid of [undefined, null, [], {}, { kind: "future", label: "x" }, { kind: "workspaceRemoval", label: 1 }, { kind: "workspaceRemoval", label: "x".repeat(4097) }]) {
+      expect(parseTerminalInfo({ ...terminal, titlePresentation: invalid })).toEqual(terminal);
+      expect(parseTerminalCommandRun({ ...run, titlePresentation: invalid })).toEqual(run);
+    }
+    titlePresentation.label = "changed";
+    const parsed = parseTerminalCommandRun({ ...run, titlePresentation });
+    titlePresentation.label = "mutated";
+    expect(parsed.titlePresentation?.label).toBe("changed");
+  });
+
   it("preserves terminal scope and workspace identity and rejects ambiguous maintenance identity", () => {
     const workspace = { ...terminal, scope: "workspace", projectId: "project-1", workspaceId: "workspace-1" };
     expect(parseTerminalInfo(workspace)).toEqual(workspace);
+    expect(parseTerminalInfo({ ...workspace, defaultShellNumber: 1234 }).defaultShellNumber).toBe(1234);
     expect(parseTerminalInfo({ ...terminal, scope: "maintenance" })).toEqual({ ...terminal, scope: "maintenance" });
     expect(() => parseTerminalInfo({ ...workspace, scope: "maintenance" })).toThrow("must not contain workspace identity");
     expect(() => parseTerminalInfo({ ...terminal, scope: "invalid" })).toThrow("Invalid Terminal info scope");

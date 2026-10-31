@@ -124,6 +124,65 @@ describe("projectSessionTree", () => {
     expect(JSON.stringify(snapshot)).not.toContain("private");
   });
 
+  it("preserves display provenance without treating user-authored English or image markers as messages", () => {
+    const roots = [
+      treeNode(entry("literal", null, "message", { message: { role: "user", content: [{ type: "text", text: "Tool error [image]" }, { type: "image", data: "private" }] } })),
+      treeNode(entry("tools", null, "message", { message: { role: "assistant", content: ["read", "bash", "read", "edit", "fourth"].map((name) => ({ type: "toolCall", name, arguments: "private" })) } })),
+      treeNode(entry("result", null, "message", { message: { role: "toolResult", toolName: "read", isError: true, content: "Assistant error" } })),
+      treeNode(entry("hidden", null, "custom_message", { display: false, customType: "private", content: "private" })),
+      treeNode(entry("model", null, "model_change", { provider: "provider", modelId: "model" })),
+      treeNode(entry("label", null, "label")),
+      treeNode(entry("visible", null, "custom_message", { display: true, customType: "notice", content: [{ type: "image", data: "private" }] })),
+    ];
+    const snapshot = projectSessionTree(roots, null);
+    expect(snapshot.nodes.map((node) => node.summaryPresentation)).toEqual([
+      { type: "content", parts: [{ type: "text", text: "Tool error [image]" }, { type: "image" }], fallback: "user-message" },
+      { type: "assistant-tools", names: ["read", "bash", "edit"] },
+      { type: "tool-result", isError: true, toolName: "read", parts: [{ type: "text", text: "Assistant error" }] },
+      { type: "status", status: "hidden-custom-message" },
+      { type: "named", field: "model", value: "provider/model" },
+      { type: "named", field: "label" },
+      { type: "custom-message", customType: "notice", parts: [{ type: "image" }] },
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("private");
+  });
+
+  it("projects all empty-message and named-field fallbacks semantically", () => {
+    const cases = [
+      ["message", { message: null }, { type: "status", status: "message" }],
+      ["message", { message: { role: "future" } }, { type: "status", status: "message" }],
+      ["message", { message: { role: "user", content: "  " } }, { type: "content", parts: [], fallback: "user-message" }],
+      ["message", { message: { role: "assistant", stopReason: "error" } }, { type: "status", status: "assistant-error" }],
+      ["message", { message: { role: "assistant", stopReason: "aborted" } }, { type: "status", status: "assistant-aborted" }],
+      ["message", { message: { role: "assistant" } }, { type: "status", status: "assistant-response" }],
+      ["message", { message: { role: "bashExecution" } }, { type: "named", field: "shell" }],
+      ["model_change", {}, { type: "named", field: "model" }],
+      ["thinking_level_change", {}, { type: "named", field: "thinking-level" }],
+      ["session_info", {}, { type: "named", field: "session-name" }],
+      ["custom", {}, { type: "named", field: "custom-entry" }],
+      ["compaction", {}, { type: "content", parts: [], fallback: "compaction-summary" }],
+      ["branch_summary", {}, { type: "content", parts: [], fallback: "branch-summary" }],
+    ] as const;
+    for (const [type, patch, expected] of cases) {
+      expect(projectSessionTree([treeNode(entry("id", null, type, patch))], null).nodes[0]?.summaryPresentation).toEqual(expected);
+    }
+  });
+
+  it("bounds transported content and image part counts while excluding controls and private payloads", () => {
+    const nodes = projectSessionTree([
+      treeNode(entry("text", null, "message", { message: { role: "user", content: `hello\u0000${"x".repeat(5000)}` } })),
+      treeNode(entry("images", null, "message", { message: { role: "user", content: Array.from({ length: 1000 }, () => ({ type: "image", data: "private" })) } })),
+    ], null).nodes;
+    const text = nodes[0]?.summaryPresentation;
+    const images = nodes[1]?.summaryPresentation;
+    expect(text?.type).toBe("content");
+    if (text?.type !== "content" || images?.type !== "content") throw new Error("Missing content projection");
+    expect(JSON.stringify(text.parts)).not.toContain("\\u0000");
+    expect(text.parts).toEqual([{ type: "text", text: `hello ${"x".repeat(714)}` }]);
+    expect(images.parts.length).toBeLessThanOrEqual(103);
+    expect(JSON.stringify(nodes)).not.toContain("private");
+  });
+
   it("rejects malformed SDK node wrappers and empty entry identities with clear boundary errors", () => {
     const malformedChild = {
       entry: entry("root", null, "custom", { customType: "root" }),

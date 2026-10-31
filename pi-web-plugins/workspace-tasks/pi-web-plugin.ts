@@ -1,4 +1,5 @@
 import type { StylesheetIntegrationCapabilityV1, PiWebPlugin, PluginCapability } from "@jmfederico/pi-web/plugin-api";
+import { createTasksLocalization } from "./tasksLocalization.js";
 import { TASKS_CONFIG_PATH } from "./config.js";
 import { defineTasksPanelElement, tasksPanelBadge } from "./tasksPanelElement.js";
 
@@ -23,7 +24,10 @@ const plugin = {
   apiVersion: 4,
   name: "Workspace Tasks",
   requires: [stylesheetIntegrationCapability],
-  activate: ({ runtimePluginId, html, svg }) => {
+  activate: ({ runtimePluginId, html, svg, localization }) => {
+    if (localization === undefined) throw new Error("The Workspace Tasks plugin requires a localization-capable PI WEB host");
+    const translations = createTasksLocalization(localization);
+    const { messages } = translations;
     defineTasksPanelElement();
     let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
 
@@ -35,9 +39,9 @@ const plugin = {
         actions: [
           {
             id: "workspace.open-tasks",
-            title: "Open Workspace Tasks",
-            description: `Open the workspace Tasks tab. Configure tasks in ${TASKS_CONFIG_PATH}.`,
-            group: "Workspace",
+            get title() { return messages.t("openTasks"); },
+            get description() { return messages.t("openDescription", { path: TASKS_CONFIG_PATH }); },
+            get group() { return messages.t("workspace"); },
             enabled: (context) => context.state.selectedWorkspace !== undefined,
             run: (context) => {
               if (context.state.selectedWorkspace === undefined) return;
@@ -48,7 +52,7 @@ const plugin = {
         workspacePanels: [
           {
             id: "workspace.tasks",
-            title: "Tasks",
+            get title() { return messages.t("tasks"); },
             icon: svg`
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 6h11"></path>
@@ -61,7 +65,7 @@ const plugin = {
             `,
             order: 40,
             badge: (context) => tasksPanelBadge(context),
-            render: (context) => html`<pi-web-workspace-tasks-panel .stylesheetIntegration=${stylesheetIntegration} .context=${context}></pi-web-workspace-tasks-panel>`,
+            render: (context) => html`<pi-web-workspace-tasks-panel .translations=${translations} .stylesheetIntegration=${stylesheetIntegration} .context=${context}></pi-web-workspace-tasks-panel>`,
           },
         ],
       },

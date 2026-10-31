@@ -24,9 +24,8 @@ const codeHighlightOutputDir = resolve(bundledPluginsOutputDir, "code-highlight"
 // separate output roots so neither becomes a discovery root for the other.
 // Files, Terminal, Mermaid, and Code highlighting are exceptions to plain transpilation: each
 // browser entry is replaced below by a self-contained bundle. Terminal also
-// keeps a package-local transpiled server graph. Captain's Log likewise bundles
-// its browser entry after transpiling its standalone package graph. Workflows
-// bundles its server entry against the public host API for standalone delivery.
+// keeps a package-local transpiled server graph. Workflows bundles its server
+// entry against the public host API for standalone delivery.
 const buildTargets = [
   { rootDir: bundledPluginsSourceDir, outDir: bundledPluginsOutputDir, label: "plugin" },
   { rootDir: resolve("pi-packages"), outDir: resolve("dist/pi-packages"), label: "package" },
@@ -65,19 +64,19 @@ async function buildAll() {
       await buildMermaidPackage(mermaidPluginSourceDir, mermaidPluginOutputDir);
       await buildFilesBrowserPackage(codeHighlightSourceDir, codeHighlightOutputDir);
     } else {
-      await viteBuild({
-        configFile: resolve(target.rootDir, "captains-log/vite.config.mjs"),
-        logLevel: "silent",
-        build: { outDir: resolve(target.outDir, "captains-log/dist/browser") },
-      });
-      await viteBuild({
-        configFile: resolve(target.rootDir, "workflows/vite.config.mjs"),
+      for (const [packageName, config] of [
+        ["workflows", "vite.config.mjs"],
+        ["scheduled-tasks", "vite.config.mjs"],
+        ["scheduled-tasks", "vite.companion.config.mjs"],
+        ["scheduled-tasks", "vite.browser.config.mjs"],
+      ]) await viteBuild({
+        configFile: resolve(target.rootDir, packageName, config),
         logLevel: "silent",
         // Map the public entry to its source for checkout builds, including cold
         // dev startup before dist exists. Plugin code still imports only the
         // published API; standalone builds use the installed public export.
         resolve: { alias: { "@jmfederico/pi-web/server-plugin-api": resolve("src/server-plugin-api.ts") } },
-        build: { outDir: resolve(target.outDir, "workflows") },
+        build: { outDir: resolve(target.outDir, packageName, ...(config === "vite.browser.config.mjs" ? ["browser"] : [])) },
       });
     }
     const suffix = result.transpiled === 1 ? "file" : "files";

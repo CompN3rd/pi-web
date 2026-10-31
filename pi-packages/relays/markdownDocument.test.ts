@@ -13,26 +13,15 @@ describe("isMarkdownDocumentPath", () => {
 });
 
 describe("renderRelayDocumentHtml", () => {
-  it("renders GFM markdown: headings, emphasis, lists, and code fences", () => {
-    const fragment = fragmentOf(renderRelayDocumentHtml([
-      "# Status",
-      "",
-      "All **good**.",
-      "",
-      "- one",
-      "- two",
-      "",
-      "```sh",
-      "echo hi",
-      "```",
-    ].join("\n")));
-
-    expect(fragment.querySelector("h1")?.textContent).toBe("Status");
-    expect(fragment.querySelector("strong")?.textContent).toBe("good");
-    expect(fragment.querySelectorAll("li")).toHaveLength(2);
-    expect(fragment.querySelector("pre code")?.textContent).toContain("echo hi");
+  it("caches by translated table label and treats translations only as attribute text", () => {
+    const source = "| User |\n| --- |\n| `code` |";
+    for (const label of ["Table", "Tabelle", '"><img src=x onerror="bad()">']) {
+      const fragment = fragmentOf(renderRelayDocumentHtml(source, label));
+      expect(fragment.querySelector(".table-scroll")?.getAttribute("aria-label")).toBe(label);
+      expect(fragment.querySelector("img")).toBeNull();
+      expect(fragment.querySelector("code")?.textContent).toBe("code");
+    }
   });
-
   it("renders soft line breaks as <br> so plain-wrapped relay docs stay readable", () => {
     const fragment = fragmentOf(renderRelayDocumentHtml("one\ntwo"));
 

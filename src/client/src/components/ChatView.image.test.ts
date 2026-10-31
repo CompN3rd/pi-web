@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatView, chatImagePartSource, chatMessageAnchorKey, chatToolOutputLabel } from "./ChatView";
+import { ChatView, chatImagePartSource, chatToolOutputLabel } from "./ChatView";
 import { TranscriptImage } from "./TranscriptImage";
 import { settleImage } from "./imagePresentation.testSupport";
 
@@ -30,9 +30,6 @@ describe("ChatView image content derivation", () => {
     expect(chatToolOutputLabel("")).toBe("tool output");
   });
 
-  it("keys a tool image message to its stable scroll anchor", () => {
-    expect(chatMessageAnchorKey(7, { entryId: "image-entry", role: "tool", parts: [] })).toBe('m:["image-entry","tool","message"]');
-  });
 });
 
 describe("ChatView image event wiring", () => {
@@ -70,20 +67,6 @@ describe("ChatView image event wiring", () => {
     expect(imageMessage?.querySelector("pi-web-transcript-image")).not.toBeNull();
     expect(view.renderRoot.querySelector("article.assistant")?.classList.contains("conversation-message")).toBe(true);
     expect(activity?.querySelector(".conversation-message")).toBeNull();
-  });
-
-  it("leaves native image load/error events free of custom scroll corrections", async () => {
-    const { view, presentation, native } = await mountImage();
-    const scroll = vi.fn();
-    Reflect.set(view, "scrollToBottom", scroll);
-    Reflect.set(view, "pinnedToBottom", true);
-    native.dispatchEvent(new Event("load"));
-    await presentation.updateComplete;
-    Reflect.set(view, "pinnedToBottom", false);
-    native.dispatchEvent(new Event("error"));
-    await presentation.updateComplete;
-    expect(scroll).not.toHaveBeenCalled();
-    expect(presentation.renderRoot.querySelector("img")).toBe(native);
   });
 
   it("opens and closes the image zoom target without waiting for native loading", async () => {

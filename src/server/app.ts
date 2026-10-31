@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { parsePiWebEnvBoolean } from "../shared/configResolution.js";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOptions } from "fastify";
@@ -22,11 +24,15 @@ import { registerProjectTrustRoutes } from "./projectTrustRoutes.js";
 import { registerWorkspaceDeletionRoutes } from "./workspaces/workspaceDeletionRoutes.js";
 import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
 import { PiWebPluginManifestRuntimeError, PiWebPluginService } from "./piWebPluginService.js";
+import { PiWebPluginCatalog } from "./piWebPluginCatalog.js";
+import { PiWebThemeCatalog, readThemeSelection, registerThemeCatalogRoutes } from "./themeCatalog.js";
+import { createThemeBootstrap, injectThemeBootstrap } from "./themeBootstrap.js";
+import { effectiveAgentConfig } from "../config.js";
 import { createActiveProfilePiPackageService, type PiPackageService } from "./piPackageService.js";
 import { registerPiPackageRoutes } from "./piPackageRoutes.js";
 import { createPiWebStatusCache, type PiWebStatusCache } from "./piWebStatusCache.js";
 import { detectPiWebInstallation, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus } from "./piWebStatus.js";
-import { createDeploymentFlavorResolver } from "./deploymentIdentity.js";
+import { createDeploymentFlavorResolver, deploymentHtmlForFlavor } from "./deploymentIdentity.js";
 import { registerDeploymentIdentityAssetRoutes } from "./deploymentIdentityRoutes.js";
 import type { PiWebDeploymentFlavor } from "./deploymentIdentity.js";
 import {
@@ -41,6 +47,7 @@ import { installationDisplayName } from "../shared/installationName.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
 import { registerPluginBackendChannelProxyRoutes } from "./plugins/pluginBackendChannelProxyRoutes.js";
 import { installPluginBackendChannelWebSocketPayloadLimit } from "./webSocketBridge.js";
+import { registerPluginBackendResourceProxyRoutes } from "./plugins/pluginBackendResourceProxyRoutes.js";
 import { registerPairedPluginBackendProxyRoutes } from "./plugins/pluginBackendProxyRoutes.js";
 import { proxyMachinePluginAsset, registerMachinePluginProxyRoutes } from "./machines/machinePluginProxyRoutes.js";
 import type { Project, WorkspaceEffectiveConfig, WorkspaceProviderResolution } from "./types.js";
@@ -53,6 +60,7 @@ export interface AppDependencies {
   sessionDaemon?: SessionProxyDaemon;
   agentProfileProvider?: ActiveAgentProfileProvider;
   piWebPlugins?: Pick<PiWebPluginService, "manifest" | "plugins" | "readAsset">;
+  themeCatalog?: Pick<PiWebThemeCatalog, "themes" | "readAsset">;
   piPackages?: PiPackageService;
   piWebStatusCache?: PiWebStatusCache;
   config?: PiWebConfigService;
@@ -105,10 +113,11 @@ async function resolveWorkspacesWithEffectiveConfig(
 }
 
 async function workspaceEffectiveConfig(projectPath: string, config?: Pick<PiWebConfigService, "read">): Promise<WorkspaceEffectiveConfig> {
-  const globalConfig = config === undefined ? {} : (await config.read()).effectiveConfig;
+  const response = await config?.read();
+  const globalConfig = response?.effectiveConfig ?? {};
   return {
-    uploads: await loadEffectiveProjectUploadsConfig(projectPath, globalConfig),
-    attachments: await loadEffectiveProjectAttachmentsConfig(projectPath, globalConfig),
+    uploads: await loadEffectiveProjectUploadsConfig(projectPath, globalConfig, response?.enforcedSettings),
+    attachments: await loadEffectiveProjectAttachmentsConfig(projectPath, globalConfig, response?.enforcedSettings),
   };
 }
 
@@ -177,7 +186,9 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   const daemonWorkspaces = new SessionDaemonWorkspaceCatalog(sessionDaemon);
   const workspaces = deps.workspaceCatalog ?? daemonWorkspaces;
   const agentProfileProvider = deps.agentProfileProvider ?? new SessionDaemonActiveAgentProfileProvider(sessionDaemon);
+  const devPluginPairing = process.env["PI_WEB_DEV_PLUGIN_PAIRING"];
   const piWebPlugins = deps.piWebPlugins ?? new PiWebPluginService({
+    relaxBrowserPairing: devPluginPairing === undefined ? false : parsePiWebEnvBoolean(devPluginPairing, "PI_WEB_DEV_PLUGIN_PAIRING"),
     configProvider: readConfig,
     agentDirProvider: () => desiredPluginAgentDir(agentProfileProvider, configService),
     runtimeProvider: daemonWorkspaces,
@@ -199,6 +210,14 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
     onNameDiscoveryError: (machineId, error) => { app.log.warn({ machineId, err: error }, "Remote installation name discovery failed; using cached or default name"); },
     localRuntime: () => getPiWebRuntime(sessionDaemon),
   });
+
+  // Static gateway themes follow desired configuration, not sessiond's immutable
+  // runtime profile. This endpoint must remain available before runtime startup.
+  const themeCatalog = deps.themeCatalog ?? new PiWebThemeCatalog(new PiWebPluginCatalog({
+    configProvider: readConfig,
+    agentDirProvider: async () => effectiveAgentConfig(process.env, await readConfig()).dir,
+  }));
+  registerThemeCatalogRoutes(app, themeCatalog, configService);
 
   app.get("/pi-web-plugins/manifest.json", async (_request, reply) => withProfileDependency(reply, () => piWebPlugins.manifest()));
 
@@ -246,9 +265,11 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerLocalProjectRoutes(app, projects, workspaces, "/api", { config: configService });
   registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
 
-  registerSessionProxyRoutes(app, sessionDaemon);
+  registerSessionProxyRoutes(app, sessionDaemon, "/api");
   registerSessionProxyRoutes(app, sessionDaemon, "/api/machines/local");
   registerPairedPluginBackendProxyRoutes(app, sessionDaemon);
+  registerPluginBackendResourceProxyRoutes(app, sessionDaemon);
+  registerPluginBackendResourceProxyRoutes(app, sessionDaemon, "/api/machines/local");
   registerPluginBackendChannelProxyRoutes(app, sessionDaemon);
   registerWorkspaceExplorerRoutes(app, projects, workspaces, "/api", { config: configService });
   registerWorkspaceExplorerRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
@@ -265,6 +286,22 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   const packagedClientDist = join(dirname(fileURLToPath(import.meta.url)), "..", "client");
   const clientDist = deps.clientDist ?? (existsSync(packagedClientDist) ? packagedClientDist : join(process.cwd(), "dist", "client"));
   if (clientDist !== false && existsSync(clientDist)) {
+    const deploymentFlavor = deps.deploymentFlavor ?? createDeploymentFlavorResolver(
+      async () => {
+        const activeAgentProfile = await agentProfileProvider.getActiveAgentProfile();
+        return detectPiWebInstallation(activeAgentProfile.status === "available" ? activeAgentProfile.profile.dir : undefined);
+      },
+      (error) => { app.log.warn({ err: error }, "failed to detect PI WEB deployment flavor"); },
+    );
+    const renderHtml = async (_request: unknown, reply: FastifyReply) => {
+      const html = await readFile(join(clientDist, "index.html"), "utf8");
+      const bootstrap = html.includes("pi-web-theme-data")
+        ? await createThemeBootstrap((preference) => readThemeSelection(themeCatalog, configService, preference), themeCatalog) : undefined;
+      return reply.header("Cache-Control", "private, no-cache").type("text/html; charset=utf-8")
+        .send(deploymentHtmlForFlavor(injectThemeBootstrap(html, bootstrap), await deploymentFlavor()));
+    };
+    app.get("/", renderHtml);
+    app.get("/index.html", renderHtml);
     const hashedAssetsDir = join(clientDist, "assets") + sep;
     await app.register(fastifyStatic, {
       root: clientDist,
@@ -275,15 +312,8 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
         if (filePath.startsWith(hashedAssetsDir)) res.header("cache-control", "public, max-age=31536000, immutable");
       },
     });
-    const deploymentFlavor = deps.deploymentFlavor ?? createDeploymentFlavorResolver(
-      async () => {
-        const activeAgentProfile = await agentProfileProvider.getActiveAgentProfile();
-        return detectPiWebInstallation(activeAgentProfile.status === "available" ? activeAgentProfile.profile.dir : undefined);
-      },
-      (error) => { app.log.warn({ err: error }, "failed to detect PI WEB deployment flavor"); },
-    );
     registerDeploymentIdentityAssetRoutes(app, { clientDist, flavor: deploymentFlavor, installationName: readInstallationName });
-    app.setNotFoundHandler((_request, reply) => reply.sendFile("index.html"));
+    app.setNotFoundHandler(renderHtml);
   }
 
   return app;

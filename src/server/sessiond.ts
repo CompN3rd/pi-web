@@ -30,6 +30,12 @@ import { ProjectService } from "./projects/projectService.js";
 import { ProjectLifecycleService } from "./projects/projectLifecycleService.js";
 import { registerProjectMutationRoutes } from "./sessiond/projectMutationRoutes.js";
 import { ProjectStore, projectStorePath } from "./storage/projectStore.js";
+import { SessionPinStore, sessionPinStorePath } from "./storage/sessionPinStore.js";
+import { navigationPreferenceStorePath } from "./storage/navigationPreferenceStore.js";
+import { registerSessionPinRoutes } from "./navigationPreferenceRoutes.js";
+import { PI_WEB_HOST_SESSION_LIFECYCLE_CAPABILITY } from "../shared/pluginSessionLifecycleTypes.js";
+import { createServerPluginSessionLifecycleCapabilityFactory } from "./plugins/serverPluginSessionLifecycleCapability.js";
+import { registerPluginSessionLifecycleRoutes } from "./sessiond/pluginSessionLifecycleRoutes.js";
 import {
   eligibleWorkspaceProviderContributions,
   WorkspaceProviderRegistry,
@@ -82,6 +88,7 @@ import { bindCompanionBackend } from "./sessions/companionBackend.js";
 import { registerWorkspaceCatalogRoutes } from "./sessiond/workspaceCatalogRoutes.js";
 import { registerPluginBackendChannelRoutes } from "./sessiond/pluginBackendChannelRoutes.js";
 import { installPluginBackendChannelWebSocketPayloadLimit } from "./webSocketBridge.js";
+import { registerPluginBackendResourceRoutes } from "./sessiond/pluginBackendResourceRoutes.js";
 import { registerPairedPluginBackendRoutes } from "./sessiond/pluginBackendRoutes.js";
 import { registerWorkspaceRemovalRoutes } from "./sessiond/workspaceRemovalRoutes.js";
 import { createWorkspaceProviderRuntimeSnapshot } from "./workspaces/workspaceCatalog.js";
@@ -214,7 +221,7 @@ async function createSessionDaemonRuntime() {
   const serverNotices = new ServerNoticeService(new ServerNoticeStore(), eventHub);
   const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
   const initialProjects = await projects.list();
-  const projectSettings = new ProjectPluginSettingsSnapshots(projects);
+  const projectSettings = new ProjectPluginSettingsSnapshots(projects, { env: daemonEnvironment });
   await projectSettings.initialize(initialProjects);
   const serverPlugins = await createServerPluginRuntime({
     catalog: serverPluginCatalog,
@@ -235,11 +242,18 @@ async function createSessionDaemonRuntime() {
       capability: MAINTENANCE_TERMINAL_CAPABILITY,
       value: resolveMaintenanceExecutionContext(childProcessEnvironment, daemonLaunchCwd),
     }],
-    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY, PI_WEB_HOST_CATALOG_CAPABILITY],
+    lateHostCapabilities: [PI_WEB_HOST_WORKSPACES_CAPABILITY, PI_WEB_HOST_PI_SESSIONS_CAPABILITY, PI_WEB_HOST_PI_SESSION_EVENTS_CAPABILITY, PI_WEB_HOST_CATALOG_CAPABILITY, PI_WEB_HOST_SESSION_LIFECYCLE_CAPABILITY],
   });
   let sessionsForFailedConstruction: PiSessionService | undefined;
   let projectLifecycleForFailedConstruction: ProjectLifecycleService | undefined;
   try {
+    const pins = new SessionPinStore(
+      sessionPinStorePath(daemonEnvironment),
+      navigationPreferenceStorePath(daemonEnvironment),
+      (scope, revision) => { eventHub.publishRealtime({ type: "session-pins.changed", ...scope, revision }); },
+    );
+    // Import before plugin activation; web/API must already have relinquished pin writes.
+    await pins.pinnedSessionIds();
     const notificationStore = new SessionNotificationStore();
     const unreadStore = new SessionUnreadStore({
       persistence: new FileSessionUnreadPersistence(defaultSessionUnreadFilePath(daemonEnvironment)),
@@ -277,6 +291,12 @@ async function createSessionDaemonRuntime() {
     const workspaceProviders = new WorkspaceProviderRegistry({
       contributions: eligibleWorkspaceProviderContributions(providerContributions, providerHealth),
       logger: app.log,
+      // Discovery starts only after composition. Publication invalidates status
+      // after the new record exists; status reads never request more discovery.
+      onPublished: () => {
+        statusAttribution.invalidate();
+        machineStatus.notifyChanged();
+      },
     });
     const statusAttribution = new CachedWorkspaceAttribution({
       projects,
@@ -294,6 +314,7 @@ async function createSessionDaemonRuntime() {
     // browser never has to reconcile a snapshot fetch against live frames.
     eventHub.setGlobalJoinFrame(() => ({ type: "machine.status", status: machineStatus.snapshot() }));
     const workspaceChanges = new WorkspaceChangeNotifier({
+      requestRefresh: (projectId) => { workspaceProviders.requestRefresh(projectId); },
       attribution: statusAttribution,
       status: machineStatus,
       publish: (event) => { eventHub.publishRealtime(event); },
@@ -311,7 +332,8 @@ async function createSessionDaemonRuntime() {
     });
     projectLifecycleForFailedConstruction = projectLifecycle;
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
-    const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
+    const messageTargets = new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps);
+    const spawnTargets = config.spawnSessions ? messageTargets : undefined;
     // A plugin may open a session during activation. Install discovery before
     // session_start, but publish backend authority only after startup health.
     let companionOptions: {
@@ -328,9 +350,12 @@ async function createSessionDaemonRuntime() {
       sessionEvents,
       agentDir: activeAgentProfile.dir,
       archiveStore: new SessionArchiveStore(defaultSessionArchiveFilePath(daemonEnvironment), sessionArchiveDirectory(daemonEnvironment, config)),
+      sessionPins: pins,
       workspaceActivity,
       logger: app.log,
       ...(spawnTargets === undefined ? {} : { spawnTargets }),
+      messageTargets,
+      sessionMessagesEnabled: config.sessionMessages,
       subsessionsEnabled: config.subsessions,
       askUserEnabled: config.askUser,
       config: configService,
@@ -364,12 +389,17 @@ async function createSessionDaemonRuntime() {
       }),
     }));
     sessionsForFailedConstruction = sessions;
+    await sessions.restoreInterventionState();
     auth.subscribe((change) => { sessions.applyAuthChange(change); });
     // Current workspace authority and session ownership become available at
     // one atomic late boundary, so no dependent can start against a partial host.
     await serverPlugins.resumeWithHostCapabilityFactories([
       createServerPluginWorkspacesCapabilityFactory({ projects, workspaces: workspaceProviders }),
-      createServerPluginCatalogCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
+      createServerPluginCatalogCapabilityFactory({ projects, workspaces: workspaceProviders, sessions, pins }),
+      createServerPluginSessionLifecycleCapabilityFactory({
+        projects, workspaces: workspaceProviders, sessions, pins,
+        onMutation: ({ projectId }) => { workspaceChanges.notify(projectId); },
+      }),
       createServerPluginPiSessionsCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
       createServerPluginPiSessionEventsCapabilityFactory({ projects, workspaces: workspaceProviders, sessions }),
     ]);
@@ -402,7 +432,10 @@ async function createSessionDaemonRuntime() {
       updateTerminal: (terminal) => { workspaceActivity.updateTerminal(terminal); },
       removeTerminal: (terminalId, cwd) => { workspaceActivity.removeTerminal(terminalId, cwd); },
     });
-    const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals, { notices: serverNotices });
+    const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals, {
+      notices: serverNotices,
+      onMutation: (projectId) => { workspaceChanges.notify(projectId); },
+    });
     const runtimeComponent = Object.freeze({
       // The deprecated-input report is fixed at startup: it was detected from
       // the captured pre-scrub daemon environment and the config snapshot this
@@ -440,7 +473,7 @@ async function createSessionDaemonRuntime() {
       await stateOwnership.release();
     };
     projectLifecycle.scheduleCleanup(); // One delayed pass for existing persisted unread, if any.
-    return { eventHub, machineStatus, statusAttribution, workspaceChanges, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    return { eventHub, machineStatus, statusAttribution, workspaceChanges, projectLifecycle, auth, sessions, pins, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
   } catch (error) {
     await projectLifecycleForFailedConstruction?.closeAll();
     try {
@@ -457,9 +490,14 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, workspaceChanges, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, serverPlugins }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, workspaceChanges, projectLifecycle, auth, sessions, pins, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, serverPlugins }: SessionDaemonRuntime): void {
   registerProjectMutationRoutes(app, projectLifecycle);
-  registerPluginCatalogRoutes(app, { projects, workspaces: workspaceProviders, sessions });
+  registerPluginCatalogRoutes(app, { projects, workspaces: workspaceProviders, sessions, pins });
+  registerPluginSessionLifecycleRoutes(app, {
+    projects, workspaces: workspaceProviders, sessions, pins,
+    onMutation: ({ projectId }) => { workspaceChanges.notify(projectId); },
+  });
+  registerSessionPinRoutes(app, pins);
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
   registerAuthRoutes(app, auth);
@@ -477,6 +515,7 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
     onWorkspacesMutated: () => { statusAttribution.invalidate(); },
   });
   registerPluginBackendChannelRoutes(app, { projects, backends: pluginBackends });
+  registerPluginBackendResourceRoutes(app, { projects, backends: pluginBackends });
   registerWorkspaceRemovalRoutes(app, {
     projects,
     removals: workspaceRemovals,

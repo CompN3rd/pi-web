@@ -14,21 +14,21 @@ describe("PI WEB status parsing", () => {
     }
   });
 
-  it("drops every advertised capability string while the registry is empty", () => {
+  it("preserves supported capabilities and filters obsolete or unknown capabilities", () => {
     expect(parsePiWebRuntimeResponse({
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",
       components: {
-        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: ["piPackages.manage", "future.capability"] },
+        web: { component: "web", label: "Web/UI", runtimeVersion: "1.0.0", available: true, capabilities: ["plugins.lifecycle", "piPackages.manage", "future.capability"] },
         sessiond: { component: "sessiond", label: "Session daemon", runtimeVersion: "1.0.0", available: true, capabilities: ["future.sessiondCapability"] },
       },
-      capabilities: ["piPackages.manage", "future.capability"],
+      capabilities: ["plugins.lifecycle", "piPackages.manage", "future.capability"],
     })).toMatchObject({
       components: {
-        web: { capabilities: [] },
+        web: { capabilities: ["plugins.lifecycle"] },
         sessiond: { capabilities: [] },
       },
-      capabilities: [],
+      capabilities: ["plugins.lifecycle"],
     });
   });
 

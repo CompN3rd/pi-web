@@ -1,10 +1,16 @@
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { api, type McpAuthServerOption, type SessionRef } from "../../api";
+import { LocalizationController, localization } from "../../localization/browser";
+import source from "./settingsMcp.messages";
 import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { uiButtonStyles } from "../ui/controlStyles";
 import { uiSettingsStyles } from "../ui/settingsStyles";
 import "./SettingsPanelFrame";
+
+export const mcpMessages = localization.registerMessages("core.settingsMcp", source);
+
+interface McpPanelError { kind: "load" | "auth"; diagnostic: string }
 
 export interface McpAuthContext {
   session: SessionRef;
@@ -17,6 +23,7 @@ export type McpAuthHandler = (mode: "login" | "logout", serverName: string, cont
 export class SettingsMcpPanel extends LitElement {
   constructor() {
     super();
+    new LocalizationController(this);
     stylesheetIntegrationCapability.createController(this);
   }
 
@@ -24,11 +31,11 @@ export class SettingsMcpPanel extends LitElement {
   @property({ attribute: false, hasChanged: (next: McpAuthContext | undefined, previous: McpAuthContext | undefined) =>
     next?.machineId !== previous?.machineId || next?.session.id !== previous?.session.id || next?.session.cwd !== previous?.session.cwd,
   }) context: McpAuthContext | undefined;
-  @property() targetLabel = "this machine";
+  @property() targetLabel = "";
   @property({ attribute: false }) onMcpAuth?: McpAuthHandler;
   @state() private servers: McpAuthServerOption[] = [];
   @state() private loading = false;
-  @state() private error = "";
+  @state() private error: McpPanelError | undefined;
   private generation = 0;
 
   override connectedCallback(): void {
@@ -39,7 +46,7 @@ export class SettingsMcpPanel extends LitElement {
   override disconnectedCallback(): void {
     this.generation += 1;
     this.servers = [];
-    this.error = "";
+    this.error = undefined;
     this.loading = false;
     super.disconnectedCallback();
   }
@@ -58,7 +65,7 @@ export class SettingsMcpPanel extends LitElement {
   private async reload(): Promise<void> {
     const generation = ++this.generation;
     this.servers = [];
-    this.error = "";
+    this.error = undefined;
     this.loading = false;
     if (!this.isConnected || this.context === undefined) return;
     const context = { machineId: this.context.machineId, session: { ...this.context.session } };
@@ -67,7 +74,7 @@ export class SettingsMcpPanel extends LitElement {
       const response = await api.mcpAuthServers(context.session, context.machineId);
       if (this.isCurrent(generation, context)) this.servers = response.servers;
     } catch (error) {
-      if (this.isCurrent(generation, context)) this.error = `Could not load MCP servers: ${errorMessage(error)}`;
+      if (this.isCurrent(generation, context)) this.error = { kind: "load", diagnostic: errorMessage(error) };
     } finally {
       if (this.isCurrent(generation, context)) this.loading = false;
     }
@@ -78,7 +85,7 @@ export class SettingsMcpPanel extends LitElement {
     try {
       await this.onMcpAuth?.(mode, serverName, context);
     } catch (error) {
-      if (this.isCurrent(generation, context)) this.error = `Could not open MCP authentication: ${errorMessage(error)}`;
+      if (this.isCurrent(generation, context)) this.error = { kind: "auth", diagnostic: errorMessage(error) };
     }
   }
 
@@ -88,37 +95,37 @@ export class SettingsMcpPanel extends LitElement {
     };
     return html`
       <settings-panel-frame
-        heading="MCP"
-        .description=${"Manage authentication for enabled MCP servers that support OAuth in the selected session."}
-        actionLabel="Refresh servers"
+        .heading=${mcpMessages.t("heading")}
+        .description=${mcpMessages.t("description")}
+        .actionLabel=${mcpMessages.t("refresh")}
         .actionDisabled=${context === undefined || this.loading}
         .onAction=${() => this.reload()}
-        .notices=${this.error === "" ? [] : [{ type: "error", content: this.error }]}
+        .notices=${this.error === undefined ? [] : [{ type: "error", content: mcpMessages.t(this.error.kind === "load" ? "loadError" : "authError", { error: this.error.diagnostic }) }]}
       >
         <section class="ui-settings-section">
           ${context === undefined ? html`
-            <p role="status">Select a nonarchived session on ${this.targetLabel} to manage MCP authentication. Close settings to select a session, or use Configure machine to match the selected session’s machine.</p>
+            <p role="status">${mcpMessages.t("selectSession", { target: this.targetLabel || mcpMessages.t("thisMachine") })}</p>
           ` : html`
-            <div class="ui-settings-heading"><h3>Session context</h3></div>
-            <div class="ui-settings-summary session-context" aria-label="MCP session context">
-              <span><strong>Machine:</strong> ${this.targetLabel}</span>
-              <span><strong>Session:</strong> ${context.session.id}</span>
-              <span><strong>Workspace:</strong> ${context.session.cwd}</span>
+            <div class="ui-settings-heading"><h3>${mcpMessages.t("context")}</h3></div>
+            <div class="ui-settings-summary session-context" aria-label=${mcpMessages.t("contextAria")}>
+              <span><strong>${mcpMessages.t("machine")}</strong> <bdi>${this.targetLabel || mcpMessages.t("thisMachine")}</bdi></span>
+              <span><strong>${mcpMessages.t("session")}</strong> <bdi>${context.session.id}</bdi></span>
+              <span><strong>${mcpMessages.t("workspace")}</strong> <bdi dir="ltr">${context.session.cwd}</bdi></span>
             </div>
-            <p>Logout removes local Pi credentials. It does not disable the server or revoke permission at the provider. Other sessions using those credentials are also affected.</p>
-            ${this.loading ? html`<p role="status">Loading MCP servers…</p>` : this.error !== "" ? null : this.servers.length === 0 ? html`
-              <p role="status">No enabled MCP servers with OAuth support are available in this session.</p>
+            <p>${mcpMessages.t("logoutHelp")}</p>
+            ${this.loading ? html`<p role="status">${mcpMessages.t("loading")}</p>` : this.error !== undefined ? null : this.servers.length === 0 ? html`
+              <p role="status">${mcpMessages.t("empty")}</p>
             ` : html`
-              <ul class="ui-settings-list server-list" aria-label="MCP servers">
+              <ul class="ui-settings-list server-list" aria-label=${mcpMessages.t("serversAria")}>
                 ${this.servers.map((server) => html`
                   <li class="ui-settings-row">
                     <div class="server-copy ui-settings-heading">
-                      <h3>${server.name}</h3>
-                      ${server.description === undefined ? null : html`<p class="server-description">${server.description}</p>`}
+                      <h3 dir="auto">${server.name}</h3>
+                      ${server.description === undefined ? null : html`<p class="server-description" dir="auto">${server.description}</p>`}
                     </div>
                     <div class="ui-settings-actions">
-                      <button class="ui-button ui-button--action" aria-label=${`Login to ${server.name}`} ?disabled=${this.onMcpAuth === undefined} @click=${() => { void this.authenticate("login", server.name, context); }}>Login</button>
-                      <button class="ui-button ui-button--action" aria-label=${`Logout from ${server.name}`} ?disabled=${this.onMcpAuth === undefined} @click=${() => { void this.authenticate("logout", server.name, context); }}>Logout</button>
+                      <button class="ui-button ui-button--action" aria-label=${mcpMessages.t("loginAria", { name: server.name })} ?disabled=${this.onMcpAuth === undefined} @click=${() => { void this.authenticate("login", server.name, context); }}>${mcpMessages.t("login")}</button>
+                      <button class="ui-button ui-button--action" aria-label=${mcpMessages.t("logoutAria", { name: server.name })} ?disabled=${this.onMcpAuth === undefined} @click=${() => { void this.authenticate("logout", server.name, context); }}>${mcpMessages.t("logout")}</button>
                     </div>
                   </li>
                 `)}
@@ -131,7 +138,7 @@ export class SettingsMcpPanel extends LitElement {
   }
 
   static override styles = [uiButtonStyles, uiSettingsStyles, css`
-    :host { display: block; }
+    :host { display: block; overflow-wrap: anywhere; }
     p { line-height: 1.45; }
     .ui-settings-section > p { margin: 0; }
     .session-context { overflow-wrap: anywhere; }

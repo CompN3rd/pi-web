@@ -1,5 +1,7 @@
 import { api as defaultApi, type SessionInfo } from "../api";
 import type { AppState } from "../appState";
+import { BrowserErrorReporter, sessionBrowserErrorScope } from "../browserErrors";
+import { sessionNotificationMessages as messages } from "../sessionNotificationMessages";
 import {
   applySelectedNotificationEvent,
   installSelectedNotificationSnapshot,
@@ -46,6 +48,7 @@ interface SelectedRefreshOperation {
  */
 export class SessionNotificationController {
   private readonly api: SessionNotificationApi;
+  private readonly browserErrors: BrowserErrorReporter;
   private readonly onBackgroundError: (message: string, error: unknown) => void;
   private selectedTarget: SessionNotificationTarget | undefined;
   private selectedGeneration = 0;
@@ -61,6 +64,7 @@ export class SessionNotificationController {
     dependencies: SessionNotificationControllerDependencies = {},
   ) {
     this.api = dependencies.api ?? defaultApi;
+    this.browserErrors = new BrowserErrorReporter(getState, setState);
     this.onBackgroundError = dependencies.onBackgroundError ?? ((message, error) => { console.warn(message, error); });
   }
 
@@ -172,7 +176,8 @@ export class SessionNotificationController {
           ...current,
           optimisticDismissedIds: current.optimisticDismissedIds.filter((id) => id !== notificationId),
         }));
-        this.setState({ error: `Failed to dismiss notification: ${errorMessage(error)}` });
+        const detail = errorMessage(error);
+        this.browserErrors.reportLocalized(sessionBrowserErrorScope(target.machineId, target.sessionId, { cwd: target.cwd }), () => messages.t("dismissFailed", { detail }));
         await this.refreshSelectedSession({ id: target.sessionId, cwd: target.cwd }, target.machineId);
       }
     } finally {
@@ -203,7 +208,8 @@ export class SessionNotificationController {
           delete next.optimisticDismissAllThrough;
           return next;
         });
-        this.setState({ error: `Failed to dismiss session notifications: ${errorMessage(error)}` });
+        const detail = errorMessage(error);
+        this.browserErrors.reportLocalized(sessionBrowserErrorScope(target.machineId, target.sessionId, { cwd: target.cwd }), () => messages.t("dismissAllFailed", { detail }));
         await this.refreshSelectedSession({ id: target.sessionId, cwd: target.cwd }, target.machineId);
       }
     } finally {

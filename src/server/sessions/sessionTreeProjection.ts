@@ -1,4 +1,4 @@
-import type { SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot } from "../../shared/apiTypes.js";
+import type { SessionTreeNode, SessionTreeNodeKind, SessionTreeSnapshot, SessionTreeSummaryField, SessionTreeSummaryPart, SessionTreeSummaryPresentation, SessionTreeSummaryStatus } from "../../shared/apiTypes.js";
 
 const SUMMARY_MAX_LENGTH = 360;
 const SUMMARY_SOURCE_MAX_LENGTH = SUMMARY_MAX_LENGTH * 2;
@@ -21,7 +21,7 @@ interface ProjectableSessionEntry extends Record<string, unknown> {
 
 interface EntryProjection {
   kind: SessionTreeNodeKind;
-  summary: string;
+  presentation: SessionTreeSummaryPresentation;
 }
 
 /**
@@ -77,7 +77,8 @@ function projectNode(node: ProjectableSessionTreeNode, entry: ProjectableSession
     id: entry.id,
     parentId: entry.parentId,
     kind: projection.kind,
-    summary: projection.summary,
+    summary: englishSummary(projection.presentation),
+    summaryPresentation: projection.presentation,
     ...(timestamp === undefined ? {} : { timestamp }),
     ...(label === undefined ? {} : { label }),
   };
@@ -85,68 +86,69 @@ function projectNode(node: ProjectableSessionTreeNode, entry: ProjectableSession
 
 function projectEntry(entry: ProjectableSessionEntry): EntryProjection {
   switch (entry.type) {
-    case "message":
-      return projectMessage(entry["message"]);
-    case "custom_message":
-      return projectCustomMessage(entry);
-    case "compaction":
-      return { kind: "compaction", summary: summary(entry["summary"], "Compaction summary") };
-    case "branch_summary":
-      return { kind: "branch-summary", summary: summary(entry["summary"], "Branch summary") };
-    case "model_change":
-      return { kind: "model-change", summary: modelChangeSummary(entry) };
-    case "thinking_level_change":
-      return { kind: "thinking-level-change", summary: namedSummary("Thinking level", entry["thinkingLevel"], "Thinking level changed") };
-    case "session_info":
-      return { kind: "session-info", summary: namedSummary("Session name", entry["name"], "Session info changed") };
-    case "label":
-      return { kind: "label", summary: namedSummary("Label", entry["label"], "Label removed") };
-    case "custom":
-      return { kind: "custom", summary: namedSummary("Custom entry", entry["customType"], "Custom entry") };
-    default:
-      return { kind: "other", summary: namedSummary("Entry", entry.type, "Other session entry") };
+    case "message": return projectMessage(entry["message"]);
+    case "custom_message": return projectCustomMessage(entry);
+    case "compaction": return contentProjection("compaction", entry["summary"], "compaction-summary");
+    case "branch_summary": return contentProjection("branch-summary", entry["summary"], "branch-summary");
+    case "model_change": {
+      const provider = optionalPlainText(entry["provider"], NAMED_FIELD_MAX_LENGTH);
+      const model = optionalPlainText(entry["modelId"], NAMED_FIELD_MAX_LENGTH);
+      return namedProjection("model-change", "model", provider !== undefined && model !== undefined ? `${provider}/${model}` : model ?? provider);
+    }
+    case "thinking_level_change": return namedProjection("thinking-level-change", "thinking-level", entry["thinkingLevel"]);
+    case "session_info": return namedProjection("session-info", "session-name", entry["name"]);
+    case "label": return namedProjection("label", "label", entry["label"]);
+    case "custom": return namedProjection("custom", "custom-entry", entry["customType"]);
+    default: return namedProjection("other", "entry", entry.type);
   }
 }
 
 function projectMessage(value: unknown): EntryProjection {
-  if (!isRecord(value)) return { kind: "other", summary: "Message" };
+  if (!isRecord(value)) return statusProjection("other", "message");
   switch (value["role"]) {
-    case "user":
-      return { kind: "user", summary: summary(contentPreview(value["content"], true), "User message") };
-    case "assistant":
-      return { kind: "assistant", summary: assistantSummary(value) };
-    case "toolResult":
-      return { kind: "tool-result", summary: toolResultSummary(value) };
-    case "bashExecution":
-      return { kind: "bash", summary: namedSummary("Shell", value["command"], "Shell command") };
-    case "custom":
-      return projectCustomMessage(value);
-    case "compactionSummary":
-      return { kind: "compaction", summary: summary(value["summary"], "Compaction summary") };
-    case "branchSummary":
-      return { kind: "branch-summary", summary: summary(value["summary"], "Branch summary") };
-    default:
-      return { kind: "other", summary: "Message" };
+    case "user": return contentProjection("user", value["content"], "user-message");
+    case "assistant": {
+      const parts = contentParts(value["content"], false);
+      if (parts.length > 0) return { kind: "assistant", presentation: { type: "content", parts, fallback: "assistant-response" } };
+      const names = assistantToolNames(value["content"]);
+      if (names.length > 0) return { kind: "assistant", presentation: { type: "assistant-tools", names } };
+      return statusProjection("assistant", value["stopReason"] === "error" ? "assistant-error" : value["stopReason"] === "aborted" ? "assistant-aborted" : "assistant-response");
+    }
+    case "toolResult": {
+      const toolName = optionalPlainText(value["toolName"], NAMED_FIELD_MAX_LENGTH);
+      return { kind: "tool-result", presentation: {
+        type: "tool-result", isError: value["isError"] === true,
+        ...(toolName === undefined ? {} : { toolName }), parts: contentParts(value["content"], true),
+      } };
+    }
+    case "bashExecution": return namedProjection("bash", "shell", value["command"]);
+    case "custom": return projectCustomMessage(value);
+    case "compactionSummary": return contentProjection("compaction", value["summary"], "compaction-summary");
+    case "branchSummary": return contentProjection("branch-summary", value["summary"], "branch-summary");
+    default: return statusProjection("other", "message");
   }
 }
 
 function projectCustomMessage(value: Record<string, unknown>): EntryProjection {
-  if (value["display"] !== true) return { kind: "custom-message", summary: "Hidden custom message" };
+  if (value["display"] !== true) return statusProjection("custom-message", "hidden-custom-message");
   const customType = optionalPlainText(value["customType"], NAMED_FIELD_MAX_LENGTH);
-  const content = contentPreview(value["content"], true);
-  const prefix = customType === undefined ? "Custom message" : `Custom message (${customType})`;
-  return { kind: "custom-message", summary: summary(content === "" ? prefix : `${prefix}: ${content}`, prefix) };
+  return { kind: "custom-message", presentation: {
+    type: "custom-message", ...(customType === undefined ? {} : { customType }), parts: contentParts(value["content"], true),
+  } };
 }
 
-function assistantSummary(message: Record<string, unknown>): string {
-  const text = contentPreview(message["content"], false);
-  if (text !== "") return summary(text, "Assistant response");
+function statusProjection(kind: SessionTreeNodeKind, status: SessionTreeSummaryStatus): EntryProjection {
+  return { kind, presentation: { type: "status", status } };
+}
 
-  const toolNames = assistantToolNames(message["content"]);
-  if (toolNames.length > 0) return summary(`Tool call: ${toolNames.join(", ")}`, "Assistant tool call");
-  if (message["stopReason"] === "error") return "Assistant error";
-  if (message["stopReason"] === "aborted") return "Assistant response aborted";
-  return "Assistant response";
+function contentProjection(kind: SessionTreeNodeKind, content: unknown, fallback: SessionTreeSummaryStatus): EntryProjection {
+  return { kind, presentation: { type: "content", parts: contentParts(content, true), fallback } };
+}
+
+function namedProjection(kind: SessionTreeNodeKind, field: SessionTreeSummaryField, raw: unknown): EntryProjection {
+  // A combined provider/model value is already independently bounded.
+  const value = optionalPlainText(raw, field === "model" ? NAMED_FIELD_MAX_LENGTH * 2 + 1 : NAMED_FIELD_MAX_LENGTH);
+  return { kind, presentation: { type: "named", field, ...(value === undefined ? {} : { value }) } };
 }
 
 function assistantToolNames(content: unknown): string[] {
@@ -161,49 +163,60 @@ function assistantToolNames(content: unknown): string[] {
   return names;
 }
 
-function toolResultSummary(message: Record<string, unknown>): string {
-  const isError = message["isError"] === true;
-  const toolName = optionalPlainText(message["toolName"], NAMED_FIELD_MAX_LENGTH);
-  const prefix = toolName === undefined
-    ? isError ? "Tool error" : "Tool result"
-    : `${isError ? "Tool error" : "Tool result"} (${toolName})`;
-  const content = contentPreview(message["content"], true);
-  return summary(content === "" ? prefix : `${prefix}: ${content}`, prefix);
-}
-
-function modelChangeSummary(entry: Record<string, unknown>): string {
-  const provider = optionalPlainText(entry["provider"], NAMED_FIELD_MAX_LENGTH);
-  const modelId = optionalPlainText(entry["modelId"], NAMED_FIELD_MAX_LENGTH);
-  if (provider !== undefined && modelId !== undefined) return summary(`Model: ${provider}/${modelId}`, "Model changed");
-  return namedSummary("Model", modelId ?? provider, "Model changed");
-}
-
-function contentPreview(content: unknown, includeImageMarkers: boolean): string {
-  const fragments: string[] = [];
+/** Bound both text and part count before transport; never retain SDK payloads. */
+function contentParts(content: unknown, includeImages: boolean): SessionTreeSummaryPart[] {
+  const parts: SessionTreeSummaryPart[] = [];
   let remaining = SUMMARY_SOURCE_MAX_LENGTH;
-  const append = (text: string): void => {
-    if (remaining <= 0 || text === "") return;
-    const fragment = text.slice(0, remaining);
-    fragments.push(fragment);
-    remaining -= fragment.length;
+  const appendText = (raw: string): void => {
+    const text = plainText(raw.slice(0, remaining));
+    remaining -= Math.min(raw.length, remaining);
+    if (text !== "") parts.push({ type: "text", text });
   };
-
-  if (typeof content === "string") {
-    append(content);
-  } else if (Array.isArray(content)) {
+  if (typeof content === "string") appendText(content);
+  else if (Array.isArray(content)) {
     for (const part of content) {
-      if (!isRecord(part)) continue;
-      if (part["type"] === "text" && typeof part["text"] === "string") append(part["text"]);
-      else if (includeImageMarkers && part["type"] === "image") append("[image]");
       if (remaining <= 0) break;
+      if (!isRecord(part)) continue;
+      if (part["type"] === "text" && typeof part["text"] === "string") appendText(part["text"]);
+      else if (includeImages && part["type"] === "image") {
+        parts.push({ type: "image" });
+        remaining -= "[image]".length;
+      }
     }
   }
-  return plainText(fragments.join(" "));
+  return parts;
 }
 
-function namedSummary(prefix: string, value: unknown, fallback: string): string {
-  const field = optionalPlainText(value, NAMED_FIELD_MAX_LENGTH);
-  return field === undefined ? fallback : summary(`${prefix}: ${field}`, fallback);
+// Compatibility only: new clients render the semantic presentation in their locale.
+function englishSummary(presentation: SessionTreeSummaryPresentation): string {
+  const content = (parts: SessionTreeSummaryPart[]): string => parts.map((part) => part.type === "text" ? part.text : "[image]").join(" ");
+  const statuses: Record<SessionTreeSummaryStatus, string> = {
+    message: "Message", "user-message": "User message", "assistant-response": "Assistant response",
+    "assistant-error": "Assistant error", "assistant-aborted": "Assistant response aborted",
+    "hidden-custom-message": "Hidden custom message", "compaction-summary": "Compaction summary", "branch-summary": "Branch summary",
+  };
+  const fields: Record<SessionTreeSummaryField, [string, string]> = {
+    shell: ["Shell", "Shell command"], model: ["Model", "Model changed"],
+    "thinking-level": ["Thinking level", "Thinking level changed"], "session-name": ["Session name", "Session info changed"],
+    label: ["Label", "Label removed"], "custom-entry": ["Custom entry", "Custom entry"], entry: ["Entry", "Other session entry"],
+  };
+  switch (presentation.type) {
+    case "status": return statuses[presentation.status];
+    case "content": return summary(content(presentation.parts), statuses[presentation.fallback]);
+    case "named": {
+      const [prefix, fallback] = fields[presentation.field];
+      return presentation.value === undefined ? fallback : summary(`${prefix}: ${presentation.value}`, fallback);
+    }
+    case "assistant-tools": return summary(`Tool call: ${presentation.names.join(", ")}`, "Assistant tool call");
+    case "tool-result":
+    case "custom-message": {
+      const name = presentation.type === "tool-result" ? presentation.toolName : presentation.customType;
+      const label = presentation.type === "tool-result" ? presentation.isError ? "Tool error" : "Tool result" : "Custom message";
+      const prefix = name === undefined ? label : `${label} (${name})`;
+      const text = content(presentation.parts);
+      return summary(text === "" ? prefix : `${prefix}: ${text}`, prefix);
+    }
+  }
 }
 
 function summary(value: unknown, fallback: string): string {

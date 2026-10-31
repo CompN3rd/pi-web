@@ -4,6 +4,8 @@ import { initialAppState, type AppState } from "../appState";
 import { browserErrorScopeKey, machineBrowserErrorScope, reportBrowserError } from "../browserErrors";
 import { machineStatusSnapshot } from "../machineStatus.testSupport";
 import { MachineController } from "./machineController";
+import { localization } from "../localization/browser";
+import { machineMessages } from "../machineMessages";
 
 const localMachine: Machine = {
   id: "local",
@@ -42,6 +44,28 @@ const offlineHealth: MachineHealth = {
 describe("MachineController", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("retains localized machine notices with unchanged remote details and stable dismissal identity", async () => {
+    let state: AppState = { ...initialAppState(), machines: [localMachine, remoteMachine], selectedMachine: remoteMachine };
+    const controller = new MachineController(() => state, (next) => { state = { ...state, ...next }; }, vi.fn(), { loadProjects: vi.fn() });
+    vi.spyOn(api, "machine").mockRejectedValue(new Error("Unchanged remote detail"));
+    await controller.refreshMachineIdentity(remoteMachine.id);
+    const scope = machineBrowserErrorScope(remoteMachine.id);
+    const notice = state.browserErrors[browserErrorScopeKey(scope)];
+    expect(notice?.message).toContain("Unchanged remote detail");
+    const identity = notice?.message;
+    try {
+      await localization.setPreferences({ language: "ar-XB", formatLocale: "en" });
+      expect(notice?.displayMessage?.()).toBe(machineMessages.t("refreshFailed", { error: "Error: Unchanged remote detail" }));
+      expect(notice?.message).toBe(identity);
+      await controller.deleteMachine(localMachine);
+      const blocked = state.browserErrors[browserErrorScopeKey(machineBrowserErrorScope(localMachine.id))];
+      await localization.setPreferences({ language: "en-XA", formatLocale: "en" });
+      expect(blocked?.displayMessage?.()).toBe(machineMessages.t("cannotRemove"));
+    } finally {
+      await localization.setPreferences({ language: "en", formatLocale: "en" });
+    }
   });
 
   it("updates or clears a name override without resetting navigation", async () => {

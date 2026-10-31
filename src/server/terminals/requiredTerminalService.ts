@@ -1,8 +1,10 @@
+import { terminalTitlePresentationField } from "../../shared/terminalTitlePresentation.js";
 import type { PluginCapability } from "../../server-plugin-api.js";
 import type { TerminalCommandRun } from "../../shared/apiTypes.js";
 import { REQUIRED_TERMINAL_PLUGIN_ID } from "../../shared/requiredTerminalPlugin.js";
 
 export interface RequiredTerminalCommandFailureNotice {
+  readonly presentation?: { kind: "workspaceRemovalCommandFailed" };
   readonly message: string;
   readonly context: Readonly<Record<string, string>>;
 }
@@ -13,11 +15,14 @@ export interface RunTerminalCommandOptions {
   workspaceId: string;
   cwd: string;
   origin: string;
+  titlePresentation?: import("../../shared/terminalTitlePresentation.js").TerminalTitlePresentation;
   title: string;
   command: string;
   metadata?: unknown;
   /** Private host-composition intent; never part of the browser Terminal protocol. */
   failureNotice?: RequiredTerminalCommandFailureNotice;
+  /** Private host-composition intent; called once when the command exits or is closed. */
+  onSettled?: () => void;
   cols?: number;
   rows?: number;
 }
@@ -114,6 +119,7 @@ function requireCommandRun(value: unknown): TerminalCommandRun {
     ...workspaceIdentity(value),
     terminalId: value["terminalId"],
     title: value["title"],
+    ...terminalTitlePresentationField(value["titlePresentation"]),
     command: value["command"],
     status,
     ...(exitCode === undefined ? {} : { exitCode }),

@@ -146,6 +146,7 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
       if (current.bare === true) throw new Error("A bare Git workspace cannot be removed as a linked worktree");
       return {
         title: `Delete workspace: ${workspace.label}`,
+        titlePresentation: { kind: "workspaceRemoval", label: workspace.label },
         command: `git worktree remove ${shellQuote(workspace.path)}`,
       };
     },
@@ -184,6 +185,7 @@ function singleGitWorkspace(project: ProjectInput): ProviderWorkspace {
 
 function gitRemovalPresentation(label: string, path: string): NonNullable<ProviderWorkspace["removal"]> {
   return {
+    localization: { kind: "gitWorktree", label, path },
     actionLabel: "Delete workspace",
     confirmation: `Delete workspace ${label}?\n\nThis will run git worktree remove and delete:\n${path}\n\nThe Git branch will not be deleted.`,
   };

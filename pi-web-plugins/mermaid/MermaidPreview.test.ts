@@ -2,6 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContentRendererInput } from "@jmfederico/pi-web/plugin-api";
 import { mermaidFrameDocument } from "./MermaidPreview";
+import { LocalizationService } from "../../src/client/src/localization/service";
+import { createPluginLocalization } from "../../src/client/src/plugins/localization";
+import { createMermaidContent } from "./mermaidLocalization";
 
 let tag = 0;
 afterEach(() => {
@@ -17,6 +20,7 @@ async function preview(input: ContentRendererInput, loadEngine?: () => Promise<s
   const { MermaidPreview } = await import("./MermaidPreview");
   customElements.define(`mermaid-test-${String(++tag)}`, MermaidPreview);
   const element = new MermaidPreview();
+  element.content = createMermaidContent(createPluginLocalization(new LocalizationService(), "mermaid", "mermaid", new AbortController().signal));
   element.input = input;
   if (loadEngine !== undefined) element.loadEngine = loadEngine;
   document.body.append(element);

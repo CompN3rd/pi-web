@@ -245,6 +245,7 @@ async function openAuthenticationDialog(app: PiWebApp): Promise<HTMLElement> {
 }
 
 async function openImageZoom(app: PiWebApp): Promise<HTMLElement> {
+  await waitForBuiltInPlugins(app);
   const selectedSession = session("session-image");
   setAppState(app, {
     selectedSession,

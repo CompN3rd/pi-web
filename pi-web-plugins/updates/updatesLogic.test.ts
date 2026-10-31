@@ -65,7 +65,7 @@ describe("recommendedCommand", () => {
     expect(result).toEqual({ label: "Restart everything", command: "pi-web restart" });
   });
 
-  it("recommends restart when the session daemon is unavailable", () => {
+  it("does not recommend a restart just because a daemon version check failed", () => {
     const result = recommendedCommand(status({
       components: {
         web: component(),
@@ -73,7 +73,7 @@ describe("recommendedCommand", () => {
       },
       commands: { restart: "pi-web restart" },
     }));
-    expect(result).toEqual({ label: "Restart everything", command: "pi-web restart" });
+    expect(result).toBeUndefined();
   });
 
   it("recommends restart when the session daemon is stale", () => {

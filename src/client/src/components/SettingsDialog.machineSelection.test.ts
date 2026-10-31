@@ -3,9 +3,10 @@
 import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
-import { configApi, piPackagesApi, pluginsApi, type Machine, type PiPackagesResponse, type PiWebConfigResponse, type PiWebPluginsResponse } from "../api";
+import { configApi, piPackagesApi, pluginsApi, type Machine, type PiPackagesResponse, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginsResponse } from "../api";
 import { PluginRegistry } from "../plugins/registry";
-import { themePackPlugin } from "../plugins/themes";
+import { builtInThemeCatalog } from "../themeCatalog.testSupport";
+import * as themeCatalog from "../themeCatalog";
 import type { SettingsSection } from "../settingsRoute";
 import { SettingsDialog } from "./SettingsDialog";
 import { configResponse, deferred, packageInfo, pluginInfo, pluginsResponse, remoteMachine, secondRemoteMachine } from "./SettingsDialog.testSupport";
@@ -23,12 +24,17 @@ const gatewayMachine: Machine = {
 const gatewayConfig = { host: "gateway.local", port: 8504, shortcuts: { "core:chat": "mod+1" } };
 
 beforeEach(() => {
+  vi.spyOn(themeCatalog, "loadThemeCatalog").mockResolvedValue(builtInThemeCatalog());
   vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => undefined);
   vi.spyOn(configApi, "config").mockImplementation((id) => Promise.resolve(configResponse(id === undefined ? gatewayConfig : {
     uploads: { defaultFolder: `${id}/uploads` }, spawnSessions: true, plugins: { info: { enabled: true } },
   })));
-  vi.spyOn(configApi, "namingModels").mockResolvedValue({ models: [] });
-  vi.spyOn(configApi, "saveConfig").mockImplementation((config) => Promise.resolve(configResponse(config)));
+  let savedGateway: PiWebConfigValues = { ...gatewayConfig };
+  vi.spyOn(configApi, "updateConfig").mockImplementation((update, id) => {
+    if (id !== undefined) return Promise.resolve(configResponse(update.set ?? {}));
+    savedGateway = { ...savedGateway, ...update.set };
+    return Promise.resolve(configResponse(savedGateway));
+  });
   vi.spyOn(pluginsApi, "plugins").mockResolvedValue(pluginsResponse([pluginInfo("info", true)]));
   vi.spyOn(piPackagesApi, "packages").mockImplementation((id) => Promise.resolve({ packages: [packageInfo(`npm:${id ?? "gateway"}`)] }));
   vi.spyOn(piPackagesApi, "install").mockResolvedValue({ action: "install", packages: [] });
@@ -134,66 +140,6 @@ function submit(input: HTMLInputElement): void {
 }
 
 describe("settings-only machine selection DOM", () => {
-  it("passes selected-machine naming models to the daemon panel and refreshes them", async () => {
-    const models = [{ provider: "provider", id: "naming" }];
-    vi.mocked(configApi.namingModels).mockResolvedValue({ models });
-    const dialog = await mount();
-    await navigate(dialog, "sessiond", "Session daemon");
-    const panel = query<SettingsSessiondPanel>(root(dialog), "settings-sessiond-panel");
-
-    expect(configApi.namingModels).toHaveBeenCalledWith(remoteMachine.id);
-    expect(panel.namingModels).toEqual(models);
-    expect(panel.namingModelsLoading).toBe(false);
-    expect(panel.namingModelsError).toBe("");
-
-    vi.mocked(configApi.namingModels).mockClear().mockResolvedValue({ models: [] });
-    await panel.onReload?.();
-    await settle(dialog);
-    expect(configApi.namingModels).toHaveBeenCalledExactlyOnceWith(remoteMachine.id);
-    expect(panel.namingModels).toEqual([]);
-  });
-
-  it("keeps daemon config editable when naming models fail to load", async () => {
-    vi.mocked(configApi.namingModels).mockRejectedValue(new Error("Model catalog unavailable"));
-    const dialog = await mount();
-    await navigate(dialog, "sessiond", "Session daemon");
-    const panel = query<SettingsSessiondPanel>(root(dialog), "settings-sessiond-panel");
-
-    expect(panel.loading).toBe(false);
-    expect(panel.error).toBe("");
-    expect(panel.namingModelsLoading).toBe(false);
-    expect(panel.namingModelsError).toContain("Model catalog unavailable");
-    expect(panel.namingModelsError).toContain("Lab Mac");
-    expect(query<HTMLInputElement>(root(panel), "#spawn-sessions").disabled).toBe(false);
-  });
-
-  it.each(["success", "failure"])("ignores stale naming-model %s after switching away and back", async (outcome) => {
-    const stale = deferred<{ models: { provider: string; id: string }[] }>();
-    const currentModels = [{ provider: "provider", id: "current" }];
-    vi.mocked(configApi.namingModels).mockResolvedValue({ models: currentModels });
-    const dialog = await mount();
-    await navigate(dialog, "sessiond", "Session daemon");
-    const panel = query<SettingsSessiondPanel>(root(dialog), "settings-sessiond-panel");
-    vi.mocked(configApi.namingModels).mockReturnValueOnce(stale.promise);
-    // Refresh the original target, then switch away and return before it finishes.
-    const refresh = panel.onReload?.();
-    await settle(dialog);
-    expect(panel.namingModelsLoading).toBe(true);
-
-    await selectMachine(dialog, secondRemoteMachine.id);
-    expect(configApi.namingModels).toHaveBeenLastCalledWith(secondRemoteMachine.id);
-    expect(panel.namingModels).toEqual(currentModels);
-    await selectMachine(dialog, remoteMachine.id);
-    if (outcome === "success") stale.resolve({ models: [{ provider: "old", id: "stale" }] });
-    else stale.reject(new Error("Stale model error"));
-    await refresh;
-    await settle(dialog);
-
-    expect(panel.namingModels).toEqual(currentModels);
-    expect(panel.namingModelsLoading).toBe(false);
-    expect(panel.namingModelsError).toBe("");
-  });
-
   it("defaults to the current machine and retargets every machine endpoint and save without changing the workspace machine", async () => {
     const dialog = await mount();
     expect(selector(dialog).value).toBe(remoteMachine.id);
@@ -213,25 +159,20 @@ describe("settings-only machine selection DOM", () => {
     await edit(general(dialog), uploadInput(general(dialog)), "new/uploads");
     submit(uploadInput(general(dialog)));
     await settle(dialog);
-    expect(configApi.saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ uploads: { defaultFolder: "new/uploads" } }), "remote-b");
+    expect(configApi.updateConfig).toHaveBeenLastCalledWith({ set: { uploads: { defaultFolder: "new/uploads" } }, unset: [] }, "remote-b");
 
     await navigate(dialog, "sessiond", "Session daemon");
     const sessiond = query<SettingsSessiondPanel>(root(dialog), "settings-sessiond-panel");
     expect(sessiond.configResponse?.config.uploads?.defaultFolder).toBe("remote-b/uploads");
     query<HTMLInputElement>(root(sessiond), "#spawn-sessions").click();
     await settle(dialog);
-    expect(configApi.saveConfig).toHaveBeenLastCalledWith({ spawnSessions: false }, "remote-b");
-    const namingBudget = query<HTMLInputElement>(root(sessiond), "#session-naming-max-tokens");
-    namingBudget.value = "48";
-    namingBudget.dispatchEvent(new Event("change"));
-    await settle(dialog);
-    expect(configApi.saveConfig).toHaveBeenLastCalledWith({ sessionNaming: { maxTokens: 48 } }, "remote-b");
+    expect(configApi.updateConfig).toHaveBeenLastCalledWith({ set: { spawnSessions: false }, unset: [] }, "remote-b");
 
     await navigate(dialog, "plugins", "PI WEB plugins");
     const plugins = query<SettingsPluginsPanel>(root(dialog), "settings-plugins-panel");
     query<HTMLInputElement>(root(plugins), 'input[aria-label="Enable info"]').click();
     await settle(dialog);
-    expect(configApi.saveConfig).toHaveBeenLastCalledWith({ plugins: { info: { enabled: false } } }, "remote-b");
+    expect(configApi.updateConfig).toHaveBeenLastCalledWith({ set: { plugins: { info: { enabled: false } } } }, "remote-b");
 
     await navigate(dialog, "packages", "Pi packages");
     const packages = query<SettingsPackagesPanel>(root(dialog), "settings-packages-panel");
@@ -246,7 +187,8 @@ describe("settings-only machine selection DOM", () => {
     const dialog = await mount();
     const registry = new PluginRegistry();
     try {
-      await registry.registerBatch([{ id: "themes", plugin: themePackPlugin }]);
+      const catalog = builtInThemeCatalog();
+      registry.setDeclarativeThemes(catalog.themes, catalog.themePairs);
       dialog.themes = registry.getThemes();
       dialog.actions = [{ id: "core:chat", title: "Chat", shortcut: "mod+1", run: () => undefined }];
       dialog.onUseLocalTheme = vi.fn();
@@ -257,7 +199,7 @@ describe("settings-only machine selection DOM", () => {
       await edit(general(dialog), hostInput(general(dialog)), "new.gateway.local");
       submit(hostInput(general(dialog)));
       await settle(dialog);
-      expect(vi.mocked(configApi.saveConfig).mock.lastCall).toEqual([expect.objectContaining({ host: "new.gateway.local" })]);
+      expect(vi.mocked(configApi.updateConfig).mock.lastCall).toEqual([{ set: { host: "new.gateway.local" }, unset: [] }]);
 
       const theme = query<SettingsThemePanel>(root(dialog), "settings-theme-panel");
       button(theme, "Use in this browser").click();
@@ -267,15 +209,15 @@ describe("settings-only machine selection DOM", () => {
       vi.mocked(configApi.config).mockClear();
       button(theme, "Set gateway default").click();
       await settle(dialog);
-      expect(vi.mocked(configApi.config).mock.calls).toEqual([[]]);
-      expect(vi.mocked(configApi.saveConfig).mock.lastCall).toEqual([{ ...gatewayConfig, defaultTheme: dialog.themePreference }]);
+      expect(vi.mocked(configApi.config).mock.calls).toEqual([]);
+      expect(vi.mocked(configApi.updateConfig).mock.lastCall).toEqual([{ set: { defaultTheme: dialog.themePreference } }]);
 
       await navigate(dialog, "shortcuts", "Keyboard shortcuts");
       const shortcuts = query<SettingsShortcutsPanel>(root(dialog), "settings-shortcuts-panel");
-      expect(shortcuts.configResponse?.config.host).toBe("gateway.local");
+      expect(shortcuts.configResponse?.config.host).toBe("new.gateway.local");
       query<HTMLButtonElement>(root(shortcuts), '[aria-label="Disable shortcut for Chat"]').click();
       await settle(dialog);
-      expect(vi.mocked(configApi.saveConfig).mock.lastCall).toEqual([expect.objectContaining({ shortcuts: { "core:chat": null } })]);
+      expect(vi.mocked(configApi.updateConfig).mock.lastCall).toEqual([{ set: { shortcuts: { "core:chat": null } }, unset: [] }]);
       expect(dialog.machine).toBe(remoteMachine);
     } finally {
       await registry.dispose();
@@ -369,7 +311,7 @@ describe("settings-only machine selection DOM", () => {
     expect(selector(dialog).value).toBe("remote-a");
     expect(root(dialog).querySelector('[aria-label="Unsaved machine settings"]')).toBeNull();
     expect(hostInput(general(dialog)).value).toBe("unsaved.gateway.local");
-    expect(configApi.saveConfig).not.toHaveBeenCalled();
+    expect(configApi.updateConfig).not.toHaveBeenCalled();
   });
 
   it("ignores delayed loads after rapid selector changes, including returning to the original machine", async () => {

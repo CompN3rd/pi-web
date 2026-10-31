@@ -1,19 +1,9 @@
 // @vitest-environment happy-dom
 
-import type { TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionInfo, SessionStatus } from "../api";
 import { markCachedNewSessionInfo } from "../cachedNewSessions";
 import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPersistence";
-// Legacy bulk-toolbar tests retain their narrow template inspection seam;
-// row actions use the DOM so keyed directives are exercised.
-import {
-  isTemplateEventHandler,
-  isTemplateResult,
-  templateStrings,
-  templateValues,
-  type TemplateEventHandler,
-} from "../templateInspection.testSupport";
 import { installPopoverFake } from "./anchoredPopup.testSupport";
 installPopoverFake();
 import { SessionList, sessionRowActivityKind, sessionRowsForCurrentTree, sessionRowUnread, unreadSessionCount } from "./SessionList";
@@ -29,6 +19,28 @@ describe("sessionRowActivityKind", () => {
   it("reports 'sending' for an uploading session, taking precedence over server activity", () => {
     expect(sessionRowActivityKind(session("s"), idle, undefined, true)).toBe("sending");
     expect(sessionRowActivityKind(session("s"), { ...idle, isStreaming: true }, undefined, true)).toBe("sending");
+  });
+
+  it("restores persisted intervention, then honors a matching live false when work resumes", () => {
+    const waiting = session("s", { interventionRequired: true });
+    expect(sessionRowActivityKind(waiting, undefined, undefined, false)).toBe("intervention-required");
+    expect(sessionRowActivityKind(waiting, sessionStatus("other", { interventionRequired: false }), undefined, false)).toBe("intervention-required");
+    expect(sessionRowActivityKind(waiting, { ...idle, interventionRequired: false, isStreaming: true }, undefined, false)).toBe("session");
+    expect(sessionRowActivityKind(waiting, { ...idle, interventionRequired: false }, undefined, false, { s: { "core:intervention-required": true } })).toBe("intervention-required");
+  });
+
+  it("clears stale status and listing attention from a complete snapshot", () => {
+    const waiting = session("s", { interventionRequired: true });
+    const staleStatus = { ...idle, interventionRequired: true };
+    expect(sessionRowActivityKind(waiting, staleStatus, undefined, false, {})).toBeUndefined();
+    expect(sessionRowActivityKind(waiting, staleStatus, undefined, false, { s: { "core:working": true } })).toBe("session");
+    expect(sessionRowActivityKind(waiting, staleStatus, undefined, false, { s: { "core:intervention-required": false } })).toBeUndefined();
+  });
+
+  it("prioritizes live and machine intervention over working and sending", () => {
+    expect(sessionRowActivityKind(session("s"), { ...idle, interventionRequired: true }, undefined, true)).toBe("intervention-required");
+    expect(sessionRowActivityKind(session("s"), undefined, undefined, false, { s: { "core:intervention-required": true, "core:working": true } })).toBe("intervention-required");
+    expect(sessionRowActivityKind(session("s", { archived: true, interventionRequired: true }), undefined, undefined, false)).toBeUndefined();
   });
 
   it("reports 'session' for server activity when not sending", () => {
@@ -60,6 +72,37 @@ describe("sessionRowActivityKind", () => {
   it("never shows an indicator for archived or cached-new sessions, even while sending", () => {
     expect(sessionRowActivityKind({ ...session("s"), archived: true }, idle, undefined, true)).toBeUndefined();
     expect(sessionRowActivityKind(markCachedNewSessionInfo(session("s")), idle, undefined, true)).toBeUndefined();
+  });
+});
+
+describe("intervention navigation", () => {
+  it("renders persisted attention and clears it on a working snapshot without changing unread", async () => {
+    const waiting = session("waiting", { persisted: true, interventionRequired: true });
+    const list = sessionList([waiting], new Set([waiting.id]));
+    document.body.append(list);
+    await list.updateComplete;
+    const row = list.shadowRoot?.querySelector<HTMLElement>(".action-row");
+    expect(row?.classList.contains("intervention-required")).toBe(true);
+    expect(row?.getAttribute("data-busy")).toBe("false");
+    expect(row?.querySelector(".session-meta")?.textContent).toContain("Needs input");
+    expect(row?.querySelector(".unread-ring .intervention-required")).not.toBeNull();
+
+    list.sessionFlags = { waiting: { "core:working": true, "core:intervention-required": true } };
+    await list.updateComplete;
+    expect(row?.getAttribute("data-busy")).toBe("true");
+    expect(row?.getAttribute("data-activity")).toBe("intervention-required");
+    await openSessionMenu(list, waiting.id);
+    const reload = [...list.shadowRoot?.querySelectorAll<HTMLButtonElement>(".action-menu-panel button") ?? []]
+      .find((button) => button.textContent === "Reload from disk");
+    expect(reload?.disabled).toBe(true);
+
+    list.statuses = { waiting: sessionStatus("waiting", { interventionRequired: false, isStreaming: true }) };
+    list.sessionFlags = { waiting: { "core:working": true } };
+    await list.updateComplete;
+    expect(row?.classList.contains("intervention-required")).toBe(false);
+    expect(row?.getAttribute("data-busy")).toBe("true");
+    expect(row?.querySelector(".session-meta")?.textContent).not.toContain("Needs input");
+    expect(row?.querySelector(".unread-ring .activity-indicator.session")).not.toBeNull();
   });
 });
 
@@ -115,6 +158,57 @@ describe("session action eligibility", () => {
 });
 
 describe("mark-as-read actions", () => {
+  it("offers Mark as unread for a read current session without selecting it or mutating unread state", async () => {
+    const read = session("read");
+    const list = sessionList([read], new Set());
+    list.selected = read;
+    list.onMarkUnread = vi.fn();
+    list.onMarkRead = vi.fn();
+    list.onSelect = vi.fn();
+
+    await openSessionMenu(list, read.id);
+    const markUnread = list.shadowRoot?.querySelector<HTMLButtonElement>('button[title="Mark session as unread"]');
+    expect(markUnread?.textContent).toBe("Mark as unread");
+    expect(list.shadowRoot?.querySelector('button[title="Mark session as read"]')).toBeNull();
+    markUnread?.click();
+    await list.updateComplete;
+
+    expect(list.onMarkUnread).toHaveBeenCalledExactlyOnceWith(read);
+    expect(list.onMarkRead).not.toHaveBeenCalled();
+    expect(list.onSelect).not.toHaveBeenCalled();
+    expect(list.unreadSessionIds.size).toBe(0);
+    expect(list.shadowRoot?.querySelector(".action-menu-panel")).toBeNull();
+
+    list.unreadSessionIds = new Set([read.id]);
+    await openSessionMenu(list, read.id);
+    expect(list.shadowRoot?.querySelector('button[title="Mark session as unread"]')).toBeNull();
+    expect(list.shadowRoot?.querySelector('button[title="Mark session as read"]')).not.toBeNull();
+  });
+
+  it.each([
+    ["cached", markCachedNewSessionInfo(session("ineligible"))],
+    ["transient", session("ineligible", { persisted: false })],
+    ["archived", session("ineligible", { archived: true })],
+    ["agent child", session("ineligible", { parentSessionPath: "/sessions/missing.jsonl", agentSubsession: true })],
+  ])("does not offer Mark as unread for a read %s session", async (_kind, ineligible) => {
+    const list = sessionList([ineligible], new Set());
+    document.body.append(list);
+    await list.updateComplete;
+    if (ineligible.archived === true) {
+      list.shadowRoot?.querySelector<HTMLButtonElement>(".subheading .section-toggle")?.click();
+      await list.updateComplete;
+    }
+    await openSessionMenu(list, ineligible.id);
+    expect(list.shadowRoot?.querySelector('button[title="Mark session as unread"]')).toBeNull();
+  });
+
+  it("offers Mark as unread for an ordinary fork, not just root sessions", async () => {
+    const fork = session("fork", { parentSessionPath: "/sessions/missing.jsonl" });
+    const list = sessionList([fork], new Set());
+    await openSessionMenu(list, fork.id);
+    expect(list.shadowRoot?.querySelector('button[title="Mark session as unread"]')).not.toBeNull();
+  });
+
   it("offers Mark as read in the menu of an unread current session and forwards it", async () => {
     const unread = session("unread");
     const list = sessionList([unread, session("read")], new Set([unread.id]));
@@ -176,25 +270,30 @@ describe("mark-as-read actions", () => {
     expect(list.shadowRoot?.querySelector('button[title="Mark session as read"]')).toBeNull();
   });
 
-  it("enables bulk Mark read only when a selected session is unread and forwards only the unread selection", () => {
+  it("enables bulk Mark read only when a selected session is unread and forwards only the unread selection", async () => {
     const unreadA = session("unread-a");
     const readB = session("read-b");
     const unreadC = session("unread-c");
     const list = sessionList([unreadA, readB, unreadC], new Set([unreadA.id, unreadC.id]));
     const onMarkReadMany = vi.fn<(sessions: SessionInfo[]) => void>();
     list.onMarkReadMany = onMarkReadMany;
-    setComponentState(list, "selectionScopes", new Set(["current"]));
-
-    setComponentState(list, "selectedSessionIds", new Set([readB.id]));
-    const disabledButton = markReadButton(renderList(list));
-    expect(disabledButton.disabled).toBe(true);
-    disabledButton.click(new Event("click"));
+    document.body.append(list);
+    await list.updateComplete;
+    list.shadowRoot?.querySelector<HTMLButtonElement>(".bulk-select-entry")?.click();
+    await list.updateComplete;
+    const boxes = [...(list.shadowRoot?.querySelectorAll<HTMLInputElement>(".session-checkbox") ?? [])];
+    boxes[1]?.click();
+    await list.updateComplete;
+    const markRead = [...(list.shadowRoot?.querySelectorAll<HTMLButtonElement>(".bulk-actions button") ?? [])].find((button) => button.textContent === "Mark read");
+    expect(markRead?.disabled).toBe(true);
+    markRead?.click();
     expect(onMarkReadMany).not.toHaveBeenCalled();
 
-    setComponentState(list, "selectedSessionIds", new Set([unreadA.id, readB.id, unreadC.id]));
-    const enabledButton = markReadButton(renderList(list));
-    expect(enabledButton.disabled).toBe(false);
-    enabledButton.click(new Event("click"));
+    boxes[0]?.click();
+    boxes[2]?.click();
+    await list.updateComplete;
+    expect(markRead?.disabled).toBe(false);
+    markRead?.click();
     expect(onMarkReadMany).toHaveBeenCalledWith([unreadA, unreadC]);
   });
 });
@@ -277,10 +376,6 @@ function sessionList(sessions: SessionInfo[], unreadSessionIds: ReadonlySet<stri
   return list;
 }
 
-function renderList(list: SessionList): TemplateResult {
-  return list.render();
-}
-
 async function openSessionMenu(list: SessionList, sessionId: string): Promise<void> {
   if (!list.isConnected) document.body.append(list);
   await list.updateComplete;
@@ -294,50 +389,6 @@ async function openSessionMenu(list: SessionList, sessionId: string): Promise<vo
 
 function componentState(list: SessionList, property: string): unknown {
   return Reflect.get(list, property);
-}
-
-function setComponentState(list: SessionList, property: string, value: unknown): void {
-  if (!Reflect.set(list, property, value)) throw new Error(`Could not set session list property ${property}`);
-}
-
-// Locates the bulk "Mark read" button inside the selection toolbar template,
-// anchored to the button's own static text so unrelated toolbar changes do not
-// break the lookup. The disabled binding sits immediately before its @click.
-function markReadButton(template: TemplateResult): { disabled: boolean; click: TemplateEventHandler } {
-  const host = findTemplateWithStaticText(template, ">Mark read</button>");
-  const strings = templateStrings(host);
-  const values = templateValues(host);
-  for (let index = 0; index < values.length; index += 1) {
-    if (strings[index + 1]?.includes(">Mark read</button>") !== true) continue;
-    const click = values[index];
-    const disabled = values[index - 1];
-    if (!isTemplateEventHandler(click) || typeof disabled !== "boolean") throw new Error("Mark read button wiring is unavailable");
-    return { disabled, click };
-  }
-  throw new Error("Expected a click handler before >Mark read</button>");
-}
-
-function findTemplateWithStaticText(value: unknown, text: string): TemplateResult {
-  const found = findOptionalTemplateWithStaticText(value, text);
-  if (found === undefined) throw new Error(`Expected template containing ${text}`);
-  return found;
-}
-
-function findOptionalTemplateWithStaticText(value: unknown, text: string): TemplateResult | undefined {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findOptionalTemplateWithStaticText(item, text);
-      if (found !== undefined) return found;
-    }
-    return undefined;
-  }
-  if (!isTemplateResult(value)) return undefined;
-  if (templateStrings(value).some((chunk) => chunk.includes(text))) return value;
-  for (const item of templateValues(value)) {
-    const found = findOptionalTemplateWithStaticText(item, text);
-    if (found !== undefined) return found;
-  }
-  return undefined;
 }
 
 

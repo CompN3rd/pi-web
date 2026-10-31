@@ -2,6 +2,7 @@ import type { ContentRenderRequest, StylesheetIntegrationCapabilityV1, SyntaxHig
 import hljs from "highlight.js/lib/common";
 import { HighlightedCode } from "./HighlightedCode";
 import { TokenHighlightedCode } from "./TokenHighlightedCode";
+import definitions from "./codeHighlight.messages";
 
 const stylesheetIntegrationCapability: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
   pluginId: "pi-web", id: "stylesheet-integration", version: 1,
@@ -37,17 +38,21 @@ function isSyntaxHighlighting(value: unknown): value is SyntaxHighlightingCapabi
 /** Language IDs and aliases take precedence over a filename's extension. */
 function builtInLanguage(request: Pick<ContentRenderRequest, "language" | "filePath">): string | undefined {
   const language = request.language?.trim().split(/\s/u)[0]?.toLowerCase();
-  if (language !== undefined && hljs.getLanguage(language) !== undefined) return language;
   const name = request.filePath?.split(/[\\/]/u).at(-1);
   const extension = name?.includes(".") === true ? name.split(".").at(-1)?.toLowerCase() : undefined;
-  return extension !== undefined && hljs.getLanguage(extension) !== undefined ? extension : undefined;
+  const candidate = language !== undefined && hljs.getLanguage(language) !== undefined ? language : extension;
+  const grammar = candidate === undefined ? undefined : hljs.getLanguage(candidate);
+  // Plain text and its aliases add neither syntax coloring nor a useful alternate view.
+  return grammar !== undefined && grammar !== hljs.getLanguage("plaintext") ? candidate : undefined;
 }
 
 const plugin = {
   apiVersion: 5,
   name: "Code highlighting",
   requires: [stylesheetIntegrationCapability, syntaxHighlightingCapability, { pluginId: "pi-web", id: "content-rendering", version: 1, parse: () => undefined }],
-  activate: ({ html }) => {
+  activate: ({ html, localization }) => {
+    if (localization === undefined) throw new Error("The Code highlighting plugin requires a localization-capable PI WEB host");
+    const messages = localization.registerMessages("renderer", definitions);
     if (customElements.get("pi-web-highlighted-code") === undefined) customElements.define("pi-web-highlighted-code", HighlightedCode);
     if (customElements.get("pi-web-token-highlighted-code") === undefined) customElements.define("pi-web-token-highlighted-code", TokenHighlightedCode);
     let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
@@ -60,7 +65,7 @@ const plugin = {
       contributions: {
         contentRenderers: [{
           id: "highlighted",
-          title: "Highlighted",
+          get title() { return messages.t("highlighted"); },
           renderMode: "automatic",
           supports: (request) => syntaxHighlighting?.supports(request) === true || builtInLanguage(request) !== undefined,
           render: (input) => {

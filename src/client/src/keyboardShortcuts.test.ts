@@ -305,6 +305,22 @@ describe("shortcut input parsing", () => {
     expect(parseShortcutInput(shortcut)).toEqual({ ok: true, shortcut, tokens: shortcut.split(" ") });
   });
 
+  it.each([
+    ["", { kind: "empty" }],
+    ["+", { kind: "missingKey" }],
+    ["mod", { kind: "missingKey" }],
+    ["ctrl+mod+k", { kind: "duplicateModifier", value: "Ctrl" }],
+    ["mod+bogus", { kind: "unsupportedKey", value: "bogus" }],
+    ["a+b", { kind: "multipleKeys" }],
+  ] as const)("exposes structured parse issues for %s without changing the English default", (input, issue) => {
+    const present = vi.fn(() => "Localized validation");
+    expect(parseShortcutInput(input, present)).toEqual({ ok: false, message: "Localized validation" });
+    expect(present).toHaveBeenCalledExactlyOnceWith(issue);
+    const original = parseShortcutInput(input);
+    expect(original.ok).toBe(false);
+    if (!original.ok) expect(original.message).not.toBe("Localized validation");
+  });
+
   it("builds canonical tokens from recorded key events", () => {
     expect(shortcutTokenFromEvent(keyEvent("K", { metaKey: true, shiftKey: true }))).toBe("mod+shift+k");
     expect(shortcutTokenFromEvent(keyEvent("ArrowDown", { altKey: true }))).toBe("alt+arrowdown");

@@ -1,8 +1,24 @@
-import type { ReactiveControllerHost, TemplateResult } from "lit";
+import type { ReactiveController, ReactiveControllerHost, TemplateResult } from "lit";
+import type { LocalizationReader, LocalizedMessages, MessageDefinitions, TranslationContribution } from "./shared/localization.js";
+export type * from "./shared/localization.js";
+export type { TerminalTitlePresentation } from "./shared/terminalTitlePresentation.js";
+/** Localization registrations and observers are released when this activation ends. */
+export interface PluginLocalization extends LocalizationReader {
+    /** Define source descriptors without importing a runtime library. */
+    readonly message: typeof import("./shared/localization.js").message;
+    /** Sources use plugin:<package ID>:<local namespace>, shared across machines. */
+    registerMessages<Definitions extends MessageDefinitions>(namespace: string, definitions: Definitions): LocalizedMessages<Definitions>;
+    /** May target any full namespace, including core and other plugins. IDs are owner-scoped. */
+    registerCatalog(contribution: TranslationContribution): () => void;
+    /** Attach live language/catalog updates to a Lit host. */
+    controller(host: ReactiveControllerHost): ReactiveController;
+}
 import type { DeleteWorkspaceFileResponse, FileContentResponse, FileTreeResponse, MachineKind, PluginBackend, PluginPeer, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, PiWebStatusResponse, PluginCapability, PluginCapabilityProvision, MaintenanceTerminalCommandRun, TerminalCommandRunHandle, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse } from "./shared/pluginApiTypes.js";
 export type { FileContentMediaType, FileContentResponse, FileTreeEntry, FileTreeResponse, JsonObject, JsonPrimitive, JsonValue, PluginBackend, PluginBackendScope, PluginPeer, PluginPeerRequestOptions, PluginPeerChannelOptions, PluginPeerChannelClose, PluginPeerChannel, MachineKind, PiWebComponentStatus, PiWebRuntimeIdentity, PiWebDockerMode, PiWebInstallationInfo, PiWebInstallationKind, PiWebReleaseStatus, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebStatusSeverity, PiWebVersionResponse, PluginCapability, PluginCapabilityProvision, SessionUiMetadata, AnyTerminalCommandRun, MaintenanceTerminalCommandRun, TerminalCommandRun, TerminalCommandRunHandle, TerminalCommandRunStatus, WorkspaceProviderCapabilities, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, WriteWorkspaceFileOptions, WriteWorkspaceFileResponse, DeleteWorkspaceFileResponse, MoveWorkspaceFileOptions, MoveWorkspaceFileResponse, } from "./shared/pluginApiTypes.js";
 export type { PluginCatalogV1, PluginCatalogProject, PluginCatalogWorkspace, PluginSessionSnapshot, PluginWorkspaceSelection, PluginSessionSelection, PluginCatalogReadOptions } from "./shared/pluginCatalogTypes.js";
 import type { PluginCatalogV1 } from "./shared/pluginCatalogTypes.js";
+export type { PluginSessionLifecycleV1, PluginSessionLifecycleState, PluginSessionLifecycleOptions } from "./shared/pluginSessionLifecycleTypes.js";
+import type { PluginSessionLifecycleV1 } from "./shared/pluginSessionLifecycleTypes.js";
 export type PiWebPlugin = LegacyPiWebPlugin | PiWebPluginV5;
 /** Current browser entrypoint. Existing contribution kinds and lifecycle behavior are unchanged. */
 export interface PiWebPluginV5 {
@@ -21,8 +37,13 @@ export type PluginActivationResultV5 = Omit<PluginActivationResult, "contributio
 export interface PluginCatalog extends PluginCatalogV1 {
     readonly machineId: string;
 }
+export interface PluginSessionLifecycle extends PluginSessionLifecycleV1 {
+    readonly machineId: string;
+}
 export interface PluginDiscoveryContext {
     readonly catalog: PluginCatalog;
+    /** Explicit lifecycle commands for this captured machine. Omitted by older hosts. Call from event handlers, not render callbacks. */
+    readonly sessions?: PluginSessionLifecycle;
     readonly backend?: PluginBackend;
 }
 export type PluginRuntimeContextV5 = PluginRuntimeContext & PluginDiscoveryContext;
@@ -42,8 +63,12 @@ export type DisplayedMessageActionContextV5 = DisplayedMessageActionContext & Pl
 export interface PluginContributionsV5 extends Omit<PluginContributions, "actions" | "applicationPanels" | "workspacePanels" | "workspaceLabels" | "sessionLabels" | "messageActions" | "contentRenderers" | "themes"> {
     stylesheets?: StylesheetContribution[];
     syntaxHighlighters?: SyntaxHighlighterContribution[];
+    filePreviewers?: FilePreviewerContribution[];
     contentRenderers?: ContentRendererContributionV5[];
+    transcriptRenderers?: TranscriptRendererContribution[];
+    /** @deprecated Declare static themes in package.json piWeb.plugins[].themes with browserRoot and stylesheet paths. */
     themes?: ThemeContributionV5[];
+    fileIconThemes?: FileIconThemeContribution[];
     actions?: PluginActionV5[];
     applicationPanels?: ApplicationPanelContributionV5[];
     workspacePanels?: WorkspacePanelContributionV5[];
@@ -101,6 +126,8 @@ export interface LegacyPiWebPlugin {
 }
 /** Host-owned frozen values supplied once during browser plugin activation. */
 export interface PluginActivationContext {
+    /** Available on localization-capable hosts; feature-detect for older installations. */
+    readonly localization?: PluginLocalization;
     readonly apiVersion: 4;
     /** Stable package/source identity, including on federated machines. */
     readonly pluginId: PluginId;
@@ -162,6 +189,101 @@ export interface ContentRendererContributionV5 extends Omit<ContentRendererContr
     /** Synchronous eligibility; replaces absent selectors or further restricts declared selectors. */
     supports?(request: Readonly<ContentRenderRequest>): boolean;
     render(input: ContentRendererInputV5): TemplateResult;
+}
+export interface TranscriptRendererScope {
+    readonly machineId: string;
+    readonly sessionId: string;
+    readonly projectId?: string;
+    readonly workspaceId?: string;
+}
+export interface TranscriptToolEntry {
+    readonly toolCallId?: string;
+    readonly toolName: string;
+    readonly args?: unknown;
+    readonly status: "pending" | "running" | "success" | "error";
+    readonly content?: unknown;
+    readonly details?: unknown;
+    readonly resultText?: string;
+}
+export interface TranscriptMessageEntry {
+    readonly entryId?: string;
+    readonly customType: string;
+    readonly content: unknown;
+    readonly details?: unknown;
+}
+export interface TranscriptRendererInput {
+    readonly scope: TranscriptRendererScope;
+    /** Aborted when the entry, selection, mounting, or plugin lifetime changes. */
+    readonly signal: AbortSignal;
+    /** Report asynchronous failure; calls from obsolete renders are ignored. */
+    readonly fail: (error: unknown) => void;
+}
+export interface TranscriptToolRendererInput extends TranscriptRendererInput {
+    readonly entry: TranscriptToolEntry;
+}
+export interface TranscriptMessageRendererInput extends TranscriptRendererInput {
+    readonly entry: TranscriptMessageEntry;
+}
+/**
+ * Render synchronously; undefined retains the host's generic view, without continuing the chain.
+ * Treat inputs as read-only and honor signal for component-owned asynchronous work.
+ */
+export interface TranscriptToolRenderer {
+    render(input: TranscriptToolRendererInput): TemplateResult | undefined;
+}
+/**
+ * Resolve synchronously; call next() to delegate to the remaining tool resolvers.
+ * The web transcript supplies its core default renderer at the chain tail. next() may
+ * return undefined when another resolver stops the chain or a caller supplies no base.
+ * Returning undefined retains the host's generic view. Resolvers receive no entry payloads.
+ */
+export type TranscriptToolRendererResolver = (toolName: string, next: () => TranscriptToolRenderer | undefined) => TranscriptToolRenderer | undefined;
+/** Tools resolve in discovery order; custom messages use the first exact customType match. */
+export type TranscriptRendererContribution = {
+    id: LocalContributionId;
+    target: "tool";
+    resolve: TranscriptToolRendererResolver;
+} | {
+    id: LocalContributionId;
+    target: "custom-message";
+    customType: string;
+    render(input: TranscriptMessageRendererInput): TemplateResult | undefined;
+};
+export interface FilePreviewRequest {
+    readonly machineId: string;
+    readonly projectId: string;
+    readonly workspaceId: string;
+    readonly file: Readonly<FileContentResponse>;
+}
+export interface FilePreviewerInput extends FilePreviewRequest {
+    readonly files: WorkspaceFilesContextValue;
+    readonly backend?: PluginBackend;
+    readonly signal: AbortSignal;
+    readonly fail: (error: unknown) => void;
+}
+export interface FilePreviewerContribution {
+    id: LocalContributionId;
+    title: string;
+    /** Extensions without a leading dot, matched case-insensitively. */
+    fileExtensions?: readonly string[];
+    /** Exact MIME types or type/* wildcards. */
+    mimeTypes?: readonly string[];
+    /** Replaces absent selectors or further restricts declared selectors. */
+    supports?(request: Readonly<FilePreviewRequest>): boolean;
+    renderMode?: "manual" | "automatic";
+    render(input: FilePreviewerInput): TemplateResult;
+}
+export type FilePreviewerOption = ContentRendererOption;
+export interface FilePreviewRenderRequest extends FilePreviewRequest {
+    previewerId: string;
+    files: WorkspaceFilesContextValue;
+    fail: (error: unknown) => void;
+}
+/** Host capability token: { pluginId: "pi-web", id: "file-previewing", version: 1, parse }. */
+export interface FilePreviewingCapability {
+    listPreviewers(request: FilePreviewRequest): readonly FilePreviewerOption[];
+    /** Only mounts the selected previewer; callers authorize manual rendering. */
+    renderPreview(request: FilePreviewRenderRequest): TemplateResult | undefined;
 }
 export type SyntaxHighlightTokenKind = "keyword" | "string" | "number" | "comment" | "type" | "function" | "variable" | "operator" | "punctuation" | "property" | "literal" | "meta";
 export interface SyntaxHighlightToken {
@@ -286,7 +408,9 @@ export interface PluginContributions {
     workspacePanels?: WorkspacePanelContribution[];
     workspaceLabels?: WorkspaceLabelContribution[];
     sessionLabels?: SessionLabelContribution[];
+    /** @deprecated Declare static themes in package.json piWeb.plugins[].themes instead. */
     themes?: ThemeContribution[];
+    /** @deprecated Declare static pairs in package.json piWeb.plugins[].themePairs instead. */
     themePairs?: ThemePairContribution[];
 }
 export interface PluginMachine {
@@ -773,9 +897,38 @@ export interface SessionLabelContribution {
     visible?: (context: SessionLabelContext) => boolean;
     items: (context: SessionLabelContext) => SessionLabelItem[];
 }
+/** Transparent artwork rendered as a single-tone alpha mask. Remote assets require CORS. */
+export interface FileIconAsset {
+    url: string;
+    lightUrl?: string;
+}
+/** File-only icons. URLs must be absolute HTTP(S) asset URLs, never inline markup. */
+export interface FileIconThemeContribution {
+    id: string;
+    name: string;
+    description?: string;
+    order?: number;
+    file: FileIconAsset;
+    /** Case-insensitive basename matching: first exact filename wins, then longest extension.
+     * Extensions include their leading dot (for example .d.ts); equal-length ties use declaration order.
+     */
+    files?: readonly {
+        filenames?: readonly string[];
+        extensions?: readonly string[];
+        icon: FileIconAsset;
+    }[];
+}
+/** App-owned host capability: { pluginId: "pi-web", id: "file-icons", version: 1, parse }. */
+export interface FileIconsCapability {
+    resolveIcon(path: string): string | undefined;
+    subscribe(listener: () => void): () => void;
+}
 export type ThemeColorScheme = "dark" | "light";
 export type ThemeTokens = Record<string, string>;
-/** Legacy v4 palette contract. V5 themes contribute CSS files instead. */
+/**
+ * Legacy v4 palette contract.
+ * Deprecated runtime contribution; declare static themes in package.json piWeb.plugins[].themes instead.
+ */
 export interface ThemeContribution {
     id: LocalContributionId;
     name: string;
@@ -784,9 +937,11 @@ export interface ThemeContribution {
     colorScheme: ThemeColorScheme;
     tokens: ThemeTokens;
 }
+/** Deprecated runtime contribution; declare static themes in package.json piWeb.plugins[].themes with stylesheet paths instead. */
 export interface ThemeContributionV5 extends Omit<ThemeContribution, "tokens"> {
     stylesheets?: StylesheetContribution[];
 }
+/** Deprecated runtime contribution; declare static pairs in package.json piWeb.plugins[].themePairs instead. */
 export interface ThemePairContribution {
     id: LocalContributionId;
     name: string;

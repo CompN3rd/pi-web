@@ -1,5 +1,7 @@
+import { LocalizationController } from "../localization/browser";
+import { machineMessages as messages } from "../machineMessages";
 import { stylesheetIntegrationCapability } from "../plugins/styles";
-import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
+import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Machine, MachineHealth, MachineStatus } from "../api";
 import { rollUpStatusFlags, type MachineStatusSnapshot } from "../../../shared/machineStatus";
@@ -9,18 +11,18 @@ import { hasStatusUnread, renderActivityIndicator, statusActivityKind } from "./
 import { canRemoveMachine } from "./MachineList";
 import type { KeyboardNavigableSection } from "./navigationFocus";
 import { uiButtonStyles, uiMenuStyles } from "./ui/controlStyles";
+import { activityIndicatorStyles } from "../theme/base/activityIndicatorStyles";
 
 @customElement("machine-switcher")
 export class MachineSwitcher extends LitElement implements KeyboardNavigableSection {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this);
   }
 
   @property({ attribute: false }) machines: Machine[] = [];
   @property({ attribute: false }) selected?: Machine;
-  /** PWA display mode: adds the gateway URL to the machine identity. */
-  @property({ type: Boolean }) locationIndicator = false;
   @property({ attribute: false }) statuses: Record<string, MachineHealth> = {};
   /** Per-machine status trees, keyed by machine id; a machine without one shows no indicator. */
   @property({ attribute: false }) statusSnapshots: Record<string, MachineStatusSnapshot> = {};
@@ -67,24 +69,25 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
       <div class="machine-switcher">
         <button
           type="button"
-          class=${`machine-switcher-button ${status === "offline" || status === "error" ? "disconnected" : ""}`}
-          title=${`${selected.name} · ${machineSubtitle(selected)} · ${machineStatusLabel(status)}`}
+          class=${`machine-switcher-button ui-popup-trigger ${status === "offline" || status === "error" ? "disconnected" : ""}`}
+          title=${messages.t("identity", { name: selected.name, location: machineSubtitle(selected), status: machineStatusLabel(status) })}
           aria-label=${this.machineSwitcherAriaLabel(selected)}
           aria-expanded=${String(this.open)}
+          aria-controls="machine-switcher-menu"
           @click=${() => { this.toggleMenu(); }}
           @keydown=${(event: KeyboardEvent) => { this.handleSwitcherButtonKeydown(event); }}
         >
           ${this.renderMachineIcon(selected)}
           ${this.renderActivity(selected)}
           <span class="machine-switcher-text">
-            <span class="machine-switcher-kicker">Machine</span>
-            <span class="machine-switcher-label">${label}</span>
+            <span class="machine-switcher-kicker">${messages.t("machine")}</span>
+            <span class="machine-switcher-label"><bdi>${label}</bdi></span>
           </span>
           ${this.renderOtherMachinesActivity(selected)}
           <span class="machine-chevron" aria-hidden="true">▾</span>
         </button>
         ${this.open ? html`
-          <div popover="auto" class="machine-switcher-menu ui-menu" @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
+          <div popover="auto" id="machine-switcher-menu" class="machine-switcher-menu ui-menu ui-popup-panel" data-ui-context="machine-picker" @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
             ${this.machines.map((machine) => this.renderMachineOption(machine))}
           </div>
         ` : null}
@@ -93,10 +96,11 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
   }
 
   private renderMachineOption(machine: Machine): TemplateResult {
-    const selected = this.selected?.id === machine.id;
+    const selected = this.selectedMachine()?.id === machine.id;
     const status = machineStatus(machine, this.statuses);
     const hasActions = canRemoveMachine(machine) && (this.onRemove !== undefined || this.onEdit !== undefined);
     const actionsOpen = this.openActionsMachineId === machine.id;
+    const actionsId = `machine-option-actions-${encodeURIComponent(machine.id)}`;
     return html`
       <div class=${`machine-option ${selected ? "selected" : ""} ${hasActions ? "" : "no-actions"}`}>
         <button
@@ -104,26 +108,29 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
           class="ui-button ui-menu-item machine-option-main"
           title=${machineTitle(machine)}
           data-machine-id=${machine.id}
+          data-current=${String(selected)}
+          aria-current=${selected ? "true" : nothing}
           @click=${() => { this.select(machine); }}
           @keydown=${(event: KeyboardEvent) => { this.handleMachineOptionKeydown(event); }}
         >
-          <span class="machine-option-name">${this.renderMachineIcon(machine)}${this.renderActivity(machine)}<span>${machine.name}</span></span>
-          <small>${machineSubtitle(machine)} · ${machineStatusLabel(status)}</small>
+          <span class="machine-option-name">${this.renderMachineIcon(machine)}${this.renderActivity(machine)}<span><bdi>${machine.name}</bdi></span></span>
+          <small>${messages.t("subtitle", { location: machineSubtitle(machine), status: machineStatusLabel(status) })}</small>
         </button>
         ${hasActions ? html`
           <div class="machine-option-actions">
             <button
               type="button"
-              class="ui-button ui-button--icon machine-option-actions-toggle"
-              title="Machine actions"
-              aria-label=${`Actions for ${machine.name}`}
+              class="ui-button ui-button--icon machine-option-actions-toggle ui-popup-trigger"
+              title=${messages.t("actions")}
+              aria-label=${messages.t("actionsFor", { name: machine.name })}
               aria-expanded=${String(actionsOpen)}
+              aria-controls=${actionsId}
               @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleActionsMenu(machine.id); }}
             >⋯</button>
             ${actionsOpen ? html`
-              <div popover="auto" class="machine-option-actions-panel ui-menu" @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
-                ${this.onEdit === undefined ? null : html`<button class="ui-button ui-menu-item" @click=${() => { this.open = false; this.openActionsMachineId = undefined; this.onEdit?.(machine); }}>Edit display name</button>`}
-                ${this.onRemove === undefined ? null : html`<button class="danger ui-button ui-menu-item" title=${`Remove ${machine.name}`} @click=${() => { this.removeMachine(machine); }}>Remove</button>`}
+              <div popover="auto" id=${actionsId} class="machine-option-actions-panel ui-menu ui-popup-panel" data-ui-context="machine-actions" @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
+                ${this.onEdit === undefined ? null : html`<button class="ui-button ui-menu-item" @click=${() => { this.open = false; this.openActionsMachineId = undefined; this.onEdit?.(machine); }}>${messages.t("edit")}</button>`}
+                ${this.onRemove === undefined ? null : html`<button class="danger ui-button ui-menu-item" title=${messages.t("removeNamed", { name: machine.name })} @click=${() => { this.removeMachine(machine); }}>${messages.t("remove")}</button>`}
               </div>
             ` : null}
           </div>
@@ -135,12 +142,11 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
   private renderMachineInfo(machine: Machine): TemplateResult {
     const status = machineStatus(machine, this.statuses);
     return html`
-      <div class=${`machine-info ${status === "offline" || status === "error" ? "disconnected" : ""}`} title=${`${machine.name} · ${machineSubtitle(machine)} · ${machineStatusLabel(status)}`}>
+      <div class=${`machine-info ${status === "offline" || status === "error" ? "disconnected" : ""}`} title=${messages.t("identity", { name: machine.name, location: machineSubtitle(machine), status: machineStatusLabel(status) })}>
         ${this.renderMachineIcon(machine)}
         ${this.renderActivity(machine)}
         <span class="machine-switcher-text">
-          <span class="machine-switcher-label">${machine.name}</span>
-          ${this.locationIndicator ? html`<span class="machine-info-url">${machineSubtitle(machine)}</span>` : null}
+          <span class="machine-switcher-label"><bdi>${machine.name}</bdi></span>
         </span>
       </div>
     `;
@@ -164,8 +170,8 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     // Unread survives offline: an offline machine keeps its last-known unread
     // state (stale-but-present still counts), so only the work dot is gated.
     const kind = status === "offline" || status === "error" ? undefined : statusActivityKind(flags);
-    const unreadLabel = hasStatusUnread(flags) ? "Unread sessions on this machine" : undefined;
-    return renderActivityIndicator(kind, kind === "terminal" ? "Machine terminal active" : "Machine active", unreadLabel);
+    const unreadLabel = hasStatusUnread(flags) ? messages.t("unread") : undefined;
+    return renderActivityIndicator(kind, kind === "terminal" ? messages.t("terminal") : messages.t("active"), unreadLabel);
   }
 
   private renderOtherMachinesActivity(selected: Machine): TemplateResult | undefined {
@@ -178,8 +184,8 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     const unread = others.some((machine) => hasStatusUnread(this.statusSnapshots[machine.id]?.machine));
     const kind = statusActivityKind(activeFlags);
     const indicator = renderActivityIndicator(kind,
-      kind === "terminal" ? "Terminal active on other machines" : "Other machines active",
-      unread ? "Unread sessions on other machines" : undefined);
+      kind === "terminal" ? messages.t("otherTerminal") : messages.t("otherActive"),
+      unread ? messages.t("otherUnread") : undefined);
     return indicator === undefined ? undefined : html`<span class="other-machines-activity">${indicator}</span>`;
   }
 
@@ -188,7 +194,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
   }
 
   private machineSwitcherAriaLabel(machine: Machine): string {
-    return `Machine: ${machine.name}. ${machineStatusLabel(machineStatus(machine, this.statuses))}. Switch machine.`;
+    return messages.t("switch", { name: machine.name, status: machineStatusLabel(machineStatus(machine, this.statuses)) });
   }
 
   private switcherButton(): HTMLElement | null {
@@ -323,33 +329,28 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     void this.onRemove?.(machine);
   }
 
-  static override styles = [uiButtonStyles, uiMenuStyles, css`
+  static override styles = [uiButtonStyles, uiMenuStyles, activityIndicatorStyles, css`
+    @layer pi-web-base {
     :host { min-width: 0; display: flex; container: machine-selector / inline-size; }
     .machine-switcher { flex: 1 1 auto; min-width: 0; display: flex; }
-    .machine-switcher-button { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 0; background: transparent; color: var(--pi-text); padding: 6px 10px; cursor: pointer; text-align: left; }
+    .machine-switcher-button { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 0; background: transparent; color: var(--pi-text); padding: 6px 10px; cursor: pointer; text-align: start; }
     .machine-switcher-button:hover, .machine-switcher-button:focus-visible { background: var(--pi-surface-hover); }
     .machine-switcher-button:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
     .machine-switcher-text { flex: 1 1 auto; min-width: 0; display: grid; gap: 1px; }
     .machine-switcher-kicker { color: var(--pi-muted); font-size: 10px; line-height: 1; text-transform: uppercase; letter-spacing: .02em; }
     .machine-switcher-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; line-height: 1.2; }
-    .disconnected .machine-switcher-text, .disconnected .machine-info-url { opacity: .55; }
+    .disconnected .machine-switcher-text { opacity: .55; }
     .other-machines-activity { flex: 0 0 auto; display: inline-flex; align-items: center; }
     .machine-chevron { flex: 0 0 auto; color: var(--pi-muted); font-size: 11px; }
     @container machine-selector (max-width: 220px) {
       .machine-switcher-kicker { display: none; }
     }
-    .activity-indicator { flex: 0 0 auto; display: inline-block; width: 7px; height: 7px; background: var(--pi-success); animation: pulse 1s ease-in-out infinite; }
-    .activity-indicator.session { border-radius: 50%; background: var(--pi-success); }
-    .activity-indicator.terminal { border-radius: 2px; background: var(--pi-accent); }
-    .activity-indicator.sending { border-radius: 50%; background: var(--pi-warning); }
-    .activity-indicator.unread { border-radius: 50%; background: var(--pi-accent); animation: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--pi-accent) 20%, transparent); }
-    .unread-ring { flex: 0 0 auto; box-sizing: border-box; display: inline-grid; place-items: center; width: 9px; height: 9px; border: 1.5px solid var(--pi-accent); border-radius: 50%; }
-    .unread-ring .activity-indicator { width: 5px; height: 5px; }
+    /* The machine selector keeps its gentler work pulse; static states stay shared. */
+    .activity-indicator { animation-name: machine-activity-pulse; }
     .machine-icon { flex: 0 0 auto; width: 16px; height: 16px; }
     .machine-icon.dimmed { filter: grayscale(1); opacity: .45; }
     .machine-option-main .machine-icon { width: 14px; height: 14px; }
     .machine-info { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 0; background: transparent; color: var(--pi-text); padding: 6px 10px; }
-    .machine-info-url { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
     .machine-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; }
     .machine-option + .machine-option { border-top: 1px solid var(--pi-border-muted); }
     .machine-option.no-actions { grid-template-columns: minmax(0, 1fr); }
@@ -360,7 +361,8 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     .machine-option-actions { position: relative; align-self: stretch; }
     .machine-option-actions-toggle { height: 100%; }
     .machine-option.selected .machine-option-main { background: var(--pi-selection-bg); }
-    @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+    @keyframes machine-activity-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+    }
   `];
 }
 
@@ -369,7 +371,7 @@ function machineStatus(machine: Machine, statuses: Record<string, MachineHealth>
 }
 
 function machineStatusLabel(status: MachineStatus): string {
-  return status === "online" ? "online" : status === "offline" ? "offline" : status === "error" ? "error" : "unknown";
+  return messages.t(status);
 }
 
 function machineTitle(machine: Machine): string {
@@ -379,5 +381,5 @@ function machineTitle(machine: Machine): string {
 /** The local machine identifies itself by the serving gateway's URL. */
 function machineSubtitle(machine: Machine): string {
   if (machine.kind === "local") return browserGatewayDisplayUrl();
-  return machine.baseUrl ?? "Remote Pi Web";
+  return machine.baseUrl ?? messages.t("remote");
 }

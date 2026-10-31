@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Workspace } from "../../../shared/apiTypes";
 import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, SESSION_TREE_FORK_PROXY_TIMEOUT_MS, PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS, SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS, WORKSPACE_FILE_FEDERATION_TIMEOUT_MS, WORKSPACE_FILE_JSON_RESPONSE_BODY_MAX_BYTES, WORKSPACE_FILE_PREVIEW_ROUTE_PATH, WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS, type FederatedHttpRouteSpec } from "../../../shared/federatedRoutes";
 import { MAX_INLINE_PREVIEW_BYTES } from "../../../shared/workspaceFiles";
-import { PAIRED_PLUGIN_BACKEND_CHANNEL_ROUTE_PATHS, PAIRED_PLUGIN_BACKEND_REQUEST_ROUTE_PATHS, PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES, PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES } from "../../../shared/pluginBackendProtocol";
+import { PAIRED_PLUGIN_BACKEND_CHANNEL_ROUTE_PATHS, PAIRED_PLUGIN_BACKEND_RESOURCE_ROUTE_PATHS, PAIRED_PLUGIN_BACKEND_REQUEST_ROUTE_PATHS, PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES, PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES } from "../../../shared/pluginBackendProtocol";
 import { configApi, filesApi, machineStatusApi, noticesApi, piPackagesApi, piWebApi, pluginsApi, projectsApi, sessionsApi, trustApi, workspacesApi } from "./clients";
 import { globalSessionEvents, realtimeEvents, sessionEvents } from "./sockets";
 import { requestPairedPluginBackend } from "./pluginBackends";
 import { sessionMediaUrl, workspaceFilePreviewUrl } from "./urls";
+import { createPluginSessionLifecycle } from "../plugins/sessionLifecycle";
 
 const machineId = "remote-a";
 const workspace: Workspace = {
@@ -25,6 +26,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("federated route contract", () => {
@@ -65,6 +67,7 @@ describe("federated route contract", () => {
   it("allowlists daemon-authoritative unread HTTP routes on the existing global socket", () => {
     expect(FEDERATED_HTTP_ROUTES.filter((route) => route.path.includes("unread"))).toEqual([
       { method: "GET", path: "/sessions/unread" },
+      { method: "POST", path: "/sessions/:sessionId/unread" },
       { method: "POST", path: "/sessions/:sessionId/unread/acknowledge" },
     ]);
     expect(FEDERATED_WEBSOCKET_ROUTES.some((path) => path.includes("unread"))).toBe(false);
@@ -131,7 +134,10 @@ describe("federated route contract", () => {
       propagateCancellation: true,
     };
     expect(FEDERATED_HTTP_ROUTES.filter((route) => route.path.includes("plugin-backends"))).toEqual(
-      PAIRED_PLUGIN_BACKEND_REQUEST_ROUTE_PATHS.map((path) => ({ ...boundedRequest, path })),
+      [
+        ...PAIRED_PLUGIN_BACKEND_RESOURCE_ROUTE_PATHS.map((path) => ({ method: "GET", path, timeoutMs: 30_000, propagateCancellation: true })),
+        ...PAIRED_PLUGIN_BACKEND_REQUEST_ROUTE_PATHS.map((path) => ({ ...boundedRequest, path })),
+      ],
     );
     expect(FEDERATED_WEBSOCKET_ROUTES.filter((path) => path.includes("plugin-backends"))).toEqual(
       [...PAIRED_PLUGIN_BACKEND_CHANNEL_ROUTE_PATHS],
@@ -194,6 +200,7 @@ describe("federated route contract", () => {
       ignoreParseFailure(filesApi.files("README", { kind: "tracked", mode: "file", projectId: "p 1", workspaceId: "w 1", machineId })),
       ignoreParseFailure(sessionsApi.sessions("/repo", machineId)),
       ignoreParseFailure(sessionsApi.unreadCatalog(machineId)),
+      ignoreParseFailure(sessionsApi.markUnread(session, machineId)),
       ignoreParseFailure(sessionsApi.acknowledgeUnread(session, "catalog-a", 7, machineId)),
       ignoreParseFailure(sessionsApi.startSession("/repo", machineId)),
       ignoreParseFailure(sessionsApi.cleanupPreview({ archiveIdleDays: 14 }, machineId)),
@@ -257,6 +264,29 @@ describe("federated route contract", () => {
     const unmatched = observedRoutes.filter((route) => !matchesHttpRoute(route, FEDERATED_HTTP_ROUTES));
 
     expect(unmatched).toEqual([]);
+  });
+
+  it("federates every explicit plugin session lifecycle operation through the browser request boundary", async () => {
+    vi.stubGlobal("document", { baseURI: "https://pi.example.test/nested/app/" });
+    vi.stubEnv("BASE_URL", "./");
+    const selection = { projectId: "p /%", workspaceId: "w ?#", sessionId: "s /%" };
+    const fetchMock = vi.fn<FetchLike>((_url, options) => Promise.resolve(jsonResponse(options?.method === "GET"
+      ? { sessionId: selection.sessionId, pinned: false, archived: false }
+      : { ok: true })));
+    vi.stubGlobal("fetch", fetchMock);
+    const sessions = createPluginSessionLifecycle("remote/a%");
+    await sessions.get(selection);
+    for (const operation of ["pin", "unpin", "archive", "restore", "delete"] as const) {
+      await expect(sessions[operation](selection)).resolves.toBeUndefined();
+    }
+
+    const routes = fetchMock.mock.calls.map((call) => fetchCallToRoute(call, sessions.machineId));
+    expect(routes).toHaveLength(6);
+    expect(routes.every((route) => matchesHttpRoute(route, FEDERATED_HTTP_ROUTES))).toBe(true);
+    expect(fetchMock.mock.calls.map(([url]) => toUrl(url).pathname)).toEqual(
+      ["", "/pin", "/unpin", "/archive", "/restore", ""].map((suffix) =>
+        `/nested/app/api/machines/remote%2Fa%25/plugin-sessions/projects/p%20%2F%25/workspaces/w%20%3F%23/sessions/s%20%2F%25${suffix}`),
+    );
   });
 
   it("covers machine-scoped client WebSocket calls with remote proxy routes", () => {

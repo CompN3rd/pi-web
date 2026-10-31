@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, open, rm, symlink, unlink, writeFile, type FileHandle }
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_ATTACHMENT_FOLDER } from "../../config.js";
+import { applyPiWebConfigEnv, DEFAULT_ATTACHMENT_FOLDER, piWebConfigEnforcedSettings } from "../../config.js";
 import { loadEffectiveProjectAttachmentsConfig, loadEffectiveProjectPathAccess, loadEffectiveProjectUploadsConfig, loadProjectPiWebConfig, mergePathAccessConfigs, PROJECT_PI_WEB_CONFIG_PATH } from "./projectPiWebConfig.js";
 
 // Node's ESM exports are not configurable; replace only the open boundary.
@@ -212,6 +212,55 @@ describe("project PI WEB config", () => {
     await expect(loadEffectiveProjectPathAccess(projectPath, { pathAccess: { allowedPaths: ["/global-sdk", "/shared"] } })).resolves.toEqual({
       allowedPaths: ["/global-sdk", "/shared", "/project-sdk"],
     });
+  });
+
+  it("combines base roots and additions without letting base enforcement suppress project additions", async () => {
+    await writeProjectConfig({ pathAccess: { allowedPaths: ["/project", "/base"] } });
+    const global = { basePaths: ["/base"], pathAccess: { allowedPaths: ["/machine"] } };
+    await expect(loadEffectiveProjectPathAccess(projectPath, global, { "/basePaths": "PI_WEB_BASE_PATHS" })).resolves.toEqual({
+      allowedPaths: ["/base", "/machine", "/project"],
+    });
+  });
+
+  it.each([{ allowedPaths: ["/enforced"] }, { allowedPaths: [] }])("enforces additions over global and project while retaining the base: $allowedPaths", async ({ allowedPaths }) => {
+    await writeProjectConfig({ pathAccess: { allowedPaths: ["/project"] } });
+    const env = { PI_WEB_PATH_ACCESS: JSON.stringify({ allowedPaths }) };
+    const global = applyPiWebConfigEnv({ basePaths: ["/base"], pathAccess: { allowedPaths: ["/machine"] } }, env);
+    await expect(loadEffectiveProjectPathAccess(projectPath, global, piWebConfigEnforcedSettings(env))).resolves.toEqual({ allowedPaths: ["/base", ...allowedPaths] });
+  });
+
+  it("rejects project base paths instead of allowing project policy replacement", async () => {
+    await writeProjectConfig({ basePaths: [] });
+    await expect(loadProjectPiWebConfig(projectPath)).rejects.toThrow("basePaths is not supported");
+  });
+
+  it("keeps enforced folder settings above project overrides", async () => {
+    await writeProjectConfig({ uploads: { defaultFolder: "project" }, attachments: { defaultFolder: "project" } });
+    const env = { PI_WEB_UPLOADS: '{"defaultFolder":"enforced-uploads"}', PI_WEB_ATTACHMENTS: '{"defaultFolder":"enforced-attachments"}' };
+    const global = applyPiWebConfigEnv({ uploads: { defaultFolder: "global" }, attachments: { defaultFolder: "global" } }, env);
+    const enforcement = piWebConfigEnforcedSettings(env);
+    await expect(loadEffectiveProjectUploadsConfig(projectPath, global, enforcement)).resolves.toEqual(global.uploads);
+    await expect(loadEffectiveProjectAttachmentsConfig(projectPath, global, enforcement)).resolves.toEqual(global.attachments);
+  });
+
+  it("preserves inheritance through empty project folder containers", async () => {
+    await writeProjectConfig({ uploads: {}, attachments: {} });
+    await expect(loadEffectiveProjectAttachmentsConfig(projectPath, { attachments: { defaultFolder: "global" } })).resolves.toEqual({ defaultFolder: "global" });
+    await expect(loadEffectiveProjectUploadsConfig(projectPath, { uploads: { defaultFolder: "global" } })).resolves.toEqual({ defaultFolder: "global" });
+  });
+
+  it("does not treat empty environment containers as enforced project policy", async () => {
+    await writeProjectConfig({ uploads: { defaultFolder: "project" }, attachments: { defaultFolder: "project" }, pathAccess: { allowedPaths: ["/project"] } });
+    const env = { PI_WEB_UPLOADS: "{}", PI_WEB_ATTACHMENTS: "{}", PI_WEB_PATH_ACCESS: "{}" };
+    const global = applyPiWebConfigEnv({ uploads: { defaultFolder: "global" }, attachments: { defaultFolder: "global" }, pathAccess: { allowedPaths: ["/global"] } }, env);
+    const enforcement = piWebConfigEnforcedSettings(env);
+    expect(enforcement).toEqual({});
+    Object.freeze(global.uploads);
+    Object.freeze(global.attachments);
+    await expect(loadEffectiveProjectUploadsConfig(projectPath, global, enforcement)).resolves.toEqual({ defaultFolder: "project" });
+    await expect(loadEffectiveProjectAttachmentsConfig(projectPath, global, enforcement)).resolves.toEqual({ defaultFolder: "project" });
+    await expect(loadEffectiveProjectPathAccess(projectPath, global, enforcement)).resolves.toEqual({ allowedPaths: ["/global", "/project"] });
+    expect(global.uploads).toEqual({ defaultFolder: "global" });
   });
 
   it("lets project upload defaults override global upload defaults", async () => {

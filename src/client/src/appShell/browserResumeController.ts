@@ -11,7 +11,7 @@ interface ScheduledFrame {
 
 export interface BrowserResumeCallbacks {
   onResumeSignal(): void;
-  refreshAfterResume(): void | Promise<void>;
+  refreshAfterResume(renewSubscription: boolean): void | Promise<void>;
   onRefreshError(error: unknown): void;
 }
 
@@ -31,6 +31,7 @@ export class BrowserResumeController {
   private readonly refreshes = new TrailingRefreshCoordinator<"browser-resume">();
   private scheduledRefresh: ScheduledFrame | undefined;
   private connected = false;
+  private renewSubscription = false;
 
   constructor(private readonly callbacks: BrowserResumeCallbacks, options: BrowserResumeControllerOptions = {}) {
     this.windowTarget = options.windowTarget ?? browserWindowTarget();
@@ -42,6 +43,7 @@ export class BrowserResumeController {
   connect(): void {
     if (this.connected) return;
     this.connected = true;
+    this.renewSubscription = !this.isDocumentVisible();
     this.windowTarget?.addEventListener("focus", this.onResume);
     this.windowTarget?.addEventListener("pageshow", this.onResume);
     this.windowTarget?.addEventListener("online", this.onResume);
@@ -57,13 +59,15 @@ export class BrowserResumeController {
     this.documentTarget?.removeEventListener("visibilitychange", this.onResume);
     this.scheduledRefresh?.cancel();
     this.scheduledRefresh = undefined;
+    this.renewSubscription = false;
   }
 
-  private readonly onResume: EventListener = () => {
-    this.handleResumeSignal();
+  private readonly onResume: EventListener = (event) => {
+    this.handleResumeSignal(event);
   };
 
-  private handleResumeSignal(): void {
+  private handleResumeSignal(event: Event): void {
+    if (event.type === "online" || event.type === "pageshow" || !this.isDocumentVisible()) this.renewSubscription = true;
     if (!this.isDocumentVisible()) return;
     this.callbacks.onResumeSignal();
     if (this.scheduledRefresh !== undefined) return;
@@ -71,7 +75,10 @@ export class BrowserResumeController {
       this.scheduledRefresh = undefined;
       if (!this.connected) return;
       void this.refreshes.request("browser-resume", async () => {
-        if (this.connected) await this.callbacks.refreshAfterResume();
+        if (!this.connected) return;
+        const renewSubscription = this.renewSubscription;
+        this.renewSubscription = false;
+        await this.callbacks.refreshAfterResume(renewSubscription);
       }).catch((error: unknown) => { this.callbacks.onRefreshError(error); });
     });
   }

@@ -43,10 +43,6 @@ export function piPackageFilteredLabel(packageInfo: Pick<PiPackageInfo, "filtere
   return packageInfo.filtered ? "Filtered by current Pi package settings" : "Available in this PI WEB process";
 }
 
-export function piPackageInstalledPathLabel(packageInfo: Pick<PiPackageInfo, "installedPath">): string {
-  return packageInfo.installedPath ?? "Installed path not reported by Pi";
-}
-
 /**
  * Carries a mutation response's refreshed package list, and the refreshed
  * installable-known-package suggestions if the server reported any, forward

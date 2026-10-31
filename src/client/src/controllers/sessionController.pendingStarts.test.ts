@@ -570,7 +570,7 @@ describe("SessionController pending starts", () => {
       machineId: "local",
       projectId: workspace.projectId,
       workspaceId: workspace.id,
-    })).toEqual([{ scope: originScope, message: "Failed to start session: late backend failure" }]);
+    })).toMatchObject([{ scope: originScope, message: "Failed to start session: late backend failure" }]);
     expect(state.sessions).toEqual([]);
     expect(temporaryId).toMatch(/^creating:/);
   });

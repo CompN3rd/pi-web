@@ -2,6 +2,8 @@
 import type { JsonValue, PluginCatalog, PluginPeerRequestOptions, PluginRuntimeContextV5, PluginSelectionService } from "@jmfederico/pi-web/plugin-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./pi-web-plugin.js";
+import { LocalizationService } from "../../../src/client/src/localization/service.js";
+import { createPluginLocalization } from "../../../src/client/src/plugins/localization.js";
 
 const prepared = { workspaceId: "main-tree", workspacePath: "/repo", branches: ["main", "origin/main", "feature"], defaultBase: "main" };
 const disposals: (() => void)[] = [];
@@ -9,8 +11,10 @@ afterEach(() => { for (const dispose of disposals.splice(0)) dispose(); document
 
 function setup(request = vi.fn<(operation: string, input: JsonValue, options?: PluginPeerRequestOptions) => Promise<JsonValue>>((operation) => Promise.resolve(operation === "prepare" ? prepared : { workspaceId: "main-tree", sessionId: "fresh-session" })), selection?: PluginSelectionService) {
   const lifetime = new AbortController();
-  const activation = plugin.activate({ lifetimeSignal: lifetime.signal, ...(selection ? { selection } : {}) });
-  disposals.push(() => { activation.dispose(); });
+  const service = new LocalizationService({ development: true, preferences: { language: "en", formatLocale: "en-US" } });
+  const localization = createPluginLocalization(service, "workflows", "@jmfederico/pi-web-workflows", lifetime.signal);
+  const activation = plugin.activate({ lifetimeSignal: lifetime.signal, localization, ...(selection ? { selection } : {}) });
+  disposals.push(() => { activation.dispose(); lifetime.abort(); });
   const action = activation.contributions.actions[0];
   if (!action) throw new Error("Worktree action missing");
   const catalog: PluginCatalog = {
@@ -25,7 +29,7 @@ function setup(request = vi.fn<(operation: string, input: JsonValue, options?: P
     catalog, backend: { machineId: "remote", forScope }, navigate: vi.fn(() => Promise.resolve()),
     prompt: { insertText: vi.fn(), getText: () => "existing draft", getSelection: () => null },
   } satisfies Pick<PluginRuntimeContextV5, "state" | "catalog" | "backend" | "navigate" | "prompt">;
-  return { action, activation, context, request, forScope, lifetime };
+  return { action, activation, context, request, forScope, lifetime, service, localization };
 }
 function root(): ShadowRoot {
   const shadow = document.body.firstElementChild?.shadowRoot;
@@ -44,6 +48,75 @@ async function open(target: ReturnType<typeof setup>) {
 function submit() { control("form", HTMLFormElement).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); }
 
 describe("Workflows worktree dialog", () => {
+  it("updates live labels, validation and direction without replacing fields or repeating requests", async () => {
+    const target = setup();
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+    target.action.run(target.context);
+    // The opener is deliberately outside the plugin host.
+    const shadow = document.body.lastElementChild?.shadowRoot;
+    if (!shadow) throw new Error("Worktree dialog missing");
+    const base = shadow.querySelector<HTMLInputElement>("#base");
+    const description = shadow.querySelector<HTMLTextAreaElement>("#description");
+    const form = shadow.querySelector<HTMLFormElement>("form");
+    if (!base || !description || !form) throw new Error("Worktree fields missing");
+    await vi.waitFor(() => { expect(base.disabled).toBe(false); });
+    base.value = "origin/main";
+    description.value = "  ";
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    const englishError = shadow.querySelector("#error")?.textContent;
+    description.value = "User purpose <script>";
+    description.focus();
+    await target.service.setPreferences({ language: "ar-XB", formatLocale: "ar-EG" });
+    expect(target.action.title).not.toBe("Create Worktree");
+    expect(target.action.description).not.toBe("Choose a base branch and purpose, then start a new conversation in the main workspace");
+    expect(target.action.group).not.toBe("Workflows");
+    expect(target.action.disabledReason()).not.toBe("Select a project with the Workflows backend available first.");
+    expect(document.body.lastElementChild?.getAttribute("dir")).toBe("rtl");
+    expect(shadow.querySelector("#error")?.textContent).not.toBe(englishError);
+    expect(shadow.querySelector("#base")).toBe(base);
+    expect(base.value).toBe("origin/main");
+    expect(description.value).toBe("User purpose <script>");
+    expect(shadow.activeElement).toBe(description);
+    expect(target.request).toHaveBeenCalledTimes(1);
+    shadow.querySelector<HTMLButtonElement>("#cancel")?.click();
+    expect(document.activeElement).toBe(opener);
+    await target.service.setPreferences({ language: "en", formatLocale: "en-US" });
+    expect(shadow.querySelector("h2")?.textContent).not.toBe("Create worktree");
+  });
+
+  it("localizes retained browser protocol errors but preserves identical backend diagnostics", async () => {
+    const malformed = setup(vi.fn(() => Promise.resolve({ ...prepared, branches: 1 })));
+    malformed.action.run(malformed.context);
+    await vi.waitFor(() => { expect(control("#error", Element).textContent).toBe("Invalid branch list from Workflows."); });
+    await malformed.service.setPreferences({ language: "en-XA", formatLocale: "en-US" });
+    expect(control("#error", Element).textContent).not.toBe("Invalid branch list from Workflows.");
+    malformed.activation.dispose();
+    const backend = setup(vi.fn(() => Promise.reject(new Error("Invalid branch list from Workflows."))));
+    backend.action.run(backend.context);
+    await vi.waitFor(() => { expect(control("#error", Element).textContent).toBe("Invalid branch list from Workflows."); });
+    await backend.service.setPreferences({ language: "ar-XB", formatLocale: "en-US" });
+    expect(control("#error", Element).textContent).toBe("Invalid branch list from Workflows.");
+    expect(control("#status", Element).textContent).not.toBe("Could not load worktree options.");
+  });
+
+  it("updates uncertain dispatch recovery live without permitting another dispatch", async () => {
+    const target = setup(vi.fn((operation) => operation === "prepare" ? Promise.resolve(prepared) : Promise.reject(new Error("Backend <failure>"))));
+    await open(target);
+    control("#description", HTMLTextAreaElement).value = "Fix login";
+    submit();
+    await vi.waitFor(() => { expect(control("#cancel", Element).textContent).toBe("Close"); });
+    await target.service.setPreferences({ language: "en-XA", formatLocale: "en-US" });
+    expect(control("#error", Element).textContent).toContain("Backend <failure>");
+    expect(control("#error", Element).querySelector("failure")).toBeNull();
+    expect(control("#cancel", Element).textContent).not.toBe("Close");
+    expect(control("#status", Element).textContent).not.toBe("Dispatch could not be confirmed.");
+    submit();
+    expect(target.request).toHaveBeenCalledTimes(2);
+    expect(control("button[type=submit]", HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("works without a conversation, captures the project's machine, and preserves the composer", async () => {
     const target = setup();
     expect(target.action.enabled(target.context)).toBe(true);

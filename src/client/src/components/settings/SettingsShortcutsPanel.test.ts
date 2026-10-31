@@ -67,7 +67,7 @@ describe("settings-shortcuts-panel send behavior", () => {
     expect(select.value).toBe("steer");
     select.value = "followUp";
     select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onSave).toHaveBeenLastCalledWith({ shortcuts: { "core:other": "mod+o" }, defaultStreamingBehavior: "followUp" });
+    expect(onSave).toHaveBeenLastCalledWith({ defaultStreamingBehavior: "followUp" });
     panel.configResponse = configResponse({ defaultStreamingBehavior: "followUp" });
     await settle(panel);
     expect(select.value).toBe("followUp");
@@ -416,6 +416,6 @@ function configResponse(config: PiWebConfigValues): PiWebConfigResponse {
     exists: true,
     config,
     effectiveConfig: config,
-    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
   };
 }

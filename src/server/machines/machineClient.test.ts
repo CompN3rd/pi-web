@@ -91,6 +91,28 @@ describe("RemoteMachineClient", () => {
     }
   });
 
+  it.each(["deadline", "caller cancellation"] as const)("retains resource cancellation through body close: %s", async (stop) => {
+    vi.useFakeTimers();
+    const source = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([0xff])); } });
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(new Response(source)));
+    const client = new RemoteMachineClient({ baseUrl: "https://remote.example.test/" }, fetchImpl);
+    const controller = new AbortController();
+    try {
+      const response = await client.request("GET", "/resource", undefined, { signal: controller.signal, streamLifetimeMs: 1000, timeoutMs: 10, range: "bytes=0-" });
+      const body = response.body;
+      if (body === undefined) throw new Error("Missing body");
+      const failed = new Promise<Error>((resolve) => { body.once("error", resolve); });
+      expect(new Headers(onlyFetchCall(fetchImpl).init.headers).get("range")).toBe("bytes=0-");
+      expect(new Headers(onlyFetchCall(fetchImpl).init.headers).get("accept-encoding")).toBe("identity");
+      await vi.advanceTimersByTimeAsync(20);
+      expect(onlyFetchCall(fetchImpl).init.signal?.aborted).toBe(false);
+      if (stop === "caller cancellation") controller.abort();
+      else await vi.advanceTimersByTimeAsync(1000);
+      expect(await failed).toBeInstanceOf(Error);
+      expect(onlyFetchCall(fetchImpl).init.signal?.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("requests compression for the remote hop even when configured headers use different casing", async () => {
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(new Response("ok", { status: 200 })));
     const client = new RemoteMachineClient({

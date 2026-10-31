@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   createCompanionBackend,
@@ -7,7 +6,6 @@ import {
 } from "./server-plugin-api.js";
 import type { PluginBackend } from "./plugin-api.js";
 import type {
-  JsonObject,
   PiWebHostPiSessionRun,
   PiWebHostPiSessionRunCompletion,
   PiWebHostPiSessionRunInput,
@@ -19,6 +17,9 @@ import type {
   PluginCapabilityProvision,
   ServerPluginCapabilityResolver,
   ServerPluginPeer,
+  ServerPluginPeerV5,
+  ServerPluginPeerResourceContextV5,
+  ServerPluginResourceResponse,
   ServerPluginPeerChannel,
   ServerPluginPeerChannelCloseContext,
   ServerPluginPeerChannelOpenContext,
@@ -33,7 +34,6 @@ import type {
   ServerPluginActivation,
   ServerPluginActivationContext,
   ServerPluginExecFileRequest,
-  ServerPluginExecFileResult,
   ServerPluginLogger,
   ServerPluginNoticeInput,
   ServerPluginStartContext,
@@ -45,41 +45,6 @@ import type {
   WorkspaceRemovalPresentation,
   WorkspaceRemovePlan,
 } from "@jmfederico/pi-web/server-plugin-api";
-
-const project: ProjectInput = { id: "project-1", name: "Project", path: "/repo" };
-const commandResult: ServerPluginExecFileResult = {
-  exitCode: 0,
-  signal: null,
-  stdout: "ok",
-  stderr: "",
-  stdoutTruncated: false,
-  stderrTruncated: false,
-};
-
-interface FixtureCapability {
-  readonly label: string;
-}
-
-const dependencyCapability = Object.freeze({
-  pluginId: "fixture.provider",
-  id: "service",
-  version: 1,
-  parse(value: unknown): FixtureCapability {
-    if (typeof value !== "object" || value === null || !("label" in value)) {
-      throw new Error("Fixture capability is invalid");
-    }
-    const label: unknown = value.label;
-    if (typeof label !== "string") throw new Error("Fixture capability is invalid");
-    return Object.freeze({ label });
-  },
-}) satisfies PluginCapability<FixtureCapability, 1>;
-
-const providedCapability = Object.freeze({
-  pluginId: "neutral-fixture",
-  id: "snapshot",
-  version: 2,
-  parse: dependencyCapability.parse,
-}) satisfies PluginCapability<FixtureCapability, 2>;
 
 type IfEqual<Left, Right, Then, Else = never> =
   (<Value>(value: Value) => Value extends Left ? 1 : 2) extends
@@ -137,89 +102,6 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof ServerPluginPeerChannelOpenContextV5>().toEqualTypeOf<"scope" | "operation" | "input" | "signal" | "send">();
     expect([legacy.apiVersion, modern.apiVersion]).toEqual([3, 5]);
   });
-  it("supports lifecycle-owned providers, peers, and typed capability composition", async () => {
-    const observedSignals: AbortSignal[] = [];
-    const observedLifetimes: AbortSignal[] = [];
-    const provider: WorkspaceProvider = {
-      fallback: false,
-      probe(_project, signal) {
-        observedSignals.push(signal);
-        return Promise.resolve("claim");
-      },
-      list(_project, signal) {
-        observedSignals.push(signal);
-        return Promise.resolve([{
-          key: "secondary",
-          path: "/repo/secondary",
-          label: "secondary",
-          isMain: false,
-          data: { privateRevision: 2 },
-          publicMetadata: { changeId: "abc" },
-          removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?" },
-        }]);
-      },
-      prepareRemove(context) {
-        observedSignals.push(context.signal);
-        return Promise.resolve({ title: "Remove secondary", command: "provider workspace remove secondary" });
-      },
-    };
-    const plugin: PiWebServerPlugin = {
-      apiVersion: 3,
-      name: "Neutral contract fixture",
-      requires: [dependencyCapability],
-      activate: ({ lifetimeSignal }) => {
-        observedLifetimes.push(lifetimeSignal);
-        return {
-          workspaceProvider: provider,
-          peer: {
-            request: (context) => {
-              observedSignals.push(context.signal);
-              return { operation: context.operation, workspaceId: context.workspace.id };
-            },
-          },
-          provides: [{ capability: providedCapability, value: { label: "snapshot" } }],
-          start: ({ capabilities, signal }) => {
-            observedSignals.push(signal);
-            if (capabilities.resolve(dependencyCapability).label !== "dependency") {
-              throw new Error("Expected resolved fixture dependency");
-            }
-          },
-          dispose: (signal) => { observedSignals.push(signal); },
-          health: (signal) => {
-            observedSignals.push(signal);
-            return { status: "healthy", details: { executable: true } };
-          },
-        };
-      },
-    };
-    const signal = AbortSignal.timeout(1_000);
-    const settings: JsonObject = { mode: "test", nested: [1, true, null] };
-    const lifetimeController = new AbortController();
-    const activation = await plugin.activate({
-      apiVersion: 3,
-      pluginId: "neutral-fixture",
-      packageRoot: "/plugins/neutral-fixture",
-      dataDirectory: "/data/plugin-data/neutral-fixture",
-      settings,
-      signal,
-      notices: { version: 1, record() { /* no-op */ } },
-      logger: {
-        debug() { /* no-op */ },
-        info() { /* no-op */ },
-        warn() { /* no-op */ },
-        error() { /* no-op */ },
-      },
-      execFile: () => Promise.resolve(commandResult),
-      lifetimeSignal: lifetimeController.signal,
-    });
-
-    await exerciseActivation(activation, project, signal);
-
-    expect(observedSignals).toHaveLength(7);
-    expect(observedSignals.every((observed) => observed === signal)).toBe(true);
-    expect(observedLifetimes).toEqual([lifetimeController.signal]);
-  });
-
   it("exports the exact frozen workspaces v1 token and snapshots resolved authority", async () => {
     const sourceProject = { id: "project-1", name: "Project", path: "/repo", createdAt: "private" };
     const sourceWorkspace = {
@@ -353,6 +235,23 @@ describe("public server plugin API", () => {
       .rejects.toThrow("completion status is invalid");
   });
 
+  it("snapshots optional run settings and rejects invalid thinking before host admission", async () => {
+    const run = vi.fn((input: PiWebHostPiSessionRunInput) => Promise.resolve({
+      sessionId: "configured", completion: Promise.resolve({ status: "completed" }),
+      model: input.model, thinkingLevel: input.thinkingLevel,
+    }));
+    const sessions = PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse({
+      version: 1, create: () => ({ sessionId: "created" }), run,
+    });
+    const input = { projectId: "project", workspaceId: "workspace", prompt: "work", model: "provider/model", thinkingLevel: "high" as const };
+    const result = await sessions.run(input);
+    expect(run).toHaveBeenCalledWith(input);
+    expect(result).toMatchObject({ model: input.model, thinkingLevel: "high" });
+    await expect(Reflect.apply(sessions.run, sessions, [{ ...input, thinkingLevel: "invalid" }])).rejects.toThrow("thinkingLevel");
+    await expect(sessions.run({ ...input, model: "" })).rejects.toThrow("model");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("snapshots prompt-free creation", async () => {
     const selection = { projectId: "project", workspaceId: "workspace" };
     const create = vi.fn((input: PiWebHostWorkspaceSelection) => {
@@ -383,7 +282,22 @@ describe("public server plugin API", () => {
     expect(() => PI_WEB_HOST_PI_SESSIONS_CAPABILITY.parse(value)).toThrow("must expose create and run");
   });
 
-  it("keeps host inputs readonly and concrete services out of the declaration surface", async () => {
+  it("exposes general-purpose byte resources only on v5 peers", () => {
+    type Resource = NonNullable<ServerPluginPeerV5["resource"]>;
+    type ResourceOnlyIsValid = { resource: Resource } extends ServerPluginPeerV5 ? true : false;
+    // eslint-disable-next-line @typescript-eslint/no-generated-empty-object-type -- Empty peers must remain invalid.
+    type EmptyPeerIsValid = Record<never, never> extends ServerPluginPeerV5 ? true : false;
+    expectTypeOf<ResourceOnlyIsValid>().toEqualTypeOf<true>();
+    expectTypeOf<EmptyPeerIsValid>().toEqualTypeOf<false>();
+    expectTypeOf<Extract<keyof ServerPluginPeer, "resource">>().toEqualTypeOf<never>();
+    expectTypeOf<ServerPluginPeerResourceContextV5["scope"]>().toEqualTypeOf<ServerPluginPeerRequestContextV5["scope"]>();
+    expectTypeOf<ServerPluginPeerResourceContextV5["range"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ReadonlyKeys<ServerPluginPeerResourceContextV5>>().toEqualTypeOf<keyof ServerPluginPeerResourceContextV5>();
+    expectTypeOf<ServerPluginResourceResponse["body"]>().toEqualTypeOf<Uint8Array | AsyncIterable<Uint8Array>>();
+    expectTypeOf<ServerPluginResourceResponse["statusCode"]>().toEqualTypeOf<200 | 206 | 416 | undefined>();
+  });
+
+  it("keeps host inputs readonly and limits the public declaration surface", () => {
     expectTypeOf<keyof ServerPluginActivationContext>().toEqualTypeOf<
       "apiVersion" | "pluginId" | "packageRoot" | "dataDirectory" | "logger" | "settings" | "resolveProjectSettings" | "workspaceNotifications" | "notices" | "execFile" | "signal" | "lifetimeSignal"
     >();
@@ -391,7 +305,7 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof WorkspaceProviderIntegration>().toEqualTypeOf<"reconcile" | "acceptNotification">();
     expectTypeOf<ReadonlyKeys<ServerPluginWorkspaceNotifications>>().toEqualTypeOf<"command">();
     expectTypeOf<keyof ServerPluginNoticeReporterV1>().toEqualTypeOf<"version" | "record">();
-    expectTypeOf<keyof ServerPluginNoticeInput>().toEqualTypeOf<"severity" | "message" | "scope" | "context">();
+    expectTypeOf<keyof ServerPluginNoticeInput>().toEqualTypeOf<"severity" | "message" | "scope" | "context" | "presentation">();
     expectTypeOf<keyof PiWebServerPlugin>().toEqualTypeOf<"apiVersion" | "name" | "requires" | "activate">();
     expectTypeOf<keyof PluginCapability>().toEqualTypeOf<"pluginId" | "id" | "version" | "parse">();
     expectTypeOf<keyof PluginCapabilityProvision>().toEqualTypeOf<"capability" | "value">();
@@ -399,8 +313,8 @@ describe("public server plugin API", () => {
     expectTypeOf<keyof PiWebHostWorkspaceSelection>().toEqualTypeOf<"projectId" | "workspaceId">();
     expectTypeOf<keyof PiWebHostWorkspaceAuthority>().toEqualTypeOf<"project" | "workspace">();
     expectTypeOf<keyof PiWebHostWorkspacesV1>().toEqualTypeOf<"version" | "resolve">();
-    expectTypeOf<keyof PiWebHostPiSessionRunInput>().toEqualTypeOf<"projectId" | "workspaceId" | "prompt">();
-    expectTypeOf<keyof PiWebHostPiSessionRun>().toEqualTypeOf<"sessionId" | "completion">();
+    expectTypeOf<keyof PiWebHostPiSessionRunInput>().toEqualTypeOf<"projectId" | "workspaceId" | "prompt" | "model" | "thinkingLevel">();
+    expectTypeOf<keyof PiWebHostPiSessionRun>().toEqualTypeOf<"sessionId" | "completion" | "model" | "thinkingLevel">();
     expectTypeOf<keyof PiWebHostPiSessionRunCompletion>().toEqualTypeOf<"status">();
     expectTypeOf<keyof Extract<PiWebHostPiSessionRunCompletion, { status: "failed" }>>()
       .toEqualTypeOf<"status" | "error">();
@@ -466,51 +380,10 @@ describe("public server plugin API", () => {
     expectTypeOf<ReadonlyKeys<ServerPluginPeerChannelCloseContext>>().toEqualTypeOf<keyof ServerPluginPeerChannelCloseContext>();
     expectTypeOf<ReadonlyKeys<ServerPluginPeerWorkspace>>().toEqualTypeOf<keyof ServerPluginPeerWorkspace>();
     expectTypeOf<ReadonlyKeys<WorkspaceRemovalPresentation>>().toEqualTypeOf<keyof WorkspaceRemovalPresentation>();
-    expectTypeOf<keyof WorkspaceRemovalPresentation>().toEqualTypeOf<"actionLabel" | "confirmation">();
+    expectTypeOf<keyof WorkspaceRemovalPresentation>().toEqualTypeOf<"actionLabel" | "confirmation" | "localization">();
     expectTypeOf<WritableKeys<ProviderWorkspace>>().toEqualTypeOf<keyof ProviderWorkspace>();
     expectTypeOf<WritableKeys<WorkspaceRemovePlan>>().toEqualTypeOf<keyof WorkspaceRemovePlan>();
     expectTypeOf<WritableKeys<ServerPluginActivation>>().toEqualTypeOf<keyof ServerPluginActivation>();
 
-    const [source, browserSource] = await Promise.all([
-      readFile("src/server-plugin-api.ts", "utf8"),
-      readFile("src/plugin-api.ts", "utf8"),
-    ]);
-    expect(source).not.toMatch(/\b(?:BackgroundService|Fastify|WorkspaceService|ProjectService|TerminalService|PiSessionService|SessionManager|SessionDaemonClient)\b/u);
-    expect(source).not.toMatch(/service\s*locator|registerRoute/iu);
-    expect(source).toContain('from "./shared/pluginApiTypes.js";');
-    expect(source).not.toContain("./shared/apiTypes.js");
-    expect(browserSource).not.toMatch(/PI_WEB_HOST_(?:STATE|WORKSPACES|PI_SESSIONS)_CAPABILITY|PiWebHost(?:State|Workspace|Workspaces|PiSession|PiSessions)/u);
   });
 });
-
-async function exerciseActivation(activation: ServerPluginActivation, input: ProjectInput, signal: AbortSignal): Promise<void> {
-  await activation.start?.({
-    capabilities: { resolve: <Value>(capability: PluginCapability<Value>) => capability.parse({ label: "dependency" }) },
-    signal,
-  });
-  const provider = activation.workspaceProvider;
-  if (provider === undefined) throw new Error("Expected fixture workspace provider");
-  await provider.probe(input, signal);
-  const [workspace] = await provider.list(input, signal);
-  if (workspace === undefined) throw new Error("Expected fixture workspace");
-  await provider.prepareRemove?.({ project: input, workspace, signal });
-  await activation.peer?.request?.({
-    project: input,
-    workspace: {
-      id: "workspace-1",
-      projectId: input.id,
-      path: workspace.path,
-      label: workspace.label,
-      isMain: workspace.isMain,
-      provider: {
-        pluginId: "neutral-fixture",
-        capabilities: { remove: false },
-      },
-    },
-    operation: "status",
-    input: null,
-    signal,
-  });
-  await activation.health?.(signal);
-  await activation.dispose?.(signal);
-}

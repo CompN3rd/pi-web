@@ -93,6 +93,8 @@ describe("session routes", () => {
     try {
       const requestCwd = resolve("/repo");
       const catalog = await routeApp.inject({ method: "GET", url: "/sessions/unread" });
+      const marked = await routeApp.inject({ method: "POST", url: "/sessions/session-1/unread", payload: { cwd: requestCwd } });
+      const invalidMark = await routeApp.inject({ method: "POST", url: "/sessions/session-1/unread", payload: {} });
       const acknowledged = await routeApp.inject({
         method: "POST",
         url: "/sessions/session-1/unread/acknowledge",
@@ -115,6 +117,10 @@ describe("session routes", () => {
 
       expect(catalog.statusCode).toBe(200);
       expect(catalog.json()).toEqual(routeService.unreadCatalogResponse);
+      expect(marked.statusCode).toBe(200);
+      expect(marked.json()).toEqual(routeService.unreadCatalogResponse);
+      expect(invalidMark.statusCode).toBe(400);
+      expect(routeService.markUnreadCalls).toEqual([{ sessionId: "session-1", cwd: requestCwd }]);
       expect(acknowledged.statusCode).toBe(200);
       expect(acknowledged.json()).toEqual(routeService.unreadCatalogResponse);
       expect(invalid.statusCode).toBe(400);
@@ -152,6 +158,9 @@ describe("session routes", () => {
         payload: { cwd: "relative", catalogId: "catalog-test", throughCompletionOrder: 7 },
       });
 
+      const marked = await routeApp.inject({ method: "POST", url: "/sessions/session-1/unread", payload: { cwd: resolve("/repo") } });
+      expect(marked.statusCode).toBe(503);
+      expect(marked.json()).toEqual({ error: "unread persistence unavailable" });
       expect(catalog.statusCode).toBe(503);
       expect(acknowledgement.statusCode).toBe(503);
       expect(catalog.json()).toEqual({ error: "unread persistence unavailable" });
@@ -1457,6 +1466,7 @@ class CapturingRouteSessionService implements SessionRouteService {
   readonly clearQueueCalls: SessionRouteRef[] = [];
   readonly dismissWarningCalls: { lookup: SessionRouteRef; dismissId: string }[] = [];
   readonly notificationInboxCalls: SessionRef[] = [];
+  readonly markUnreadCalls: { sessionId: string; cwd: string }[] = [];
   readonly acknowledgeUnreadCalls: { sessionId: string; request: SessionUnreadAcknowledgeRequest }[] = [];
   readonly unreadCatalogResponse: SessionUnreadCatalogSnapshot = { catalogId: "catalog-test", catalogRevision: 1, sessions: [] };
   readonly dismissNotificationCalls: { ref: SessionRef; request: Omit<SessionNotificationDismissRequest, "cwd"> }[] = [];
@@ -1548,6 +1558,11 @@ class CapturingRouteSessionService implements SessionRouteService {
     return this.unreadError === undefined
       ? Promise.resolve(this.unreadCatalogResponse)
       : Promise.reject(this.unreadError);
+  }
+
+  markUnread(sessionId: string, cwd: string): Promise<SessionUnreadCatalogSnapshot> {
+    this.markUnreadCalls.push({ sessionId, cwd });
+    return this.unreadCatalog();
   }
 
   acknowledgeUnread(sessionId: string, request: SessionUnreadAcknowledgeRequest): Promise<SessionUnreadCatalogSnapshot> {

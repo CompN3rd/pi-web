@@ -22,6 +22,7 @@ import { corePlugin } from "../plugins/core";
 import type { WorkspacePanelContext } from "../plugins/types";
 import { PiWebApp } from "./PiWebApp";
 import { themeStylesheetFetch } from "./themeStylesheetFetch.testSupport";
+import * as themeCatalogApi from "../themeCatalog";
 import { ChatView } from "./ChatView";
 import { ConversationLayout } from "./ConversationLayout";
 import type { ActionPalette } from "./ActionPalette";
@@ -33,9 +34,12 @@ import { ProjectList } from "./ProjectList";
 import { SessionList } from "./SessionList";
 import { loadNavigationPreferences, saveNavigationPreferences } from "../navigationPreferences";
 import { NavigationDialog } from "./appShell/NavigationDialog";
+import type { AppMobileMainTabs } from "./appShell/AppMobileMainTabs";
 import { deepActiveElement } from "./modalLayerRegistry";
 import { AppShellController } from "../appShell/appShellController";
 import { configResponse } from "./SettingsDialog.testSupport";
+import { localization } from "../localization/browser";
+import { appFeedbackMessages } from "../appFeedbackMessages";
 
 // Exercise the real shell and child rendering without starting API/socket
 // orchestration. The inherited Lit controllers and update lifecycle still run.
@@ -55,6 +59,9 @@ beforeEach(() => {
   unexpectedRequest.mockClear();
   window.history.replaceState(null, "", "/");
   vi.stubGlobal("fetch", themeStylesheetFetch(unexpectedRequest));
+  // Theme discovery is outside this render-only fixture's orchestration boundary.
+  vi.spyOn(themeCatalogApi, "loadThemeBootstrap").mockResolvedValue({ catalog: { themes: [], themePairs: [] }, stylesheets: [] });
+  vi.spyOn(themeCatalogApi, "loadThemeCatalog").mockResolvedValue({ themes: [], themePairs: [] });
   // Scroll scheduling is not under test; happy-dom supplies no layout metrics.
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
@@ -70,8 +77,10 @@ function panelToggle(app: PiWebApp, label: string): HTMLButtonElement {
   throw new Error(`Expected ${label}`);
 }
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  vi.useRealTimers();
+  await localization.setPreferences({ language: "en", formatLocale: "en" });
   clearStagedAttachments(machineSessionKey("local", session.id));
   localStorage.clear();
   sessionStorage.clear();
@@ -81,6 +90,27 @@ afterEach(() => {
 });
 
 describe("application rendering boundaries", () => {
+  it("places sustained stale-chat feedback above the conversation, outside the composer, and hides it after recovery", async () => {
+    vi.useFakeTimers();
+    const app = await mountApp({ selectedWorkspace: workspace, selectedSession: session, sessions: [session], mainView: "chat", conversationSync: "stale" });
+    await settle(app);
+    const notice = app.shadowRoot?.querySelector("conversation-sync-notice");
+    const layout = app.shadowRoot?.querySelector("conversation-layout");
+    const composer = app.shadowRoot?.querySelector("prompt-editor");
+    if (!(notice instanceof LitElement) || layout === null || layout === undefined) throw new Error("Expected conversation and notice");
+    expect(notice.nextElementSibling).toBe(layout);
+    expect(notice.parentElement).toBe(layout.parentElement);
+    expect(app.shadowRoot?.querySelector(".composer-area conversation-sync-notice")).toBeNull();
+    expect(notice.shadowRoot?.querySelector("[role], button")).toBeNull();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await notice.updateComplete;
+    expect(notice.shadowRoot?.textContent).toContain("Chat may be out of date.");
+    patchState(app, { conversationSync: "checked" });
+    await settle(app);
+    expect(notice.shadowRoot?.querySelector("[role], button")).toBeNull();
+    expect(app.shadowRoot?.querySelector("prompt-editor")).toBe(composer);
+  });
+
   it("does not mount a restored mobile transcript until Chat is opened, and retains an already displayed chat across tabs", async () => {
     const app = new RenderOnlyApp();
     const shell: unknown = Reflect.get(app, "appShell");
@@ -224,8 +254,8 @@ describe("application rendering boundaries", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it("switches a wide shell to tabbed two-column mode and restores three columns", async () => {
-    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "chat" }, () => html`<p>Tool content</p>`);
+  it.each(["chat", "workspace"] as const)("collapses a wide workspace panel to Chat and restores three columns from %s", async (mainView) => {
+    const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView }, () => html`<p>Tool content</p>`);
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
     shell.isDesktopSideBySideLayout = true;
@@ -616,6 +646,96 @@ describe("application rendering boundaries", () => {
     expect(layout?.shadowRoot?.querySelector(".activity-text")?.textContent).toBe("running");
   });
 
+  it("updates the cross-instance alert, accessible name and dismissal control live in both pseudo modes", async () => {
+    const app = await mountApp({ selectedSession: session, status: { ...sessionStatus(session.id), recentlyActiveElsewhere: true } });
+    await settle(app);
+    const editor = promptEditor(app);
+    const notice = app.shadowRoot?.querySelector(".composer-activity-notice");
+    if (notice == null) throw new Error("Missing activity alert");
+    const button = notice.querySelector("button");
+    if (button == null) throw new Error("Missing acknowledgement button");
+    for (const language of ["en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      await settle(app);
+      expect(notice.getAttribute("aria-label")).toBe(appFeedbackMessages.t("activityLabel"));
+      expect(notice.querySelector("p")?.textContent).toBe(appFeedbackMessages.t("activityNotice"));
+      expect(button.textContent).toBe(appFeedbackMessages.t("dismissActivity"));
+      expect(button.textContent).not.toBe("Dismiss and continue");
+      expect(editor.disabled).toBe(true);
+    }
+    button.click();
+    await settle(app);
+    expect(app.shadowRoot?.querySelector(".composer-activity-notice")).toBeNull();
+    expect(editor.disabled).toBe(false);
+  });
+
+  it("updates deferred conversation-loading guidance live without mounting the transcript", async () => {
+    manualAnimationFrames();
+    const app = new RenderOnlyApp();
+    const controller: unknown = Reflect.get(app, "sessions");
+    if (!(controller instanceof SessionController)) throw new Error("Missing sessions");
+    vi.spyOn(controller, "isChatLoadDeferred", "get").mockReturnValue(true);
+    patchState(app, { selectedWorkspace: workspace, selectedSession: session, mainView: "chat" });
+    document.body.append(app);
+    await settle(app);
+    for (const language of ["en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      await settle(app);
+      expect(app.shadowRoot?.querySelector('[role="status"]')?.textContent).toBe(appFeedbackMessages.t("loadingConversation"));
+      expect(app.shadowRoot?.querySelector('[role="status"]')?.textContent).not.toBe("Loading conversation…");
+      expect(app.shadowRoot?.querySelector("chat-view")).toBeNull();
+    }
+  });
+
+  it("updates Notices availability without changing routes or pins and scopes dismiss requests to the current session", async () => {
+    saveNavigationPreferences({ pinnedIds: ["chat", "core:notices"], mobileCollapsed: false });
+    const dismiss = vi.spyOn(SessionController.prototype, "dismissWarning").mockResolvedValue(undefined);
+    const snapshot = sessionStatus(session.id, [{ severity: "warning", message: "Persistent condition", dismiss: { id: "billing" } }]);
+    const { app } = await mountMobileNavigationApp({ selectedSession: session, selectedWorkspace: workspace, status: snapshot, mainView: "chat" });
+    const tabs = app.shadowRoot?.querySelector<AppMobileMainTabs>("app-mobile-main-tabs");
+    expect(tabs?.tabs.find((tab) => tab.id === "core:notices")?.badge).toBe(1);
+    tabs?.onSelect?.("core:notices"); await settle(app);
+    const panel = app.shadowRoot?.querySelector<WorkspacePanel>("workspace-panel");
+    panel?.shadowRoot?.querySelector("session-notices-panel")?.shadowRoot?.querySelector<HTMLButtonElement>(".session-warning-dismiss")?.click();
+    expect(dismiss).toHaveBeenCalledWith("billing");
+    panel?.dispatchEvent(new CustomEvent("session-notice-dismiss", { detail: { machineId: "other", sessionId: session.id, dismissId: "billing" } }));
+    expect(dismiss).toHaveBeenCalledOnce();
+    const url = window.location.href;
+    patchState(app, { status: sessionStatus(session.id) }); await settle(app);
+    expect(tabs?.tabs.some((tab) => tab.id === "core:notices")).toBe(false);
+    expect(panel?.shadowRoot?.querySelector("session-notices-panel")).toBeNull();
+    expect(panel?.error).not.toBe("");
+    expect(window.location.href).toBe(url);
+    expect(loadNavigationPreferences().pinnedIds).toEqual(["chat", "core:notices"]);
+    patchState(app, { status: snapshot }); await settle(app);
+    expect(tabs?.tabs.some((tab) => tab.id === "core:notices")).toBe(true);
+    expect(panel?.shadowRoot?.querySelector("session-notices-panel")?.status?.warnings).toEqual(snapshot.warnings);
+  });
+
+  it.each([false, true])("places Notices after Chat, or first when Chat has no tab (desktop=%s)", async (desktop) => {
+    const app = new RenderOnlyApp();
+    patchState(app, { selectedSession: session, selectedWorkspace: workspace, status: sessionStatus(session.id, [{ severity: "warning", message: "Persistent condition" }]), mainView: "chat" });
+    const registry: unknown = Reflect.get(app, "plugins");
+    if (!(registry instanceof PluginRegistry)) throw new Error("Expected plugin registry");
+    Reflect.set(app, "verifiedPluginModeByMachine", new Map([["local", "recovery-disabled"]]));
+    await registry.register({ id: "ordered-panel", plugin: { apiVersion: 5, name: "Ordered panel", activate: () => ({ contributions: {
+      applicationPanels: [{ id: "files", title: "Files", order: 10, render: () => html`Files` }],
+    } }) } });
+    const shell: unknown = Reflect.get(app, "appShell");
+    if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
+    shell.isDesktopSideBySideLayout = desktop;
+    shell.isMobileNavigationLayout = !desktop;
+    document.body.append(app); await settle(app);
+    if (desktop) {
+      const panel = app.shadowRoot?.querySelector<WorkspacePanel>("workspace-panel");
+      expect(panel?.panels.map(({ id }) => id)).toEqual(["core:notices", "ordered-panel:files"]);
+    } else {
+      const tabs = app.shadowRoot?.querySelector<AppMobileMainTabs>("app-mobile-main-tabs");
+      const ids = tabs?.tabs.map(({ id }) => id) ?? [];
+      expect(ids.slice(ids.indexOf("chat"))).toEqual(["chat", "core:notices", "ordered-panel:files"]);
+    }
+  });
+
   it("keeps the activity notice in the blocked composer until dismissal without losing drafts or attachments", async () => {
     const send = vi.spyOn(SessionController.prototype, "send").mockResolvedValue(true);
     const key = machineSessionKey("local", session.id);
@@ -646,11 +766,6 @@ describe("application rendering boundaries", () => {
     const chat = app.shadowRoot?.querySelector("chat-view");
     expect(chat?.hasAttribute("inert")).toBe(false);
     expect(chat?.shadowRoot?.textContent).not.toContain("Recently active in another PI-WEB instance");
-    expect(chat?.shadowRoot?.textContent).toContain("Ordinary runtime warning");
-    const statusBar = app.shadowRoot?.querySelector<StatusBar>("status-bar");
-    expect(statusBar?.warningCount).toBe(1);
-    statusBar?.shadowRoot?.querySelector<HTMLButtonElement>(".warning-toggle")?.click();
-    await settle(app);
     expect(chat?.shadowRoot?.textContent).not.toContain("Ordinary runtime warning");
     expect(app.shadowRoot?.querySelector(".composer-activity-notice")).toBe(notice);
     expect(editor.disabled).toBe(true);
@@ -676,8 +791,6 @@ describe("application rendering boundaries", () => {
     dismissActivityNotice(app);
     await settle(app);
     expect(promptEditor(app).disabled).toBe(false);
-
-    expect(app.shadowRoot?.querySelector<StatusBar>("status-bar")?.warningCount).toBe(0);
     // Missing activity information, a stale session status, or unrelated warnings must not erase acknowledgement.
     patchState(app, { status: undefined });
     await settle(app);

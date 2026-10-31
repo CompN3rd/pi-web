@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DisplayedMessageActionAvailabilityContext, DisplayedMessageActionContext, DisplayedMessageActionContribution, EntryMessageActionContribution, MessageActionAvailabilityContext, MessageActionContext, MessageActionContribution, MessageActionFeedback } from "../../../plugin-api";
 import * as clipboard from "../clipboard";
+import { localization } from "../localization/browser";
+import { coreMessageActionMessages as actionMessages } from "../plugins/core/messages";
 import { normalizeMessages } from "../chatMessages";
 import { corePlugin } from "../plugins/core";
 import { PluginRegistry } from "../plugins/registry";
@@ -27,7 +29,8 @@ function invocation(input: MessageActionAvailabilityContext): MessageActionConte
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await localization.setPreferences({ language: "en", formatLocale: "en-US" });
   vi.useRealTimers();
   document.body.replaceChildren();
   localStorage.clear();
@@ -79,6 +82,52 @@ async function settle(view: ChatView) {
 }
 
 describe("plugin-defined transcript message actions", () => {
+  it("updates cached action labels and retained copy feedback live without copying again", async () => {
+    const copy = vi.spyOn(clipboard, "writeClipboardText").mockResolvedValue(true);
+    const { view, registry } = await mount();
+    try {
+      const originalButtons = buttons(view);
+      originalButtons[2]?.click();
+      await settle(view);
+      await vi.waitFor(() => { expect(buttons(view)[2]?.title).toBe("Copied"); });
+      for (const language of ["en-XA", "ar-XB", "en"]) {
+        await localization.setPreferences({ language, formatLocale: "ar-EG" });
+        await settle(view);
+        expect(buttons(view)).toEqual(originalButtons);
+        expect(buttons(view).map((button) => button.getAttribute("aria-label"))).toEqual([
+          actionMessages.t("fork"), actionMessages.t("back"), actionMessages.t("copiedRole", { role: "user" }),
+        ]);
+        expect(buttons(view)[2]?.title).toBe(actionMessages.t("copied"));
+        expect(view.messages[0]?.parts).toEqual([{ type: "text", text: "Hello" }]);
+      }
+      expect(copy).toHaveBeenCalledExactlyOnceWith("Hello");
+    } finally { view.remove(); await registry.dispose(); }
+  });
+
+  it("updates settled copy errors and cached labels while leaving external diagnostics untouched", async () => {
+    vi.spyOn(clipboard, "writeClipboardText").mockResolvedValue(false);
+    const { view, registry } = await mount();
+    try {
+      button(view, "Copy user message").click();
+      await settle(view);
+      await vi.waitFor(() => { expect(view.renderRoot.textContent).toContain("Unable to copy message to the clipboard."); });
+      for (const language of ["en-XA", "ar-XB", "en"]) {
+        await localization.setPreferences({ language, formatLocale: "en-US" });
+        await settle(view);
+        expect(view.renderRoot.textContent).toContain(actionMessages.t("copyFailed"));
+        expect(buttons(view)[2]?.getAttribute("aria-label")).toBe(actionMessages.t("copyRole", { role: "user" }));
+      }
+      vi.mocked(clipboard.writeClipboardText).mockRejectedValue(new Error("Raw <clipboard> diagnostic"));
+      button(view, "Copy user message").click();
+      await settle(view);
+      await vi.waitFor(() => { expect(view.renderRoot.textContent).toContain("Raw <clipboard> diagnostic"); });
+      await localization.setPreferences({ language: "ar-XB", formatLocale: "ar-EG" });
+      await settle(view);
+      expect(view.renderRoot.textContent).toContain("Raw <clipboard> diagnostic");
+      expect(view.renderRoot.querySelector("clipboard")).toBeNull();
+    } finally { view.remove(); await registry.dispose(); }
+  });
+
   it("preserves core confirmation for cloning through the public callback", async () => {
     const label = "Clone session from this message";
     const { view, context } = await mount();

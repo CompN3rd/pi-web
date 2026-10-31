@@ -249,7 +249,7 @@ Sessions started by a PI WEB Docker deployment get one short block of environmen
 - the container filesystem is discarded on recreation, while mise tool installations under `/data`, `PI_WEB_EXTRA_APT_PACKAGES` configuration, and `custom-image.d/*.sh` hooks persist;
 - `/data` persists, selected host paths are mounted read/write at identical absolute paths, and the host root is mounted read-only at `/host`;
 - the Docker socket is mounted, and `hostexec` is either available or explicitly disabled for this host profile;
-- in development mode, the checkout is bind-mounted at `/workspace` and `/workspace/node_modules` is a separate container-managed mount rather than the host directory.
+- in development mode, the checkout is bind-mounted at `/usr/local/lib/node_modules/@jmfederico/pi-web`, matching the runtime npm installation. Its `node_modules` is a separate container-managed mount rather than the host directory; `/workspace` is a compatibility symlink to the checkout.
 
 The block states facts only and gives no workflow advice, so your own context and prompt files stay authoritative. Facts are derived from the running container, including its mount table, so extra mounts from `PI_WEB_DOCKER_EXTRA_HOST_PATHS` are described automatically without extra configuration. No deployment descriptor variables were added to the container environment for this, so nothing new is inherited by the commands agents run.
 
@@ -374,7 +374,9 @@ On native Linux, `hostexec` starts a temporary privileged helper container throu
 Use this mode when developing PI WEB from this checkout. It bind-mounts the source tree, keeps dependencies in a Docker volume, stores PI WEB/Pi data in the same host data directory as runtime mode by default, and preserves the split runtime model:
 
 - `sessiond` runs `npm run start:sessiond` as the long-lived owner of Pi agent runtimes;
-- `web` runs `npm run dev:web` and `npm run dev:client` so API, plugin, and Vite changes can autoreload without restarting `sessiond`.
+- `web` runs `npm run dev:ui`, which supervises `dev:web` and `dev:client`, so API, plugin, and Vite changes can autoreload without restarting `sessiond`.
+
+Docker and native development services use the same package-script lifecycles, including their `pre*` and `post*` hooks. Add startup prerequisites to those lifecycles rather than Docker commands. Docker pins Node for lifecycle tooling, then restores the original tooling PATH for API/sessiond children so agent tools and terminals keep their user-selected tools. If either UI service fails, its supervisor stops the other and exits instead of leaving a partially running UI group. See [Development startup](../docs/development-checks.md#development-startup) for the shared contract.
 
 Use `./docker/pi-web-docker --dev restart` to restart both services. It handles plugin-build readiness and restart order for you. Restarting interrupts active sessions, so wait for important work to finish first.
 
@@ -384,7 +386,9 @@ From the repository root, use the canonical Docker command so the same fail-clos
 ./docker/pi-web-docker --dev start
 ```
 
-The command creates `.pi-web/docker-compose-dev.local.env` on first run, writes `.pi-web/docker-compose-dev.generated.env` and `.pi-web/docker-compose-dev.host.generated.yml`, then runs Docker Compose with `docker/compose.dev.yml` plus that generated host override. The generated environment includes the host repository root as `PI_WEB_DOCKER_DEV_REPO_ROOT`. Development Compose exposes the checkout at both `/workspace` and that original host path, with the same container-managed dependency volume at both paths; the generated host override supplies only the profile-specific host mounts. Edit only the `.local.env` file for persistent dev settings; the `.generated.env` and `.host.generated.yml` files are refreshed by the command. Extra environment variables for the dev containers go in the shared `container.env` or the dev-only `.pi-web/docker-compose-dev.container.env`; see [Container environment](#container-environment).
+The command creates `.pi-web/docker-compose-dev.local.env` on first run, writes `.pi-web/docker-compose-dev.generated.env` and `.pi-web/docker-compose-dev.host.generated.yml`, then runs Docker Compose with `docker/compose.dev.yml` plus that generated host override. The generated environment includes the host repository root as `PI_WEB_DOCKER_DEV_REPO_ROOT`. The generated host override supplies only the profile-specific host mounts. Edit only the `.local.env` file for persistent dev settings; the `.generated.env` and `.host.generated.yml` files are refreshed by the command. Extra environment variables for the dev containers go in the shared `container.env` or the dev-only `.pi-web/docker-compose-dev.container.env`; see [Container environment](#container-environment).
+
+Development Compose bind-mounts the same checkout at `/build/pi-web`, `/usr/local/lib/node_modules/@jmfederico/pi-web`, and its original host path. Browser/plugin builders and Vite run from `/build/pi-web`, a real source mount outside `node_modules`, so tsconfig discovery does not skip the checkout and browser bundles use the intended compiler settings. The API and `sessiond` runtime remain at `/usr/local/lib/node_modules/@jmfederico/pi-web`, matching the production npm installation so ordinary Pi package registrations resolve to each container's own shipped packages. `/workspace` remains a compatibility symlink to that installation path. These paths expose the same files directly; no synchronization copies are needed.
 
 Values used by the command are resolved in this order:
 
@@ -469,9 +473,9 @@ Set `PI_WEB_DOCKER_DATA_DIR=/some/path` for both modes if you want that shared d
 
 Use this shared directory to switch between runtime and dev mode, not to run both at the same time. Stop one Compose stack before starting the other so two session daemons do not share the same socket/state directory concurrently.
 
-For sessions to appear under the same workspace in both modes, use the same project path in PI WEB. On Linux, prefer host-mounted paths such as `/home/core/<repo>`, `/srv/<project>`, or `/opt/<project>`. On Mac, prefer paths under `/Users/<you>/...`. The dev container also exposes this checkout as `/workspace` so the PI WEB dev server can run from it, but sessions started against `/workspace` are organized under that different working-directory path and will not line up with runtime sessions for the host-mounted path.
+For sessions to appear under the same workspace in both modes, use the same project path in PI WEB. On Linux, prefer host-mounted paths such as `/home/core/<repo>`, `/srv/<project>`, or `/opt/<project>`. On Mac, prefer paths under `/Users/<you>/...`. The dev server runs from `/usr/local/lib/node_modules/@jmfederico/pi-web`, with `/workspace` retained as a compatibility symlink. Use the original host path for projects and sessions so their working-directory paths match runtime mode.
 
-Development mode owns one persistent `node_modules` volume, mounted at both `/workspace/node_modules` and `<host-repository-path>/node_modules` inside the application containers. Commands run from either checkout path use the same dependencies. The host checkout's own `node_modules` is hidden inside these containers and is neither used nor modified; manage a separate native host installation with its own npm commands.
+Development mode owns one persistent `node_modules` volume, mounted at `/build/pi-web/node_modules`, `/usr/local/lib/node_modules/@jmfederico/pi-web/node_modules`, and `<host-repository-path>/node_modules` inside the application containers. Builders and runtime commands use the same dependencies. The host checkout's own `node_modules` is hidden inside these containers and is neither used nor modified; manage a separate native host installation with its own npm commands.
 
 Development startup keeps that volume synchronized with the dependency tree built into the dev image. When `package.json`, `package-lock.json`, the Node image, or another dependency-build input changes, `start` or `update` rebuilds the image and `data-init` refreshes the volume before `sessiond` starts. Unchanged dependency-build inputs can reuse Docker's build cache; updates do not force an unnecessary reinstall. Manual volume removal is not required.
 

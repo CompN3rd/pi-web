@@ -47,6 +47,10 @@ export class FakeSocket implements SessionEventSocket {
     // Test socket does not emit events.
   }
 
+  reconnect(): void {
+    // Test socket does not emit events.
+  }
+
   close(): void {
     // No-op.
   }

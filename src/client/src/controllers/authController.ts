@@ -1,4 +1,5 @@
 import { api as defaultApi, type AuthProviderOption, type AuthType, type OAuthFlowState, type SessionRef, type SessionStatus } from "../api";
+import { authMessages as messages } from "../authMessages";
 import type { AuthDialogState } from "../appState";
 import { BrowserErrorReporter, machineBrowserErrorScope } from "../browserErrors";
 import { selectedMachineId, type GetState, type SetState } from "./types";
@@ -74,11 +75,11 @@ export class AuthController {
     const session = context?.session ?? (state.selectedSession?.archived === true ? undefined : state.selectedSession);
     const machineId = context?.machineId ?? selectedMachineId(state);
     if (session === undefined) {
-      this.browserErrors.report(machineBrowserErrorScope(machineId), "Select a session to authenticate MCP servers.");
+      this.browserErrors.reportLocalized(machineBrowserErrorScope(machineId), () => messages.t("selectSession"));
       return;
     }
     const operationGeneration = this.advanceAuthOperation();
-    this.setState({ authDialog: { step: "starting", machineId, title: mode === "login" ? "Sign in to an MCP server" : "Sign out of an MCP server" } });
+    this.setState({ authDialog: { step: "starting", machineId, mode } });
     await this.startFlow(() => serverName === undefined
       ? this.api.startMcpAuth(session, mode, machineId)
       : this.api.startMcpAuth(session, mode, machineId, serverName), machineId, operationGeneration);
@@ -118,7 +119,7 @@ export class AuthController {
       if (providerId !== undefined && providerId !== "") {
         const provider = providers.find((candidate) => candidate.id === providerId);
         if (provider !== undefined) await this.logoutProviderOnMachine(provider.id, machineId, operationGeneration);
-        else this.browserErrors.report(machineBrowserErrorScope(machineId), `No stored credentials for ${providerId}`);
+        else this.browserErrors.reportLocalized(machineBrowserErrorScope(machineId), () => messages.t("noStoredProvider", { provider: providerId }));
         return;
       }
       this.setState({ authDialog: { step: "logout", machineId, providers } });
@@ -225,7 +226,7 @@ export class AuthController {
       if (!this.isCurrentAuthOperation(operationGeneration)) return;
       const exact = providers.filter((provider) => provider.id === providerId);
       if (exact.length === 0) {
-        this.browserErrors.report(machineBrowserErrorScope(machineId), `Auth provider not found: ${providerId}`);
+        this.browserErrors.reportLocalized(machineBrowserErrorScope(machineId), () => messages.t("providerNotFound", { provider: providerId }));
         return;
       }
       if (exact.length > 1) {

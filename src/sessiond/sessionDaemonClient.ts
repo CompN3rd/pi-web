@@ -20,6 +20,9 @@ export interface SessionDaemonClientOptions {
 
 export interface SessionDaemonRequestOptions {
   signal?: AbortSignal;
+  /** Selected stream request headers only; never arbitrary browser headers. */
+  headers?: { range?: string };
+  timeoutMs?: number;
 }
 
 export interface SessionDaemonStreamResponse {
@@ -61,8 +64,11 @@ export class SessionDaemonClient {
 
   /** Stream binary resources without UTF-8 decoding or buffering the response. */
   requestStream(path: string, options: SessionDaemonRequestOptions = {}): Promise<SessionDaemonStreamResponse> {
+    const range = options.headers?.range;
+    if (range !== undefined && (range.length > 256 || /[\r\n]/u.test(range))) return Promise.reject(new Error("Invalid resource Range header"));
     return new Promise((resolve, reject) => {
       const onResponse = (response: http.IncomingMessage): void => {
+        clearTimeout(headerTimeout);
         resolve({
           statusCode: response.statusCode ?? 500,
           headers: Object.fromEntries(Object.entries(response.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : value ?? ""])),
@@ -71,14 +77,16 @@ export class SessionDaemonClient {
       };
       const requestOptions: http.RequestOptions = {
         method: "GET",
-        headers: { "accept-encoding": "identity" },
+        headers: { "accept-encoding": "identity", ...(options.headers?.range === undefined ? {} : { range: options.headers.range }) },
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       };
       const url = this.baseUrl === undefined || this.baseUrl === "" ? undefined : new URL(path, this.baseUrl);
       const request = url === undefined
         ? http.request({ ...requestOptions, socketPath: this.socketPath, path }, onResponse)
         : (url.protocol === "https:" ? https : http).request(url, requestOptions, onResponse);
-      request.on("error", reject);
+      request.on("error", (error) => { clearTimeout(headerTimeout); reject(error); });
+      const headerTimeout = setTimeout(() => { request.destroy(new Error("Session daemon resource headers timed out")); }, options.timeoutMs ?? 30_000);
+      headerTimeout.unref();
       request.end();
     });
   }

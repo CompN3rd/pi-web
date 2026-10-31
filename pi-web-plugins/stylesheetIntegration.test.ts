@@ -2,6 +2,8 @@
 
 import type { PiWebPlugin, PluginActivationContext, PluginCapability, StylesheetIntegrationCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
 import { html, svg } from "lit";
+import { LocalizationService } from "../src/client/src/localization/service";
+import { createPluginLocalization } from "../src/client/src/plugins/localization";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import files, { defineFilesCustomElements, FILES_PANEL_ELEMENT, FILES_VIEWER_ELEMENT, FILES_CODE_VIEWER_ELEMENT } from "./files/pi-web-plugin";
 import terminal, { defineTerminalCustomElements, TERMINAL_PANEL_ELEMENT, TERMINAL_SOFT_KEYS_ELEMENT } from "./terminal/pi-web-plugin";
@@ -23,6 +25,7 @@ const plugins: [string, PiWebPlugin][] = [
 function activationContext(pluginId: string): PluginActivationContext {
   return {
     apiVersion: 4, pluginId, runtimePluginId: pluginId, html, svg,
+    localization: createPluginLocalization(new LocalizationService(), pluginId, pluginId, new AbortController().signal),
     signal: new AbortController().signal, lifetimeSignal: new AbortController().signal,
   };
 }
@@ -62,6 +65,8 @@ describe("bundled stylesheet capability participation", () => {
       resolve<Value>(requirement: PluginCapability<Value>): Value {
         requests.push(requirement.id);
         return requirement.parse(requirement.id === "stylesheet-integration" ? styles
+          : requirement.id === "file-previewing" ? { listPreviewers: () => [], renderPreview: () => undefined }
+          : requirement.id === "file-icons" ? { resolveIcon: () => undefined, subscribe: () => () => undefined }
           : requirement.id === "syntax-highlighting" ? { supports: () => false, highlight: () => Promise.resolve(undefined) }
           : {
           listRenderers: () => [], renderText: () => undefined, renderMarkdown: () => html``,

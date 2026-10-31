@@ -39,7 +39,6 @@ describe("PiWebApp workspace topology refresh wiring", () => {
 
   it.each([
     ["hidden document", { visibilityState: "hidden", isStreaming: false }],
-    ["active session", { visibilityState: "visible", isStreaming: true }],
   ])("does not poll a %s", async (_label: string, options: { visibilityState: string; isStreaming: boolean }) => {
     const app = createApp();
     selectSessionForPolling(app, options.isStreaming);
@@ -55,6 +54,27 @@ describe("PiWebApp workspace topology refresh wiring", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("uses one slow reconciliation loop even when the conversation is active", async () => {
+    vi.useFakeTimers();
+    const app = createApp();
+    selectSessionForPolling(app, true);
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    const sessions: unknown = Reflect.get(app, "sessions");
+    if (!hasSelectedSessionRefresh(sessions)) throw new Error("SessionController unavailable");
+    const refresh = vi.spyOn(sessions, "refreshSelectedSession").mockResolvedValue();
+    vi.stubGlobal("window", { location: window.location, localStorage: window.localStorage, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout });
+    const schedule: unknown = Reflect.get(app, "scheduleSelectedSessionRefresh");
+    if (typeof schedule !== "function") throw new Error("Transcript polling unavailable");
+    schedule.call(app);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refresh).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    vi.clearAllTimers();
+  });
+
   it("re-lists the selected project's workspaces on the browser-resume refresh", async () => {
     const app = createApp();
     stubBackgroundRefreshes(app);
@@ -64,9 +84,11 @@ describe("PiWebApp workspace topology refresh wiring", () => {
     const sessions: unknown = Reflect.get(app, "sessions");
     if (!(sessions instanceof SessionController)) throw new Error("SessionController was unavailable");
     const refreshSelected = vi.spyOn(sessions, "refreshSelectedSession").mockResolvedValue();
+    const resumeSelected = vi.spyOn(sessions, "resumeSelectedSession");
 
     await browserResumeRefresh(app)();
 
+    expect(resumeSelected).toHaveBeenCalledExactlyOnceWith({ reconnect: false });
     expect(refreshSelected).toHaveBeenCalledExactlyOnceWith(undefined, { recoverNetwork: true });
     expect(refreshSessions).toHaveBeenCalledExactlyOnceWith("local", { recoverNetwork: true });
     expect(refreshTopology).toHaveBeenCalledOnce();
@@ -117,7 +139,7 @@ describe("PiWebApp workspace topology refresh wiring", () => {
 });
 
 describe("PiWebApp realtime workspace invalidations", () => {
-  it.each(["local", "machine-a"])("refreshes only topology for a matching project on %s, even while the agent is active", (machineId) => {
+  it.each(["local", "machine-a"])("refreshes topology and session lifecycle for a matching project on %s, even while the agent is active", (machineId) => {
     const app = createApp();
     selectSessionForPolling(app, true);
     setAppState(app, { selectedMachine: machine(machineId), selectedProject: project });
@@ -132,7 +154,7 @@ describe("PiWebApp realtime workspace invalidations", () => {
 
     expect(sourceMachineId).toBe(machineId);
     expect(refreshTopology).toHaveBeenCalledOnce();
-    expect(refreshSessions).not.toHaveBeenCalled();
+    expect(refreshSessions).toHaveBeenCalledExactlyOnceWith(machineId, { recoverNetwork: true });
     expect(applySessionEvent).not.toHaveBeenCalled();
   });
 
@@ -144,10 +166,12 @@ describe("PiWebApp realtime workspace invalidations", () => {
     const app = createApp();
     setAppState(app, { selectedMachine: machine("machine-a"), selectedProject });
     const refreshTopology = spyOnTopologyRefresh(app);
+    const refreshSessions = spyOnWorkspaceSessionsRefresh(app);
 
     deliverRealtimeEvent(app, source, { type: "workspaces.changed", projectId });
 
     expect(refreshTopology).not.toHaveBeenCalled();
+    expect(refreshSessions).not.toHaveBeenCalled();
   });
 
   it("coalesces a burst of notifications through the existing WorkspaceController", async () => {

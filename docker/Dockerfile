@@ -100,4 +100,4 @@ USER pi-web
 EXPOSE 8504
 
 ENTRYPOINT ["tini", "--"]
-CMD ["pi-web-service", "/usr/local/bin/pi-web-server"]
+CMD ["pi-web-service", "/usr/local/lib/node_modules/@jmfederico/pi-web/dist/server/index.js"]

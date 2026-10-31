@@ -1,41 +1,27 @@
-import type { TemplateResult } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { localization } from "../localization/browser";
+import { describe, expect, it } from "vitest";
 import type { QueuedSessionMessage, SessionStatus, SessionWarning } from "../api";
 import {
-  ChatView,
   chatEventAnchorKey,
   chatGroupAnchorKey,
   chatMessageAnchorKey,
-  chatMessageGroupClassName,
-  chatMessageGroupLabel,
   chatMessageMetadataLabel,
   chatQueuedMessageSections,
   chatQueuedSectionShowsClearAction,
-  chatSessionWarningRows,
 } from "./ChatView";
-import { templateEventHandlerAfterMarker, templateEventHandlerNearMarker } from "../templateInspection.testSupport";
+import { chatSessionWarningRows } from "./chat/SessionWarnings";
 import type { ChatLine } from "./shared";
 
 describe("chatQueuedMessageSections", () => {
-  it("labels client-side pending-start sends separately from server queued messages", () => {
+  it("keeps client pending-start sends separate from server queued messages", () => {
     const sections = chatQueuedMessageSections(
       [{ kind: "followUp", text: "queued before start" }],
       [{ kind: "steer", text: "server queued" }],
     );
 
-    expect(sections).toEqual([
-      {
-        source: "client",
-        heading: "Queued until session starts",
-        detail: "Will send once the backend session is ready",
-        messages: [{ kind: "followUp", text: "queued before start" }],
-      },
-      {
-        source: "server",
-        heading: "Queued messages",
-        detail: "1 pending",
-        messages: [{ kind: "steer", text: "server queued" }],
-      },
+    expect(sections.map(({ source, messages }) => ({ source, messages }))).toEqual([
+      { source: "client", messages: [{ kind: "followUp", text: "queued before start" }] },
+      { source: "server", messages: [{ kind: "steer", text: "server queued" }] },
     ]);
   });
 });
@@ -59,40 +45,19 @@ describe("chatQueuedSectionShowsClearAction", () => {
   });
 });
 
-describe("ChatView queued-message clear wiring", () => {
-  // Escape hatch: this case verifies the Clear queue button's Lit event wiring,
-  // whose only observable effect is invoking the injected callback. Vitest runs
-  // with no DOM environment here, so a shadow-DOM click harness would add
-  // disproportionate setup; handler extraction anchored to the user-facing
-  // "Clear queue" button text is proportionate.
-  it("invokes onClearServerQueue when the server-queue action is activated", () => {
-    const view = new ChatView();
-    const onClearServerQueue = vi.fn();
-    view.status = queuedStatus([{ kind: "steer", text: "server queued" }]);
-    view.onClearServerQueue = onClearServerQueue;
-
-    templateEventHandlerNearMarker(renderQueuedMessages(view), "Clear queue")(new Event("click"));
-
-    expect(onClearServerQueue).toHaveBeenCalledOnce();
-  });
-});
-
 describe("chatSessionWarningRows", () => {
-  // Warning-row content (severity class, message, path, source, dismiss
-  // capability, ordering) is derived by a pure exported seam rather than scraped
-  // from rendered `TemplateResult` markup, per the testing-guide rule that
-  // TemplateResult inspection is not for general content assertions.
-  it("derives one severity-tagged row per warning with optional path and source", () => {
+  // Test warning-row shaping directly rather than depending on template markup.
+  it("preserves each diagnostic's severity, message and optional provenance", () => {
     const rows = chatSessionWarningRows(warningStatus([
       { severity: "error", message: "skill failed to load", source: "skill", path: "/skills/a.md" },
       { severity: "warning", message: "subscription auth is active" },
       { severity: "info", message: "heads up", source: "runtime" },
     ]));
 
-    expect(rows).toEqual([
-      { severity: "error", severityClass: "session-warning error", message: "skill failed to load", source: "skill", path: "/skills/a.md", dismissId: undefined },
-      { severity: "warning", severityClass: "session-warning warning", message: "subscription auth is active", source: undefined, path: undefined, dismissId: undefined },
-      { severity: "info", severityClass: "session-warning info", message: "heads up", source: "runtime", path: undefined, dismissId: undefined },
+    expect(rows.map(({ severity, message, source, path }) => ({ severity, message, source, path }))).toEqual([
+      { severity: "error", message: "skill failed to load", source: "skill", path: "/skills/a.md" },
+      { severity: "warning", message: "subscription auth is active", source: undefined, path: undefined },
+      { severity: "info", message: "heads up", source: "runtime", path: undefined },
     ]);
   });
 
@@ -111,55 +76,6 @@ describe("chatSessionWarningRows", () => {
   });
 });
 
-describe("ChatView session-warning dismiss wiring", () => {
-  // Escape hatch: this case verifies the dismiss button's Lit event wiring,
-  // whose observable effect is invoking onDismissWarning with the warning's
-  // dismiss id. No DOM environment is available, so handler extraction anchored
-  // to the stable `session-warning-dismiss` class marker is proportionate.
-  it("invokes onDismissWarning with the warning's dismiss id", () => {
-    const view = new ChatView();
-    const onDismissWarning = vi.fn();
-    view.onDismissWarning = onDismissWarning;
-    view.status = warningStatus([
-      { severity: "warning", message: "subscription auth is active", source: "anthropic", dismiss: { id: "anthropicExtraUsage" } },
-    ]);
-
-    const rendered = renderWarnings(view);
-    if (rendered === null) throw new Error("expected a warnings banner");
-    templateEventHandlerAfterMarker(rendered, "session-warning-dismiss")(new Event("click"));
-
-    expect(onDismissWarning).toHaveBeenCalledExactlyOnceWith("anthropicExtraUsage");
-  });
-
-  // Escape hatch: this verifies the minimise chevron's Lit callback wiring in
-  // the node test environment, anchored to its stable semantic class marker.
-  // The chevron is wired to the unified onToggleWarnings (toggle ≡ collapse in
-  // the expanded state), so this also proves the single visibility mutation.
-  it("invokes onToggleWarnings from the visible warning area", () => {
-    const view = withStatus(new ChatView(), warningStatus([
-      { severity: "warning", message: "subscription auth is active" },
-    ]));
-    const onToggleWarnings = vi.fn();
-    view.onToggleWarnings = onToggleWarnings;
-
-    const rendered = renderWarnings(view);
-    if (rendered === null) throw new Error("expected a warnings banner");
-    templateEventHandlerAfterMarker(rendered, "session-warnings-collapse")(new Event("click"));
-
-    expect(onToggleWarnings).toHaveBeenCalledOnce();
-  });
-
-  it("removes the warning area while presentation is collapsed or there are no warnings", () => {
-    const view = withStatus(new ChatView(), warningStatus([
-      { severity: "warning", message: "subscription auth is active" },
-    ]));
-    view.warningsVisible = false;
-
-    expect(renderWarnings(view)).toBeNull();
-    expect(renderWarnings(withStatus(new ChatView(), warningStatus([])))).toBeNull();
-  });
-});
-
 describe("chatMessageMetadataLabel", () => {
   it("uses one full date and model label without a model prefix", () => {
     const timestamp = "2026-07-10T19:15:30.000Z";
@@ -169,7 +85,7 @@ describe("chatMessageMetadataLabel", () => {
       role: "assistant",
       parts: [],
       meta: { timestamp, model: { provider: "provider", id: "model" } },
-    })).toBe(`${formattedTimestamp} · provider/model`);
+    })).toBe(localization.list([formattedTimestamp, "provider/model"]));
   });
 
   it("appends the thinking level after the model when present", () => {
@@ -180,7 +96,7 @@ describe("chatMessageMetadataLabel", () => {
       role: "assistant",
       parts: [],
       meta: { timestamp, model: { provider: "provider", id: "model" }, thinkingLevel: "high" },
-    })).toBe(`${formattedTimestamp} · provider/model · high`);
+    })).toBe(localization.list([formattedTimestamp, "provider/model", "high"]));
   });
 });
 
@@ -205,46 +121,11 @@ describe("chat event-group content seams", () => {
     }
     expect(chatMessageAnchorKey(495, reply)).not.toBe(chatEventAnchorKey(495, reply));
   });
-
-  it("distinguishes the live tail group by class and disclosure label", () => {
-    expect(chatMessageGroupClassName(true)).toBe("msg event-group live");
-    expect(chatMessageGroupClassName(false)).toBe("msg event-group");
-    expect(chatMessageGroupLabel(true)).toBe("live events");
-    expect(chatMessageGroupLabel(false)).toBe("events");
-  });
 });
-
-type RenderQueuedMessages = (this: ChatView) => TemplateResult;
-type RenderWarnings = (this: ChatView) => TemplateResult | null;
-
-function renderQueuedMessages(view: ChatView): TemplateResult {
-  const method: unknown = Reflect.get(view, "renderQueuedMessages");
-  if (!isRenderQueuedMessages(method)) throw new Error("ChatView.renderQueuedMessages is not callable");
-  return method.call(view);
-}
-
-function renderWarnings(view: ChatView): TemplateResult | null {
-  const method: unknown = Reflect.get(view, "renderWarnings");
-  if (!isRenderWarnings(method)) throw new Error("ChatView.renderWarnings is not callable");
-  return method.call(view);
-}
-
-function isRenderQueuedMessages(value: unknown): value is RenderQueuedMessages {
-  return typeof value === "function";
-}
-
-function isRenderWarnings(value: unknown): value is RenderWarnings {
-  return typeof value === "function";
-}
 
 function requireSection(section: ReturnType<typeof chatQueuedMessageSections>[number] | undefined): ReturnType<typeof chatQueuedMessageSections>[number] {
   if (section === undefined) throw new Error("expected a queued-message section");
   return section;
-}
-
-function withStatus(view: ChatView, status: SessionStatus): ChatView {
-  view.status = status;
-  return view;
 }
 
 function warningStatus(warnings: SessionWarning[]): SessionStatus {

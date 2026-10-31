@@ -1,3 +1,5 @@
+import { LocalizationController } from "../localization/browser";
+import { imageMessages } from "../imageMessages";
 import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -14,6 +16,7 @@ export class MarkdownImage extends LitElement {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this);
   }
 
   @property({ attribute: "preview-url" }) previewUrl = "";
@@ -53,7 +56,7 @@ export class MarkdownImage extends LitElement {
       .source=${!this.loadingDisabled && this.previewUrl !== "" && (!this.outside || this.approved) ? this.previewUrl : undefined}
       .dimensions=${this.dimensions} .onIntrinsicDimensions=${this.rememberDimensions}
       .requestDisabled=${this.loadingDisabled || !this.outside || this.previewUrl === ""}
-      .pendingLabel=${this.loadingDisabled ? "Image loading disabled" : "Show image"}
+      .pendingLabel=${this.loadingDisabled ? imageMessages.t("loadingDisabled") : imageMessages.t("show")}
       .description=${this.description} .label=${this.path}
       @image-request=${() => { this.showImage(); }}
     ></pi-web-image-presentation>`;

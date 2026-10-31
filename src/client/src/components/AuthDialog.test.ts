@@ -129,7 +129,7 @@ describe("unified MCP authentication dialog", () => {
 
   it("renders startup failures inside the same modal", async () => {
     const onCancel = vi.fn();
-    const dialog = await mountDialog({ step: "starting", machineId: "local", title: "Sign in to an MCP server", error: "MCP extension is disabled" }, { onCancel });
+    const dialog = await mountDialog({ step: "starting", machineId: "local", mode: "login", error: "MCP extension is disabled" }, { onCancel });
     expect(dialog.shadowRoot?.querySelector("[role=alert]")?.textContent).toContain("MCP extension is disabled");
     requiredElement(dialog.shadowRoot?.querySelector<HTMLButtonElement>(".ui-form-actions button"), "Close action").click();
     expect(onCancel).toHaveBeenCalledOnce();

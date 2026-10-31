@@ -1,6 +1,11 @@
+import { type ThinkingLevel } from "./shared/thinkingLevels.js";
+import type { ServerNoticePresentation } from "./shared/serverNoticePresentation.js";
+export type { ServerNoticePresentation } from "./shared/serverNoticePresentation.js";
+export type { TerminalTitlePresentation } from "./shared/terminalTitlePresentation.js";
 import type { PluginBackend, JsonObject, JsonPrimitive, JsonValue, PluginCapability, PluginCapabilityProvision, WorkspaceProviderMetadata, WorkspaceRemovalPresentation } from "./shared/pluginApiTypes.js";
 export type { JsonObject, JsonPrimitive, JsonValue, PluginCapability, PluginCapabilityProvision, WorkspaceProviderMetadata, WorkspaceRemovalPresentation, };
 export { PI_WEB_HOST_CATALOG_CAPABILITY, type PluginCatalogProject, type PluginCatalogWorkspace, type PluginSessionSnapshot, type PluginWorkspaceSelection, type PluginSessionSelection, type PluginCatalogReadOptions, type PluginCatalogV1, } from "./shared/pluginCatalogTypes.js";
+export { PI_WEB_HOST_SESSION_LIFECYCLE_CAPABILITY, type PluginSessionLifecycleV1, type PluginSessionLifecycleState, type PluginSessionLifecycleOptions, } from "./shared/pluginSessionLifecycleTypes.js";
 /** Discover this package's local v5 backend on a hosted pi.events bus.
  * Throws synchronously outside PI WEB or when the paired backend is unavailable.
  * Extensions are trusted in-process code, not a sandbox.
@@ -85,6 +90,8 @@ export type ServerPluginNoticeScope = {
 };
 /** Plugin-authored notice data. The host supplies the immutable source identity. */
 export interface ServerPluginNoticeInput {
+    /** Optional PI WEB-generated presentation; unknown metadata retains the raw message. Diagnostic detail is limited to 4096 code units. */
+    readonly presentation?: ServerNoticePresentation;
     readonly severity: ServerPluginNoticeSeverity;
     /** Non-empty human-readable text, limited to 4 KiB of UTF-8. */
     readonly message: string;
@@ -156,6 +163,10 @@ export interface PiWebHostPiSessionRunInput {
     readonly workspaceId: string;
     /** Non-empty initial prompt, limited to 64 KiB of UTF-8. */
     readonly prompt: string;
+    /** Exact provider/model-id; omission uses normal session defaults. */
+    readonly model?: string;
+    /** Omission uses normal session defaults. Unsupported levels reject before prompting. */
+    readonly thinkingLevel?: ThinkingLevel;
 }
 /** Detached final outcome for one host-owned Pi session run. */
 export type PiWebHostPiSessionRunCompletion = {
@@ -175,13 +186,19 @@ export interface PiWebHostPiSessionCreated {
 export interface PiWebHostPiSessionRun extends PiWebHostPiSessionCreated {
     /** Initial submission outcome, including final provider errors; not later user turns. */
     readonly completion: Promise<PiWebHostPiSessionRunCompletion>;
+    /** Effective startup settings, when reported by the host. */
+    readonly model?: string;
+    readonly thinkingLevel?: ThinkingLevel;
 }
 /** Bounded initial-run admission. Plugin revocation cancels only unpublished startup. */
 export interface PiWebHostPiSessionsV1 {
     readonly version: 1;
     /** Publish an observed session without a prompt; connect separately before companion kickoff. */
     readonly create: (input: PiWebHostWorkspaceSelection) => Promise<PiWebHostPiSessionCreated>;
-    /** Re-resolve current authority, start one session, and admit its initial prompt. */
+    /** Re-resolve current authority, start one session, and admit its initial prompt.
+     * No implicit model/thinking fallback. Errors with code PI_SESSION_MODEL_UNAVAILABLE
+     * or PI_SESSION_THINKING_UNAVAILABLE guarantee no initial prompt was submitted.
+     */
     readonly run: (input: PiWebHostPiSessionRunInput) => Promise<PiWebHostPiSessionRun>;
 }
 /** Exact PI sessions v1 capability supplied separately for each declaring server plugin. */
@@ -253,12 +270,18 @@ export type LegacyServerPluginPeer = {
 };
 export type ServerPluginPeerV5 = {
     request(context: ServerPluginPeerRequestContextV5): MaybePromise<JsonValue>;
+    resource?(context: ServerPluginPeerResourceContextV5): MaybePromise<ServerPluginResourceResponse>;
     /** Open one finite-lived, host-bounded duplex channel. */
     openChannel?(context: ServerPluginPeerChannelOpenContextV5): MaybePromise<ServerPluginPeerChannel>;
 } | {
     request?: undefined;
     /** Open one finite-lived, host-bounded duplex channel. */
     openChannel(context: ServerPluginPeerChannelOpenContextV5): MaybePromise<ServerPluginPeerChannel>;
+    resource?(context: ServerPluginPeerResourceContextV5): MaybePromise<ServerPluginResourceResponse>;
+} | {
+    request?: undefined;
+    openChannel?: undefined;
+    resource(context: ServerPluginPeerResourceContextV5): MaybePromise<ServerPluginResourceResponse>;
 };
 /** Channel instance returned by `openChannel()` after the host validates scope. */
 export interface ServerPluginPeerChannel {
@@ -307,6 +330,19 @@ export type LegacyServerPluginPeerRequestContext = Omit<ServerPluginPeerRequestC
     readonly project: ProjectInput;
     readonly workspace: ServerPluginPeerWorkspace;
 };
+/** Binary resource metadata is allowlisted; plugins cannot supply arbitrary HTTP headers. */
+export interface ServerPluginResourceResponse {
+    readonly body: Uint8Array | AsyncIterable<Uint8Array>;
+    readonly contentType: string;
+    readonly contentLength?: number;
+    readonly statusCode?: 200 | 206 | 416;
+    readonly contentRange?: string;
+    readonly acceptRanges?: "bytes";
+}
+/** The signal stays live until the body ends, is cancelled, or reaches its lifetime limit. */
+export interface ServerPluginPeerResourceContextV5 extends ServerPluginPeerRequestContextV5 {
+    readonly range?: string;
+}
 export interface ServerPluginPeerRequestContextV5 {
     readonly scope: ServerPluginPeerScope;
     readonly operation: string;
@@ -388,6 +424,8 @@ export interface ProviderRemoveContext {
  * approves the operation; it does not mean removal has completed.
  */
 export interface WorkspaceRemovePlan {
+    /** Optional generated title provenance; unknown metadata retains the authored title. */
+    titlePresentation?: import("./shared/terminalTitlePresentation.js").TerminalTitlePresentation;
     /** Human-readable title for the host-owned terminal run. */
     title: string;
     /**

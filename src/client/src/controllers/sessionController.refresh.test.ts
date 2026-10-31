@@ -303,7 +303,7 @@ describe("SessionController selected-session refresh", () => {
 
     await controller.refreshSelectedSession();
 
-    expect(transcriptSnapshot).toHaveBeenCalledExactlyOnceWith(oldSession, { limit: 100 }, "local");
+    expect(transcriptSnapshot).toHaveBeenCalledExactlyOnceWith(oldSession, expect.objectContaining({ limit: 100, timeoutMs: 10_000 }), "local");
     expect(messages).not.toHaveBeenCalled();
     expect(selectedStatus).not.toHaveBeenCalled();
     expect(streamSnapshot).not.toHaveBeenCalled();
@@ -510,19 +510,19 @@ describe("SessionController unchanged selected-session refresh", () => {
     };
   }
 
-  it("skips the merge, cache rewrite, and state update when a poll changes nothing", async () => {
+  it("updates only freshness metadata when a poll changes nothing", async () => {
     const harness = controllerWithPolls([idlePoll()]);
 
-    await harness.controller.refreshSelectedSession();
+    await harness.controller.refreshSelectedSession(undefined, { silent: true });
     expect(harness.appliedRefreshes()).toBe(1);
     const setStateCallsAfterFirst = harness.setStateCalls();
     const messagesAfterFirst = harness.getState().messages;
     expect(setStateCallsAfterFirst).toBeGreaterThan(0);
 
-    await harness.controller.refreshSelectedSession();
+    await harness.controller.refreshSelectedSession(undefined, { silent: true });
 
     expect(harness.appliedRefreshes()).toBe(1);
-    expect(harness.setStateCalls()).toBe(setStateCallsAfterFirst);
+    expect(harness.setStateCalls()).toBe(setStateCallsAfterFirst + 1);
     expect(harness.getState().messages).toBe(messagesAfterFirst);
   });
 

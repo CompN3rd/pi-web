@@ -1,12 +1,15 @@
 import { html } from "lit";
+import { localization } from "../../localization/browser";
+import { appShellMessages as m } from "../../appShellMessages";
 import type { ResizablePanelSide } from "../../appShell/panelResizeController";
 
 /** Shared native toggle for panel headers and their collapsed counterparts. */
 export function renderPanelToggleButton(side: ResizablePanelSide, collapsed: boolean, onToggle: (() => void) | undefined) {
   if (onToggle === undefined) return null;
   const panel = side === "navigation" ? "navigation" : "workspace";
-  const label = `${collapsed ? "Expand" : "Collapse"} ${panel} panel`;
-  const pointsLeft = side === "navigation" ? !collapsed : collapsed;
+  const label = m.t(side === "navigation" ? (collapsed ? "expandNavigation" : "collapseNavigation") : (collapsed ? "expandWorkspace" : "collapseWorkspace"));
+  const pointsStart = side === "navigation" ? !collapsed : collapsed;
+  const pointsLeft = localization.direction === "rtl" ? !pointsStart : pointsStart;
   return html`
     <button type="button" class="panel-toggle ui-button ui-button--icon"
       data-panel-toggle=${side} title=${label} aria-label=${label}

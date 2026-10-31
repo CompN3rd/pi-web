@@ -6,5 +6,5 @@ import { loadEffectiveProjectPathAccess } from "./projectPiWebConfig.js";
 export async function pathAccessForWorkspaceContext(context: WorkspaceContext, config: Pick<PiWebConfigService, "read"> | undefined): Promise<PiWebPathAccessConfig | undefined> {
   if (config === undefined) return undefined;
   const response = await config.read();
-  return loadEffectiveProjectPathAccess(context.project.path, response.effectiveConfig);
+  return loadEffectiveProjectPathAccess(context.project.path, response.effectiveConfig, response.enforcedSettings);
 }

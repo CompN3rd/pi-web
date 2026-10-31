@@ -1,12 +1,17 @@
 // @vitest-environment happy-dom
 
-import { render, type TemplateResult } from "lit";
+import { LitElement, render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Machine, MachineRuntime, PiWebDeprecatedAgentInput } from "../api";
+import { localization, LocalizationController } from "../localization/browser";
 import { deprecatedAgentInputsBanner, deprecatedAgentInputsWarnings, deprecatedAgentInputsWarningText, type DeprecatedAgentInputsWarning } from "./deprecatedAgentInputsBanner";
 
-afterEach(() => {
+const releases: (() => void)[] = [];
+afterEach(async () => {
   document.body.replaceChildren();
+  localStorage.clear();
+  releases.splice(0).forEach((release) => { release(); });
+  await localization.setPreferences({ language: "en", formatLocale: "en" });
 });
 
 describe("deprecatedAgentInputsWarnings", () => {
@@ -43,7 +48,7 @@ describe("deprecatedAgentInputsWarningText", () => {
       { source: "config", name: "agent.dir", replacement: "PI_CODING_AGENT_DIR" },
     ]));
 
-    expect(text).toBe("Build box: environment variable PI_WEB_AGENT_DIR is deprecated; set PI_CODING_AGENT_DIR instead; config key agent.dir is deprecated; set PI_CODING_AGENT_DIR instead. Support for deprecated agent configuration inputs will be removed in a future release.");
+    expect(text).toBe("Build box: environment variable PI_WEB_AGENT_DIR is deprecated; set PI_CODING_AGENT_DIR instead, config key agent.dir is deprecated; set PI_CODING_AGENT_DIR instead. Support for deprecated agent configuration inputs will be removed in a future release.");
   });
 
   it("tells the user to remove inputs that have no replacement", () => {
@@ -82,6 +87,57 @@ describe("deprecatedAgentInputsBanner", () => {
     // Non-dismissable by contract: no dismiss control of any kind.
     expect(notice?.querySelector("button, [role='button'], a")).toBeNull();
   });
+});
+
+// The app owns localization invalidation; the banner is a stateless template.
+class BannerHost extends LitElement {
+  constructor(readonly warnings: readonly DeprecatedAgentInputsWarning[] = []) {
+    super();
+    new LocalizationController(this);
+  }
+  override render() { return deprecatedAgentInputsBanner(this.warnings); }
+}
+customElements.define("test-deprecated-inputs-banner", BannerHost);
+
+it("updates the complete banner without changing machine reports or interpreting identifiers as markup", async () => {
+  releases.push(localization.registerCatalog({ id: "deprecated-inputs-test", namespace: "core.deprecatedAgentInputs", locale: "de", load: () => Promise.resolve({
+    warning: "{machine}: {inputs}. Die Unterstützung endet in einer künftigen Version.",
+    configReplacement: "Konfigurationsschlüssel {name} ist veraltet; stattdessen {replacement} setzen",
+    environmentReplacement: "Umgebungsvariable {name} ist veraltet; stattdessen {replacement} setzen",
+    configIgnored: "Konfigurationsschlüssel {name} wird ignoriert; ohne Ersatz entfernen",
+    environmentIgnored: "Umgebungsvariable {name} wird ignoriert; ohne Ersatz entfernen",
+  }) }));
+  const report = warning("<b>Build box</b>", [
+    { source: "config", name: "agent.dir", replacement: "PI_CODING_AGENT_DIR" },
+    { source: "environment", name: "PI_WEB_AGENT_DIR", replacement: "PI_CODING_AGENT_DIR" },
+    { source: "config", name: "agent.command" },
+    { source: "environment", name: "PI_WEB_AGENT_COMMAND" },
+  ]);
+  const reports = [report];
+  await localization.setPreferences({ language: "en", formatLocale: "de-DE" });
+  const host = new BannerHost(reports);
+  document.body.append(host);
+  await host.updateComplete;
+  const alert = host.shadowRoot?.querySelector('[role="alert"]');
+  const english = alert?.textContent;
+  for (const language of ["de", "en-XA", "ar-XB", "en"]) {
+    await localization.setPreferences({ language, formatLocale: "de-DE" });
+    await host.updateComplete;
+    expect(host.shadowRoot?.querySelector('[role="alert"]')).toBe(alert);
+    expect(alert?.textContent).toContain(deprecatedAgentInputsWarningText(report));
+    for (const value of ["<b>Build box</b>", "agent.dir", "PI_CODING_AGENT_DIR", "PI_WEB_AGENT_DIR", "agent.command", "PI_WEB_AGENT_COMMAND"]) expect(alert?.textContent).toContain(value);
+    expect(alert?.querySelector("b, button, a")).toBeNull();
+    expect(host.warnings).toBe(reports);
+    if (language === "en") expect(alert?.textContent).toBe(english);
+    else expect(alert?.textContent).not.toBe(english);
+    if (language === "de") {
+      expect(alert?.textContent).toContain("Konfigurationsschlüssel agent.dir ist veraltet");
+      expect(alert?.textContent).toContain("Umgebungsvariable PI_WEB_AGENT_DIR ist veraltet");
+      expect(alert?.textContent).toContain("Konfigurationsschlüssel agent.command wird ignoriert");
+      expect(alert?.textContent).toContain("Umgebungsvariable PI_WEB_AGENT_COMMAND wird ignoriert");
+      expect(alert?.textContent).toContain("Die Unterstützung endet");
+    }
+  }
 });
 
 function machine(id: string, name: string, kind: Machine["kind"] = "remote"): Machine {

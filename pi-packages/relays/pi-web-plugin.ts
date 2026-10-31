@@ -1,4 +1,5 @@
 import type { StylesheetIntegrationCapabilityV1, PiWebPlugin, PluginCapability } from "@jmfederico/pi-web/plugin-api";
+import { createRelaysContent, relayText, relayValue } from "./relaysLocalization.js";
 import { RELAYS_ROOT } from "./relayDiscovery.js";
 import { relayIdentityFromMetadata } from "./relayIdentity.js";
 import { defineRelaysPanelElement, RELAY_SELECTION_QUERY_KEY } from "./relaysPanelElement.js";
@@ -24,8 +25,9 @@ const plugin = {
   apiVersion: 4,
   name: "Relays",
   requires: [stylesheetIntegrationCapability],
-  activate: ({ runtimePluginId, html, svg }) => {
+  activate: ({ runtimePluginId, html, svg, localization }) => {
     defineRelaysPanelElement();
+    const content = localization === undefined ? undefined : createRelaysContent(localization);
     let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
 
     return {
@@ -36,9 +38,9 @@ const plugin = {
         actions: [
           {
             id: "workspace.open-relays",
-            title: "Open Workspace Relays",
-            description: `Open the workspace Relays tab. Relays live in ${RELAYS_ROOT}.`,
-            group: "Workspace",
+            get title() { return relayText(content, "openRelays"); },
+            get description() { return relayText(content, "openDescription", { path: relayValue(content, RELAYS_ROOT) }); },
+            get group() { return relayText(content, "workspace"); },
             enabled: (context) => context.state.selectedWorkspace !== undefined,
             run: (context) => {
               if (context.state.selectedWorkspace === undefined) return;
@@ -59,7 +61,7 @@ const plugin = {
                     type="button"
                     style="border:0; padding:0; background:transparent; color:var(--pi-accent); font:inherit; text-align:start; overflow-wrap:anywhere; cursor:pointer"
                     title=${identity.packetPath}
-                    aria-label=${`Open Relay ${identity.relayName}, leg ${identity.leg}`}
+                    aria-label=${relayText(content, "openRelay", { name: relayValue(content, identity.relayName), leg: relayValue(content, identity.leg) })}
                     @click=${() => context.navigate({
                       machineId: context.machine.id,
                       projectId: context.workspace.projectId,
@@ -68,7 +70,7 @@ const plugin = {
                       tool: `${runtimePluginId}:workspace.relays`,
                       query: { [RELAY_SELECTION_QUERY_KEY]: identity.packetPath },
                     }, { mode: "patch" })}
-                  >relay</button>
+                  >${relayText(content, "relayLabel")}</button>
                 `,
               }];
             },
@@ -77,7 +79,7 @@ const plugin = {
         workspacePanels: [
           {
             id: "workspace.relays",
-            title: "Relays",
+            get title() { return relayText(content, "relays"); },
             icon: svg`
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 17H7A5 5 0 0 1 7 7h2"></path>
@@ -86,7 +88,7 @@ const plugin = {
               </svg>
             `,
             order: 50,
-            render: (context) => html`<pi-web-relays-panel .stylesheetIntegration=${stylesheetIntegration} .context=${context}></pi-web-relays-panel>`,
+            render: (context) => html`<pi-web-relays-panel .content=${content} .stylesheetIntegration=${stylesheetIntegration} .context=${context}></pi-web-relays-panel>`,
           },
         ],
       },

@@ -46,12 +46,12 @@ x-pi-web-dev-data-volume: &pi-web-dev-data-volume
 x-pi-web-dev-checkout-volume: &pi-web-dev-checkout-volume
   type: bind
   source: ${PI_WEB_DOCKER_DEV_REPO_ROOT:?set by docker/pi-web-docker --dev}
-  target: /workspace
+  target: /usr/local/lib/node_modules/@jmfederico/pi-web
 
 x-pi-web-dev-dependency-volume: &pi-web-dev-dependency-volume
   type: volume
   source: node_modules
-  target: /workspace/node_modules
+  target: /usr/local/lib/node_modules/@jmfederico/pi-web/node_modules
   volume:
     nocopy: true
 
@@ -62,11 +62,19 @@ x-pi-web-dev-init-volumes: &pi-web-dev-init-volumes
   - *pi-web-dev-dependency-volume
   - *pi-web-dev-data-volume
 
-# One checkout and one dependency volume, visible at both container paths.
-# Compose merges mounts by target when the host checkout is already /workspace.
+# Runtime imports use the production package path; browser builds use a fixed
+# source path outside node_modules. All aliases share the dependency volume.
 x-pi-web-dev-volumes: &pi-web-dev-volumes
   - *pi-web-dev-checkout-volume
   - *pi-web-dev-dependency-volume
+  - type: bind
+    source: ${PI_WEB_DOCKER_DEV_REPO_ROOT:?set by docker/pi-web-docker --dev}
+    target: /build/pi-web
+  - type: volume
+    source: node_modules
+    target: /build/pi-web/node_modules
+    volume:
+      nocopy: true
   - type: bind
     source: ${PI_WEB_DOCKER_DEV_REPO_ROOT:?set by docker/pi-web-docker --dev}
     target: ${PI_WEB_DOCKER_DEV_REPO_ROOT:?set by docker/pi-web-docker --dev}
@@ -101,8 +109,8 @@ services:
   sessiond:
     build: *pi-web-dev-build
     image: ${PI_WEB_DEV_IMAGE:-pi-web:dev}
-    command: ["pi-web-service", "scripts/dev-sessiond.mjs"]
-    working_dir: /workspace
+    command: ["pi-web-npm", "run", "start:sessiond"]
+    working_dir: /usr/local/lib/node_modules/@jmfederico/pi-web
     depends_on:
       web:
         condition: service_healthy
@@ -124,8 +132,8 @@ services:
   web:
     build: *pi-web-dev-build
     image: ${PI_WEB_DEV_IMAGE:-pi-web:dev}
-    command: ["bash", "-c", "trap 'kill 0' EXIT; (pi-web-service node_modules/typescript/bin/tsc -p tsconfig.plugins.json && pi-web-service scripts/dev-web.mjs) & pi-web-service node_modules/vite/bin/vite.js --host 0.0.0.0 & wait"]
-    working_dir: /workspace
+    command: ["pi-web-npm", "run", "dev:ui"]
+    working_dir: /usr/local/lib/node_modules/@jmfederico/pi-web
     depends_on:
       data-init:
         condition: service_completed_successfully

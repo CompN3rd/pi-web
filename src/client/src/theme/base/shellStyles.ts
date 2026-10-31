@@ -2,6 +2,7 @@ import { css } from "lit";
 import { uiButtonStyles, uiMenuStyles, uiToolbarStyles, uiTabStyles } from "./controlStyles";
 import { chatNavigationStyles } from "./chatNavigationStyles";
 import { promptEditorIntegrationStyles } from "./promptEditorIntegrationStyles";
+import { activityIndicatorStyles } from "./activityIndicatorStyles";
 
 // The base theme owns default shell layout and presentation; components retain behaviour.
 
@@ -144,6 +145,7 @@ export const workspacePanelStyles = css`
 `;
 
 export const listStyles = css`
+  ${activityIndicatorStyles}
   ${uiButtonStyles}
   ${uiToolbarStyles}
   ${uiMenuStyles}
@@ -152,9 +154,9 @@ export const listStyles = css`
   :host([collapsed]) { flex: 0 0 auto; min-height: auto; overflow: hidden; }
   section { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 0; }
   h2 { flex: 0 0 auto; margin: 0; color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
-  h2.ui-toolbar { border-bottom: 1px solid var(--pi-border-muted); }
   section > h2 { position: relative; z-index: 3; background: var(--pi-bg); box-shadow: ${scrollBoundaryShadow}; }
   .list-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  .list-status { padding: 10px; color: var(--pi-muted); }
   .subheading { margin-top: 14px; }
   .section-toggle { width: 100%; gap: 8px; }
   .section-toggle span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -184,16 +186,8 @@ export const listStyles = css`
   .badge { display: inline-block; margin-left: 5px; border: 1px solid var(--pi-border); border-radius: 999px; color: var(--pi-muted); padding: 0 5px; font-size: 11px; font-weight: 400; }
   .action-activity { position: absolute; top: 50%; inset-inline-start: calc(6px + var(--depth, 0) * 16px + var(--agent-offset, 0px)); transform: translateY(-50%); z-index: 1; display: grid; place-items: center; width: 10px; height: 10px; }
   .action-activity .activity-indicator { margin: 0; vertical-align: 0; }
-  .activity-indicator { flex: 0 0 auto; display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--pi-success); animation: pulse 1s ease-in-out infinite; vertical-align: 1px; }
-  .activity-indicator.session { border-radius: 50%; background: var(--pi-success); }
-  .activity-indicator.terminal { border-radius: 2px; background: var(--pi-accent); }
-  /* Client-side sending (upload in flight); distinct from server activity, which propagates to workspace/machine rows. */
-  .activity-indicator.sending { border-radius: 50%; background: var(--pi-warning); }
-  /* Unread is a stable state, not ongoing work: keep it static and accent-colored. */
-  .activity-indicator.unread { border-radius: 50%; background: var(--pi-accent); animation: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--pi-accent) 20%, transparent); }
-  /* Unread + ongoing work: a static accent ring wraps the still-pulsing work dot. */
-  .unread-ring { flex: 0 0 auto; box-sizing: border-box; display: inline-grid; place-items: center; width: 9px; height: 9px; margin-right: 6px; border: 1.5px solid var(--pi-accent); border-radius: 50%; vertical-align: 1px; }
-  .unread-ring .activity-indicator { width: 5px; height: 5px; margin: 0; vertical-align: 0; }
+  .activity-indicator, .unread-ring { margin-right: 6px; vertical-align: 1px; }
+  .unread-ring .activity-indicator { margin: 0; vertical-align: 0; }
   .action-activity .unread-ring { margin: 0; vertical-align: 0; }
   .action-menu { position: relative; align-self: stretch; }
   .action-menu-toggle { height: 100%; }
@@ -210,18 +204,15 @@ export const listStyles = css`
   .workspace-label-link:hover, .workspace-label-link:focus { text-decoration: underline; }
   .workspace-detail-row .workspace-label { overflow: visible; white-space: normal; flex-wrap: wrap; }
   .workspace-detail-row .workspace-label-base, .workspace-detail-row .workspace-label-item, .workspace-detail-row .workspace-label-render { overflow: visible; text-overflow: clip; overflow-wrap: anywhere; white-space: normal; }
-  @keyframes pulse { 0%, 100% { transform: scale(.75); opacity: .55; } 50% { transform: scale(1.2); opacity: 1; } }
   }
 `;
 
 export const statusBarStyles = css`
   @layer pi-web-base {
-  :host { display: block; color: var(--pi-muted); font: 12px var(--pi-font, system-ui, sans-serif); }
-  .bar { display: flex; justify-content: flex-end; gap: 12px; align-items: center; min-width: 0; padding: 7px 12px; border-top: 1px solid var(--pi-border); background: var(--pi-bg); white-space: nowrap; overflow: hidden; }
+  /* Only this non-interactive footer consumes the shell's reserved bottom inset. */
+  :host { display: block; margin-block-end: calc(0px - var(--pi-app-safe-area-bottom, 0px)); color: var(--pi-muted); font: 12px var(--pi-font, system-ui, sans-serif); }
+  .bar { box-sizing: border-box; display: flex; justify-content: flex-end; gap: 12px; align-items: center; min-width: 0; min-height: max(32px, var(--pi-app-safe-area-bottom, 0px)); padding: 7px 12px; border-top: 1px solid var(--pi-border); background: var(--pi-bg); white-space: nowrap; overflow: hidden; }
   span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .warning-toggle { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; margin-right: auto; border: 0; background: transparent; color: inherit; padding: 0; font: inherit; line-height: 1; white-space: nowrap; cursor: pointer; }
-  .warning-toggle:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
-  .warning-toggle-icon { flex: 0 0 auto; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .activity { display: inline-flex; align-items: center; gap: 6px; color: var(--pi-muted); }
   .activity.active { color: var(--pi-success); }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .45; flex: 0 0 auto; }
@@ -235,7 +226,7 @@ export const autocompleteStyles = css`
   @layer pi-web-base {
   :host { display: block; }
   .menu { overflow: auto; padding: 0; color: var(--pi-text); border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 10px 30px var(--pi-shadow); }
-  button { display: grid; grid-template-columns: minmax(120px, 1fr) auto; gap: 4px 10px; width: 100%; border: 0; border-bottom: 1px solid var(--pi-border); border-radius: 0; background: transparent; color: var(--pi-text); padding: 8px 10px; text-align: left; cursor: pointer; }
+  button { display: grid; grid-template-columns: minmax(120px, 1fr) auto; gap: 4px 10px; width: 100%; border: 0; border-bottom: 1px solid var(--pi-border); border-radius: 0; background: transparent; color: var(--pi-text); padding: 8px 10px; text-align: start; cursor: pointer; }
   button:last-child { border-bottom: 0; }
   button.selected, button:hover { background: var(--pi-selection-bg); }
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -258,7 +249,7 @@ export const promptEditorLayoutStyles = css`
   .actions { justify-content: flex-end; flex-wrap: nowrap; white-space: nowrap; border-top: 1px solid var(--pi-border-muted); }
   .compact-status { display: flex; min-width: 0; align-items: stretch; flex: 1 1 0; }
   .compact-status > .ui-toolbar-group { flex: 0 1 auto; }
-  .select-model { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+  .select-model { display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: start; }
   .icon-button { flex: 0 0 auto; display: inline-grid; place-items: center; }
   .icon-button .prompt-action-icon, .icon-button .prompt-thinking-gauge { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
   .icon-button .prompt-action-icon-filled { fill: currentColor; stroke: none; }
@@ -266,11 +257,10 @@ export const promptEditorLayoutStyles = css`
   .stop-button:not(:disabled), .stop-button:hover:not(:disabled) { color: var(--pi-danger); }
   .select-thinking .prompt-thinking-gauge .gauge-bar { fill: currentColor; stroke: none; opacity: .28; }
   .select-thinking .prompt-thinking-gauge .gauge-bar-active { opacity: 1; }
-  .editor-chat-navigation { position: absolute; right: 0; top: 0; z-index: 2; box-sizing: border-box; width: 58px; border: 1px solid var(--pi-border-muted); }
+  .editor-chat-navigation { position: absolute; inset-inline-end: 0; top: 0; z-index: 2; box-sizing: border-box; width: 58px; border: 1px solid var(--pi-border-muted); }
   .editor-chat-navigation .chat-jumps button + button { border-inline-start: 1px solid var(--pi-border-muted); }
-  .editor-input:has(.editor-chat-navigation) .editor-attach { box-sizing: border-box; width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 1px solid var(--pi-border-muted); }
-  .editor-input:has(.editor-chat-navigation) .editor-attach .prompt-action-icon { width: 14px; height: 14px; }
-  .editor-attach { position: absolute; right: 0; bottom: 0; z-index: 2; border-inline-start: 1px solid var(--pi-border-muted); }
+  .editor-attach { position: absolute; inset-inline-end: 0; bottom: 0; z-index: 2; box-sizing: border-box; width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 1px solid var(--pi-border-muted); }
+  .editor-attach .prompt-action-icon { width: 14px; height: 14px; }
   .attach-source-panel .attach-source-label { display: inline-flex; align-items: center; min-width: 0; }
   .attach-source-panel .attach-source-icon { display: inline-grid; place-items: center; flex: 0 0 auto; width: 16px; height: 16px; margin-inline-end: 9px; color: var(--pi-muted); }
   .attach-source-panel .attach-source-icon .prompt-action-icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
@@ -279,11 +269,11 @@ export const promptEditorLayoutStyles = css`
   textarea:focus-visible, .markdown-editor:focus-within { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
   .shell-mode textarea { background: var(--pi-success-bg); }
   .shell-mode textarea:focus-visible, .shell-mode .markdown-editor:focus-within { outline-color: var(--pi-success); }
-  .mode-hint { position: absolute; right: 46px; bottom: 8px; max-width: calc(100% - 54px); border: 1px solid var(--pi-success-border); border-radius: 999px; background: var(--pi-success-surface); color: var(--pi-success); padding: 2px 8px; font-size: 12px; pointer-events: none; }
+  .mode-hint { position: absolute; inset-inline-end: 46px; bottom: 8px; box-sizing: border-box; max-width: calc(100% - 54px); overflow-wrap: anywhere; border: 1px solid var(--pi-success-border); border-radius: 999px; background: var(--pi-success-surface); color: var(--pi-success); padding: 2px 8px; font-size: 12px; pointer-events: none; }
   .prompt-chips, .attachments { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 12px; }
   .prompt-chip { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); padding-inline-start: 6px; }
   .prompt-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chip-error { flex-basis: 100%; color: var(--pi-danger); font-size: 12px; }
+  .chip-error { overflow-wrap: anywhere; min-width: 0; flex-basis: 100%; color: var(--pi-danger); font-size: 12px; }
   .attachment-chip { --attachment-remove-width: 32px; position: relative; width: 56px; height: 56px; padding-inline-end: var(--attachment-remove-width); border: 1px solid var(--pi-border); border-radius: 8px; overflow: hidden; background: var(--pi-bg); }
   .attachment-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .attachment-chip-file { display: grid; place-items: center; }
@@ -292,7 +282,7 @@ export const promptEditorLayoutStyles = css`
   .attachment-remove { position: absolute; top: 0; inset-inline-end: 0; width: var(--attachment-remove-width); height: 100%; border-inline-start: 1px solid var(--pi-border-muted); background: var(--pi-surface); }
   .attachment-delivery { min-width: 0; max-width: 100%; }
   .attachment-delivery .ui-select { width: 100%; }
-  .attachment-error { flex-basis: 100%; color: var(--pi-danger); font-size: 12px; }
+  .attachment-error { overflow-wrap: anywhere; min-width: 0; flex-basis: 100%; color: var(--pi-danger); font-size: 12px; }
   textarea:disabled { opacity: .5; cursor: not-allowed; }
   }
 `;

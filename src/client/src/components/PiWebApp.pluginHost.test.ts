@@ -10,7 +10,9 @@ import { InMemoryTerminalSelectionMemory } from "../../../../pi-web-plugins/term
 import type { QualifiedContributionId, WorkspaceFilesCapabilityV1, WorkspacePanelContext as PublicWorkspacePanelContext } from "../../../plugin-api";
 import type { Machine, Project, SessionInfo, TerminalCommandRun, Workspace, WorkspaceProviderResolution } from "../api";
 import { machineScopedBundledPluginId, machineScopedPluginId } from "../../../shared/machinePluginIds";
-import { initialAppState } from "../appState";
+import { initialAppState, type AppState } from "../appState";
+import { localization } from "../localization/browser";
+import { pluginRecoveryMessages as recovery } from "../pluginRecoveryMessages";
 import { AppShellController } from "../appShell/appShellController";
 import { loadCachedNewSessions, markCachedNewSessionInfo, rememberCachedNewSession } from "../cachedNewSessions";
 import { loadDraft, saveDraft } from "../promptDraftStorage";
@@ -80,10 +82,80 @@ afterEach(async () => {
     vi.unstubAllGlobals();
     window.localStorage.clear();
     window.sessionStorage.clear();
+    await localization.setPreferences({ language: "en", formatLocale: "en" });
   }
 });
 
 describe("PiWebApp plugin host", () => {
+  it("retains live required-plugin recovery and dismissal across language changes", async () => {
+    installBrowserWindow("http://localhost/app");
+    const app = createDetachedApp();
+    stubPluginLoadRendering(app);
+    const diagnostic = "raw /srv/插件: unavailable";
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await callAsyncAppMethod(app, "registerExternalPlugins", () => recovery.t("remoteSource", { name: "机器" }),
+      () => Promise.reject(new Error(diagnostic)));
+    const english = displayedError(app);
+    for (const language of ["en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      expect(displayedError(app)).toBe(recovery.t("loadFailed", {
+        source: recovery.t("remoteSource", { name: "机器" }), detail: diagnostic,
+      }));
+      expect(displayedError(app)).not.toBe(english);
+      expect(displayedError(app)).toContain(diagnostic);
+    }
+    callAppMethod(app, "dismissDisplayedError");
+    await localization.setPreferences({ language: "en", formatLocale: "en" });
+    expect(displayedError(app)).toBe("");
+    await callAsyncAppMethod(app, "registerExternalPlugins", "PI WEB plugins", () => Promise.resolve({
+      terminalMode: "required", declarations: [], registrations: [],
+      failures: [{ entry: manifestEntry("pi-web.terminal"), error: new Error(diagnostic) }],
+    }));
+    expect(displayedError(app)).toBe(recovery.t("terminalLoadFailed", { detail: diagnostic }));
+    for (const language of ["en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      expect(displayedError(app)).toBe(recovery.t("terminalLoadFailed", { detail: diagnostic }));
+    }
+  });
+
+  it("localizes nested browser activation guidance instead of freezing it", async () => {
+    installBrowserWindow("http://localhost/app");
+    const app = createDetachedApp();
+    stubPluginLoadRendering(app);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await callAsyncAppMethod(app, "registerExternalPlugins", "PI WEB plugins", () => Promise.resolve({
+      terminalMode: "required", declarations: [], registrations: [], failures: [],
+    }));
+    for (const language of ["en", "en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      expect(displayedError(app)).toBe(recovery.t("terminalActivationFailed", {
+        phase: "validate", detail: recovery.t("registrationMissing"),
+      }));
+    }
+  });
+
+  it("updates every empty session guidance state in both pseudo modes", async () => {
+    installBrowserWindow("http://localhost/app");
+    const app = createDetachedApp();
+    const states = [
+      { isLoadingProjects: true },
+      { selectedProject: project, selectedWorkspace: workspace },
+      { selectedProject: project },
+      {},
+      { projects: [project] },
+    ];
+    const english = ["Loading projects…", "Select or start a session.", "Select a workspace to start a session.", "Add a project to start a session.", "Select a project and workspace to start a session."];
+    for (const [index, state] of states.entries()) {
+      setAppState(app, { ...initialAppState(), ...state });
+      await localization.setPreferences({ language: "en", formatLocale: "ar" });
+      expect(callAppMethod(app, "sessionEmptyMessage")).toBe(english[index]);
+      for (const language of ["en-XA", "ar-XB"]) {
+        await localization.setPreferences({ language, formatLocale: "en" });
+        expect(callAppMethod(app, "sessionEmptyMessage")).not.toBe(english[index]);
+      }
+    }
+  });
+
   it.each(["", "Requested plugin failed to load"])("keeps tool tabs usable without substituting content when a selected tool fails: %s", async (error) => {
     const app = createApp();
     setAppState(app, { ...initialAppState(), selectedProject: project, selectedWorkspace: workspace });
@@ -136,6 +208,15 @@ describe("PiWebApp plugin host", () => {
     expect(host.textContent).not.toContain("Workspace panel unavailable");
     if (query.includes("view=missing")) {
       expect(host.querySelector('.error.warning[role="alert"]')?.textContent).toContain("Unknown view: missing");
+      for (const language of ["en-XA", "ar-XB"]) {
+        await localization.setPreferences({ language, formatLocale: "en" });
+        render(app.render(), host);
+        const warning = host.querySelector('.error.warning[role="alert"]')?.textContent;
+        expect(warning).not.toContain("Unknown view: missing");
+        expect(warning).toContain("missing");
+      }
+      await localization.setPreferences({ language: "en", formatLocale: "en" });
+      render(app.render(), host);
     } else {
       expect(host.querySelector('.error.warning[role="alert"]')).toBeNull();
     }
@@ -799,7 +880,7 @@ describe("PiWebApp plugin host", () => {
     const creation = deferred<SessionInfo>();
     const startSession = vi.fn(() => creation.promise);
     const connectedSessionIds: string[] = [];
-    const socket: SessionEventSocket = { connect: (session) => { connectedSessionIds.push(session.id); }, setHandler: () => undefined, close: () => undefined };
+    const socket: SessionEventSocket = { connect: (session) => { connectedSessionIds.push(session.id); }, setHandler: () => undefined, reconnect: () => undefined, close: () => undefined };
     const sessionKey = (id: string) => machineSessionKey("local", id);
     if (!Reflect.set(sessions, "socket", socket)
       || !Reflect.set(sessions, "notifications", undefined)
@@ -899,17 +980,13 @@ describe("PiWebApp plugin host", () => {
     expect(focusNavigationTarget).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { mobile: true, count: 1, selected: true, target: "sessions" },
-    { mobile: true, count: 2, selected: true, target: "workspaces" },
-    { mobile: false, count: 1, selected: true, target: "workspaces" },
-    { mobile: true, count: 0, selected: false, target: "workspaces" },
-    { mobile: true, count: 1, selected: false, target: "workspaces" },
-  ])("advances after project loading without an unnecessary mobile workspace choice: %j", async ({ mobile, count, selected, target }) => {
+  // Mobile topology and loading transitions are covered through the real
+  // WorkspaceController in PiWebApp.mobileNavigation.test.ts.
+  it("keeps the desktop workspace step after selecting a single-workspace project", async () => {
     const app = createApp();
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("App shell unavailable");
-    shell.isMobileNavigationLayout = mobile;
+    shell.isMobileNavigationLayout = false;
     const focusNavigationTarget = vi.fn();
     if (!Reflect.set(app, "focusNavigationTarget", focusNavigationTarget)) throw new Error("Could not stub navigation focus");
     if (!Reflect.set(app, "withChatScrollTransition", async (action: () => Promise<void>) => { await action(); })) throw new Error("Could not stub navigation transition");
@@ -917,10 +994,45 @@ describe("PiWebApp plugin host", () => {
     setAppState(app, { ...initialAppState(), selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace, { ...workspace, id: "previous-other" }] });
     await callAsyncAppMethod(app, "selectNavigationItem", "projects", "workspaces", async () => {
       await Promise.resolve();
-      const workspaces = Array.from({ length: count }, (_, index) => ({ ...workspace, id: `loaded-${String(index)}` }));
-      setAppState(app, { ...appState(app), workspaces, selectedWorkspace: selected ? workspaces[0] : undefined });
+      const loadedWorkspace = { ...workspace, id: "loaded-workspace" };
+      setAppState(app, { ...appState(app), workspaces: [loadedWorkspace], selectedWorkspace: loadedWorkspace });
     });
-    expect(focusNavigationTarget).toHaveBeenCalledWith(target, expect.any(Function));
+    expect(focusNavigationTarget).toHaveBeenCalledWith("workspaces", expect.any(Function));
+  });
+
+  it.each(["success", "unavailable"] as const)("opens the restored session before advancing to Chat (%s)", async (outcome) => {
+    const app = createDetachedApp();
+    const previous: SessionInfo = { id: "previous", cwd: workspace.path, path: "/repo/previous.jsonl", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
+    const archived = { ...previous, id: "archived", path: "/repo/archived.jsonl", archived: true };
+    const restored: SessionInfo = { ...archived };
+    delete restored.archived;
+    setAppState(app, { ...initialAppState(), selectedProject: project, selectedWorkspace: workspace, selectedSession: previous, sessions: [previous, archived], mainView: "navigation" });
+    const restore = vi.spyOn(SessionController.prototype, "restoreSession").mockResolvedValue(outcome === "success" ? restored : undefined);
+    const select = vi.fn((session: SessionInfo) => {
+      setAppState(app, { ...appState(app), selectedSession: session });
+      return Promise.resolve(true);
+    });
+    Reflect.set(app, "selectSessionFromNavigation", select);
+    const focus = vi.fn(() => { expect(appState(app).selectedSession?.id).toBe(restored.id); });
+    Reflect.set(app, "focusNavigationTarget", focus);
+    Reflect.set(app, "withChatScrollTransition", async (action: () => Promise<void>) => { await action(); });
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(callAppMethod(app, "renderNavigationPanel"), host);
+    const panel = host.querySelector("app-navigation-panel");
+    if (!(panel instanceof AppNavigationPanel)) throw new Error("Navigation panel was not rendered");
+
+    await panel.onRestoreSession?.(archived);
+
+    expect(restore).toHaveBeenCalledWith(archived);
+    if (outcome === "success") {
+      expect(select).toHaveBeenCalledWith(restored);
+      expect(focus).toHaveBeenCalledWith("chat", expect.any(Function));
+    } else {
+      expect(select).not.toHaveBeenCalled();
+      expect(focus).not.toHaveBeenCalled();
+      expect(appState(app).selectedSession).toBe(previous);
+    }
   });
 
   it("does not focus a navigation target when its guarded navigation is rejected", async () => {
@@ -1211,6 +1323,15 @@ describe("PiWebApp plugin host", () => {
     expect(callAppMethod(app, "visibleBrowserErrorsForCurrentRoute", appState(app))).toEqual([
       expect.objectContaining({ message: "Project not found: missing-project" }),
     ]);
+    for (const language of ["en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      const display = callAppMethod(app, "sessionEmptyMessage");
+      expect(display).not.toBe("Project not found: missing-project");
+      expect(display).toContain("missing-project");
+      if (typeof display !== "string") throw new Error("Expected route feedback");
+      await expectWorkspaceContentError(app, display);
+      expect(Object.values(appState(app).browserErrors)[0]?.displayMessage?.()).toBe(display);
+    }
   });
 
   it("preserves a missing session route while retaining its workspace", async () => {
@@ -1280,6 +1401,17 @@ describe("PiWebApp plugin host", () => {
     ]);
     expect(callAppMethod(app, "sessionEmptyMessage")).toContain(message);
     if (appState(app).selectedWorkspace === undefined) await expectWorkspaceContentError(app, message);
+    const english = callAppMethod(app, "sessionEmptyMessage");
+    for (const language of ["en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      const display = callAppMethod(app, "sessionEmptyMessage");
+      if (scenario.endsWith("failure")) expect(display).toBe(english);
+      else {
+        expect(display).not.toBe(english);
+        expect(display).toContain(scenario === "missing workspace" ? workspace.id : "requested-session");
+      }
+      expect(browser.url.href).toBe(destination);
+    }
   });
 
   it.each([
@@ -1489,6 +1621,7 @@ describe("PiWebApp plugin host", () => {
     const socket: SessionEventSocket = {
       connect: (_session, onEvent) => { handler = onEvent; },
       setHandler,
+      reconnect: () => undefined,
       close: () => { handler = undefined; },
     };
     const status = { sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false, pendingMessageCount: 0, queuedMessages: [], tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 };
@@ -1587,7 +1720,7 @@ describe("PiWebApp plugin host", () => {
     let handler: ((event: SessionUiEvent) => void) | undefined;
     const connect = vi.fn<SessionEventSocket["connect"]>((_session, onEvent) => { handler = onEvent; });
     const close = vi.fn(() => { handler = undefined; });
-    const socket: SessionEventSocket = { connect, close, setHandler: (onEvent) => { handler = onEvent; } };
+    const socket: SessionEventSocket = { connect, close, reconnect: () => undefined, setHandler: (onEvent) => { handler = onEvent; } };
     Reflect.set(sessions, "socket", socket);
     const restoring = callAsyncAppMethod(app, "restoreRoute", false);
     await vi.waitFor(() => { expect(sessions.isChatLoadDeferred).toBe(true); });
@@ -3249,6 +3382,35 @@ describe("PiWebApp plugin host", () => {
     expect(appState(app).browserErrors).toEqual({});
   });
 
+  it("treats an old Notices history entry as unavailable after conditions clear without rewriting history", async () => {
+    const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&view=chat&step=origin");
+    const app = createDetachedApp();
+    const selectedSession = runtimeRecoverySession(workspace);
+    const status: NonNullable<AppState["status"]> = {
+      sessionId: selectedSession.id, isStreaming: false, isCompacting: false, isBashRunning: false,
+      pendingMessageCount: 0, queuedMessages: [], cost: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      warnings: [{ severity: "warning", message: "Persistent condition" }],
+    };
+    setAppState(app, { ...initialAppState(), selectedProject: project, selectedWorkspace: workspace, workspaces: [workspace], selectedSession, status, mainView: "chat" });
+    await markPluginLoadingReady(app);
+    expect(callAppMethod(app, "visibleWorkspacePanels")).toEqual(expect.arrayContaining([expect.objectContaining({ id: "core:notices" })]));
+    window.history.pushState({}, "", "?project=project-1&workspace=workspace-1&tool=core%3Anotices&view=workspace&step=notices");
+    window.history.pushState({}, "", "?project=project-1&workspace=workspace-1&view=chat&step=later");
+    setAppState(app, { ...appState(app), status: { ...status, warnings: [] } });
+    browser.pushed.splice(0); browser.replaced.splice(0);
+    window.history.back();
+    await vi.waitFor(() => { expect(browser.url.searchParams.get("step")).toBe("notices"); });
+    callAppMethod(app, "onPopState");
+    await vi.waitFor(() => { expect(appState(app).mainView).toBe("workspace"); });
+    expect(callAppMethod(app, "availableWorkspacePanelId", "core:notices")).toBeUndefined();
+    expect(callAppMethod(app, "workspaceContentError")).not.toBe("");
+    expect(browser.url.searchParams.get("tool")).toBe("core:notices");
+    expect(browser.pushed).toHaveLength(0); expect(browser.replaced).toHaveLength(0);
+    window.history.back();
+    await vi.waitFor(() => { expect(browser.url.searchParams.get("step")).toBe("origin"); });
+  });
+
   it("preserves an unavailable panel on popstate and the adjacent history entries", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&tool=core%3Aworkspace.terminal&view=workspace&step=origin");
     const app = createDetachedApp();
@@ -4102,7 +4264,12 @@ describe("PiWebApp plugin host", () => {
     await expect(context.terminal.runCommand({ title: "Unavailable", command: "true" }))
       .rejects.toThrow("Required Terminal plugin is unavailable");
     context.terminal.open();
-    expect(appState(app).error).toContain("Required Terminal plugin is unavailable");
+    const error = Object.values(appState(app).browserErrors).find((entry) => entry.scope.kind === "machine" && entry.scope.machineId === "local");
+    expect(error?.displayMessage?.()).toBe(recovery.t("terminalUnavailable"));
+    for (const language of ["en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      expect(error?.displayMessage?.()).toBe(recovery.t("terminalUnavailable"));
+    }
   });
 
   it("hides a failed registered Terminal contribution and re-enables the same paired revision on retry", async () => {
@@ -4256,7 +4423,7 @@ describe("PiWebApp plugin host", () => {
 
     expect(appPluginRegistry(app).hasPlugin("pi-web.terminal")).toBe(false);
     expect(appPluginRegistry(app).hasPlugin("info")).toBe(false);
-    expect(displayedError(app)).toContain("Required Terminal plugin failed during browser activate");
+    expect(displayedError(app)).toContain("Required Terminal plugin failed during browser activation");
     expect(displayedError(app)).toContain("Terminal activation failed");
   });
 
@@ -4296,7 +4463,7 @@ describe("PiWebApp plugin host", () => {
 
     expect(appPluginRegistry(app).hasPlugin("pi-web.terminal")).toBe(false);
     expect(ordinaryActivate).not.toHaveBeenCalled();
-    expect(displayedError(app)).toContain("Required Terminal plugin failed during browser start");
+    expect(displayedError(app)).toContain("Required Terminal plugin failed during browser startup");
     expect(displayedError(app)).toContain("Terminal start failed");
   });
 
@@ -4334,7 +4501,7 @@ describe("PiWebApp plugin host", () => {
     await ensureGatewayPluginsLoaded(app);
 
     expect(appPluginRegistry(app).hasPlugin("pi-web.terminal")).toBe(false);
-    expect(displayedError(app)).toContain("Required Terminal plugin failed during browser validate");
+    expect(displayedError(app)).toContain("Required Terminal plugin failed during browser validation");
     expect(displayedError(app)).toContain("did not provide facade v1");
   });
 
@@ -4385,7 +4552,7 @@ describe("PiWebApp plugin host", () => {
     expect(callAppMethod(app, "getDefaultActions")).toEqual(expect.not.arrayContaining([
       expect.objectContaining({ id: "pi-web.terminal:partial" }),
     ]));
-    expect(displayedError(app)).toContain("Required Terminal plugin failed during browser validate");
+    expect(displayedError(app)).toContain("Required Terminal plugin failed during browser validation");
     expect(displayedError(app)).toContain("did not provide required capability pi-web.terminal/browser-facade v1");
   });
 
@@ -4733,6 +4900,7 @@ async function installRuntimeRecoveryBoundaries(
   const socket: SessionEventSocket = {
     connect: () => undefined,
     setHandler: () => undefined,
+    reconnect: () => undefined,
     close: () => undefined,
   };
   if (!Reflect.set(sessions, "socket", socket)

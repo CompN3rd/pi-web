@@ -34,6 +34,7 @@ function recordingWorkspaceActivity() {
   return {
     calls,
     workspaceActivity: {
+      applySessionIntervention: () => { calls.push("applySessionIntervention"); },
       applySessionStatus: () => { calls.push("applySessionStatus"); },
       applySessionActivity: () => { calls.push("applySessionActivity"); },
       removeSession: () => { calls.push("removeSession"); },
@@ -78,7 +79,10 @@ describe("PiSessionService session startup progress", () => {
     // The proof that matters: the user is told what is being waited on before
     // the wait ends, not after it.
     expect(startupText(hub)).toEqual(["Creating session: Starting the Pi session"]);
-    expect(startupEvents(hub).at(0)).toMatchObject({ activity: { sessionId: "session-1", phase: "active" } });
+    expect(startupEvents(hub).at(0)).toMatchObject({ activity: {
+      sessionId: "session-1", phase: "active",
+      startupPresentation: { intent: "create", stage: "runtime", catalogRefreshing: false },
+    } });
 
     runtimeResult.resolve(fake.runtime);
     await started;
@@ -120,6 +124,11 @@ describe("PiSessionService session startup progress", () => {
       "Creating session: Loading session extensions · provider model lists are refreshing",
       "idle",
     ]);
+    expect(startupEvents(hub).map(({ activity }) => activity.startupPresentation)).toEqual([
+      { intent: "create", stage: "runtime", catalogRefreshing: true },
+      { intent: "create", stage: "extensions", catalogRefreshing: true },
+      undefined,
+    ]);
     await service.dispose();
   });
 
@@ -135,6 +144,8 @@ describe("PiSessionService session startup progress", () => {
         "Creating session: Loading session extensions",
         "idle",
       ]);
+      expect(startupEvents(hub).at(-1)).toMatchObject({ activity: { sessionId: "session-1", phase: "idle", label: "idle" } });
+      expect(startupEvents(hub).at(-1)?.activity.detail).toBeUndefined();
     }
     await withStatus.service.dispose();
     await withoutStatus.service.dispose();
@@ -150,16 +161,11 @@ describe("PiSessionService session startup progress", () => {
       "Opening session: Loading session extensions",
       "idle",
     ]);
-    await service.dispose();
-  });
-
-  it("ends the startup window with an idle report when creation succeeds", async () => {
-    const { hub, service } = startupService();
-
-    await service.start("/workspace");
-
-    expect(startupEvents(hub).at(-1)).toMatchObject({ activity: { sessionId: "session-1", phase: "idle", label: "idle" } });
-    expect(startupEvents(hub).at(-1)?.activity.detail).toBeUndefined();
+    expect(startupEvents(hub).map(({ activity }) => activity.startupPresentation)).toEqual([
+      { intent: "open", stage: "runtime", catalogRefreshing: false },
+      { intent: "open", stage: "extensions", catalogRefreshing: false },
+      undefined,
+    ]);
     await service.dispose();
   });
 

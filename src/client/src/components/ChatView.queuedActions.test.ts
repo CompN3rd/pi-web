@@ -36,6 +36,11 @@ function button(view: ChatView, selector: string): HTMLButtonElement {
 }
 
 describe("queued message actions", () => {
+  it("does not warn about recalled attachment loss for attachments on a later message", () => {
+    const attached = messages.map((message, index) => ({ ...message, hasAttachments: index === 2 }));
+    expect(queuedMessageRecallConfirmation(attached, 0)).not.toContain("attachments");
+  });
+
   it("shows attachment indicators and counts, including attachment-only messages", async () => {
     const view = await queuedView([
       { kind: "steer", text: "picture", hasAttachments: true, attachmentCount: 1 },
@@ -55,16 +60,8 @@ describe("queued message actions", () => {
     await view.updateComplete;
     expect(view.shadowRoot?.querySelector(".queued-attachments")?.textContent).toContain("2 attachments");
   });
-  it("renders named icon-only queue controls, including both switch destinations", async () => {
+  it("switches a follow-up message to steer using its queue index", async () => {
     const view = await queuedView();
-    view.onClearServerQueue = vi.fn();
-    await view.updateComplete;
-    for (const label of ["Clear queue", "Copy queued message", "Switch to Queue", "Switch to Steer", "Recall queued message", "Remove queued message"]) {
-      const control = button(view, `[aria-label="${label}"]`);
-      expect(control.title).not.toBe("");
-      expect(control.querySelector('[aria-hidden="true"]')).not.toBeNull();
-      expect(control.textContent.trim()).toBe(label === "Copy queued message" ? "⧉" : "");
-    }
     button(view, '[aria-label="Switch to Steer"]').click();
     expect(view.onQueuedMessageAction).toHaveBeenCalledWith({ machineId: "remote", sessionId: "session", action: "toggle", index: 2, expectedQueue: messages });
   });
@@ -162,18 +159,5 @@ describe("queued message actions", () => {
     remove.click();
     expect(view.onQueuedMessageAction).not.toHaveBeenCalled();
     expect(button(view, '[aria-label="Copy queued message"]').disabled).toBe(false);
-  });
-
-  it("confirms clearing later messages without an attachment warning for text-only recall", () => {
-    expect(queuedMessageRecallConfirmation(messages, 0)).toBe("Recall this message?\n\nThis will also remove 1 later steer and 1 queued follow-up.");
-    expect(queuedMessageRecallConfirmation(messages, 1)).toBe("Recall this message?\n\nThis will also remove 1 queued follow-up.");
-    expect(queuedMessageRecallConfirmation(messages, 2)).toBeUndefined();
-  });
-
-  it("warns about attachment loss only on the recalled message", () => {
-    const attached = messages.map((message, index) => ({ ...message, hasAttachments: index === 2 }));
-    expect(queuedMessageRecallConfirmation(attached, 0)).not.toContain("attachments");
-    expect(queuedMessageRecallConfirmation(attached, 2)).toBe("Recall this message? Only its text will return to the composer. Its attachments will be lost.");
-    expect(queuedMessageRecallConfirmation([{ kind: "steer", text: "attached", hasAttachments: true }, { kind: "followUp", text: "later" }], 0)).toBe("Recall this message? Only its text will return to the composer. Its attachments will be lost.\n\nThis will also remove 1 queued follow-up.");
   });
 });

@@ -11,25 +11,25 @@ export interface UpdatesRuntimeHint {
 
 // The shared update CLI owns installation-specific planning, confirmation, and
 // safe execution. Stale components without an available update need a restart.
-export function recommendedCommand(status: PiWebStatusResponse): CommandEntry | undefined {
+export function recommendedCommand(status: PiWebStatusResponse, label: (key: "update" | "restart") => string = (key) => key === "update" ? "Update PI WEB" : "Restart everything"): CommandEntry | undefined {
   const { commands, release, components } = status;
   if (release.updateAvailable && typeof commands.update === "string" && commands.update !== "") {
-    return { label: "Update PI WEB", command: commands.update };
+    return { label: label("update"), command: commands.update };
   }
-  const restartNeeded = components.web.stale || components.sessiond.stale || !components.sessiond.available;
+  const restartNeeded = components.web.stale || components.sessiond.stale;
   if (restartNeeded && typeof commands.restart === "string" && commands.restart !== "") {
-    return { label: "Restart everything", command: commands.restart };
+    return { label: label("restart"), command: commands.restart };
   }
   return undefined;
 }
 
-export function additionalCommands(status: PiWebStatusResponse, recommended: CommandEntry | undefined): CommandEntry[] {
+export function additionalCommands(status: PiWebStatusResponse, recommended: CommandEntry | undefined, label: (key: "updateOptional" | "restartAll" | "restartWeb" | "restartSessiond" | "status") => string = (key) => ({ updateOptional: "Update", restartAll: "Restart all", restartWeb: "Restart Web/UI", restartSessiond: "Restart session daemon", status: "Status" })[key]): CommandEntry[] {
   return [
-    ["Update", status.commands.update],
-    ["Restart all", status.commands.restart],
-    ["Restart Web/UI", status.commands.restartWeb],
-    ["Restart session daemon", status.commands.restartSessiond],
-    ["Status", status.commands.status],
+    [label("updateOptional"), status.commands.update],
+    [label("restartAll"), status.commands.restart],
+    [label("restartWeb"), status.commands.restartWeb],
+    [label("restartSessiond"), status.commands.restartSessiond],
+    [label("status"), status.commands.status],
   ]
     .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== "")
     .filter(([, command]) => command !== recommended?.command)

@@ -121,6 +121,7 @@ function pluginsPath(machineId?: string): string {
 export const configApi = {
   namingModels: (machineId = "local") => request(`${machinePrefix(machineId)}/models`, parseModelSelectionResponse),
   config: (machineId?: string) => request(configPath(machineId), parsePiWebConfigResponse),
+  updateConfig: (update: { set?: PiWebConfigValues; unset?: string[] }, machineId?: string) => request(configPath(machineId), parsePiWebConfigResponse, { method: "PATCH", body: JSON.stringify(update) }),
   saveConfig: (config: PiWebConfigValues, machineId?: string) => request(configPath(machineId), parsePiWebConfigResponse, { method: "PUT", body: JSON.stringify({ config }) }),
 };
 
@@ -238,6 +239,7 @@ export const sessionsApi = {
     options?.signal === undefined ? undefined : { signal: options.signal },
   ),
   unreadCatalog: (machineId = "local") => request(`${machinePrefix(machineId)}/sessions/unread`, parseSessionUnreadCatalogSnapshot, { cache: "no-store" }),
+  markUnread: (session: SessionRef, machineId = "local") => request(sessionPath(session, "unread", machineId), parseSessionUnreadCatalogSnapshot, { method: "POST", body: JSON.stringify({ cwd: session.cwd }) }),
   acknowledgeUnread: (session: SessionRef, catalogId: string, throughCompletionOrder: number, machineId = "local") => {
     const body: SessionUnreadAcknowledgeRequest = { cwd: session.cwd, catalogId, throughCompletionOrder };
     return request(sessionPath(session, "unread/acknowledge", machineId), parseSessionUnreadCatalogSnapshot, { method: "POST", body: JSON.stringify(body) });
@@ -253,7 +255,10 @@ export const sessionsApi = {
   messages: (session: SessionRef, options?: { limit?: number; before?: number }, machineId = "local") => request(messagePath(session, options, machineId), parseMessagePage),
   status: (session: SessionRef, machineId = "local") => request(sessionQueryPath(session, "status", machineId), parseSessionStatus),
   streamSnapshot: (session: SessionRef, machineId = "local") => request(streamSnapshotPath(session, machineId), parseSessionStreamSnapshot),
-  transcriptSnapshot: (session: SessionRef, options?: { limit?: number }, machineId = "local") => request(transcriptSnapshotPath(session, options, machineId), parseSessionTranscriptSnapshot),
+  transcriptSnapshot: (session: SessionRef, options?: { limit?: number; signal?: AbortSignal; timeoutMs?: number }, machineId = "local") => request(
+    transcriptSnapshotPath(session, options, machineId), parseSessionTranscriptSnapshot,
+    { ...(options?.signal === undefined ? {} : { signal: options.signal }), ...(options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) },
+  ),
   mutateQueuedMessage: (session: SessionRef, mutation: SessionQueueMessageMutation, machineId = "local") => request(sessionPath(session, "queue/message", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { ...mutation }) }),
   clearQueue: (session: SessionRef, machineId = "local") => request(sessionPath(session, "queue/clear", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session) }),
   dismissWarning: (session: SessionRef, dismissId: string, machineId = "local") => request(sessionPath(session, "warnings/dismiss", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { dismissId }) }),

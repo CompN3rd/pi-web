@@ -1,9 +1,15 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { TerminalPanel } from "../../pi-web-plugins/terminal/TerminalPanel";
+import { createTerminalContent } from "../../pi-web-plugins/terminal/terminalLocalization";
+import { LocalizationService } from "../../src/client/src/localization/service";
+import { createPluginLocalization } from "../../src/client/src/plugins/localization";
 
 customElements.define("fixture-terminal-panel", TerminalPanel);
 const panel = new TerminalPanel();
+const lifetime = new AbortController();
+panel.content = createTerminalContent(createPluginLocalization(new LocalizationService(), "pi-web.terminal", "fixture", lifetime.signal));
+window.addEventListener("pagehide", () => { lifetime.abort(); }, { once: true });
 panel.style.cssText = "width: 100%; height: 100%;";
 document.body.style.cssText = "margin: 0; height: 100dvh;";
 document.body.append(panel);

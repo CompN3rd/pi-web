@@ -86,6 +86,11 @@ describe("settings config drafts", () => {
     expect(machineAccessDraftFromConfig({ installationName: "Studio" }).installationName).toBe("Studio");
   });
 
+  it("preserves localization defaults when saving gateway fields", () => {
+    const defaultLocalization = { language: "fr", formatLocale: "de-DE", timeZone: "UTC", hourCycle: "h23" as const };
+    expect(gatewayServerConfigFromDraft(gatewayServerDraftFromConfig({}), { defaultLocalization }).defaultLocalization).toEqual(defaultLocalization);
+  });
+
   it("preserves the default theme when saving gateway fields", () => {
     const defaultTheme = { themeId: "themes:pi-web-light", auto: false };
     expect(gatewayServerConfigFromDraft(gatewayServerDraftFromConfig({}), { defaultTheme }).defaultTheme).toEqual(defaultTheme);
@@ -95,6 +100,12 @@ describe("settings config drafts", () => {
     const draft = gatewayServerDraftFromConfig({ host: "gateway.local" });
     expect(gatewayServerConfigFromDraft(draft, { defaultStreamingBehavior }).defaultStreamingBehavior).toBe(defaultStreamingBehavior);
     expect(gatewayServerConfigFromDraft(draft)).not.toHaveProperty("defaultStreamingBehavior");
+  });
+
+  it.each([true, false])("preserves sessionMessages %s during gateway edits", (sessionMessages) => {
+    const draft = gatewayServerDraftFromConfig({ host: "gateway.local" });
+    expect(gatewayServerConfigFromDraft(draft, { sessionMessages }).sessionMessages).toBe(sessionMessages);
+    expect(gatewayServerConfigFromDraft(draft)).not.toHaveProperty("sessionMessages");
   });
 
   it.each([true, false])("preserves quietMode %s during gateway edits", (quietMode) => {

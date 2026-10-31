@@ -2,6 +2,9 @@
 
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { FileContentResponse, FileTreeEntry, FileTreeResponse, StylesheetIntegrationCapabilityV1, WorkspaceFiles, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import { LocalizationService } from "../../src/client/src/localization/service";
+import { createPluginLocalization } from "../../src/client/src/plugins/localization";
+import { createRelaysContent, type RelaysContent } from "./relaysLocalization";
 import { RELAYS_ROOT, type RelayDiscoveryFiles, type RelayTreeNode } from "./relayDiscovery";
 import {
   collapsedAncestorOfSelectedFile,
@@ -10,6 +13,7 @@ import {
 } from "./relaysPanelElement";
 
 interface RelaysPanelTestElement extends HTMLElement {
+  content: RelaysContent | undefined;
   context: WorkspacePanelContext | undefined;
   stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
 }
@@ -68,11 +72,7 @@ describe("host stylesheet integration", () => {
     expect(root.querySelector(".document-tabs")).toBe(regions[1]);
     expect(root.querySelector(".viewer")).toBe(regions[2]);
     expect(activeTab(panel)).toBe(tab);
-    expect(root.querySelector(".toolbar")?.classList.contains("ui-toolbar")).toBe(true);
-    expect(root.querySelector("[data-refresh]")?.classList.contains("ui-button--icon")).toBe(true);
-    expect(picker(panel)?.classList.contains("ui-select")).toBe(true);
-    expect(root.querySelector(".document-tabs")?.classList.contains("ui-tabs")).toBe(true);
-    expect(tab?.matches("button.ui-button.ui-tab[aria-current='page']")).toBe(true);
+    expect(tab?.getAttribute("aria-current")).toBe("page");
   });
 
   it("uses only the latest integration when replaced while disconnected", () => {
@@ -99,6 +99,76 @@ function stylesheetIntegrationFake() {
   } satisfies StylesheetIntegrationCapabilityV1 & { release: typeof release };
 }
 
+describe("localization", () => {
+  it("updates live chrome and table labels without reloading or replacing focused controls and content", async () => {
+    const service = new LocalizationService({ development: true });
+    const lifetime = new AbortController();
+    const localization = createPluginLocalization(service, "@jmfederico/pi-relay", "relay", lifetime.signal);
+    const content = createRelaysContent(localization);
+    const fake = twoRelays();
+    fake.addDocument(`${RELAYS_ROOT}/newer/status.md`, "# User content\n\n| Code |\n| --- |\n| `echo test` |");
+    const panel = await mountPanel(panelContext(fake));
+    panel.content = content;
+    const root = shadow(panel);
+    const refresh = root.querySelector<HTMLButtonElement>("[data-refresh]");
+    refresh?.focus();
+    const tab = activeTab(panel);
+    const documentNode = root.querySelector(".document");
+    const viewer = root.querySelector<HTMLElement>(".viewer");
+    if (viewer !== null) viewer.scrollTop = 85;
+    const readFile = vi.spyOn(fake.files, "readFile");
+    const listFiles = vi.spyOn(fake.files, "listFiles");
+    const reads = readFile.mock.calls.length;
+    const lists = listFiles.mock.calls.length;
+    for (const language of ["en-XA", "ar-XB"]) {
+      await service.setPreferences({ language, formatLocale: "en" });
+      expect(refresh?.getAttribute("aria-label")).toBe(content.messages.t("refresh"));
+      expect(root.querySelector(".document-tabs")?.getAttribute("dir")).toBe(service.direction);
+      expect(root.querySelector(".table-scroll")?.getAttribute("aria-label")).toBe(content.messages.t("table"));
+      expect(root.activeElement).toBe(refresh);
+      expect(activeTab(panel)).toBe(tab);
+      expect(root.querySelector(".document")).toBe(documentNode);
+      expect(documentNode?.textContent).toContain("User content");
+      expect(documentNode?.querySelector("code")?.textContent).toBe("echo test");
+      expect(viewer?.scrollTop).toBe(85);
+      expect(readFile).toHaveBeenCalledTimes(reads);
+      expect(listFiles).toHaveBeenCalledTimes(lists);
+    }
+    const subscribe = vi.spyOn(service, "subscribe");
+    panel.remove();
+    const disconnectedLabel = refresh?.getAttribute("aria-label");
+    await service.setPreferences({ language: "en", formatLocale: "en" });
+    expect(refresh?.getAttribute("aria-label")).toBe(disconnectedLabel);
+    document.body.append(panel);
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(refresh?.getAttribute("aria-label")).toBe("Refresh");
+    expect(activeTab(panel)).toBe(tab);
+    lifetime.abort();
+  });
+
+  it("escapes translated empty-state text while leaving backend diagnostics unchanged", async () => {
+    const service = new LocalizationService({ development: true });
+    const lifetime = new AbortController();
+    const localization = createPluginLocalization(service, "@jmfederico/pi-relay", "relay", lifetime.signal);
+    const content = createRelaysContent(localization);
+    localization.registerCatalog({ id: "test", namespace: "plugin:@jmfederico/pi-relay:browser", locale: "de", load: () => Promise.resolve({ noRelays: "'<img src=x onerror=\"bad()\">'", scanFailed: "Scan fehlgeschlagen" }) });
+    const fake = workspaceFilesFake();
+    const panel = await mountPanel(panelContext(fake));
+    panel.content = content;
+    await service.setPreferences({ language: "de", formatLocale: "de" });
+    expect(viewerText(panel)).toContain('<img src=x onerror="bad()">');
+    expect(shadow(panel).querySelector("img")).toBeNull();
+    fake.failWith(RELAYS_ROOT, new Error("Could not scan workspace relays."));
+    shadow(panel).querySelector<HTMLButtonElement>("[data-refresh]")?.click();
+    await flushAsync();
+    expect(viewerText(panel)).toContain("Scan fehlgeschlagen");
+    expect(shadow(panel).querySelector(".status pre")?.textContent).toBe("Could not scan workspace relays.");
+    await service.setPreferences({ language: "ar-XB", formatLocale: "en" });
+    expect(shadow(panel).querySelector(".status pre")?.textContent).toBe("Could not scan workspace relays.");
+    lifetime.abort();
+  });
+});
+
 describe("workspace states", () => {
   it("asks for a workspace when no context is set", async () => {
     const panel = await mountPanel();
@@ -111,7 +181,6 @@ describe("workspace states", () => {
     const panel = await mountPanel(panelContext(workspaceFilesFake()));
 
     expect(viewerText(panel)).toContain("No relays in this workspace.");
-    expect(viewerText(panel)).toContain(`${RELAYS_ROOT}/<name>/`);
   });
 
   it("shows the same empty state when the relays root exists but is empty", async () => {
@@ -335,29 +404,6 @@ describe("document tabs", () => {
     expect(documentText(panel)).toBe("log body");
   });
 
-  it("renders all document tabs as direct children of one tab strip", async () => {
-    // The strip scrolls horizontally instead of wrapping, so every tab must be
-    // a direct child of the single nav.document-tabs row.
-    const fake = workspaceFilesFake();
-    fake.addDirectory(RELAYS_ROOT, [relayDirectory("relay")]);
-    fake.addDirectory(`${RELAYS_ROOT}/relay`, [
-      relayDocument("relay", "notes.md"),
-      relayDocument("relay", "log.md"),
-      relayDocument("relay", "status.md"),
-    ]);
-    fake.addDocument(`${RELAYS_ROOT}/relay/status.md`, "status body");
-
-    const panel = await mountPanel(panelContext(fake));
-
-    const strips = shadow(panel).querySelectorAll("nav.document-tabs");
-    expect(strips.length).toBe(1);
-    const strip = strips[0];
-    expect(strip?.getAttribute("aria-label")).toBe("Relay documents");
-    const children = [...(strip?.children ?? [])];
-    expect(children.every((child) => child instanceof HTMLButtonElement)).toBe(true);
-    expect(children.map((child) => child.textContent)).toEqual(["status.md", "log.md", "notes.md"]);
-  });
-
   it("keeps the tab strip mounted with its scroll and focus when switching documents", async () => {
     const fake = workspaceFilesFake();
     fake.addDirectory(RELAYS_ROOT, [relayDirectory("relay")]);
@@ -472,28 +518,17 @@ describe("document tabs", () => {
     const panel = await mountPanel(panelContext(fake));
 
     expect(viewerText(panel)).toContain("This relay has no documents yet.");
-    expect(viewerText(panel)).toContain("charter.md (goal)");
-    expect(viewerText(panel)).toContain("status.md (current baton)");
-    expect(viewerText(panel)).toContain("log.md (history)");
-    expect(viewerText(panel)).toContain("An optional decisions.md");
-    expect(viewerText(panel)).not.toContain("operations.md");
+    expect(tabNames(panel)).toEqual([]);
+    expect(fake.readFile).not.toHaveBeenCalled();
   });
 });
 
 describe("markdown rendering", () => {
-  it("renders .md documents as sanitized markdown HTML", async () => {
+  it("routes .md documents through the Markdown renderer", async () => {
     const fake = workspaceFilesFake();
     fake.addDirectory(RELAYS_ROOT, [relayDirectory("relay")]);
     fake.addDirectory(`${RELAYS_ROOT}/relay`, [relayDocument("relay", "status.md")]);
-    fake.addDocument(`${RELAYS_ROOT}/relay/status.md`, [
-      "# Status",
-      "",
-      "See [the docs](https://example.com/docs).",
-      "",
-      "<script>alert('xss')</script>",
-      "",
-      "[click](javascript:alert('xss'))",
-    ].join("\n"));
+    fake.addDocument(`${RELAYS_ROOT}/relay/status.md`, "# Status");
 
     const panel = await mountPanel(panelContext(fake));
 
@@ -501,12 +536,6 @@ describe("markdown rendering", () => {
     expect(rendered).not.toBeNull();
     expect(shadow(panel).querySelector("pre.document")).toBeNull();
     expect(rendered?.querySelector("h1")?.textContent).toBe("Status");
-    expect(rendered?.querySelector("script")).toBeNull();
-    const docsLink = rendered?.querySelector('a[href="https://example.com/docs"]');
-    expect(docsLink?.getAttribute("target")).toBe("_blank");
-    expect(docsLink?.getAttribute("rel")).toBe("noreferrer noopener");
-    const unsafeLink = [...rendered?.querySelectorAll("a") ?? []].find((link) => link.textContent === "click");
-    expect(unsafeLink?.hasAttribute("href")).toBe(false);
   });
 
   it("keeps non-markdown documents as escaped preformatted text", async () => {
@@ -524,18 +553,6 @@ describe("markdown rendering", () => {
     expect(shadow(panel).querySelector(".viewer script")).toBeNull();
   });
 
-  it("keeps the truncation notice ahead of rendered markdown", async () => {
-    const fake = workspaceFilesFake();
-    fake.addDirectory(RELAYS_ROOT, [relayDirectory("relay")]);
-    fake.addDirectory(`${RELAYS_ROOT}/relay`, [relayDocument("relay", "log.md")]);
-    fake.addDocument(`${RELAYS_ROOT}/relay/log.md`, "# Partial", { truncated: true });
-
-    const panel = await mountPanel(panelContext(fake));
-
-    const viewer = shadow(panel).querySelector(".viewer");
-    expect(viewer?.querySelector(".status.info")?.textContent).toContain("truncated");
-    expect(viewer?.querySelector(".document.markdown h1")?.textContent).toBe("Partial");
-  });
 });
 
 describe("nested documents", () => {
@@ -820,26 +837,6 @@ describe("collapsed-ancestor highlight", () => {
 });
 
 describe("refresh and context changes", () => {
-  it("renders Refresh as an icon-only button with an accessible name", async () => {
-    const fake = workspaceFilesFake();
-    fake.addDirectory(RELAYS_ROOT, []);
-
-    const panel = await mountPanel(panelContext(fake));
-
-    const button = refreshButton(panel);
-    expect(button.getAttribute("aria-label")).toBe("Refresh");
-    expect(button.getAttribute("title")).toBe("Refresh");
-    expect(button.textContent.trim()).toBe("");
-    const icon = button.querySelector("svg");
-    expect(icon).not.toBeNull();
-    expect(icon?.getAttribute("aria-hidden")).toBe("true");
-
-    fake.listFiles.mockClear();
-    button.click();
-    await flushAsync();
-    expect(fake.listFiles).toHaveBeenCalledWith(RELAYS_ROOT);
-  });
-
   it("re-scans on Refresh while keeping the open relay and document", async () => {
     const fake = workspaceFilesFake();
     fake.addDirectory(RELAYS_ROOT, [

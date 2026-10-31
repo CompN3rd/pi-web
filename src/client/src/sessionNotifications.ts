@@ -1,3 +1,4 @@
+import { sessionNotificationMessages as messages } from "./sessionNotificationMessages";
 import {
   SESSION_NOTIFICATION_LIMIT,
   SESSION_NOTIFICATION_MESSAGE_BYTES,
@@ -192,14 +193,12 @@ export function selectedNotificationView(inbox: SelectedSessionNotificationInbox
   };
 }
 
-export function notificationSeverityLabel(severity: SessionNotificationSeverity): "Info" | "Warning" | "Error" {
-  if (severity === "error") return "Error";
-  if (severity === "warning") return "Warning";
-  return "Info";
+export function notificationSeverityLabel(severity: SessionNotificationSeverity): string {
+  return messages.t(severity);
 }
 
 export function notificationAnnouncementLabel(announcement: Pick<SessionNotificationAnnouncement, "severity">): string {
-  return `${notificationSeverityLabel(announcement.severity)} notification received.`;
+  return messages.t("announcement", { severity: announcement.severity });
 }
 
 export function notificationInboxTotalCount(inbox: Pick<SelectedSessionNotificationView, "retainedCount" | "discardedCount">): number {
@@ -207,16 +206,21 @@ export function notificationInboxTotalCount(inbox: Pick<SelectedSessionNotificat
 }
 
 export function notificationTrayHeading(inbox: Pick<SelectedSessionNotificationView, "retainedCount" | "discardedCount">): string {
-  return `Notifications (${String(notificationInboxTotalCount(inbox))})`;
+  return messages.t("heading", { count: notificationInboxTotalCount(inbox) });
 }
 
-export function notificationDismissLabel(notification: Pick<SessionNotification, "message" | "severity">): string {
-  const message = notification.message.replace(/\s+/gu, " ").trim();
-  if (message === "") return `Dismiss ${notificationSeverityLabel(notification.severity).toLowerCase()} notification`;
+/** Localize only explicit host provenance; raw extension content stays untouched. */
+export function notificationMessage(notification: Pick<SessionNotification, "message" | "presentation">): string {
+  return notification.presentation === undefined ? notification.message : messages.t(notification.presentation.kind);
+}
+
+export function notificationDismissLabel(notification: Pick<SessionNotification, "message" | "severity" | "presentation">): string {
+  const message = notificationMessage(notification).replace(/\s+/gu, " ").trim();
+  if (message === "") return messages.t("dismissEmpty", { severity: notification.severity });
   const maxCharacters = 80;
   const characters = Array.from(message);
   const summary = characters.length <= maxCharacters ? message : `${characters.slice(0, maxCharacters - 1).join("").trimEnd()}…`;
-  return `Dismiss notification: ${summary}`;
+  return messages.t("dismiss", { summary });
 }
 
 export type NotificationFocusTarget = { kind: "notification"; notificationId: string } | { kind: "header" };
@@ -247,13 +251,13 @@ export function setNotificationTrayCollapsed(collapsedTargetKeys: ReadonlySet<st
 }
 
 export function notificationInboxOverflowLabel(discardedCount: number): string {
-  return `${String(discardedCount)} older ${discardedCount === 1 ? "notification" : "notifications"} not shown.`;
+  return messages.t("overflow", { count: discardedCount });
 }
 
 export function notificationMessageTruncationLabel(notification: Pick<SessionNotification, "truncated">): string | undefined {
   if (!notification.truncated) return undefined;
   const kibibytes = SESSION_NOTIFICATION_MESSAGE_BYTES / 1024;
-  return `Message truncated at ${String(kibibytes)} KiB.`;
+  return messages.t("truncated", { limit: kibibytes });
 }
 
 export function notificationTargetsEqual(left: SessionNotificationTarget, right: SessionNotificationTarget): boolean {

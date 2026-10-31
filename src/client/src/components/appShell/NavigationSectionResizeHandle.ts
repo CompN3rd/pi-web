@@ -1,3 +1,5 @@
+import { LocalizationController } from "../../localization/browser";
+import { appShellMessages as m } from "../../appShellMessages";
 import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { LitElement, css, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
@@ -20,6 +22,7 @@ interface ActiveResize {
 export class NavigationSectionResizeHandle extends LitElement {
   constructor() {
     super();
+    new LocalizationController(this);
     stylesheetIntegrationCapability.createController(this);
   }
 
@@ -101,8 +104,8 @@ export class NavigationSectionResizeHandle extends LitElement {
   override render() {
     return html`<div
       role="separator" tabindex="0" aria-orientation="horizontal"
-      aria-label=${`Resize ${this.sectionLabel}`}
-      title=${`Resize ${this.sectionLabel}. Double-click or double-tap to reset.`}
+      aria-label=${m.t("resizeSection", { section: this.sectionLabel })}
+      title=${m.t("resizeHint", { label: m.t("resizeSection", { section: this.sectionLabel }) })}
       aria-controls=${this.controls}
       aria-valuemin="44" aria-valuemax=${String(Math.round(this.measurement.maxHeight))}
       aria-valuenow=${String(Math.round(this.measurement.height))}

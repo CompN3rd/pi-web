@@ -1,3 +1,5 @@
+import { LocalizationController } from "../localization/browser";
+import { pickerMessages as messages } from "../pickerMessages";
 import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -13,9 +15,10 @@ export class CommandPicker extends LitElement {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this);
   }
 
-  @property() override title = "Select";
+  @property() override title = "";
   @property({ type: Boolean }) searchable = false;
   @property({ attribute: false }) options: CommandOption[] = [];
   @property({ attribute: false }) selectedValue?: string;
@@ -35,15 +38,15 @@ export class CommandPicker extends LitElement {
       <modal-surface
         .onClose=${() => this.onCancel?.()}
         .initialFocus=${this.searchable ? "input" : ".options"}
-        .label=${this.title}
+        .label=${this.title || messages.t("select")}
         @keydown=${(event: KeyboardEvent) => { this.handleKeyDown(event); }}
       >
         <header class="ui-dialog-header">
-          <strong class="ui-dialog-title">${this.title}</strong>
-          <button class="ui-button ui-button--icon" aria-label="Close" @click=${() => this.onCancel?.()}>×</button>
+          <strong class="ui-dialog-title">${this.title || messages.t("select")}</strong>
+          <button class="ui-button ui-button--icon" aria-label=${messages.t("close")} @click=${() => this.onCancel?.()}>×</button>
         </header>
-        ${this.searchable ? html`<div class="ui-dialog-search-row"><input class="ui-dialog-search" placeholder="Search" .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}></div>` : null}
-        ${this.onSetDefault ? defaultPinHelp : nothing}
+        ${this.searchable ? html`<div class="ui-dialog-search-row"><input class="ui-dialog-search" aria-label=${messages.t("searchOptions")} placeholder=${messages.t("search")} .value=${this.query} @input=${(event: Event) => { this.handleSearchInput(event); }}></div>` : null}
+        ${this.onSetDefault ? defaultPinHelp() : nothing}
         <div class="options ui-selection-list" tabindex="0">
           ${options.map((option, index) => {
             const pick = html`<button
@@ -58,7 +61,7 @@ export class CommandPicker extends LitElement {
             </button>`;
             return this.onSetDefault ? html`<div class="default-row ui-selection-row">${pick}${defaultPin(option.label, option.value === this.defaultValue, this.defaultsLoading || this.defaultPending, () => { void this.setDefault(option.value); })}</div>` : pick;
           })}
-          ${options.length === 0 ? html`<div class="empty ui-dialog-empty">No matching options</div>` : null}
+          ${options.length === 0 ? html`<div class="empty ui-dialog-empty">${messages.t("noOptions")}</div>` : null}
         </div>
       </modal-surface>
     `;

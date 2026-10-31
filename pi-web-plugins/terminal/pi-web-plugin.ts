@@ -5,6 +5,7 @@ import { TerminalBrowserRuntime } from "./TerminalBrowserRuntime";
 import { TERMINAL_BROWSER_FACADE_CAPABILITY, TerminalFacade, type RequiredTerminalBrowserFacadeV1 } from "./TerminalFacade";
 import { TerminalPanel } from "./TerminalPanel";
 import { TerminalSoftKeys } from "./TerminalSoftKeys";
+import { createTerminalContent } from "./terminalLocalization";
 
 export const TERMINAL_PANEL_ELEMENT = terminalPanelElementName("pi-web.terminal");
 export const TERMINAL_SOFT_KEYS_ELEMENT = terminalSoftKeysElementName("pi-web.terminal");
@@ -45,6 +46,8 @@ export function activateTerminalPlugin(
   if (context.pluginId !== "pi-web.terminal") {
     throw new Error(`Terminal browser entry must activate as plugin id pi-web.terminal, received ${context.pluginId}`);
   }
+  if (context.localization === undefined) throw new Error("The Terminal plugin requires a localization-capable PI WEB host");
+  const content = createTerminalContent(context.localization);
   const panelElement = terminalPanelElementName(context.runtimePluginId);
   const softKeysElement = terminalSoftKeysElementName(context.runtimePluginId);
   defineTerminalCustomElements(panelElement, softKeysElement);
@@ -76,22 +79,22 @@ export function activateTerminalPlugin(
     contributions: {
       applicationPanels: [{
         id: "workspace.terminal",
-        title: "Terminal",
+        get title() { return content.messages.t("terminal"); },
         icon,
         order: 30,
         badge: (applicationContext: ApplicationPanelContextV5) => runtime.activeTerminalBadge(applicationTerminalContext(applicationContext)),
         onInvalidate: (applicationContext: ApplicationPanelContextV5) => runtime.invalidate(applicationTerminalContext(applicationContext)),
         render: (applicationContext: ApplicationPanelContextV5) => {
           const terminalContext = applicationTerminalContext(applicationContext);
-          return context.html`${staticHtml`<${panelTag} .stylesheetIntegration=${stylesheetIntegration} .context=${terminalContext} .runtime=${runtime} .softKeysElementName=${softKeysElement}></${panelTag}>`}`;
+          return context.html`${staticHtml`<${panelTag} .content=${content} .stylesheetIntegration=${stylesheetIntegration} .context=${terminalContext} .runtime=${runtime} .softKeysElementName=${softKeysElement}></${panelTag}>`}`;
         },
       }],
       actions: [{
         id: "view.terminal",
-        title: "Go to Terminal",
+        get title() { return content.messages.t("goTerminal"); },
         shortcut: "mod+4",
         shortcutAliases: ["core:view.terminal"],
-        group: "Navigation",
+        get group() { return content.messages.t("navigation"); },
         run: (runtimeContext: PluginRuntimeContext) => { runtimeContext.openTerminal(); },
       }],
     },

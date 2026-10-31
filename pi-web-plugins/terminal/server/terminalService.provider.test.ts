@@ -18,6 +18,41 @@ const scope = { projectId: "p", workspaceId: "w", cwd: "/fake/project" };
 const command = { ...scope, origin: "test", title: "Command", command: "printf done" };
 
 describe("TerminalService with an injected PTY provider", () => {
+  it("exposes generated shell-name metadata without marking caller-provided names", () => {
+    const service = new TerminalService(fakeProvider().provider);
+    try {
+      const shell = service.create(scope);
+      expect(shell).toMatchObject({ name: "Shell 1", defaultShellNumber: 1 });
+      expect(service.list(scope)[0]?.defaultShellNumber).toBe(1);
+      expect(service.create({ ...scope, name: "Shell 999" }).defaultShellNumber).toBeUndefined();
+      expect(service.runCommand(command).title).toBe(command.title);
+      expect(service.list(scope).find((item) => item.name === command.title)?.defaultShellNumber).toBeUndefined();
+    } finally { service.dispose(); }
+  });
+  it("snapshots generated command titles on the run and terminal through exit and continuation", () => {
+    const fake = fakeProvider();
+    const service = new TerminalService(fake.provider);
+    const titlePresentation = { kind: "workspaceRemoval" as const, label: "feature/<img>" };
+    try {
+      const run = service.runCommand({ ...command, titlePresentation });
+      titlePresentation.label = "mutated";
+      expect(run.titlePresentation).toEqual({ kind: "workspaceRemoval", label: "feature/<img>" });
+      expect(service.list(scope)[0]?.titlePresentation).toEqual(run.titlePresentation);
+      fake.processes[0]?.handlers.exit(7);
+      expect(service.getCommandRun(run.id)?.titlePresentation).toEqual(run.titlePresentation);
+      expect(service.continue(scope, run.terminalId).titlePresentation).toEqual(run.titlePresentation);
+      expect(service.get(scope, run.terminalId)?.name).toBe(command.title);
+      expect(service.runCommand(command)).not.toHaveProperty("titlePresentation");
+      for (const invalid of [{ kind: "future", label: "x" }, { kind: "workspaceRemoval", label: 1 }, { kind: "workspaceRemoval", label: "x".repeat(4097) }]) {
+        const options = { ...command };
+        Object.defineProperty(options, "titlePresentation", { value: invalid });
+        const fallback = service.runCommand(options);
+        expect(fallback).not.toHaveProperty("titlePresentation");
+        expect(service.get(scope, fallback.terminalId)).not.toHaveProperty("titlePresentation");
+      }
+    } finally { service.dispose(); }
+  });
+
   it("replays output before exit, releases natural exits, and ignores stale callbacks after continue", () => {
     const fake = fakeProvider();
     const service = new TerminalService(fake.provider);

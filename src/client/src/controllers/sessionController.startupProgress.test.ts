@@ -53,6 +53,28 @@ function pendingStartController(state: { current: AppState }, api: Partial<typeo
 }
 
 describe("SessionController session startup progress", () => {
+  it("retains structured startup presentation when forwarding onto its pending row", async () => {
+    const state = { current: { ...initialAppState(), selectedWorkspace: workspace, sessions: [] } };
+    const { controller, startRequest } = pendingStartController(state);
+    const start = controller.startSession();
+    const temporaryId = state.current.selectedSession?.id;
+    if (temporaryId === undefined) throw new Error("Expected temporary session id");
+    const activity = startupActivity({ startupPresentation: { intent: "create", stage: "extensions", catalogRefreshing: true } });
+    controller.applyGlobalEvent({ type: "session.startup", startupToken: temporaryId, activity });
+    runPendingAnimationFrames();
+
+    expect(state.current.activity?.startupPresentation).toEqual(activity.startupPresentation);
+    expect(state.current.sessionActivities[temporaryId]?.startupPresentation).toEqual(activity.startupPresentation);
+    expect(state.current.activity?.startup).toBeUndefined();
+    expect(isSessionActive(state.current.status, state.current.activity)).toBe(true);
+
+    controller.applyGlobalEvent({ type: "session.startup", startupToken: temporaryId, activity: idleStartupActivity() });
+    runPendingAnimationFrames();
+    expect(state.current.activity?.startupPresentation).toBeUndefined();
+    startRequest.resolve({ ...oldSession, id: "backend-session", path: "/tmp/backend-session.jsonl" });
+    await start;
+  });
+
   it("shows the daemon's startup phase on a pending row while its start request is still open", async () => {
     const state = { current: { ...initialAppState(), selectedWorkspace: workspace, sessions: [] } };
     const { controller, startRequest } = pendingStartController(state);

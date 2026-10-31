@@ -51,8 +51,8 @@ const MOUNT_INFO_PATH = "/proc/self/mountinfo";
 const DATA_MOUNT = "/data";
 /** Read-only view of the Docker host root filesystem. */
 const HOST_ROOT_MOUNT = "/host";
-/** Development mode's bind mount of the PI WEB checkout. */
-const DEV_WORKSPACE_MOUNT = "/workspace";
+/** Development checkout mounts, canonical first with legacy deployment fallback. */
+const DEV_WORKSPACE_MOUNTS = ["/usr/local/lib/node_modules/@jmfederico/pi-web", "/workspace"] as const;
 const DOCKER_SOCKET_MOUNTS = ["/run/docker.sock", "/var/run/docker.sock"] as const;
 
 /**
@@ -224,7 +224,7 @@ function hostSharedMountTargets(mounts: readonly ContainerMount[]): string[] {
   const candidates = mounts
     .filter((mount) => !mount.readOnly && isHostPathMount(mount))
     .map((mount) => mount.target)
-    .filter((target) => target !== DATA_MOUNT && target !== DEV_WORKSPACE_MOUNT && !isWithin(target, DEV_WORKSPACE_MOUNT))
+    .filter((target) => target !== DATA_MOUNT && !DEV_WORKSPACE_MOUNTS.some((root) => target === root || isWithin(target, root)))
     .sort((left, right) => left.localeCompare(right));
   return [...new Set(candidates)].filter((target, index, all) => !all.slice(0, index).some((outer) => isWithin(target, outer)));
 }
@@ -252,23 +252,24 @@ function hostExecFact(env: NodeJS.ProcessEnv): string[] {
 }
 
 function devWorkspaceFacts(mounts: readonly ContainerMount[], devRepoRoot: string | undefined): string[] {
-  if (!mounts.some((mount) => mount.target === DEV_WORKSPACE_MOUNT)) return [];
+  const workspaceMount = DEV_WORKSPACE_MOUNTS.find((target) => mounts.some((mount) => mount.target === target));
+  if (workspaceMount === undefined) return [];
   const hostPath = devRepoRoot === undefined ? "" : ` Its Docker host path is \`${devRepoRoot}\`.`;
   const nested = mounts
-    .filter((mount) => mount.target !== DEV_WORKSPACE_MOUNT && isWithin(mount.target, DEV_WORKSPACE_MOUNT))
+    .filter((mount) => mount.target !== workspaceMount && isWithin(mount.target, workspaceMount))
     .map((mount) => `\`${mount.target}\``);
   const hostDependencies = devRepoRoot === undefined ? undefined : `${devRepoRoot}/node_modules`;
   const sharedDependencies = hostDependencies !== undefined
-    && hostDependencies !== `${DEV_WORKSPACE_MOUNT}/node_modules`
-    && mounts.some((mount) => mount.target === `${DEV_WORKSPACE_MOUNT}/node_modules`)
+    && hostDependencies !== `${workspaceMount}/node_modules`
+    && mounts.some((mount) => mount.target === `${workspaceMount}/node_modules`)
     && mounts.some((mount) => mount.target === hostDependencies);
   return [
-    `The PI WEB checkout this deployment runs is bind-mounted at \`${DEV_WORKSPACE_MOUNT}\`.${hostPath}`,
+    `The PI WEB checkout this deployment runs is bind-mounted at \`${workspaceMount}\`.${hostPath}`,
     ...(nested.length === 0
       ? []
       : [`Inside it, ${nested.join(", ")} ${nested.length === 1 ? "is a separate container-managed mount" : "are separate container-managed mounts"}, not the host directory of the same path.`]),
     ...(sharedDependencies
-      ? [`Inside this container, \`${hostDependencies}\` uses the same container-managed dependency volume as \`${DEV_WORKSPACE_MOUNT}/node_modules\`. Neither checkout path uses or modifies the host checkout's \`node_modules\`.`]
+      ? [`Inside this container, \`${hostDependencies}\` uses the same container-managed dependency volume as \`${workspaceMount}/node_modules\`. Neither checkout path uses or modifies the host checkout's \`node_modules\`.`]
       : []),
   ];
 }

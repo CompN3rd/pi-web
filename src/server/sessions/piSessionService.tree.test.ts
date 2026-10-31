@@ -266,6 +266,7 @@ describe("PiSessionService session-tree behavior", () => {
           parentId: null,
           kind: "assistant",
           summary: "safe answer",
+          summaryPresentation: { type: "content", parts: [{ type: "text", text: "safe answer" }], fallback: "assistant-response" },
           timestamp: "2026-01-01T00:00:00.000Z",
         }],
         activeLeafId: "leaf-1",
@@ -525,6 +526,7 @@ describe("PiSessionService session-tree behavior", () => {
     await expect(service.runCommand(sessionRef(SESSION_ID), "/name blocked")).resolves.toEqual({
       type: "unsupported",
       message: "Cannot run commands while session tree navigation is active. Stop or finish the navigation first.",
+      presentation: { kind: "commandResult", feedback: { code: "navigationActive" } },
     });
     await expect(service.archive(sessionRef(SESSION_ID))).rejects.toThrow("Stop current session activity before archiving");
     expect(fake.calls.prompt).toEqual([]);

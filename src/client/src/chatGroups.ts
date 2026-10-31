@@ -22,7 +22,11 @@ export function groupConsecutiveImageOutputs(groups: readonly ChatGroup[]): Chat
   return result;
 }
 
-export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGroup[] {
+export function groupChatMessages(
+  messages: ChatLine[],
+  indexOffset = 0,
+  preserveCustomMessage: (customType: string) => boolean = () => false,
+): ChatGroup[] {
   const groups: ChatGroup[] = [];
   let eventMessages: Extract<ChatGroup, { kind: "group" }>["messages"] = [];
 
@@ -38,7 +42,9 @@ export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGr
   };
 
   messages.forEach((message, index) => {
-    const visibleParts = message.parts.filter((part) => part.type !== "toolResultBoundary" && part.type !== "empty");
+    const parts = message.parts.flatMap((part) => part.type === "customMessage" && !preserveCustomMessage(part.customType)
+      ? part.parts : [part]);
+    const visibleParts = parts.filter((part) => part.type !== "toolResultBoundary" && part.type !== "empty");
     // Ordering markers affect the conversation tail, not visual grouping.
     if (visibleParts.length === 0) return;
     const readableParts = visibleParts.filter((part) => isReadablePart(message, part));
@@ -91,7 +97,22 @@ export function canonicalEntryActionHeaders(groups: readonly ChatGroup[]): Reado
   return new Set(Array.from(entries.values(), ({ message }) => message));
 }
 
-export function summarizeChatGroup(messages: ChatLine[]): string {
+export interface ChatGroupSummary {
+  kind: "compaction" | "branch" | "events";
+  count: number;
+  roles: Partial<Record<ChatLine["role"], number>>;
+}
+
+export function summarizeChatGroup(messages: ChatLine[], format?: (summary: ChatGroupSummary) => string): string {
+  if (format !== undefined) {
+    const roles: ChatGroupSummary["roles"] = {};
+    for (const message of messages) roles[message.role] = (roles[message.role] ?? 0) + 1;
+    return format({
+      kind: messages.every((message) => message.source === "compaction") ? "compaction"
+        : messages.every((message) => message.source === "branch_summary") ? "branch" : "events",
+      count: messages.length, roles,
+    });
+  }
   if (messages.every((message) => message.source === "compaction")) return `${String(messages.length)} history compaction ${messages.length === 1 ? "summary" : "summaries"}`;
   if (messages.every((message) => message.source === "branch_summary")) return `${String(messages.length)} branch ${messages.length === 1 ? "summary" : "summaries"}`;
   const counts = messages.reduce<Record<string, number>>((acc, message) => {
@@ -115,6 +136,6 @@ function toolNameFromParts(parts: ChatPart[]): string | undefined {
 
 function isReadablePart(message: ChatLine, part: ChatPart): boolean {
   if (message.source === "compaction" || message.source === "branch_summary") return false;
-  if (part.type === "skillInvocation" || part.type === "image" || part.type === "askUserQuestion" || part.type === "askUserRecord") return true;
+  if (part.type === "skillInvocation" || part.type === "image" || part.type === "askUserQuestion" || part.type === "askUserRecord" || part.type === "customMessage") return true;
   return part.type === "text" && (message.role === "user" || message.role === "assistant" || message.role === "system" || message.role === "bash");
 }

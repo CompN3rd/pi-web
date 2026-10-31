@@ -5,13 +5,14 @@ import { repeat } from "lit/directives/repeat.js";
 import {
   notificationAnnouncementLabel, notificationDismissLabel, notificationFocusTargetAfterDismiss,
   notificationInboxOverflowLabel, notificationInboxTotalCount, notificationMessageTruncationLabel,
-  notificationSeverityLabel, notificationTargetKey, notificationTrayHeading, notificationTrayIsCollapsed,
+  notificationMessage, notificationSeverityLabel, notificationTargetKey, notificationTrayHeading, notificationTrayIsCollapsed,
   setNotificationTrayCollapsed, type NotificationFocusTarget, type SelectedSessionNotificationView, type SessionNotificationTarget,
 } from "../sessionNotifications";
 import { uiButtonStyles, uiToolbarStyles } from "./ui/controlStyles";
 import { sessionNotificationTrayStyles } from "./sessionNotificationTrayStyles";
 
-const timestampFormatter = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+import { localization, LocalizationController } from "../localization/browser";
+import { sessionNotificationMessages as messages } from "../sessionNotificationMessages";
 
 function isNotificationTarget(value: unknown): value is SessionNotificationTarget {
   return typeof value === "object" && value !== null
@@ -59,6 +60,7 @@ export class SessionNotificationTray extends LitElement {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this);
   }
 
   @property() sessionId = "";
@@ -107,16 +109,16 @@ export class SessionNotificationTray extends LitElement {
     const inbox = this.notificationInbox;
     if (inbox === undefined || !this.hasVisibleTray()) return null;
     const collapsed = notificationTrayIsCollapsed(this.collapsedNotificationTargetKeys, inbox);
-    const toggleLabel = collapsed ? "Expand notifications" : "Collapse notifications";
+    const toggleLabel = messages.t(collapsed ? "expand" : "collapse");
     return html`
       <section class=${`notification-tray${collapsed ? " collapsed" : ""}`} role="region" aria-labelledby="session-notifications-heading" @focusout=${(event: FocusEvent) => { this.releaseEmptyNotificationTray(event); }}>
         <header class="notification-header" data-notification-focus="header" tabindex="-1">
           <strong class="notification-heading" id="session-notifications-heading">${notificationTrayHeading(inbox)}</strong>
-          <div class="ui-toolbar notification-header-actions">
+          <div class="ui-toolbar ui-toolbar--borderless notification-header-actions">
             <div class="ui-toolbar-group">
-              <button type="button" class="ui-button notification-clear" aria-label="Clear all notifications" title="Clear all notifications"
+              <button type="button" class="ui-button notification-clear" aria-label=${messages.t("clearAll")} title=${messages.t("clearAll")}
                 ?disabled=${inbox.dismissAllPending || notificationInboxTotalCount(inbox) === 0 || this.onDismissAllNotifications === undefined}
-                @click=${() => { this.dismissAllNotifications(); }}>Clear</button>
+                @click=${() => { this.dismissAllNotifications(); }}>${messages.t("clear")}</button>
               <button type="button" class="ui-button ui-button--icon notification-toggle" aria-label=${toggleLabel} title=${toggleLabel}
                 aria-expanded=${String(!collapsed)} aria-controls="session-notification-list"
                 @click=${() => { this.collapsedNotificationTargetKeys = setNotificationTrayCollapsed(this.collapsedNotificationTargetKeys, inbox, !collapsed); }}>
@@ -132,12 +134,12 @@ export class SessionNotificationTray extends LitElement {
               <div class="notification-metadata">
                 <strong class="notification-severity">${notificationSeverityLabel(notification.severity)}</strong>
                 <span aria-hidden="true">·</span>
-                <time datetime=${notification.receivedAt}>${timestampFormatter.format(new Date(notification.receivedAt))}</time>
+                <time datetime=${notification.receivedAt}>${localization.time(new Date(notification.receivedAt), { timeStyle: "short" })}</time>
               </div>
-              <p class="notification-message" dir="auto">${renderNotificationMessage(notification.message, notification.truncated)}</p>
+              <p class="notification-message" dir="auto">${renderNotificationMessage(notificationMessage(notification), notification.truncated)}</p>
               ${notificationMessageTruncationLabel(notification) === undefined ? null : html`<p class="notification-truncated">${notificationMessageTruncationLabel(notification)}</p>`}
               <button type="button" class="ui-button ui-button--compact ui-button--icon notification-row-dismiss"
-                aria-label=${notificationDismissLabel(notification)} title="Dismiss notification"
+                aria-label=${notificationDismissLabel(notification)} title=${messages.t("dismissTitle")}
                 ?disabled=${inbox.pendingDismissedIds.has(notification.id) || inbox.dismissAllPending || this.onDismissNotification === undefined}
                 @click=${() => { this.dismissNotification(notification.id); }}>
                 <svg class="notification-icon notification-close-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6 6 18"></path></svg>

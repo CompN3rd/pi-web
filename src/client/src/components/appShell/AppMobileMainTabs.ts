@@ -1,3 +1,6 @@
+import { LocalizationController, localization } from "../../localization/browser";
+import { horizontalScrollEdges } from "./scrollEdges";
+import { appShellMessages as m } from "../../appShellMessages";
 import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { LitElement, css, html, type TemplateResult } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
@@ -24,6 +27,7 @@ export interface AppMobileMainTab {
 export class AppMobileMainTabs extends LitElement {
   constructor() {
     super();
+    new LocalizationController(this);
     stylesheetIntegrationCapability.createController(this);
   }
 
@@ -74,7 +78,7 @@ export class AppMobileMainTabs extends LitElement {
               </button>
             `;
           })}
-          ${this.onShowNavigation === undefined ? null : html`<button type="button" class=${`ui-button ui-button--icon ui-tab navigation-menu-button${this.hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`}
+          ${this.onShowNavigation === undefined ? null : html`<button type="button" class=${`ui-button ui-button--icon ui-tab navigation-menu-button${this.hiddenActiveDestination ? " selected" : ""}`} data-navigation-trigger title=${m.t("navigation")} aria-label=${m.t("navigation")} aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`}
         </div>
         ${this.trailingControl}
       </div>
@@ -94,13 +98,13 @@ export class AppMobileMainTabs extends LitElement {
   }
 
   private tabAriaLabel(tab: AppMobileMainTab): string {
-    const badge = tab.badgeLabel ?? (typeof tab.badge === "string" || typeof tab.badge === "number" ? String(tab.badge).trim() : "");
-    return badge === "" ? tab.label : `${tab.label}, ${badge}`;
+    const badge = tab.badgeLabel ?? (typeof tab.badge === "string" || typeof tab.badge === "number" ? (typeof tab.badge === "number" ? localization.number(tab.badge) : tab.badge).trim() : "");
+    return badge === "" ? tab.label : m.t("badge", { label: tab.label, badge });
   }
 
   private renderBadge(badge: unknown, tone: AppMobileMainTab["badgeTone"]) {
     if (badge === undefined || badge === "") return null;
-    return html`<span class=${`tab-badge${tone === undefined ? "" : ` ${tone}`}`}>${badge}</span>`;
+    return html`<span class=${`tab-badge${tone === undefined ? "" : ` ${tone}`}`}>${typeof badge === "number" ? localization.number(badge) : badge}</span>`;
   }
 
   private renderTabMark(tab: AppMobileMainTab, fallbackLabels: Map<AppMobileMainTabId, string>) {
@@ -127,7 +131,7 @@ export class AppMobileMainTabs extends LitElement {
 
   private initialsLabel(label: string): string {
     const words = label.match(/[\p{L}\p{N}]+/gu) ?? [];
-    const initials = words.map((word) => Array.from(word)[0] ?? "").join("").toLocaleUpperCase();
+    const initials = words.map((word) => Array.from(word)[0] ?? "").join("").toLocaleUpperCase(localization.language);
     return initials === "" ? "?" : initials;
   }
 
@@ -152,8 +156,9 @@ export class AppMobileMainTabs extends LitElement {
   private updateScrollState(): void {
     const mobileTabs = this.mobileTabsElement();
     const maxScrollLeft = mobileTabs === undefined ? 0 : Math.max(0, mobileTabs.scrollWidth - mobileTabs.clientWidth);
-    const canScrollLeft = mobileTabs !== undefined && mobileTabs.scrollLeft > 1;
-    const canScrollRight = mobileTabs !== undefined && maxScrollLeft - mobileTabs.scrollLeft > 1;
+    const edges = horizontalScrollEdges(mobileTabs?.scrollLeft ?? 0, maxScrollLeft, localization.direction);
+    const canScrollLeft = mobileTabs !== undefined && edges.left;
+    const canScrollRight = mobileTabs !== undefined && edges.right;
     if (this.canScrollLeft !== canScrollLeft) this.canScrollLeft = canScrollLeft;
     if (this.canScrollRight !== canScrollRight) this.canScrollRight = canScrollRight;
   }

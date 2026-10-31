@@ -7,9 +7,9 @@ export type KnownPiPackage = KnownAutoInstallablePiPackage;
 export const KNOWN_PI_PACKAGES: readonly KnownPiPackage[] = [
   ...KNOWN_AUTO_INSTALLABLE_PI_PACKAGES,
   {
-    id: "@jmfederico/pi-captains-log",
-    label: "Captain’s Log",
-    description: "Translate the selected session's last reply into pirate, with a visible Pi message trail. Install, then explicitly enable its PI WEB plugin.",
-    shippedPathSegments: ["dist", "pi-packages", "captains-log"],
+    id: "@jmfederico/pi-web-scheduled-tasks",
+    label: "Scheduled agent tasks (beta)",
+    description: "Agent-managed schedules and a persistent execution ledger. Disabled by default.",
+    shippedPathSegments: ["dist", "pi-packages", "scheduled-tasks"],
   },
 ];

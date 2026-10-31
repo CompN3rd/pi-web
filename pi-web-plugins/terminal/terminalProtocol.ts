@@ -1,4 +1,6 @@
+import { terminalTitlePresentationField } from "./terminalTitlePresentation.js";
 import type {
+  TerminalTitlePresentation,
   JsonObject,
   JsonValue,
   AnyTerminalCommandRun,
@@ -17,6 +19,9 @@ export interface TerminalInfo {
   id: string;
   cwd: string;
   name: string;
+  titlePresentation?: TerminalTitlePresentation;
+  /** Present only for an automatically named shell; name remains the wire fallback. */
+  defaultShellNumber?: number;
   createdAt: string;
   exited: boolean;
   exitCode?: number;
@@ -186,6 +191,8 @@ export function parseTerminalInfo(value: unknown): TerminalInfo {
     id: requireString(record, "id", "Terminal info"),
     cwd: requireString(record, "cwd", "Terminal info"),
     name: requireString(record, "name", "Terminal info"),
+    ...terminalTitlePresentationField(record["titlePresentation"]),
+    ...optionalNumberField(record, "defaultShellNumber", "Terminal info"),
     createdAt: requireString(record, "createdAt", "Terminal info"),
     exited: requireBoolean(record, "exited", "Terminal info"),
     ...optionalNumberField(record, "exitCode", "Terminal info"),
@@ -215,6 +222,7 @@ export function parseTerminalCommandRun(value: unknown): AnyTerminalCommandRun {
     ...parseCommandRunScope(record),
     terminalId: requireString(record, "terminalId", "Terminal command run"),
     title: requireString(record, "title", "Terminal command run"),
+    ...terminalTitlePresentationField(record["titlePresentation"]),
     command: requireString(record, "command", "Terminal command run"),
     status: parseTerminalCommandRunStatus(record["status"]),
     ...optionalNumberField(record, "exitCode", "Terminal command run"),

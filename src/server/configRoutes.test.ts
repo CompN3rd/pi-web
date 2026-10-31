@@ -27,6 +27,57 @@ afterEach(async () => {
 });
 
 describe("config routes", () => {
+  it.each(["/api/config", "/api/machines/local/config"])("exposes and validates sessionMessages through %s", async (url) => {
+    const saved = await app.inject({ method: "PUT", url, payload: { config: { sessionMessages: false } } });
+    expect(saved.statusCode).toBe(200);
+    expect(parsePiWebConfigResponseBody(saved.json())).toMatchObject({ config: { sessionMessages: false }, effectiveConfig: { sessionMessages: false } });
+    const read = await app.inject({ method: "GET", url });
+    expect(read.json<PiWebConfigResponse>().config.sessionMessages).toBe(false);
+    vi.mocked(service.write).mockClear();
+    const rejected = await app.inject({ method: "PATCH", url, payload: { set: { sessionMessages: "false" } } });
+    expect(rejected.statusCode).toBe(400);
+    expect(service.write).not.toHaveBeenCalled();
+  });
+
+  it("accepts canonical localization defaults and empty resets through the gateway API", async () => {
+    const response = await app.inject({ method: "PUT", url: "/api/config", payload: { config: {
+      defaultLocalization: { language: "EN-us", formatLocale: "de-de", timeZone: "utc", hourCycle: "h12" },
+    } } });
+    expect(response.statusCode).toBe(200);
+    const config = { defaultLocalization: { language: "en-US", formatLocale: "de-DE", timeZone: "UTC", hourCycle: "h12" } };
+    expect(savedConfig).toEqual(config);
+    expect(parsePiWebConfigResponseBody(response.json())).toMatchObject({ config, effectiveConfig: config });
+    const reset = await app.inject({ method: "PUT", url: "/api/config", payload: { config: { defaultLocalization: {} } } });
+    expect(reset.statusCode).toBe(200);
+    expect(savedConfig.defaultLocalization).toEqual({});
+  });
+
+  it.each([null, [], { language: "en_US" }, { language: "ar-XB" }, { formatLocale: "en-XA" }, { timeZone: "invalid" }, { hourCycle: "12" }, { extra: true }])("rejects invalid localization defaults %j in API updates and responses", async (defaultLocalization) => {
+    const config = { defaultLocalization };
+    const response = await app.inject({ method: "PUT", url: "/api/config", payload: { config } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toContain("defaultLocalization");
+    expect(service.write).not.toHaveBeenCalled();
+    for (const field of ["config", "effectiveConfig"]) {
+      expect(() => parsePiWebConfigResponseBody({ ...responseFor({}, true), [field]: config })).toThrow("defaultLocalization");
+    }
+  });
+
+  it("isolates gateway localization defaults from selected-machine reads and writes", async () => {
+    const defaultLocalization = { language: "fr", timeZone: "UTC" };
+    savedConfig.defaultLocalization = defaultLocalization;
+    const read = await app.inject({ method: "GET", url: "/api/machines/local/config" });
+    expect(read.json<PiWebConfigResponse>().config).not.toHaveProperty("defaultLocalization");
+    expect(read.json<PiWebConfigResponse>().effectiveConfig).not.toHaveProperty("defaultLocalization");
+    const rejected = await app.inject({ method: "PUT", url: "/api/machines/local/config", payload: { config: { defaultLocalization: {} } } });
+    expect(rejected.statusCode).toBe(400);
+    expect(service.write).not.toHaveBeenCalled();
+    const accepted = await app.inject({ method: "PUT", url: "/api/machines/local/config", payload: { config: { askUser: false } } });
+    expect(accepted.statusCode).toBe(200);
+    expect(savedConfig.defaultLocalization).toEqual(defaultLocalization);
+    expect(accepted.json<PiWebConfigResponse>().config).not.toHaveProperty("defaultLocalization");
+  });
+
   it.each(["/api/config", "/api/machines/local/config"])("updates and clears installation identity through %s", async (url) => {
     const response = await app.inject({ method: "PUT", url, payload: { config: { installationName: "  Build lab  " } } });
     expect(response.statusCode).toBe(200);
@@ -83,64 +134,17 @@ describe("config routes", () => {
     expect(parsePiWebConfigResponseBody(response.json()).config).toEqual(expectedConfig);
   });
 
-  it.each(["/api/config", "/api/machines/local/config"])("saves and resets session naming through %s", async (url) => {
-    const sessionNaming = { model: "provider/org/model", maxTokens: 64, thinkingLevel: "off" as const, timeoutMs: 2147483647 };
-    const saved = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming } } });
-    expect(saved.statusCode).toBe(200);
-    expect(parsePiWebConfigResponseBody(saved.json()).config.sessionNaming).toEqual(sessionNaming);
-    expect(parsePiWebConfigResponseBody(saved.json()).effectiveConfig.sessionNaming).toEqual(sessionNaming);
-    const reset = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming: {} } } });
-    expect(reset.statusCode).toBe(200);
-    expect(savedConfig.sessionNaming).toEqual({});
-  });
-
-  it("preserves session naming on unrelated selected-machine saves", async () => {
-    const sessionNaming = { model: "provider/model", maxTokens: 48, thinkingLevel: "high" as const, timeoutMs: 15000 };
-    savedConfig.sessionNaming = sessionNaming;
-    const response = await app.inject({ method: "PUT", url: "/api/machines/local/config", payload: { config: { spawnSessions: false } } });
-    expect(response.statusCode).toBe(200);
-    expect(response.json<PiWebConfigResponse>().config.sessionNaming).toEqual(sessionNaming);
-    expect(savedConfig.sessionNaming).toEqual(sessionNaming);
-  });
-
-  it.each(["/api/config", "/api/machines/local/config"])("validates session naming before writing through %s", async (url) => {
-    const response = await app.inject({ method: "PUT", url, payload: { config: { sessionNaming: { maxTokens: 0 } } } });
-    expect(response.statusCode).toBe(400);
-    expect(service.write).not.toHaveBeenCalled();
-  });
-
-  it.each(["", "ultra", null, false, 42, {}, []])("rejects invalid naming thinking level %j before writing and in remote responses", async (thinkingLevel) => {
-    const config = { sessionNaming: { thinkingLevel } };
-    for (const url of ["/api/config", "/api/machines/local/config"]) {
-      const result = await app.inject({ method: "PUT", url, payload: { config } });
-      expect(result.statusCode).toBe(400);
-      expect(result.json<{ error: string }>().error).toContain("sessionNaming.thinkingLevel");
-    }
-    expect(service.write).not.toHaveBeenCalled();
-    const response = responseFor({}, true);
-    for (const field of ["config", "effectiveConfig"]) {
-      expect(() => parsePiWebConfigResponseBody({ ...response, [field]: config })).toThrow("sessionNaming.thinkingLevel");
-    }
-  });
-
-  it.each([0, -1, 1.5, 2147483648, "10000", null, false, {}, []])("rejects invalid naming timeout %j before writing and in remote responses", async (timeoutMs) => {
-    const config = { sessionNaming: { timeoutMs } };
-    for (const url of ["/api/config", "/api/machines/local/config"]) {
-      const result = await app.inject({ method: "PUT", url, payload: { config } });
-      expect(result.statusCode).toBe(400);
-      expect(result.json<{ error: string }>().error).toContain("sessionNaming.timeoutMs");
-    }
-    expect(service.write).not.toHaveBeenCalled();
-    const response = responseFor({}, true);
-    for (const field of ["config", "effectiveConfig"]) {
-      expect(() => parsePiWebConfigResponseBody({ ...response, [field]: config })).toThrow("sessionNaming.timeoutMs");
-    }
-  });
-
-  it("rejects invalid session naming in remote config responses", () => {
-    const response = responseFor({}, true);
-    for (const field of ["config", "effectiveConfig"]) {
-      expect(() => parsePiWebConfigResponseBody({ ...response, [field]: { sessionNaming: { model: "/missing" } } })).toThrow("sessionNaming.model");
+  it.each(["/api/config", "/api/machines/local/config"])("rejects legacy core sessionNaming writes through %s without changing saved config", async (url) => {
+    const original = structuredClone(savedConfig);
+    for (const [method, payload] of [
+      ["PUT", { config: { sessionNaming: { model: "provider/model" } } }],
+      ["PATCH", { set: { sessionNaming: { model: "provider/model" } } }],
+      ["PATCH", { unset: ["/sessionNaming/model"] }],
+    ] as const) {
+      const response = await app.inject({ method, url, payload });
+      expect(response.statusCode).toBe(400);
+      expect(service.write).not.toHaveBeenCalled();
+      expect(savedConfig).toEqual(original);
     }
   });
 
@@ -364,6 +368,15 @@ describe("config routes", () => {
     }
   });
 
+  it("accepts older peer responses without the sessionMessages override flag but rejects invalid supplied values", () => {
+    const response = responseFor({}, false);
+    const legacyOverrides = Object.fromEntries(Object.entries(response.envOverrides).filter(([key]) => key !== "sessionMessages"));
+    expect(parsePiWebConfigResponseBody({ ...response, envOverrides: legacyOverrides }).envOverrides.sessionMessages).toBe(false);
+    for (const sessionMessages of [null, "false", 0]) {
+      expect(() => parsePiWebConfigResponseBody({ ...response, envOverrides: { ...legacyOverrides, sessionMessages } })).toThrow("field must be a boolean: sessionMessages");
+    }
+  });
+
   it("rejects config responses missing a required override flag", () => {
     for (const flag of ["host", "port", "allowedHosts", "spawnSessions", "subsessions", "askUser"] as const) {
       const envOverrides = Object.fromEntries(Object.entries(responseFor({}, false).envOverrides).filter(([key]) => key !== flag));
@@ -435,6 +448,6 @@ function responseFor(config: PiWebConfigValues, exists: boolean): PiWebConfigRes
     exists,
     config,
     effectiveConfig: config,
-    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, sessionMessages: false, subsessions: false, askUser: false },
   };
 }

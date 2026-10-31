@@ -7,6 +7,9 @@ import infoPlugin from "../../../../pi-web-plugins/info/pi-web-plugin";
 import updatesPlugin from "../../../../pi-web-plugins/updates/pi-web-plugin";
 import { TerminalPanel } from "../../../../pi-web-plugins/terminal/TerminalPanel";
 import { TerminalBrowserRuntime } from "../../../../pi-web-plugins/terminal/TerminalBrowserRuntime";
+import { createTerminalContent } from "../../../../pi-web-plugins/terminal/terminalLocalization";
+import { createPluginLocalization } from "../plugins/localization";
+import { LocalizationService } from "../localization/service";
 import { applicationTerminalContext } from "../../../../pi-web-plugins/terminal/TerminalContext";
 import { installTerminalRendererFake } from "../../../../pi-web-plugins/terminal/terminalRenderer.testSupport";
 import type { PluginRuntimeContext as InternalPluginRuntimeContext } from "../plugins/types";
@@ -54,7 +57,7 @@ it("uses bundled Info with no project, workspace or session and follows selectio
   expect(panel.shadowRoot?.textContent).not.toContain("Workspace");
   expect(navigationTabs(app).querySelector('[aria-label="Info"]')).not.toBeNull();
   const status: PiWebStatusResponse = {
-    packageName: "@jmfederico/pi-web", generatedAt: "now",
+    packageName: "@jmfederico/pi-web", generatedAt: "2026-10-01T12:00:00Z",
     components: {
       web: { component: "web", label: "Web/UI", runtimeVersion: "1.202610.0", stale: false, available: true },
       sessiond: { component: "sessiond", label: "Session daemon", stale: false, available: true },
@@ -523,6 +526,8 @@ it("scopes application queries per contribution and refreshes restored queries w
 
 it("keeps real Terminal selection stable across no-project host rerenders and workspace changes", async () => {
   installTerminalRendererFake();
+  const lifetime = new AbortController();
+  const content = createTerminalContent(createPluginLocalization(new LocalizationService(), "pi-web.terminal", "terminal-lifecycle", lifetime.signal));
   const runtime = new TerminalBrowserRuntime();
   const maintenance = { id: "maintenance-output", scope: "maintenance", cwd: "/maintenance", name: "Update", createdAt: "now", exited: true };
   const maintenanceRequest = vi.fn((operation: string) => Promise.resolve(operation === "terminal.list" ? [maintenance] : []));
@@ -543,7 +548,7 @@ it("keeps real Terminal selection stable across no-project host rerenders and wo
         if (hostRenders > 20) throw new Error("Terminal selection triggered a host-render loop");
         context.host.requestRender();
       } };
-      return html`<application-host-terminal .runtime=${runtime} .context=${applicationTerminalContext({ ...context, backend, host })}></application-host-terminal>`;
+      return html`<application-host-terminal .content=${content} .runtime=${runtime} .context=${applicationTerminalContext({ ...context, backend, host })}></application-host-terminal>`;
     },
   }] } }) }, { id: "terminal-lifecycle", state: { workspaceTool: "terminal-lifecycle:workspace.terminal" } });
   try {
@@ -583,6 +588,7 @@ it("keeps real Terminal selection stable across no-project host rerenders and wo
     expect(maintenanceRequest.mock.calls.some(([operation]) => operation === "terminal.create")).toBe(false);
   } finally {
     app.remove();
+    lifetime.abort();
     runtime.dispose();
   }
 });

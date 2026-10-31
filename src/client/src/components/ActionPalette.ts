@@ -1,3 +1,5 @@
+import { LocalizationController } from "../localization/browser";
+import { pickerMessages as messages } from "../pickerMessages";
 import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -13,6 +15,7 @@ export class ActionPalette extends LitElement {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this);
   }
 
   @property({ attribute: false }) actions: AppAction[] = [];
@@ -27,13 +30,13 @@ export class ActionPalette extends LitElement {
       <modal-surface
         .onClose=${() => this.onCancel?.()}
         .initialFocus=${"input"}
-        .label=${"Action palette"}
+        .label=${messages.t("actionPalette")}
         @keydown=${(event: KeyboardEvent) => { this.handleKeyDown(event); }}
       >
         <header class="ui-dialog-header">
-          <input class="ui-dialog-search" aria-label="Search actions"
+          <input class="ui-dialog-search" aria-label=${messages.t("searchActions")}
             .value=${this.queryText}
-            placeholder="Search actions..."
+            placeholder=${messages.t("searchActionsPlaceholder")}
             @input=${(event: Event) => {
               if (event.target instanceof HTMLInputElement) {
                 this.queryText = event.target.value;
@@ -41,10 +44,10 @@ export class ActionPalette extends LitElement {
               }
             }}
           >
-          <button class="ui-button ui-button--icon" title="Close" aria-label="Close" @click=${() => this.onCancel?.()}>×</button>
+          <button class="ui-button ui-button--icon" title=${messages.t("close")} aria-label=${messages.t("close")} @click=${() => this.onCancel?.()}>×</button>
         </header>
         <div class="options ui-selection-list">
-          ${actions.length === 0 ? html`<div class="empty ui-dialog-empty">No actions found.</div>` : actions.map((action, index) => {
+          ${actions.length === 0 ? html`<div class="empty ui-dialog-empty">${messages.t("noActions")}</div>` : actions.map((action, index) => {
             const hasDescription = action.description !== undefined && action.description !== "";
             const group = action.group !== undefined && action.group !== ""
               ? html`<small class="group ui-selection-detail">${action.group}</small>` : nothing;
@@ -112,7 +115,7 @@ export class ActionPalette extends LitElement {
     strong { flex: 1 1 12ch; min-width: 0; }
     .description { flex: 1 1 24ch; min-width: 0; font: inherit; }
     .disabled-reason { color: var(--pi-warning); }
-    .group { flex: 0 1 auto; min-width: 0; max-width: 100%; margin: 0 0 0 auto; text-align: right; font-size: 12px; }
+    .group { flex: 0 1 auto; min-width: 0; max-width: 100%; margin-inline-start: auto; text-align: end; font-size: 12px; }
     kbd { flex: 0 1 auto; max-width: 100%; margin-inline-start: auto; align-self: center; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-muted); padding: 2px 6px; font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); white-space: normal; }
   `];
 }

@@ -10,6 +10,55 @@ afterEach(() => {
 });
 
 describe("General settings", () => {
+  it("shows effective machine base roots without claiming external access is denied", async () => {
+    const panel = await mountPanel();
+    panel.onResetMachine = vi.fn();
+    panel.machineConfigResponse = {
+      ...configResponse({ basePaths: ["/saved-root"] }),
+      effectiveConfig: { basePaths: ["/effective-root"] },
+      enforcedSettings: { "/basePaths": "PI_WEB_BASE_PATHS" },
+    };
+    await settle(panel);
+    const summary = required(panel.shadowRoot?.querySelector('[aria-label="Effective selected machine file access and upload summary"]'));
+    expect(summary.textContent).toContain("/effective-root");
+    expect(summary.textContent).not.toContain("/saved-root");
+    expect(summary.textContent).not.toContain("No machine-wide external roots");
+    expect(summary.textContent).not.toContain("External paths denied");
+    expect(summary.textContent).toContain("PI_WEB_BASE_PATHS");
+    expect(summary.textContent).toContain("project additions are not shown here");
+    expect(summary.querySelector("button")).toBeNull();
+    expect(required(panel.shadowRoot?.querySelector<HTMLTextAreaElement>('textarea[placeholder^="~/SDKs"]')).value).toBe("");
+
+    panel.machineConfigResponse = {
+      ...configResponse({ basePaths: ["/file-root"] }),
+      configSources: { "/basePaths": "user config" },
+    };
+    await settle(panel);
+    expect(summary.textContent).toContain("user config");
+    expect(summary.textContent).not.toContain("PI_WEB_BASE_PATHS");
+    expect(summary.querySelector("button")).toBeNull();
+  });
+
+  it("lists base roots separately from global additions and does not save base roots with edits", async () => {
+    const panel = await mountPanel();
+    panel.machineConfigResponse = configResponse({ basePaths: ["/base"], pathAccess: { allowedPaths: ["/additional"] } });
+    await settle(panel);
+    const summary = required(panel.shadowRoot?.querySelector('[aria-label="Effective selected machine file access and upload summary"]'));
+    const rows = Array.from(summary.querySelectorAll("dl > div"));
+    expect(rows[0]?.querySelector("dt")?.textContent).toBe("Machine base roots");
+    expect(rows[0]?.querySelector("dd")?.textContent).toContain("/base");
+    expect(rows[0]?.textContent).not.toContain("/additional");
+    expect(rows[1]?.querySelector("dt")?.textContent).toBe("Global additions");
+    expect(rows[1]?.querySelector("dd")?.textContent).toBe("/additional");
+    expect(summary.textContent).not.toContain("No machine-wide external roots");
+    const save = vi.fn();
+    panel.onSaveMachineConfig = save;
+    edit(panel, machineInput, "manual/uploads");
+    submit(panel, 1);
+    await settle(panel);
+    expect(save).toHaveBeenCalledExactlyOnceWith({ uploads: { defaultFolder: "manual/uploads" } });
+  });
+
   it("edits and clears the selected machine name through the machine config save", async () => {
     const panel = await mountPanel();
     panel.machineConfigResponse = configResponse({ installationName: "Studio" });
@@ -59,7 +108,7 @@ describe("General settings", () => {
     expect(save).not.toHaveBeenCalled();
   });
 
-  it("shows scope and environment priority without hiding saved values", async () => {
+  it("shows and locks the effective environment value without modifying the hidden saved value", async () => {
     const panel = await mountPanel();
     panel.targetLabel = "Lab Mac (remote machine)";
     panel.configResponse = { ...configResponse({ host: "saved.local" }), effectiveConfig: { host: "env.local" }, envOverrides: { ...configResponse({}).envOverrides, host: true } };
@@ -67,7 +116,10 @@ describe("General settings", () => {
     expect(panel.shadowRoot?.textContent).toContain("Save the machine name, file access, and upload defaults on Lab Mac (remote machine)");
     expect(panel.shadowRoot?.textContent).toContain("Environment overrides take priority.");
     expect(panel.shadowRoot?.textContent).toContain("env.local");
-    expect(input(panel, gatewayHostInput).value).toBe("saved.local");
+    expect(input(panel, gatewayHostInput).value).toBe("env.local");
+    expect(input(panel, gatewayHostInput).disabled).toBe(true);
+    expect(panel.configResponse.config.host).toBe("saved.local");
+    expect(panel.shadowRoot?.textContent).toContain("PI_WEB_HOST");
   });
 
   it("preserves dirty fields across refresh while updating untouched fields and save remainders", async () => {
@@ -84,7 +136,23 @@ describe("General settings", () => {
     panel.onSave = save;
     submit(panel, 0);
     await settle(panel);
-    expect(save).toHaveBeenCalledWith({ host: "draft.local", port: 9000, allowedHosts: [], plugins: { info: { enabled: false } } });
+    expect(save).toHaveBeenCalledWith({ host: "draft.local" });
+  });
+
+  it("combines cleared server overrides and changed values in one update", async () => {
+    const panel = await mountPanel();
+    panel.configResponse = { ...configResponse({ host: "saved.local", port: 8504 }), defaultsConfig: { host: "deployment.local" } };
+    await settle(panel);
+    edit(panel, gatewayHostInput, "");
+    edit(panel, gatewayHostInput + "[inputmode]", "9000");
+    const save = vi.fn((config: PiWebConfigValues) => {
+      panel.configResponse = { ...configResponse(config), effectiveConfig: { host: "deployment.local", ...config } };
+    });
+    panel.onSave = save;
+    submit(panel, 0);
+    await settle(panel);
+    expect(save).toHaveBeenCalledExactlyOnceWith({ port: 9000 }, ["/host"]);
+    expect(input(panel, gatewayHostInput).value).toBe("deployment.local");
   });
 
   it("acknowledges only the saved scope, including normalized values", async () => {
@@ -139,6 +207,7 @@ describe("General settings", () => {
     const panel = await mountPanel();
     edit(panel, gatewayHostInput, "gateway-draft.local");
     edit(panel, machineInput, "old-machine/uploads");
+    panel.targetId = "other-machine";
     panel.targetLabel = "Other machine";
     panel.machineConfigResponse = configResponse({ uploads: { defaultFolder: "other/uploads" } });
     await settle(panel);
@@ -177,7 +246,7 @@ describe("General settings", () => {
     edit(panel, machineInput, "manual\\uploads/.");
     submit(panel, 1);
     await settle(panel);
-    expect(save).toHaveBeenCalledWith({ installationName: "", pathAccess: { allowedPaths: [] }, uploads: { defaultFolder: "manual/uploads" }, attachments: {} });
+    expect(save).toHaveBeenCalledWith({ uploads: { defaultFolder: "manual/uploads" } });
     expect(gatewaySave).not.toHaveBeenCalled();
   });
   it("reflects the saved quiet-mode setting and shows dialog save failures", async () => {
@@ -264,6 +333,6 @@ function configResponse(config: PiWebConfigValues): PiWebConfigResponse {
     exists: true,
     config,
     effectiveConfig: config,
-    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
   };
 }

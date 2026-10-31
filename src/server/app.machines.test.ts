@@ -149,6 +149,28 @@ describe("buildApp machine routes", () => {
     expect(requestJson).toHaveBeenCalledWith("GET", "/api/config");
   });
 
+  it("forwards one scoped set/unset request without a gateway read-modify-write", async () => {
+    const added = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = added.json<{ id: string }>();
+    const upstream: PiWebConfigResponse = { ...piWebConfigResponse({ host: "localhost", quietMode: true, askUser: false }),
+      enforcedSettings: { "/host": "PI_WEB_HOST", "/askUser": "PI_WEB_ASK_USER" },
+      defaultsConfig: { host: "localhost", installationName: "Office" },
+    };
+    const requestJson = vi.fn<MachineClient["requestJson"]>(() => Promise.resolve({ statusCode: 200, headers: {}, body: upstream }));
+    appTestContext.remoteClient = fakeRemoteClient({ requestJson });
+    const payload = { set: { askUser: false }, unset: ["/installationName"] };
+    const response = await appTestContext.app.inject({ method: "PATCH", url: `/api/machines/${remote.id}/config`, payload });
+    expect(response.statusCode).toBe(200);
+    expect(requestJson).toHaveBeenCalledExactlyOnceWith("PATCH", "/api/config", payload);
+    expect(response.json<PiWebConfigResponse>().config).toEqual({ askUser: false });
+    expect(response.json<PiWebConfigResponse>().enforcedSettings).toEqual({ "/askUser": "PI_WEB_ASK_USER" });
+    expect(response.json<PiWebConfigResponse>().defaultsConfig).toEqual({ installationName: "Office" });
+    requestJson.mockClear();
+    const rejected = await appTestContext.app.inject({ method: "PATCH", url: `/api/machines/${remote.id}/config`, payload: { unset: ["/host"] } });
+    expect(rejected.statusCode).toBe(400);
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
   it("merges remote selected-machine config updates into the target machine config", async () => {
     const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
     const remote = addResponse.json<{ id: string }>();
@@ -189,10 +211,42 @@ describe("buildApp machine routes", () => {
     });
   });
 
-  it("proxies session naming reads, updates, unrelated saves, and resets", async () => {
+  it("protects hidden remote overrides before forwarding legacy PUT replacements", async () => {
+    const added = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = added.json<{ id: string }>();
+    let persistedConfig: PiWebConfigValues = { host: "localhost", installationName: "Hidden", attachments: { defaultFolder: "hidden" }, askUser: false };
+    const enforcedSettings = { "/installationName": "PI_WEB_INSTALLATION_NAME", "/attachments/defaultFolder": "PI_WEB_ATTACHMENTS", "/uploads/defaultFolder": "PI_WEB_UPLOADS" };
+    const requestJson = vi.fn<MachineClient["requestJson"]>((method, _path, body) => {
+      if (method === "PUT") persistedConfig = configFromMachineConfigWriteBody(body);
+      return Promise.resolve({ statusCode: 200, headers: {}, body: { ...piWebConfigResponse(persistedConfig), enforcedSettings } });
+    });
+    appTestContext.remoteClient = fakeRemoteClient({ requestJson });
+    const url = `/api/machines/${remote.id}/config`;
+    const read = await appTestContext.app.inject({ method: "GET", url });
+    const roundtrip = await appTestContext.app.inject({ method: "PUT", url, payload: { config: read.json<PiWebConfigResponse>().config } });
+    expect(roundtrip.statusCode).toBe(200);
+    const before = structuredClone(persistedConfig);
+    for (const config of [{ installationName: "New" }, { attachments: { defaultFolder: "new" } }, { uploads: { defaultFolder: "new" } }]) {
+      requestJson.mockClear();
+      const rejected = await appTestContext.app.inject({ method: "PUT", url, payload: { config } });
+      expect(rejected.statusCode).toBe(400);
+      expect(rejected.json<{ error: string }>().error).toContain("enforced by");
+      expect(requestJson).toHaveBeenCalledExactlyOnceWith("GET", "/api/config");
+      expect(persistedConfig).toEqual(before);
+    }
+    requestJson.mockClear();
+    const result = await appTestContext.app.inject({ method: "PUT", url, payload: { config: { sessionArchive: { directory: "/archive" }, askUser: true } } });
+    expect(result.statusCode).toBe(200);
+    const expected = { host: "localhost", installationName: "Hidden", attachments: { defaultFolder: "hidden" }, sessionArchive: { directory: "/archive" }, askUser: true };
+    expect(requestJson).toHaveBeenNthCalledWith(2, "PUT", "/api/config", { config: expected });
+    expect(persistedConfig).toEqual(expected);
+    expect(persistedConfig).not.toHaveProperty("uploads");
+  });
+
+  it("proxies upload defaults reads, updates, unrelated saves, and resets", async () => {
     const addResponse = await appTestContext.app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
     const remote = addResponse.json<{ id: string }>();
-    let persistedConfig: PiWebConfigValues = { ...fullPiWebConfig(), sessionNaming: { model: "provider/model", maxTokens: 32 } };
+    let persistedConfig: PiWebConfigValues = { ...fullPiWebConfig(), uploads: { defaultFolder: "initial" } };
     const requestJson = vi.fn<MachineClient["requestJson"]>((method, _path, body) => {
       if (method === "PUT") persistedConfig = configFromMachineConfigWriteBody(body);
       return Promise.resolve({ statusCode: 200, headers: { "content-type": "application/json" }, body: piWebConfigResponse(persistedConfig) });
@@ -201,13 +255,13 @@ describe("buildApp machine routes", () => {
     const url = `/api/machines/${remote.id}/config`;
     const read = await appTestContext.app.inject({ method: "GET", url });
     expect(read.statusCode).toBe(200);
-    expect(read.json<PiWebConfigResponse>().config.sessionNaming).toEqual(persistedConfig.sessionNaming);
-    for (const config of [{ spawnSessions: false }, { sessionNaming: { model: "other/model", maxTokens: 64 } }, { sessionNaming: {} }]) {
+    expect(read.json<PiWebConfigResponse>().config.uploads).toEqual(persistedConfig.uploads);
+    for (const config of [{ spawnSessions: false }, { uploads: { defaultFolder: "other" } }, { uploads: {} }]) {
       const expected = { ...persistedConfig, ...config };
       const response = await appTestContext.app.inject({ method: "PUT", url, payload: { config } });
       expect(response.statusCode).toBe(200);
       expect(persistedConfig).toEqual(expected);
-      expect(response.json<PiWebConfigResponse>().config.sessionNaming).toEqual(expected.sessionNaming);
+      expect(response.json<PiWebConfigResponse>().config.uploads).toEqual(expected.uploads);
     }
   });
 

@@ -1,6 +1,14 @@
 export const TASKS_CONFIG_PATH = ".pi-web/tasks.json";
 export const TASKS_CONFIG_VERSION = 1;
 
+export type ConfigIssue =
+  | { kind: "json"; error: string }
+  | { kind: "object" | "version" | "tasks" }
+  | { kind: "duplicate"; id: string }
+  | { kind: "task-object" | "confirm"; index: number }
+  | { kind: "id"; index: number; pattern: string }
+  | { kind: "required" | "optional"; index: number; field: string };
+
 const taskIdPattern = /^[a-z][a-z0-9.-]*$/u;
 
 export interface WorkspaceTasksConfig {
@@ -19,31 +27,31 @@ export interface WorkspaceTask {
 
 export type ParseTasksConfigResult =
   | { ok: true; config: WorkspaceTasksConfig }
-  | { ok: false; error: string };
+  | { ok: false; error: ConfigIssue };
 
 export function parseTasksConfigText(text: string): ParseTasksConfigResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (error) {
-    return { ok: false, error: `Invalid JSON: ${error instanceof Error ? error.message : String(error)}` };
+    return { ok: false, error: { kind: "json", error: error instanceof Error ? error.message : String(error) } };
   }
   return parseTasksConfig(parsed);
 }
 
 export function parseTasksConfig(value: unknown): ParseTasksConfigResult {
-  if (!isRecord(value)) return invalid("Config must be an object");
-  if (value["version"] !== TASKS_CONFIG_VERSION) return invalid("Config version must be 1");
+  if (!isRecord(value)) return invalid({ kind: "object" });
+  if (value["version"] !== TASKS_CONFIG_VERSION) return invalid({ kind: "version" });
 
   const tasks = value["tasks"];
-  if (!Array.isArray(tasks)) return invalid("Config tasks must be an array");
+  if (!Array.isArray(tasks)) return invalid({ kind: "tasks" });
 
   const ids = new Set<string>();
   const parsedTasks: WorkspaceTask[] = [];
   for (const [index, task] of tasks.entries()) {
     const parsedTask = parseTask(task, index);
     if (!parsedTask.ok) return parsedTask;
-    if (ids.has(parsedTask.task.id)) return invalid(`Duplicate task id: ${parsedTask.task.id}`);
+    if (ids.has(parsedTask.task.id)) return invalid({ kind: "duplicate", id: parsedTask.task.id });
     ids.add(parsedTask.task.id);
     parsedTasks.push(parsedTask.task);
   }
@@ -53,30 +61,30 @@ export function parseTasksConfig(value: unknown): ParseTasksConfigResult {
 
 type ParseTaskResult =
   | { ok: true; task: WorkspaceTask }
-  | { ok: false; error: string };
+  | { ok: false; error: ConfigIssue };
 
 function parseTask(value: unknown, index: number): ParseTaskResult {
-  const label = `Task ${String(index + 1)}`;
-  if (!isRecord(value)) return invalid(`${label} must be an object`);
+  index += 1;
+  if (!isRecord(value)) return invalid({ kind: "task-object", index });
 
-  const id = requireNonEmptyString(value, "id", label);
+  const id = requireNonEmptyString(value, "id", index);
   if (!id.ok) return id;
-  if (!taskIdPattern.test(id.value)) return invalid(`${label} id must match ${taskIdPattern.source}`);
+  if (!taskIdPattern.test(id.value)) return invalid({ kind: "id", index, pattern: taskIdPattern.source });
 
-  const title = requireNonEmptyString(value, "title", label);
+  const title = requireNonEmptyString(value, "title", index);
   if (!title.ok) return title;
 
-  const command = requireNonEmptyString(value, "command", label);
+  const command = requireNonEmptyString(value, "command", index);
   if (!command.ok) return command;
 
-  const description = optionalNonEmptyString(value, "description", label);
+  const description = optionalNonEmptyString(value, "description", index);
   if (!description.ok) return description;
 
-  const group = optionalNonEmptyString(value, "group", label);
+  const group = optionalNonEmptyString(value, "group", index);
   if (!group.ok) return group;
 
   const confirm = value["confirm"];
-  if (confirm !== undefined && typeof confirm !== "boolean") return invalid(`${label} confirm must be a boolean`);
+  if (confirm !== undefined && typeof confirm !== "boolean") return invalid({ kind: "confirm", index });
 
   return {
     ok: true,
@@ -93,26 +101,26 @@ function parseTask(value: unknown, index: number): ParseTaskResult {
 
 type StringFieldResult =
   | { ok: true; value: string }
-  | { ok: false; error: string };
+  | { ok: false; error: ConfigIssue };
 
 type OptionalStringFieldResult =
   | { ok: true; value: string | undefined }
-  | { ok: false; error: string };
+  | { ok: false; error: ConfigIssue };
 
-function requireNonEmptyString(record: Record<string, unknown>, key: string, label: string): StringFieldResult {
+function requireNonEmptyString(record: Record<string, unknown>, key: string, index: number): StringFieldResult {
   const value = record[key];
-  if (typeof value !== "string" || value.trim() === "") return invalid(`${label} ${key} must be a non-empty string`);
+  if (typeof value !== "string" || value.trim() === "") return invalid({ kind: "required", index, field: key });
   return { ok: true, value };
 }
 
-function optionalNonEmptyString(record: Record<string, unknown>, key: string, label: string): OptionalStringFieldResult {
+function optionalNonEmptyString(record: Record<string, unknown>, key: string, index: number): OptionalStringFieldResult {
   const value = record[key];
   if (value === undefined) return { ok: true, value: undefined };
-  if (typeof value !== "string" || value.trim() === "") return invalid(`${label} ${key} must be a non-empty string when provided`);
+  if (typeof value !== "string" || value.trim() === "") return invalid({ kind: "optional", index, field: key });
   return { ok: true, value };
 }
 
-function invalid(error: string): { ok: false; error: string } {
+function invalid(error: ConfigIssue): { ok: false; error: ConfigIssue } {
   return { ok: false, error };
 }
 

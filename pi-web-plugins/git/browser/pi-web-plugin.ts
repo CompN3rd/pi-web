@@ -1,4 +1,4 @@
-import type { PiWebPlugin, PluginCapability, StylesheetIntegrationCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
+import type { FileIconsCapability, PiWebPlugin, PluginCapability, StylesheetIntegrationCapabilityV1 } from "@jmfederico/pi-web/plugin-api";
 import { createGitBrowserContributions } from "./git-panel.js";
 
 const stylesheetIntegrationCapability: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
@@ -18,17 +18,34 @@ function isStylesheetIntegration(value: unknown): value is StylesheetIntegration
     && "createController" in value && typeof value.createController === "function";
 }
 
+const fileIconsCapability: PluginCapability<FileIconsCapability> = {
+  pluginId: "pi-web", id: "file-icons", version: 1,
+  parse(value) {
+    if (!isFileIcons(value)) throw new Error("Invalid PI WEB file icons capability v1");
+    return value;
+  },
+};
+
+function isFileIcons(value: unknown): value is FileIconsCapability {
+  return typeof value === "object" && value !== null
+    && "resolveIcon" in value && typeof value.resolveIcon === "function"
+    && "subscribe" in value && typeof value.subscribe === "function";
+}
+
 const plugin = {
   apiVersion: 4,
   name: "Git",
-  requires: [stylesheetIntegrationCapability],
-  activate: ({ pluginId, runtimePluginId, html, svg }) => {
+  requires: [stylesheetIntegrationCapability, fileIconsCapability],
+  activate: ({ pluginId, runtimePluginId, html, svg, localization }) => {
+    if (localization === undefined) throw new Error("The Git plugin requires a localization-capable PI WEB host");
     let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
+    let fileIcons: FileIconsCapability | undefined;
     return {
       start: ({ capabilities }) => {
         stylesheetIntegration = capabilities.resolve(stylesheetIntegrationCapability);
+        fileIcons = capabilities.resolve(fileIconsCapability);
       },
-      contributions: createGitBrowserContributions(pluginId, runtimePluginId, html, svg, () => stylesheetIntegration),
+      contributions: createGitBrowserContributions(pluginId, runtimePluginId, html, svg, () => stylesheetIntegration, localization, () => fileIcons),
     };
   },
 } satisfies PiWebPlugin;

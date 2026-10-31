@@ -198,11 +198,16 @@ export function toggleSessionTreeFold(model: SessionTreeModel, state: SessionTre
   return { selectedId: id, foldedIds };
 }
 
-export function validateSessionTreeSummaryChoice(mode: SessionTreeSummaryChoice["mode"], customInstructions: string): SessionTreeSummaryValidation {
+/** Optional presentation callback keeps the domain's English API compatible. */
+export function validateSessionTreeSummaryChoice(
+  mode: SessionTreeSummaryChoice["mode"],
+  customInstructions: string,
+  validationMessage?: (code: "required" | "tooLong") => string,
+): SessionTreeSummaryValidation {
   if (mode === "none" || mode === "default") return { ok: true, choice: { mode } };
-  if (customInstructions.trim() === "") return { ok: false, error: "Enter custom summary focus instructions." };
+  if (customInstructions.trim() === "") return { ok: false, error: validationMessage?.("required") ?? "Enter custom summary focus instructions." };
   if (customInstructions.length > SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH) {
-    return { ok: false, error: `Custom summary focus must be ${String(SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH)} characters or fewer.` };
+    return { ok: false, error: validationMessage?.("tooLong") ?? `Custom summary focus must be ${String(SESSION_TREE_CUSTOM_INSTRUCTIONS_MAX_LENGTH)} characters or fewer.` };
   }
   return { ok: true, choice: { mode: "custom", instructions: customInstructions.trim() } };
 }

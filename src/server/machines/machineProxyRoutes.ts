@@ -1,12 +1,17 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { WebSocket } from "ws";
+import { effectivePiWebCapabilities, PI_WEB_CAPABILITIES } from "../../shared/capabilities.js";
+import { parsePiWebRuntimeResponse } from "../../shared/piWebStatusParsing.js";
 import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, WORKSPACE_FILE_PREVIEW_ROUTE_PATH, type FederatedHttpRouteSpec } from "../../shared/federatedRoutes.js";
 import {
   PAIRED_PLUGIN_BACKEND_CHANNEL_ROUTE_PATHS,
+  PAIRED_PLUGIN_BACKEND_RESOURCE_ROUTE_PATHS,
+  parsePluginBackendResourceQuery,
   pluginBackendScopeFromRoute,
   PLUGIN_BACKEND_CHANNEL_DATA_FRAME_MAX_BYTES,
 } from "../../shared/pluginBackendProtocol.js";
-import { mergeSelectedMachineConfig, parsePiWebConfigResponseBody, parseSelectedMachineConfigRequest, selectedMachineConfigResponse } from "../configRoutes.js";
+import { preserveEnforcedConfigOverrides } from "../configUpdates.js";
+import { mergeSelectedMachineConfig, parsePiWebConfigResponseBody, parsePiWebConfigUpdate, parseSelectedMachineConfigRequest, selectedMachineConfigResponse } from "../configRoutes.js";
 import {
   type PluginBackendChannelProxyAdmissionPool,
   type PluginBackendChannelProxyScope,
@@ -16,12 +21,13 @@ import {
   coordinatePluginBackendChannelProxy,
   PluginBackendChannelProxyConnectionError,
 } from "../plugins/pluginBackendChannelProxyCoordinator.js";
+import { applyPluginResourcePolicy, pluginResourceError, pluginResourceRange, sendPluginResourceResponse, PLUGIN_RESOURCE_STREAM_DEADLINE_MS } from "../plugins/pluginBackendResourceResponse.js";
 import { requestCancellation } from "../requestCancellation.js";
 import { isSessionImageMimeType } from "../sessions/sessionMediaIndex.js";
 import { bridgeSockets, markPluginBackendChannelUpgradeRequest } from "../webSocketBridge.js";
 import { applyWorkspaceFilePreviewErrorResponsePolicy, applyWorkspaceFilePreviewResponsePolicy } from "../workspaces/filePreviewResponseHeaders.js";
 import { workspaceFilePreviewErrorResponsePolicy, workspaceFilePreviewResponsePolicy, type WorkspaceFilePreviewResponsePolicy } from "../workspaces/filePreviewResponsePolicy.js";
-import { DEFAULT_REMOTE_REQUEST_TIMEOUT_MS, RemoteMachineRequestError, type MachineClient, type MachineHttpResponse, type MachineJsonResponse, type MachineRequestOptions } from "./machineClient.js";
+import { DEFAULT_REMOTE_HEALTH_TIMEOUT_MS, DEFAULT_REMOTE_REQUEST_TIMEOUT_MS, RemoteMachineRequestError, type MachineClient, type MachineHttpResponse, type MachineJsonResponse, type MachineRequestOptions } from "./machineClient.js";
 import type { MachineService } from "./machineService.js";
 
 export const REMOTE_HTTP_ROUTES = FEDERATED_HTTP_ROUTES;
@@ -57,11 +63,30 @@ export function registerMachineProxyRoutes(
       method: spec.method,
       url: `/api/machines/:machineId${spec.path}`,
       ...("bodyLimit" in spec ? { bodyLimit: spec.bodyLimit } : {}),
+      ...(PAIRED_PLUGIN_BACKEND_RESOURCE_ROUTE_PATHS.includes(spec.path) ? { exposeHeadRoute: false } : {}),
       handler: async (request, reply) => {
         const cancellation = "propagateCancellation" in spec
           ? requestCancellation(request, reply)
           : undefined;
         try {
+          if (PAIRED_PLUGIN_BACKEND_RESOURCE_ROUTE_PATHS.includes(spec.path)) {
+            applyPluginResourcePolicy(reply);
+            let range;
+            try {
+              parsePluginBackendResourceQuery(request.query);
+              range = pluginResourceRange(request.headers.range);
+            }
+            catch (error) { return await pluginResourceError(reply, 400, error); }
+            try {
+              const client = await machines.remoteClient(request.params.machineId);
+              if (client === undefined) return await pluginResourceError(reply, 404, "Machine not found");
+              const upstream = await client.request("GET", remoteApiPath(request.params.machineId, request.url), undefined, {
+                ...(cancellation === undefined ? {} : { signal: cancellation.signal }),
+                ...(range === undefined ? {} : { range }), timeoutMs: 30_000, streamLifetimeMs: PLUGIN_RESOURCE_STREAM_DEADLINE_MS,
+              });
+              return await sendPluginResourceResponse(reply, upstream, cancellation?.signal ?? new AbortController().signal);
+            } catch (error) { return await pluginResourceError(reply, error instanceof RemoteMachineRequestError ? error.statusCode : 502, error); }
+          }
           return await proxyHttpRequest(
             machines,
             spec,
@@ -144,9 +169,24 @@ async function proxyHttpRequest(
 
   try {
     const remotePath = remoteApiPath(machineId, requestUrl);
+    if ((spec.path === "/sessions/cleanup/preview" || spec.path === "/sessions/cleanup") && isRecord(body)) {
+      const skipPinned = body["skipPinned"];
+      if (skipPinned !== undefined && typeof skipPinned !== "boolean") {
+        return await reply.code(400).send({ error: "skipPinned field must be a boolean" });
+      }
+      if (skipPinned === true) {
+        // Old remote web processes can ignore skipPinned even with an updated daemon.
+        // Read fresh support from both owners before forwarding any cleanup operation.
+        const response = await client.requestJson("GET", "/api/pi-web/runtime", undefined, { timeoutMs: DEFAULT_REMOTE_HEALTH_TIMEOUT_MS });
+        const runtime = response.statusCode >= 200 && response.statusCode < 300 ? parsePiWebRuntimeResponse(response.body) : undefined;
+        if (runtime === undefined || !effectivePiWebCapabilities(runtime.components).includes(PI_WEB_CAPABILITIES.sessionCleanupPinnedExclusions)) {
+          return await reply.code(503).send({ error: "Pinned-session cleanup protection is unavailable on the remote machine. Update and restart PI WEB and its session daemon there." });
+        }
+      }
+    }
     if (spec.path === "/config") {
       const response = await proxySelectedMachineConfigRequest(client, machineId, method, remotePath, body, reply);
-      if (method === "PUT" && reply.statusCode < 300) machines.invalidateReportedName(machineId);
+      if ((method === "PUT" || method === "PATCH") && reply.statusCode < 300) machines.invalidateReportedName(machineId);
       return response;
     }
 
@@ -230,13 +270,18 @@ async function proxySelectedMachineConfigRequest(client: MachineClient, machineI
     return sendSelectedMachineConfigResponse(reply, await client.requestJson("GET", remotePath), machineId);
   }
 
+  if (method === "PATCH") {
+    const update = parsePiWebConfigUpdate(body, true, "portable");
+    return sendSelectedMachineConfigResponse(reply, await client.requestJson("PATCH", remotePath, update), machineId);
+  }
+
   if (method === "PUT") {
     const patch = parseSelectedMachineConfigRequest(configPayload(body), "portable");
     const currentResponse = await client.requestJson("GET", remotePath);
     if (!isSuccessfulStatus(currentResponse.statusCode)) return sendUpstreamJsonResponse(reply, currentResponse, machineId);
 
     const current = parsePiWebConfigResponseBody(currentResponse.body, "Remote machine config response");
-    const merged = mergeSelectedMachineConfig(current.config, patch);
+    const merged = preserveEnforcedConfigOverrides(current.config, mergeSelectedMachineConfig(current.config, patch), current.enforcedSettings);
     return sendSelectedMachineConfigResponse(reply, await client.requestJson("PUT", remotePath, { config: merged }), machineId);
   }
 
@@ -500,7 +545,7 @@ function destroyReadable(body: NodeJS.ReadableStream): void {
 }
 
 function isSelectedMachineConfigRequestError(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith("PI WEB selected-machine config");
+  return error instanceof Error && (error.message.startsWith("PI WEB selected-machine config") || error.message.startsWith("PI WEB config update"));
 }
 
 function errorMessage(error: unknown): string {

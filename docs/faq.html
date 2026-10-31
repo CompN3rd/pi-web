@@ -104,7 +104,9 @@
             <a href="#plugins">Can I use local plugins?</a>
             <a href="#worktree-list-out-of-date">A worktree I created is missing</a>
             <a href="#navigation-order">How do I arrange navigation lists?</a>
+            <a href="#session-notices">Where are persistent session warnings?</a>
             <a href="#chat-images">How do chat images load?</a>
+            <a href="#chat-updates">Chat updates stopped</a>
             <a href="#sessions-stop">Sessions stop unexpectedly</a>
             <a href="#model-response-terminated">Model responses fail with 'terminated'</a>
             <a href="#provider-extension-no-effect">My provider extension has no effect</a>
@@ -352,6 +354,13 @@
               </p>
             </article>
 
+            <article id="session-notices" class="faq-item">
+              <h2>Where are persistent session warnings?</h2>
+              <p>Open <strong>Navigation → Notices</strong> for the selected session’s current conditions, such as skill diagnostics, extension load failures, or billing notices. Pin Notices to keep its count visible immediately after Chat, or first when Chat has no tab. Leave it unpinned to open it through Navigation instead.</p>
+              <p>Notices is available only while the selected session has warnings. When they clear, the destination disappears without forgetting its pin preference. An old link or browser-history entry then shows the normal unavailable-panel message.</p>
+              <p>Most conditions remain until their cause is resolved; a dismiss button appears only when the underlying warning supports suppression. Event notifications about work happening in the session remain in the chat, where they can be dismissed.</p>
+            </article>
+
             <article id="chat-images" class="faq-item">
               <h2>How do chat images load?</h2>
               <p>
@@ -362,6 +371,21 @@
                 This changes only what PI WEB sends to the browser; Pi's session files and model inputs stay unchanged.
                 Update and restart the session daemon on each selected machine to enable separate image delivery.
                 A daemon restart can interrupt active sessions, so wait for important work to finish first.
+              </p>
+            </article>
+
+            <article id="chat-updates" class="faq-item">
+              <h2>Chat updates stopped</h2>
+              <p>
+                The session keeps running when you leave the browser. When you return, PI WEB reconnects and checks
+                for new messages without clearing your draft or reading position. While the conversation is visible,
+                it also checks history every 30 seconds. Activity indicators and chat delivery are separate:
+                activity can continue while chat messages are delayed.
+              </p>
+              <p>
+                Routine checks are silent. If the chat may be out of date or could not refresh, a notice above the conversation offers
+                <strong>Refresh messages</strong>. The notice stays until the conversation recovers.
+                Refreshing reconnects the conversation; it does not restart the session or resend your prompt.
               </p>
             </article>
 

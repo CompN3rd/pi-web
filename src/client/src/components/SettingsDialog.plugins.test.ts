@@ -33,7 +33,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
     const config = configResponse({ plugins: { info: { enabled: false } } });
     const saved = configResponse({ plugins: { info: { enabled: true } } });
     const configSpy = vi.spyOn(configApi, "config").mockResolvedValue(config);
-    const saveSpy = vi.spyOn(configApi, "saveConfig").mockResolvedValue(saved);
+    const saveSpy = vi.spyOn(configApi, "updateConfig").mockResolvedValue(saved);
     const pluginsSpy = vi.spyOn(pluginsApi, "plugins").mockResolvedValue(pluginsResponse([pluginInfo("info", false)]));
     const dialog = new SettingsDialog();
     dialog.machine = remoteMachine;
@@ -54,7 +54,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
 
     await callDialogPromise(dialog, "togglePlugin", "info", true);
 
-    expect(saveSpy).toHaveBeenCalledWith({ plugins: { info: { enabled: true } } }, "remote-a");
+    expect(saveSpy).toHaveBeenCalledWith({ set: { plugins: { info: { enabled: true } } } }, "remote-a");
     expect(pluginsSpy).not.toHaveBeenCalled();
     expect(getDialogProperty(dialog, "selectedPluginConfigResponse")).toBe(saved);
     expect(getDialogProperty(dialog, "savedMessage")).toBe("Plugin settings saved for Lab Mac.");
@@ -112,7 +112,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
       },
     });
     const refreshedPlugins = pluginsResponse([pluginInfo("info", false), pluginInfo("keep", true)]);
-    const saveSpy = vi.spyOn(configApi, "saveConfig").mockResolvedValue(savedConfig);
+    const saveSpy = vi.spyOn(configApi, "updateConfig").mockResolvedValue(savedConfig);
     const pluginsSpy = vi.spyOn(pluginsApi, "plugins").mockResolvedValue(refreshedPlugins);
     const dialog = new SettingsDialog();
     dialog.machine = remoteMachine;
@@ -121,12 +121,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
     await callDialogPromise(dialog, "togglePlugin", "info", false);
 
     expect(saveSpy.mock.calls).toEqual([[
-      {
-        plugins: {
-          keep: { enabled: true, settings: { level: 1 } },
-          info: { enabled: false, settings: { color: "blue" } },
-        },
-      },
+      { set: { plugins: { info: { enabled: false } } } },
       "remote-a",
     ]]);
     expect(pluginsSpy.mock.calls).toEqual([["remote-a"]]);
@@ -141,7 +136,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
     const baseConfig = configResponse({ plugins: { info: { enabled: true, settings: { color: "blue" } } } });
     const savedConfig = configResponse({ plugins: { info: { enabled: false, settings: { color: "blue" } } } });
     const stalePlugins = pluginsResponse([pluginInfo("info", true)]);
-    vi.spyOn(configApi, "saveConfig").mockResolvedValue(savedConfig);
+    vi.spyOn(configApi, "updateConfig").mockResolvedValue(savedConfig);
     vi.spyOn(pluginsApi, "plugins").mockRejectedValue(new Error("Session daemon unavailable"));
     const dialog = new SettingsDialog();
     dialog.machine = remoteMachine;
@@ -166,7 +161,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
     });
     const savedConfig = configResponse({ plugins: { info: { enabled: true }, gateway: { settings: { theme: "dark" } } } });
     const refreshedPlugins = pluginsResponse([pluginInfo("info", true)]);
-    const saveSpy = vi.spyOn(configApi, "saveConfig").mockResolvedValue(savedConfig);
+    const saveSpy = vi.spyOn(configApi, "updateConfig").mockResolvedValue(savedConfig);
     vi.spyOn(pluginsApi, "plugins").mockResolvedValue(refreshedPlugins);
     const onConfigSaved = vi.fn();
     const dialog = new SettingsDialog();
@@ -176,7 +171,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
 
     await callDialogPromise(dialog, "togglePlugin", "info", true);
 
-    expect(saveSpy.mock.calls).toEqual([[{ plugins: { info: { enabled: true } } }, "local"]]);
+    expect(saveSpy.mock.calls).toEqual([[{ set: { plugins: { info: { enabled: true } } } }, "local"]]);
     expect(getDialogProperty(dialog, "selectedPluginConfigResponse")).toBe(savedConfig);
     expect(getDialogProperty(dialog, "selectedPluginsResponse")).toBe(refreshedPlugins);
     expect(getDialogProperty(dialog, "configResponse")).toMatchObject({
@@ -227,7 +222,7 @@ describe("settings-dialog plugin settings machine targeting", () => {
   it("ignores stale plugin save responses after the selected machine changes", async () => {
     const save = deferred<PiWebConfigResponse>();
     const pluginsSpy = vi.spyOn(pluginsApi, "plugins").mockResolvedValue(pluginsResponse([pluginInfo("info", false)]));
-    vi.spyOn(configApi, "saveConfig").mockReturnValue(save.promise);
+    vi.spyOn(configApi, "updateConfig").mockReturnValue(save.promise);
     const dialog = new SettingsDialog();
     dialog.machine = remoteMachine;
     setDialogProperty(dialog, "selectedPluginConfigResponse", configResponse({ plugins: { info: { enabled: true } } }));

@@ -1,4 +1,4 @@
-import type { StylesheetIntegrationCapabilityV1, ContentRenderingCapability, FileTreeEntry, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import type { FileIconsCapability, StylesheetIntegrationCapabilityV1, FilePreviewingCapability, FileTreeEntry, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
 import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import {
@@ -10,6 +10,7 @@ import {
   workspaceFilesCapabilityV1,
   workspaceUploadPath,
 } from "./FilesRuntime";
+import { FilesLocalizationController, formatFileSize, formatPercent, type FilesContent } from "./filesLocalization";
 import type { WorkspaceFilePreviewUrlBuilder } from "./FilesViewer";
 import { createWorkspaceFileViewModeStore, type WorkspaceFileViewModeStore } from "./workspaceFileViewMode";
 
@@ -18,6 +19,11 @@ interface PendingWorkspaceUploadReview {
 }
 
 export class WorkspaceFilesPanel extends LitElement {
+  private readonly text = new FilesLocalizationController(this);
+  @property({ attribute: false })
+  get content(): FilesContent | undefined { return this.text.content; }
+  set content(value: FilesContent | undefined) { this.text.content = value; }
+
   private integration: StylesheetIntegrationCapabilityV1 | undefined;
   private releaseStyles: (() => void) | undefined;
 
@@ -31,22 +37,41 @@ export class WorkspaceFilesPanel extends LitElement {
     if (this.isConnected && this.renderRoot instanceof ShadowRoot) this.releaseStyles = value?.registerRoot(this.renderRoot, { sharedUi: true });
   }
 
+  private icons: FileIconsCapability | undefined;
+  private releaseIcons: (() => void) | undefined;
+
+  @property({ attribute: false })
+  get fileIcons(): FileIconsCapability | undefined { return this.icons; }
+  set fileIcons(value: FileIconsCapability | undefined) {
+    if (value === this.icons) return;
+    this.releaseIcons?.();
+    this.releaseIcons = undefined;
+    this.icons = value;
+    if (this.isConnected) this.subscribeIcons();
+  }
+
+  private subscribeIcons(): void {
+    this.releaseIcons ??= this.icons?.subscribe(() => { this.requestUpdate(); });
+  }
+
   @property({ attribute: false }) context: WorkspacePanelContext | undefined;
   @property({ attribute: false }) runtime: FilesRuntime | undefined;
-  @property({ attribute: false }) contentRendering: ContentRenderingCapability | undefined;
+  @property({ attribute: false }) filePreviewing: FilePreviewingCapability | undefined;
   @query("#workspace-upload-input") private uploadInput?: HTMLInputElement;
   @query("dialog.upload-dialog") private uploadDialog?: HTMLDialogElement;
   @state() private pendingUpload: PendingWorkspaceUploadReview | undefined;
   @state() private destinationFolder = "";
   @state() private overwrite = false;
   @state() private createDirs = true;
-  @state() private formError = "";
+  @state() private formError: (() => string) | undefined;
   @state() private dragActive = false;
   private dragDepth = 0;
   private scope: FilesScopeState | undefined;
   private unsubscribeRuntime: (() => void) | undefined;
   private boundRuntime: FilesRuntime | undefined;
   private boundScopeKey: string | undefined;
+  private boundContext: WorkspacePanelContext | undefined;
+  private scrollRestorePending = true;
   private navigationModeKey = "";
   private modeStore: WorkspaceFileViewModeStore = createWorkspaceFileViewModeStore(undefined);
   private uploadReturnFocus: HTMLElement | undefined;
@@ -66,10 +91,12 @@ export class WorkspaceFilesPanel extends LitElement {
 
   protected override updated(): void {
     this.openPendingDialog();
+    this.restoreExplorerPresentation();
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
+    this.subscribeIcons();
     if (this.renderRoot instanceof ShadowRoot) this.releaseStyles ??= this.integration?.registerRoot(this.renderRoot, { sharedUi: true });
     window.addEventListener("resize", this.handleResponsiveVisibilityChange);
     if (typeof ResizeObserver !== "undefined") {
@@ -83,6 +110,10 @@ export class WorkspaceFilesPanel extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    // Detached layout has already reset scrollTop in browsers. Scroll events own
+    // the last visible position; do not replace it with detached geometry.
+    this.scrollRestorePending = true;
+    this.boundContext = undefined;
     window.removeEventListener("resize", this.handleResponsiveVisibilityChange);
     this.visibilityObserver?.disconnect();
     this.unsubscribeRuntime?.();
@@ -93,6 +124,8 @@ export class WorkspaceFilesPanel extends LitElement {
     this.resetPendingUpload();
     this.releaseStyles?.();
     this.releaseStyles = undefined;
+    this.releaseIcons?.();
+    this.releaseIcons = undefined;
     super.disconnectedCallback();
   }
 
@@ -100,17 +133,18 @@ export class WorkspaceFilesPanel extends LitElement {
     const context = this.context;
     const runtime = this.runtime;
     const scope = this.scope;
-    if (context === undefined || runtime === undefined || scope === undefined) return html`<p class="muted">Files unavailable.</p>`;
+    if (this.content === undefined) return html``;
+    if (context === undefined || runtime === undefined || scope === undefined) return html`<p class="muted">${this.text.messages.t("unavailable")}</p>`;
     if (scope.capabilityError !== undefined) {
       return html`
         <section class="capability-error" role="alert">
-          <strong>Files is unavailable on this host.</strong>
+          <strong>${this.text.messages.t("hostUnavailable")}</strong>
           <span>${scope.capabilityError}</span>
         </section>
       `;
     }
     const files = workspaceFilesCapabilityV1(context.files);
-    if (files === undefined) return html`<p class="capability-error" role="alert">Files requires workspace-files capability v1.</p>`;
+    if (files === undefined) return html`<p class="capability-error" role="alert">${this.text.messages.t("capabilityRequired")}</p>`;
     const previewUrlBuilder: WorkspaceFilePreviewUrlBuilder = (_projectId, _workspaceId, path, options) => {
       const reference = options?.modifiedAt === undefined ? undefined : { version: options.modifiedAt };
       return options?.download === true ? files.downloadUrl(path, reference) : files.previewUrl(path, reference);
@@ -124,25 +158,27 @@ export class WorkspaceFilesPanel extends LitElement {
         @drop=${this.handleDrop}
       >
         <section class="toolbar ui-toolbar">
-          <strong class="ui-toolbar-title">Files</strong>
-          ${scope.treeLoading ? html`<span class="muted">loading…</span>` : null}
-          ${scope.treeStale ? html`<span class="stale">stale</span>` : null}
+          <strong class="ui-toolbar-title">${this.text.messages.t("files")}</strong>
+          ${scope.treeLoading ? html`<span class="muted">${this.text.messages.t("loading")}</span>` : null}
+          ${scope.treeStale ? html`<span class="stale">${this.text.messages.t("stale")}</span>` : null}
           <div class="toolbar-actions ui-toolbar-group">
-            <button class="ui-button" @click=${this.openFilePicker}>Upload</button>
-            <button class="ui-button" @click=${() => { void runtime.refreshFiles(context); }}>Refresh</button>
+            <button class="ui-button" @click=${this.openFilePicker}>${this.text.messages.t("upload")}</button>
+            <button class="ui-button" @click=${() => { void runtime.refreshFiles(context); }}>${this.text.messages.t("refresh")}</button>
           </div>
           <input id="workspace-upload-input" class="visually-hidden" type="file" multiple @change=${this.handleFileInputChange} />
         </section>
         ${scope.error === undefined ? null : html`<p class="files-error" role="alert">${scope.error}</p>`}
         ${this.renderUploadProgress(context, runtime, scope)}
         <section class="split">
-          <div class="list tree ui-file-list">
-            ${scope.fileTree.length === 0 ? html`<p class="muted">No files loaded.</p>` : scope.fileTree.map((entry) => this.renderTreeEntry(context, runtime, scope, entry, 0))}
+          <div class="list tree ui-file-list" @scroll=${this.handleTreeScroll}>
+            ${scope.fileTree.length === 0 ? html`<p class="muted">${this.text.messages.t("noFiles")}</p>` : scope.fileTree.map((entry) => this.renderTreeEntry(context, runtime, scope, entry, 0))}
           </div>
           <div class="viewer">
             <pi-web-files-viewer
+              .content=${this.content}
               .stylesheetIntegration=${this.stylesheetIntegration}
-              .contentRendering=${this.contentRendering}
+              .filePreviewing=${this.filePreviewing}
+              .files=${context.files}
               .machineId=${context.machine.id}
               .projectId=${context.workspace.projectId}
               .workspaceId=${context.workspace.id}
@@ -157,8 +193,8 @@ export class WorkspaceFilesPanel extends LitElement {
         </section>
         <div class="drop-overlay" aria-hidden=${this.dragActive ? "false" : "true"}>
           <div>
-            <strong>Drop files to upload</strong>
-            <span>Uploads immediately to the default folder.</span>
+            <strong>${this.text.messages.t("drop")}</strong>
+            <span>${this.text.messages.t("dropHelp")}</span>
           </div>
         </div>
         ${this.pendingUpload === undefined ? null : this.renderUploadDialog(context, runtime, this.pendingUpload, files.defaultUploadFolder)}
@@ -171,6 +207,9 @@ export class WorkspaceFilesPanel extends LitElement {
     const runtime = this.runtime;
     const needsSubscription = runtime !== this.boundRuntime || nextKey !== this.boundScopeKey;
     if (needsSubscription) {
+      // Save the old scope before Lit reuses its list element for another workspace.
+      this.rememberExplorerScroll();
+      this.scrollRestorePending = true;
       this.unsubscribeRuntime?.();
       this.unsubscribeRuntime = undefined;
       this.boundRuntime = runtime;
@@ -188,7 +227,40 @@ export class WorkspaceFilesPanel extends LitElement {
         this.requestUpdate();
       });
     }
+    this.boundContext = context;
     this.scope = runtime.prepare(context);
+  }
+
+  private rememberExplorerScroll(): void {
+    const list = this.renderRoot.querySelector<HTMLElement>(".list.tree");
+    if (!this.isConnected || !this.isPanelVisible() || this.scrollRestorePending || list === null || this.boundContext === undefined) return;
+    this.boundRuntime?.rememberScroll(this.boundContext, list.scrollTop);
+  }
+
+  private readonly handleTreeScroll = (): void => {
+    // Ignore clamping and programmatic scroll events until the new tree is ready.
+    if (this.context === undefined || workspaceContextKey(this.context) !== this.boundScopeKey) return;
+    this.rememberExplorerScroll();
+  };
+
+  private restoreExplorerPresentation(): void {
+    const scope = this.scope;
+    const context = this.boundContext;
+    const runtime = this.boundRuntime;
+    const list = this.renderRoot.querySelector<HTMLElement>(".list.tree");
+    if (!this.isConnected || scope === undefined || scope.treeLoading || context === undefined || runtime === undefined || list === null || !this.isPanelVisible()) return;
+    const reveal = scope.revealRequest;
+    if (reveal !== undefined) {
+      // Compare paths directly: filenames need not be valid CSS selector fragments.
+      const row = [...list.querySelectorAll<HTMLButtonElement>(".row")].find((candidate) => candidate.title === reveal.path);
+      if (row === undefined) return;
+      row.scrollIntoView({ block: "nearest", inline: "nearest" });
+      this.scrollRestorePending = false;
+      runtime.acknowledgeReveal(context, reveal.id, list.scrollTop);
+    } else if (this.scrollRestorePending) {
+      list.scrollTop = scope.scrollTop;
+      this.scrollRestorePending = false;
+    }
   }
 
   private renderTreeEntry(
@@ -198,18 +270,18 @@ export class WorkspaceFilesPanel extends LitElement {
     entry: FileTreeEntry,
     depth: number,
   ): TemplateResult {
-    const children = scope.expandedDirs[entry.path];
-    const hasChildren = children !== undefined;
+    const children = Object.hasOwn(scope.expandedDirs, entry.path) ? scope.expandedDirs[entry.path] : undefined;
+    const expanded = scope.expandedPaths.includes(entry.path);
     const selected = entry.type !== "directory" && scope.selectedFilePath === entry.path;
     return html`
-      <button type="button" class=${`row ui-button ui-file-row ${selected ? "selected" : ""}`} style=${`--depth:${String(depth)}`} title=${entry.path} aria-current=${selected ? "page" : nothing} aria-expanded=${entry.type === "directory" ? String(hasChildren) : nothing} @click=${() => {
+      <button type="button" class=${`row ui-button ui-file-row ${selected ? "selected" : ""}`} style=${`--depth:${String(depth)}`} title=${entry.path} aria-current=${selected ? "page" : nothing} aria-expanded=${entry.type === "directory" ? String(expanded) : nothing} @click=${() => {
         if (entry.type === "directory") void runtime.expandDir(context, entry.path);
         else void runtime.selectFile(context, entry.path);
       }}>
-        <span class="ui-file-leading" aria-hidden="true">${entry.type === "directory" ? (hasChildren ? "▾" : "▸") : html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path></svg>`}</span>
-        <span class="ui-file-label">${entry.name}</span>
+        <span class="ui-file-leading" aria-hidden="true">${entry.type === "directory" ? (expanded ? "▾" : "▸") : html`<pi-web-files-icon .url=${this.icons?.resolveIcon(entry.path)}></pi-web-files-icon>`}</span>
+        <span class="ui-file-label" dir="ltr">${entry.name}</span>
       </button>
-      ${hasChildren ? children.map((child) => this.renderTreeEntry(context, runtime, scope, child, depth + 1)) : null}
+      ${expanded && children !== undefined ? children.map((child) => this.renderTreeEntry(context, runtime, scope, child, depth + 1)) : null}
     `;
   }
 
@@ -217,26 +289,26 @@ export class WorkspaceFilesPanel extends LitElement {
     const batches = workspaceUploadBatches(scope.uploadBatches);
     if (batches.length === 0) return null;
     return html`
-      <section class="upload-progress" aria-label="Workspace uploads">
+      <section class="upload-progress" aria-label=${this.text.messages.t("uploadsRegion")}>
         <div class="upload-progress-header">
-          <strong>Uploads</strong>
-          <small>${uploadSummaryLabel(batches)}</small>
+          <strong>${this.text.messages.t("uploads")}</strong>
+          <small>${uploadSummaryLabel(batches, this.requireContent())}</small>
         </div>
         ${batches.map((batch) => html`
           <article class=${`upload-batch ${batch.status}`}>
             <div class="upload-batch-heading">
               <div>
-                <strong>${uploadBatchTitle(batch)}</strong>
-                <small>${batch.destinationFolder === "" ? "workspace root" : batch.destinationFolder}</small>
+                <strong>${uploadBatchTitle(batch, this.requireContent())}</strong>
+                <small>${batch.destinationFolder === "" ? this.text.messages.t("root") : html`<bdi dir="ltr">${batch.destinationFolder}</bdi>`}</small>
               </div>
-              <span>${uploadBatchStatusLabel(batch)}</span>
+              <span>${uploadBatchStatusLabel(batch, this.requireContent())}</span>
             </div>
             <progress max="1" .value=${uploadBatchProgressValue(batch)}></progress>
             <div class="upload-file-list">${batch.files.map((file) => this.renderUploadFile(file))}</div>
             <div class="upload-actions">
               ${batch.status === "uploading"
-                ? html`<button @click=${() => { runtime.cancelWorkspaceUpload(context, batch.id); }}>Cancel</button>`
-                : html`<button @click=${() => { runtime.clearWorkspaceUpload(context, batch.id); }}>Dismiss</button>`}
+                ? html`<button @click=${() => { runtime.cancelWorkspaceUpload(context, batch.id); }}>${this.text.messages.t("cancel")}</button>`
+                : html`<button @click=${() => { runtime.clearWorkspaceUpload(context, batch.id); }}>${this.text.messages.t("dismiss")}</button>`}
             </div>
           </article>
         `)}
@@ -248,10 +320,10 @@ export class WorkspaceFilesPanel extends LitElement {
     return html`
       <div class=${`upload-file ${file.status}`}>
         <div class="upload-file-main">
-          <span>${file.name}</span>
-          <small>${uploadFileDetail(file)}</small>
+          <bdi dir="ltr">${file.name}</bdi>
+          <small>${uploadFileDetail(file, this.requireContent())}</small>
         </div>
-        <span class="upload-file-status">${uploadFileStatusLabel(file)}</span>
+        <span class="upload-file-status">${uploadFileStatusLabel(file, this.requireContent())}</span>
       </div>
     `;
   }
@@ -264,32 +336,32 @@ export class WorkspaceFilesPanel extends LitElement {
   ): TemplateResult {
     const fileCount = review.files.length;
     return html`
-      <dialog class="upload-dialog" aria-label="Review file upload" @cancel=${this.handleDialogCancel} @close=${this.handleDialogClose} @click=${this.handleDialogClick}>
+      <dialog class="upload-dialog" aria-label=${this.text.messages.t("reviewLabel")} @cancel=${this.handleDialogCancel} @close=${this.handleDialogClose} @click=${this.handleDialogClick}>
         <header>
           <div>
-            <span class="eyebrow">Upload</span>
-            <h2>Review ${fileCount === 1 ? "file" : `${String(fileCount)} files`}</h2>
+            <span class="eyebrow">${this.text.messages.t("upload")}</span>
+            <h2>${this.text.messages.t("review", { count: fileCount })}</h2>
           </div>
-          <button class="close-button" type="button" title="Cancel upload" aria-label="Cancel upload" @click=${() => { this.closeUploadDialog(); }}>×</button>
+          <button class="close-button" type="button" title=${this.text.messages.t("cancelUpload")} aria-label=${this.text.messages.t("cancelUpload")} @click=${() => { this.closeUploadDialog(); }}>×</button>
         </header>
         <form @submit=${(event: SubmitEvent) => { this.submitUploadReview(event, context, runtime, review); }}>
           <label>
-            <span>Destination folder</span>
-            <input id="workspace-upload-destination" autofocus .value=${this.destinationFolder} placeholder=${defaultFolder} @input=${this.handleDestinationInput} />
-            <small>Workspace-relative. Leave empty to upload at the workspace root.</small>
+            <span>${this.text.messages.t("destination")}</span>
+            <input id="workspace-upload-destination" dir="ltr" autofocus .value=${this.destinationFolder} placeholder=${defaultFolder} @input=${this.handleDestinationInput} />
+            <small>${this.text.messages.t("destinationHelp")}</small>
           </label>
           <div class="dialog-options">
-            <label><input type="checkbox" .checked=${this.createDirs} @change=${this.handleCreateDirsChange} /><span>Create parent folders</span></label>
-            <label><input type="checkbox" .checked=${this.overwrite} @change=${this.handleOverwriteChange} /><span>Overwrite existing files</span></label>
+            <label><input type="checkbox" .checked=${this.createDirs} @change=${this.handleCreateDirsChange} /><span>${this.text.messages.t("createDirs")}</span></label>
+            <label><input type="checkbox" .checked=${this.overwrite} @change=${this.handleOverwriteChange} /><span>${this.text.messages.t("overwrite")}</span></label>
           </div>
-          <section class="review-files" aria-label="Files to upload">
-            <strong>${fileCount === 1 ? "File" : "Files"}</strong>
-            ${review.files.map((file) => html`<div class="review-file"><span>${file.name}</span><small>${formatFileSize(file.size)}</small></div>`)}
+          <section class="review-files" aria-label=${this.text.messages.t("toUpload")}>
+            <strong>${this.text.messages.t("fileHeading", { count: fileCount })}</strong>
+            ${review.files.map((file) => html`<div class="review-file"><bdi dir="ltr">${file.name}</bdi><small>${formatFileSize(file.size, this.requireContent())}</small></div>`)}
           </section>
-          ${this.formError === "" ? null : html`<div class="dialog-error" role="alert">${this.formError}</div>`}
+          ${this.formError === undefined ? null : html`<div class="dialog-error" role="alert">${this.formError()}</div>`}
           <footer>
-            <button type="button" @click=${() => { this.closeUploadDialog(); }}>Cancel</button>
-            <button type="submit">Upload</button>
+            <button type="button" @click=${() => { this.closeUploadDialog(); }}>${this.text.messages.t("cancel")}</button>
+            <button type="submit">${this.text.messages.t("upload")}</button>
           </footer>
         </form>
       </dialog>
@@ -340,7 +412,7 @@ export class WorkspaceFilesPanel extends LitElement {
 
   private readonly handleDestinationInput = (event: Event): void => {
     this.destinationFolder = event.currentTarget instanceof HTMLInputElement ? event.currentTarget.value : "";
-    this.formError = "";
+    this.formError = undefined;
   };
 
   private readonly handleCreateDirsChange = (event: Event): void => {
@@ -359,7 +431,7 @@ export class WorkspaceFilesPanel extends LitElement {
   private readonly handleDialogClose = (): void => {
     if (this.pendingUpload !== undefined) {
       this.pendingUpload = undefined;
-      this.formError = "";
+      this.formError = undefined;
     }
     this.restoreUploadFocus();
   };
@@ -369,6 +441,10 @@ export class WorkspaceFilesPanel extends LitElement {
   };
 
   private readonly handleResponsiveVisibilityChange = (): void => {
+    // Visibility can change without a Lit update (the responsive shell hides us).
+    if (this.isPanelVisible()) {
+      void this.updateComplete.then(() => { this.restoreExplorerPresentation(); });
+    }
     const dialog = this.uploadDialog;
     if ((this.pendingUpload === undefined && dialog?.open !== true) || this.isPanelVisible()) return;
     // The trigger remains connected when the compact shell CSS hides this
@@ -384,14 +460,15 @@ export class WorkspaceFilesPanel extends LitElement {
     this.destinationFolder = defaults.destinationFolder;
     this.overwrite = defaults.overwrite;
     this.createDirs = defaults.createDirs;
-    this.formError = "";
+    this.formError = undefined;
   }
 
   private submitUploadReview(event: SubmitEvent, context: WorkspacePanelContext, runtime: FilesRuntime, review: PendingWorkspaceUploadReview): void {
     event.preventDefault();
-    const validationError = workspaceUploadReviewError(review.files, this.destinationFolder);
+    const validationError = workspaceUploadReviewError(review.files, this.destinationFolder, this.content, runtime);
     if (validationError !== undefined) {
-      this.formError = validationError;
+      const folder = this.destinationFolder;
+      this.formError = () => workspaceUploadReviewError(review.files, folder, this.content, runtime) ?? validationError;
       return;
     }
     const run = runtime.startWorkspaceUpload(context, review.files, {
@@ -421,7 +498,8 @@ export class WorkspaceFilesPanel extends LitElement {
       dialog.showModal();
       this.renderRoot.querySelector<HTMLInputElement>("#workspace-upload-destination")?.focus();
     } catch (error) {
-      this.formError = `Unable to open upload review: ${errorMessage(error)}`;
+      const diagnostic = errorMessage(error);
+      this.formError = () => this.text.messages.t("reviewFailed", { error: diagnostic });
     }
   }
 
@@ -434,7 +512,7 @@ export class WorkspaceFilesPanel extends LitElement {
     if (dialog?.open === true) dialog.close();
     else {
       this.pendingUpload = undefined;
-      this.formError = "";
+      this.formError = undefined;
       this.restoreUploadFocus();
     }
   }
@@ -448,9 +526,14 @@ export class WorkspaceFilesPanel extends LitElement {
   private resetPendingUpload(): void {
     if (this.uploadDialog?.open === true) this.uploadDialog.close();
     this.pendingUpload = undefined;
-    this.formError = "";
+    this.formError = undefined;
     this.dragDepth = 0;
     this.dragActive = false;
+  }
+
+  private requireContent(): FilesContent {
+    if (this.content === undefined) throw new Error("Files localization is unavailable");
+    return this.content;
   }
 
   static override styles = css`
@@ -486,13 +569,13 @@ export class WorkspaceFilesPanel extends LitElement {
     .upload-batch-heading > div { min-width: 0; display: grid; gap: 2px; }
     .upload-batch-heading strong, .upload-batch-heading small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     progress { width: 100%; accent-color: var(--pi-accent); }
-    .upload-file-list { display: grid; gap: 4px; max-height: 180px; overflow: auto; padding-right: 2px; }
+    .upload-file-list { display: grid; gap: 4px; max-height: 180px; overflow: auto; padding-inline-end: 2px; }
     .upload-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--pi-muted); }
     .upload-file.completed .upload-file-status { color: var(--pi-success); }
     .upload-file.error { color: var(--pi-danger); }
     .upload-file.cancelled .upload-file-status { color: var(--pi-warning); }
     .upload-file-main { min-width: 0; display: grid; gap: 1px; }
-    .upload-file-main span, .upload-file-main small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .upload-file-main bdi, .upload-file-main small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .upload-file-status { font-size: 12px; white-space: nowrap; }
     .upload-actions { justify-content: end; }
     dialog.upload-dialog { box-sizing: border-box; width: min(560px, calc(100% - 40px)); max-height: min(720px, calc(100% - 40px)); max-height: min(720px, calc(100dvh - 40px)); margin: auto; padding: 0; border: 1px solid var(--pi-border); border-radius: 14px; background: var(--pi-bg); color: var(--pi-text); box-shadow: 0 18px 70px var(--pi-shadow-strong); overflow: hidden; }
@@ -510,7 +593,7 @@ export class WorkspaceFilesPanel extends LitElement {
     .dialog-options label { display: flex; align-items: center; gap: 8px; }
     .review-files { flex: 1 1 180px; display: grid; gap: 6px; min-height: 0; max-height: 180px; overflow: auto; border: 1px solid var(--pi-border-muted); border-radius: 8px; padding: 8px; }
     .review-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
-    .review-file span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .review-file bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dialog-error { flex: 0 0 auto; border: 1px solid var(--pi-danger); border-radius: 8px; background: color-mix(in srgb, var(--pi-danger) 10%, transparent); color: var(--pi-danger); padding: 9px; overflow-wrap: anywhere; }
     footer { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
   `;
@@ -520,13 +603,13 @@ export function workspaceUploadBatches(batches: Record<string, WorkspaceUploadBa
   return Object.values(batches).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 
-export function workspaceUploadReviewError(files: readonly File[], destinationFolder: string): string | undefined {
-  if (files.length === 0) return "Choose at least one file to upload.";
+export function workspaceUploadReviewError(files: readonly File[], destinationFolder: string, content?: FilesContent, runtime?: FilesRuntime): string | undefined {
+  if (files.length === 0) return content?.messages.t("chooseFile") ?? "Choose at least one file to upload.";
   for (const file of files) {
     try {
       workspaceUploadPath(destinationFolder, file.name);
     } catch (error) {
-      return errorMessage(error);
+      return runtime?.formatError(error) ?? errorMessage(error);
     }
   }
   return undefined;
@@ -552,12 +635,12 @@ export function startDirectWorkspaceUpload(
   });
 }
 
-export function uploadBatchStatusLabel(batch: WorkspaceUploadBatchState): string {
+export function uploadBatchStatusLabel(batch: WorkspaceUploadBatchState, content: FilesContent): string {
   switch (batch.status) {
-    case "completed": return "Done";
-    case "error": return "Failed";
-    case "cancelled": return "Cancelled";
-    case "uploading": return formatPercent(batch.percent);
+    case "completed": return content.messages.t("done");
+    case "error": return content.messages.t("failed");
+    case "cancelled": return content.messages.t("cancelled");
+    case "uploading": return formatPercent(batch.percent, content);
   }
 }
 
@@ -565,54 +648,29 @@ export function uploadBatchProgressValue(batch: WorkspaceUploadBatchState): numb
   return batch.status === "uploading" ? batch.percent : 1;
 }
 
-function uploadSummaryLabel(batches: readonly WorkspaceUploadBatchState[]): string {
+function uploadSummaryLabel(batches: readonly WorkspaceUploadBatchState[], content: FilesContent): string {
   const uploading = batches.filter((batch) => batch.status === "uploading").length;
-  return uploading === 0 ? `${String(batches.length)} recent` : `${String(uploading)} uploading`;
+  return content.messages.t(uploading === 0 ? "recent" : "uploadingCount", { count: uploading === 0 ? batches.length : uploading });
 }
 
-function uploadBatchTitle(batch: WorkspaceUploadBatchState): string {
-  const count = batch.files.length;
-  const files = count === 1 ? "file" : "files";
-  switch (batch.status) {
-    case "completed": return `Uploaded ${String(count)} ${files}`;
-    case "error": return `Upload failed for ${String(count)} ${files}`;
-    case "cancelled": return `Upload cancelled for ${String(count)} ${files}`;
-    case "uploading": return `Uploading ${String(count)} ${files}`;
-  }
+function uploadBatchTitle(batch: WorkspaceUploadBatchState, content: FilesContent): string {
+  return content.messages.t("batchTitle", { status: batch.status, count: batch.files.length });
 }
 
-function uploadFileStatusLabel(file: WorkspaceUploadFileState): string {
+function uploadFileStatusLabel(file: WorkspaceUploadFileState, content: FilesContent): string {
   switch (file.status) {
-    case "pending": return "Pending";
-    case "uploading": return formatPercent(file.percent);
-    case "completed": return "Done";
-    case "error": return "Error";
-    case "cancelled": return "Cancelled";
+    case "pending": return content.messages.t("pending");
+    case "uploading": return formatPercent(file.percent, content);
+    case "completed": return content.messages.t("done");
+    case "error": return content.messages.t("error");
+    case "cancelled": return content.messages.t("cancelled");
   }
 }
 
-function uploadFileDetail(file: WorkspaceUploadFileState): string {
+function uploadFileDetail(file: WorkspaceUploadFileState, content: FilesContent): string {
   if (file.error !== undefined) return file.error;
-  if (file.response !== undefined) return `Wrote ${file.response.path}`;
-  return `${file.path} · ${formatFileSize(file.loaded)} / ${formatFileSize(file.total)}`;
-}
-
-function formatPercent(value: number): string {
-  return `${String(Math.round(Math.max(0, Math.min(1, value)) * 100))}%`;
-}
-
-function formatFileSize(size: number): string {
-  if (!Number.isFinite(size) || size < 0) return "0 B";
-  if (size < 1024) return `${String(size)} B`;
-  const kib = size / 1024;
-  if (kib < 1024) return `${formatScaledFileSize(kib)} KB`;
-  const mib = kib / 1024;
-  if (mib < 1024) return `${formatScaledFileSize(mib)} MB`;
-  return `${formatScaledFileSize(mib / 1024)} GB`;
-}
-
-function formatScaledFileSize(value: number): string {
-  return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
+  if (file.response !== undefined) return content.messages.t("wrote", { path: file.response.path });
+  return content.messages.t("fileProgress", { path: file.path, loaded: formatFileSize(file.loaded, content), total: formatFileSize(file.total, content) });
 }
 
 function workspaceContextKey(context: WorkspacePanelContext): string {

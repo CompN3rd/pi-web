@@ -1,5 +1,7 @@
 import type {
+  FileIconsCapability,
   HtmlTemplateTag,
+  PluginLocalization,
   JsonValue,
   PluginAction,
   PluginContributions,
@@ -16,14 +18,18 @@ import {
   parseGitDiffResponse,
   parseGitStatusResponse,
   type GitDiffResponse,
+  type GitFileState,
   type GitStatusFile,
   type GitStatusResponse,
 } from "./git-contract.js";
+import { defineGitFileIconElement } from "./gitFileIcon.js";
 import { buildGitFileList, type GitFileListModel, type GitFileListSubmoduleFile, type GitFileListSubmoduleGroup } from "./gitFileList.js";
 import { buildGitFileTree, collectGitFileTreeDirectoryPaths, type GitFileTreeNode } from "./gitFileTree.js";
 import { readGitFileView, writeGitFileView, type GitFileView } from "./gitFileViewPreference.js";
 import { createGitDiffRoute, type GitDiffRoute } from "./gitRoute.js";
 import { parseUnifiedDiff, type UnifiedDiffLine, type UnifiedDiffTextSpan } from "./unifiedDiff.js";
+
+import definitions from "./git.messages.js";
 
 const GIT_PANEL_LOCAL_ID = "workspace.git";
 const GIT_POLL_INTERVAL_MS = 8_000;
@@ -43,7 +49,7 @@ interface GitWorkspaceUiState {
   selectedDiff: GitDiffView | undefined;
   selectedStagedDiff: GitDiffView | undefined;
   diffLoading: boolean;
-  error: string | undefined;
+  error: "backendUnavailable" | "requestFailed" | undefined;
   expandedDirectories: Set<string>;
   statusRequest: Promise<void> | undefined;
   diffRequestSequence: number;
@@ -76,9 +82,12 @@ export function createGitBrowserContributions(
   html: HtmlTemplateTag,
   svg: SvgTemplateTag,
   stylesheetIntegration: () => StylesheetIntegrationCapabilityV1 | undefined,
+  localization: PluginLocalization,
+  fileIcons: () => FileIconsCapability | undefined,
 ): PluginContributions {
   const panelId = `${runtimePluginId}:${GIT_PANEL_LOCAL_ID}`;
-  const controller = new GitUiController(sourcePluginId, createGitDiffRoute(panelId));
+  const controller = new GitUiController(sourcePluginId, createGitDiffRoute(panelId), localization, fileIcons);
+  defineGitFileIconElement();
   defineGitPanelActivityElement();
   return {
     actions: createGitActions(panelId, controller),
@@ -87,6 +96,8 @@ export function createGitBrowserContributions(
 }
 
 class GitUiController {
+  readonly messages;
+
   private readonly states = new Map<string, GitWorkspaceUiState>();
   private activeWorkspaceKey: string | undefined;
   private connectedWorkspaceKey: string | undefined;
@@ -96,7 +107,13 @@ class GitUiController {
   constructor(
     private readonly sourcePluginId: string,
     private readonly route: GitDiffRoute,
-  ) {}
+    readonly localization: PluginLocalization,
+    private readonly getFileIcons: () => FileIconsCapability | undefined,
+  ) {
+    this.messages = localization.registerMessages("panel", definitions);
+  }
+
+  get fileIcons(): FileIconsCapability | undefined { return this.getFileIcons(); }
 
   canInspectWorkspace(workspace: Workspace | undefined): boolean {
     return workspace !== undefined &&
@@ -181,7 +198,7 @@ class GitUiController {
         }
       })
       .catch((error: unknown) => {
-        if (state.retained) state.error = errorMessage(error);
+        if (state.retained) state.error = gitError(error);
       })
       .finally(() => {
         if (state.statusRequest !== request) return;
@@ -349,7 +366,7 @@ class GitUiController {
       state.error = undefined;
     } catch (error) {
       if (!state.retained || state.diffRequestSequence !== sequence || state.selectedDiffPath !== path) return;
-      state.error = errorMessage(error);
+      state.error = gitError(error);
     } finally {
       if (state.retained && state.diffRequestSequence === sequence && state.selectedDiffPath === path) {
         const wasLoading = state.diffLoading;
@@ -370,19 +387,19 @@ function createGitActions(panelId: string, controller: GitUiController): PluginA
   return [
     {
       id: "view.git",
-      title: "Go to Git",
+      get title() { return controller.messages.t("goToGit"); },
       shortcut: "mod+3",
       shortcutAliases: ["core:view.git"],
-      group: "Navigation",
+      get group() { return controller.messages.t("navigation"); },
       enabled: hasGitWorkspace,
       run: (context) => { context.selectWorkspaceTool(panelId); },
     },
     {
       id: "workspace.refresh-git",
-      title: "Refresh Git",
+      get title() { return controller.messages.t("refreshGit"); },
       shortcut: "mod+shift+g",
       shortcutAliases: ["core:workspace.refresh-git"],
-      group: "Workspace",
+      get group() { return controller.messages.t("workspace"); },
       enabled: hasGitWorkspace,
       run: (context) => context.refreshWorkspacePanels(panelId),
     },
@@ -397,7 +414,7 @@ function createGitPanel(
 ): WorkspacePanelContribution {
   return {
     id: GIT_PANEL_LOCAL_ID,
-    title: "Git",
+    get title() { return controller.messages.t("git"); },
     icon: svg`
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="6" cy="6" r="2"></circle>
@@ -417,7 +434,7 @@ function createGitPanel(
 
 function requestGitBackend(context: WorkspacePanelContext, operation: string, input: JsonValue): Promise<JsonValue> {
   if (context.peer?.request === undefined) {
-    return Promise.reject(new Error("Git workspace backend is unavailable. Update and restart PI WEB on this machine, then reload the browser."));
+    return Promise.reject(new GitBackendUnavailableError());
   }
   return context.peer.request(operation, input);
 }
@@ -428,20 +445,20 @@ function renderGitPanel(html: HtmlTemplateTag, controller: GitUiController, cont
   return html`
     <section class="git-panel">
       <style data-git-styles .textContent=${gitPanelStyles}></style>
-      <pi-web-git-panel-activity .stylesheetIntegration=${stylesheetIntegration} .controller=${controller} .context=${context}></pi-web-git-panel-activity>
+      <pi-web-git-panel-activity .fileIcons=${controller.fileIcons} .stylesheetIntegration=${stylesheetIntegration} .localization=${controller.localization} .controller=${controller} .context=${context}></pi-web-git-panel-activity>
       <section class="ui-toolbar git-toolbar">
-        <strong>Git</strong>
-        ${state.stale ? html`<span class="git-stale">stale</span>` : null}
+        <strong>${controller.messages.t("git")}</strong>
+        ${state.stale ? html`<span class="git-stale">${controller.messages.t("stale")}</span>` : null}
         <div class="ui-toolbar-group git-toolbar-actions">
           ${viewState.expandablePaths.length === 0 ? null : renderExpandCollapseAll(html, controller, context, state, viewState.expandablePaths)}
           ${renderViewToggle(html, controller, context)}
-          <button type="button" class="ui-button" ?disabled=${state.statusLoading} @click=${() => { void controller.refresh(context); }}>Refresh</button>
+          <button type="button" class="ui-button" ?disabled=${state.statusLoading} @click=${() => { void controller.refresh(context); }}>${controller.messages.t("refresh")}</button>
         </div>
       </section>
-      ${state.error === undefined ? null : html`<div class="git-error" role="alert">${state.error}</div>`}
+      ${state.error === undefined ? null : html`<div class="git-error" role="alert">${controller.messages.t(state.error)}</div>`}
       <section class="git-split">
         <div class="ui-file-list git-file-list">${renderFileList(html, controller, context, state, viewState)}</div>
-        <div class="git-viewer">${renderDiffViewer(html, state)}</div>
+        <div class="git-viewer">${renderDiffViewer(html, state, controller)}</div>
       </section>
     </section>
   `;
@@ -449,9 +466,9 @@ function renderGitPanel(html: HtmlTemplateTag, controller: GitUiController, cont
 
 function renderViewToggle(html: HtmlTemplateTag, controller: GitUiController, context: WorkspacePanelContext) {
   return html`
-    <div class="ui-toolbar-group" role="group" aria-label="Changed files view">
-      ${renderViewToggleButton(html, controller, context, "list", "List")}
-      ${renderViewToggleButton(html, controller, context, "tree", "Tree")}
+    <div class="ui-toolbar-group" role="group" aria-label=${controller.messages.t("changedFilesView")}>
+      ${renderViewToggleButton(html, controller, context, "list", controller.messages.t("list"))}
+      ${renderViewToggleButton(html, controller, context, "tree", controller.messages.t("tree"))}
     </div>
   `;
 }
@@ -469,7 +486,7 @@ function renderExpandCollapseAll(
   expandablePaths: readonly string[],
 ) {
   const allExpanded = expandablePaths.every((path) => state.expandedDirectories.has(path));
-  return html`<button type="button" class="ui-button" @click=${() => { controller.toggleExpandAll(context, expandablePaths, allExpanded); }}>${allExpanded ? "Collapse all" : "Expand all"}</button>`;
+  return html`<button type="button" class="ui-button" @click=${() => { controller.toggleExpandAll(context, expandablePaths, allExpanded); }}>${controller.messages.t(allExpanded ? "collapseAll" : "expandAll")}</button>`;
 }
 
 function renderFileList(
@@ -480,10 +497,10 @@ function renderFileList(
   viewState: GitViewState,
 ) {
   const status = state.status;
-  if (status === undefined) return html`<p class="git-muted">${state.error === undefined ? "Loading status…" : "Status unavailable."}</p>`;
-  if (!status.isGitRepo) return html`<p class="git-muted">Not a git repository.</p>`;
-  const summary = html`<p class="git-summary">${gitSummary(status)}</p>`;
-  if (status.files.length === 0) return html`${summary}<p class="git-muted">No changes.</p>`;
+  if (status === undefined) return html`<p class="git-muted">${controller.messages.t(state.error === undefined ? "loadingStatus" : "statusUnavailable")}</p>`;
+  if (!status.isGitRepo) return html`<p class="git-muted">${controller.messages.t("notRepository")}</p>`;
+  const summary = html`<p class="git-summary">${gitSummary(html, status, controller)}</p>`;
+  if (status.files.length === 0) return html`${summary}<p class="git-muted">${controller.messages.t("noChanges")}</p>`;
   const body = controller.currentView() === "tree"
     ? viewState.nodes.map((node) => renderTreeNode(html, controller, context, state, node, 0))
     : renderListBody(html, controller, context, state, viewState.listModel);
@@ -514,7 +531,7 @@ function renderSubmoduleGroup(
   return html`
     <button type="button" class="ui-button ui-file-row" style="--depth:0" title=${group.path} aria-expanded=${String(expanded)} @click=${() => { controller.toggleDirectory(context, group.path); }}>
       <span class="ui-file-leading" aria-hidden="true">${expanded ? "▾" : "▸"}</span>
-      <span class="ui-file-label">${group.name}${submoduleBadge(html)}</span>
+      <span class="ui-file-label"><bdi dir="ltr">${group.name}</bdi>${submoduleBadge(html, controller)}</span>
     </button>
     ${expanded ? html`
       ${group.pointer === undefined ? null : renderSelectableRow(html, controller, context, state, group.path, group.pointer.name, group.pointer.file, 1)}
@@ -546,7 +563,7 @@ function renderTreeNode(
     return html`
       <button type="button" class="ui-button ui-file-row" style=${`--depth:${String(depth)}`} title=${node.path} aria-expanded=${String(expanded)} @click=${() => { controller.toggleDirectory(context, node.path); }}>
         <span class="ui-file-leading" aria-hidden="true">${expanded ? "▾" : "▸"}</span>
-        <span class="ui-file-label">${node.name}${node.isSubmodule === true ? submoduleBadge(html) : null}</span>
+        <span class="ui-file-label"><bdi dir="ltr">${node.name}</bdi>${node.isSubmodule === true ? submoduleBadge(html, controller) : null}</span>
       </button>
       ${expanded ? node.children.map((child) => renderTreeNode(html, controller, context, state, child, depth + 1)) : null}
     `;
@@ -575,35 +592,48 @@ function renderSelectableRow(
   depth: number,
 ) {
   const selected = state.selectedDiffPath === path;
+  const status = file.index === "conflicted" || file.workingTree === "conflicted"
+    ? "conflicted" : file.workingTree !== "unmodified" ? file.workingTree : file.index;
+  const description = controller.messages.t("fileState", { state: status });
+  const staged = file.index !== "unmodified";
+  const unstaged = file.workingTree !== "unmodified";
+  const staging = status === "conflicted" || status === "untracked" || status === "ignored"
+    ? undefined : staged && unstaged ? "bothChanges" : staged ? "stagedChanges" : "unstagedChanges";
   return html`
-    <button type="button" class=${selected ? "ui-button ui-file-row selected" : "ui-button ui-file-row"} style=${`--depth:${String(depth)}`} title=${path} aria-current=${selected ? "page" : "false"} @click=${() => { controller.selectDiff(context, path); }}>
-      <span class="ui-file-leading" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path></svg></span>
-      <span class="ui-file-label">${label}</span>
-      <span class="ui-file-meta">${stateLabel(file.index, file.workingTree)}</span>
+    <button type="button" class=${selected ? "ui-button ui-file-row selected" : "ui-button ui-file-row"} data-git-state=${status} style=${`--depth:${String(depth)}`} title=${path} aria-current=${selected ? "page" : "false"} @click=${() => { controller.selectDiff(context, path); }}>
+      <span class="ui-file-leading" aria-hidden="true"><pi-web-git-file-icon .url=${controller.fileIcons?.resolveIcon(file.path)}></pi-web-git-file-icon></span>
+      <span class="ui-file-label"><bdi dir="ltr">${label}</bdi></span>
+      <span class="git-file-details">
+      ${staging === undefined ? null : html`<span class="git-staging" title=${controller.messages.t("stagingDetail", {
+        index: controller.messages.t("fileState", { state: file.index }),
+        workingTree: controller.messages.t("fileState", { state: file.workingTree }),
+      })}>${controller.messages.t(staging)}</span>`}
+      <span class="ui-file-meta git-status" title=${description} aria-label=${description}>${status === "conflicted" ? description : stateLabel(status)}</span>
+      </span>
     </button>
   `;
 }
 
-function renderDiffViewer(html: HtmlTemplateTag, state: GitWorkspaceUiState) {
-  if (state.selectedDiffPath === undefined) return html`<p class="git-muted">Select a changed file.</p>`;
+function renderDiffViewer(html: HtmlTemplateTag, state: GitWorkspaceUiState, controller: GitUiController) {
+  if (state.selectedDiffPath === undefined) return html`<p class="git-muted">${controller.messages.t("selectFile")}</p>`;
   const unstaged = state.selectedDiff;
   const staged = state.selectedStagedDiff;
-  if (unstaged === undefined || staged === undefined) return html`<p class="git-muted">Loading diff…</p>`;
+  if (unstaged === undefined || staged === undefined) return html`<p class="git-muted">${controller.messages.t("loadingDiff")}</p>`;
   const diffs = [staged, unstaged].filter((diff) => diff.response.diff !== "");
-  if (diffs.length === 0) return html`<p class="git-muted">No staged or unstaged diff.</p>`;
-  return html`<div class=${diffs.length === 1 ? "git-diffs is-single" : "git-diffs"}>${diffs.map((diff) => renderDiffSection(html, diff))}</div>`;
+  if (diffs.length === 0) return html`<p class="git-muted">${controller.messages.t("noStagedDiff")}</p>`;
+  return html`<div class=${diffs.length === 1 ? "git-diffs is-single" : "git-diffs"}>${diffs.map((diff) => renderDiffSection(html, diff, controller))}</div>`;
 }
 
-function renderDiffSection(html: HtmlTemplateTag, view: GitDiffView) {
+function renderDiffSection(html: HtmlTemplateTag, view: GitDiffView, controller: GitUiController) {
   const diff = view.response;
   const lines = view.lines ??= parseUnifiedDiff(diff.diff);
   return html`
     <section class="git-diff-section">
-      <div class="git-viewer-header"><strong>${diff.path ?? "diff"}</strong><small>${diff.staged ? "staged" : "unstaged"}${diff.truncated ? " · truncated" : ""}</small></div>
-      ${lines.length === 0 ? html`<p class="git-muted">No diff.</p>` : html`
+      <div class="git-viewer-header"><strong><bdi dir="ltr">${diff.path ?? controller.messages.t("diff")}</bdi></strong><small>${controller.messages.t("diffState", { staged: diff.staged ? "yes" : "no", truncated: diff.truncated ? "yes" : "no" })}</small></div>
+      ${lines.length === 0 ? html`<p class="git-muted">${controller.messages.t("noDiff")}</p>` : html`
         <div class="git-diff-scroller">
-          <div class="git-diff-grid" role="table" aria-label="Unified diff">
-            ${lines.map((line) => renderDiffLine(html, line))}
+          <div class="git-diff-grid" role="table" aria-label=${controller.messages.t("unifiedDiff")} dir="ltr">
+            ${lines.map((line) => renderDiffLine(html, line, controller))}
           </div>
         </div>
       `}
@@ -611,11 +641,11 @@ function renderDiffSection(html: HtmlTemplateTag, view: GitDiffView) {
   `;
 }
 
-function renderDiffLine(html: HtmlTemplateTag, line: UnifiedDiffLine) {
+function renderDiffLine(html: HtmlTemplateTag, line: UnifiedDiffLine, controller: GitUiController) {
   return html`
     <div class="git-diff-line" role="row">
-      <span class=${`git-diff-cell git-line-number ${line.kind}`} role="cell">${formatLineNumber(line.oldLineNumber)}</span>
-      <span class=${`git-diff-cell git-line-number ${line.kind}`} role="cell">${formatLineNumber(line.newLineNumber)}</span>
+      <span class=${`git-diff-cell git-line-number ${line.kind}`} role="cell">${formatLineNumber(line.oldLineNumber, controller)}</span>
+      <span class=${`git-diff-cell git-line-number ${line.kind}`} role="cell">${formatLineNumber(line.newLineNumber, controller)}</span>
       <span class=${`git-diff-cell git-prefix ${line.kind}`} role="cell">${line.prefix}</span>
       <span class=${`git-diff-cell git-content ${line.kind}`} role="cell">${renderDiffSpans(html, line.spans)}</span>
     </div>
@@ -644,6 +674,36 @@ function defineGitPanelActivityElement(): void {
     private pollTimer: number | undefined;
     private integration: StylesheetIntegrationCapabilityV1 | undefined;
     private releaseStyles: (() => void) | undefined;
+    private localizationValue: PluginLocalization | undefined;
+    private releaseLocalization: (() => void) | undefined;
+    private icons: FileIconsCapability | undefined;
+    private releaseIcons: (() => void) | undefined;
+
+    set fileIcons(value: FileIconsCapability | undefined) {
+      if (value === this.icons) return;
+      this.releaseIcons?.();
+      this.releaseIcons = undefined;
+      this.icons = value;
+      this.subscribeIcons();
+    }
+
+    private subscribeIcons(): void {
+      if (!this.isConnected || this.releaseIcons !== undefined) return;
+      this.releaseIcons = this.icons?.subscribe(() => this.contextValue?.host.requestRender());
+    }
+
+    set localization(value: PluginLocalization | undefined) {
+      if (this.localizationValue === value) return;
+      this.releaseLocalization?.();
+      this.releaseLocalization = undefined;
+      this.localizationValue = value;
+      this.subscribeLocalization();
+    }
+
+    private subscribeLocalization(): void {
+      if (!this.isConnected || this.releaseLocalization !== undefined) return;
+      this.releaseLocalization = this.localizationValue?.subscribe(() => this.contextValue?.host.requestRender());
+    }
 
     set stylesheetIntegration(value: StylesheetIntegrationCapabilityV1 | undefined) {
       if (this.integration === value) return;
@@ -674,11 +734,18 @@ function defineGitPanelActivityElement(): void {
 
     connectedCallback(): void {
       this.registerStyles();
+      this.subscribeLocalization();
+      this.subscribeIcons();
+      this.contextValue?.host.requestRender();
       window.addEventListener("popstate", this.onPopState);
       this.restart();
     }
 
     disconnectedCallback(): void {
+      this.releaseIcons?.();
+      this.releaseIcons = undefined;
+      this.releaseLocalization?.();
+      this.releaseLocalization = undefined;
       this.releaseStyles?.();
       this.releaseStyles = undefined;
       window.removeEventListener("popstate", this.onPopState);
@@ -707,24 +774,27 @@ function defineGitPanelActivityElement(): void {
   customElements.define(activityElementTag, GitPanelActivityElement);
 }
 
-function submoduleBadge(html: HtmlTemplateTag) {
-  return html`<span class="submodule-badge">submodule</span>`;
+function submoduleBadge(html: HtmlTemplateTag, controller: GitUiController) {
+  return html`<span class="submodule-badge">${controller.messages.t("submodule")}</span>`;
 }
 
-function gitSummary(status: GitStatusResponse): string {
-  const branch = status.branch ?? "detached";
+function gitSummary(html: HtmlTemplateTag, status: GitStatusResponse, controller: GitUiController) {
+  const branch = status.branch ?? controller.messages.t("detached");
   const ahead = status.ahead ?? 0;
   const behind = status.behind ?? 0;
-  return ahead === 0 && behind === 0 ? branch : `${branch} · ↑${String(ahead)} ↓${String(behind)}`;
+  return ahead === 0 && behind === 0
+    ? html`<bdi dir="ltr">${branch}</bdi>`
+    : controller.messages.rich("branchSummary", { branch, ahead, behind, name: (parts) => html`<bdi dir="ltr">${parts}</bdi>` });
 }
 
-function stateLabel(index: string, workingTree: string): string {
-  const label = workingTree !== "unmodified" ? workingTree : index;
-  return label.slice(0, 1).toUpperCase();
+function stateLabel(state: GitFileState): string {
+  if (state === "untracked") return "?";
+  if (state === "ignored") return "!";
+  return state.slice(0, 1).toUpperCase();
 }
 
-function formatLineNumber(lineNumber: number | undefined): string {
-  return lineNumber === undefined ? "" : String(lineNumber);
+function formatLineNumber(lineNumber: number | undefined, controller: GitUiController): string {
+  return lineNumber === undefined ? "" : controller.localization.number(lineNumber, { useGrouping: false });
 }
 
 function createDiffView(response: GitDiffResponse, previous: GitDiffView | undefined): GitDiffView {
@@ -739,8 +809,12 @@ function workspaceContextKey(context: WorkspacePanelContext): string {
   return JSON.stringify([context.machine.id, context.workspace.projectId, context.workspace.id]);
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+class GitBackendUnavailableError extends Error {}
+
+function gitError(error: unknown): "backendUnavailable" | "requestFailed" {
+  if (error instanceof GitBackendUnavailableError) return "backendUnavailable";
+  console.error("Git request failed", error);
+  return "requestFailed";
 }
 
 const gitPanelStyles = `
@@ -748,8 +822,8 @@ const gitPanelStyles = `
   .git-panel ${activityElementTag} { display: none; }
   .git-panel small, .git-panel .git-muted { color: var(--pi-muted); }
   .git-panel p { margin: 10px; }
-  .git-panel .git-toolbar { flex: 0 0 auto; border-bottom: 1px solid var(--pi-border-muted); font-size: 12px; color: var(--pi-muted); }
-  .git-panel .git-toolbar-actions { margin-left: auto; }
+  .git-panel .git-toolbar { overflow-x: auto; flex: 0 0 auto; font-size: 12px; color: var(--pi-muted); }
+  .git-panel .git-toolbar-actions { margin-inline-start: auto; }
   .git-panel .git-toolbar > strong { display: flex; align-items: center; padding-inline: 10px; font-weight: 500; }
   .git-panel .git-toolbar .ui-button { white-space: nowrap; }
   .git-panel .git-toolbar .ui-button[aria-pressed="true"] { background: var(--pi-surface-hover); color: var(--pi-text); }
@@ -757,8 +831,17 @@ const gitPanelStyles = `
   .git-panel .git-error { flex: 0 0 auto; margin: 8px; border: 1px solid var(--pi-danger); border-radius: 7px; color: var(--pi-danger); padding: 8px; }
   .git-panel .git-split { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); }
   .git-panel .git-file-list { border-bottom: 1px solid var(--pi-border); }
+  .git-panel [data-git-state] { --git-status-color: var(--pi-muted); }
+  .git-panel [data-git-state="added"], .git-panel [data-git-state="untracked"] { --git-status-color: var(--pi-success); }
+  .git-panel [data-git-state="modified"] { --git-status-color: var(--pi-warning); }
+  .git-panel [data-git-state="deleted"], .git-panel [data-git-state="conflicted"] { --git-status-color: var(--pi-danger); }
+  .git-panel [data-git-state="renamed"], .git-panel [data-git-state="copied"] { --git-status-color: var(--pi-accent); }
+  .git-panel [data-git-state] .ui-file-label, .git-panel .git-status { color: var(--git-status-color); }
+  .git-panel .git-status { font-weight: 600; }
+  .git-panel .git-file-details { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .git-panel .git-staging { color: var(--pi-muted); font-size: 11px; white-space: nowrap; }
   .git-panel .git-summary { margin: 10px 12px 8px; color: var(--pi-muted); }
-  .git-panel .submodule-badge { display: inline-block; margin-left: 6px; border: 1px solid var(--pi-border); border-radius: 999px; color: var(--pi-muted); padding: 0 5px; font-size: 11px; font-weight: 400; vertical-align: baseline; }
+  .git-panel .submodule-badge { display: inline-block; margin-inline-start: 6px; border: 1px solid var(--pi-border); border-radius: 999px; color: var(--pi-muted); padding: 0 5px; font-size: 11px; font-weight: 400; vertical-align: baseline; }
   .git-panel .git-viewer { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
   .git-panel .git-diffs { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; grid-template-rows: minmax(120px, 1fr) minmax(120px, 1fr); }
   .git-panel .git-diffs.is-single { grid-template-rows: minmax(0, 1fr); }

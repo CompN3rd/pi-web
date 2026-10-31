@@ -1,3 +1,5 @@
+import { LocalizationController } from "../localization/browser";
+import { machineMessages as messages } from "../machineMessages";
 import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
@@ -16,6 +18,7 @@ export class MachineDialog extends LitElement {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this);
   }
 
   @property({ attribute: false }) onSubmit?: (input: MachineDialogSubmit) => void | Promise<void>;
@@ -89,7 +92,7 @@ export class MachineDialog extends LitElement {
 
   override render() {
     const editing = this.machine !== undefined;
-    const title = editing ? "Edit local display name" : "Add machine";
+    const title = editing ? messages.t("editTitle") : messages.t("addTitle");
     const hasUrl = this.url.trim() !== "";
     const urlError = hasUrl ? machineBaseUrlValidationMessage(this.url) : undefined;
     const canSubmit = this.validInput() !== undefined && !this.submitting;
@@ -103,31 +106,31 @@ export class MachineDialog extends LitElement {
         <form class="ui-form" aria-describedby=${this.error === "" ? "" : "machine-error"} @submit=${(event: SubmitEvent) => { this.handleSubmit(event); }}>
           <header class="ui-dialog-header">
             <strong class="ui-dialog-title">${title}</strong>
-            <button class="ui-button ui-button--icon" type="button" @click=${() => { this.onCancel?.(); }} aria-label=${editing ? "Close edit local display name" : "Close add machine"}>×</button>
+            <button class="ui-button ui-button--icon" type="button" @click=${() => { this.onCancel?.(); }} aria-label=${editing ? messages.t("closeEdit") : messages.t("closeAdd")}>×</button>
           </header>
           <div class="body ui-dialog-body ui-form-body">
             ${this.error === "" ? null : html`<div id="machine-error" class="dialog-error ui-form-error" role="alert">${this.error}</div>`}
-            ${editing ? html`<p class="hint">${this.machine?.baseUrl}</p>` : html`<label class="ui-form-field">
-              Remote PI WEB URL
-              <input class="ui-input" name="baseUrl" type="url" aria-describedby="machine-url-help" aria-invalid=${urlError !== undefined ? "true" : "false"} .value=${this.url} @input=${(event: InputEvent) => { this.handleUrlInput(event); }} placeholder="http://dev-box.local:8504" autocomplete="url" inputmode="url" />
+            ${editing ? html`<p class="hint"><bdi dir="ltr">${this.machine?.baseUrl}</bdi></p>` : html`<label class="ui-form-field">
+              ${messages.t("urlLabel")}
+              <input class="ui-input" name="baseUrl" type="url" dir="ltr" aria-describedby="machine-url-help" aria-invalid=${urlError !== undefined ? "true" : "false"} .value=${this.url} @input=${(event: InputEvent) => { this.handleUrlInput(event); }} placeholder="http://dev-box.local:8504" autocomplete="url" inputmode="url" />
             </label>
-            <small id="machine-url-help" aria-live="polite" class=${urlError === undefined ? "hint" : "field-error"}>${urlError ?? "Enter the reachable base URL first, including http:// or https://."}</small>`}
+            <small id="machine-url-help" aria-live="polite" class=${urlError === undefined ? "hint" : "field-error"}>${urlError ?? messages.t("urlHelp")}</small>`}
             ${hasUrl ? html`
               <label class="ui-form-field">
-                <span>Local display name <span class="optional">(optional)</span></span>
+                <span>${messages.t("nameLabel")}</span>
                 <input class="ui-input" name="name" type="text" maxlength="120" aria-describedby="machine-name-help" .value=${this.name} @input=${(event: InputEvent) => { this.handleNameInput(event); }} autocomplete="off" />
               </label>
-              <small id="machine-name-help" class="hint">Only changes the name shown here. Leave blank to use the remote machine’s name.</small>
+              <small id="machine-name-help" class="hint">${messages.t("nameHelp")}</small>
               ${editing ? null : html`<label class="ui-form-field">
-                <span>Bearer token <span class="optional">(optional)</span></span>
-                <input class="ui-input" name="token" type="password" aria-describedby="machine-token-help" .value=${this.token} @input=${(event: InputEvent) => { this.handleTokenInput(event); }} placeholder="Leave blank if the remote machine does not require one" autocomplete="off" />
+                <span>${messages.t("tokenLabel")}</span>
+                <input class="ui-input" name="token" type="password" dir="ltr" aria-describedby="machine-token-help" .value=${this.token} @input=${(event: InputEvent) => { this.handleTokenInput(event); }} placeholder=${messages.t("tokenPlaceholder")} autocomplete="off" />
               </label>
-              <small id="machine-token-help" class="hint">If the remote machine requires a token, paste it without the “Bearer” prefix.</small>`}
-            ` : html`<p class="hint intro">After you enter a URL, you can add an optional local display name and bearer token.</p>`}
+              <small id="machine-token-help" class="hint">${messages.t("tokenHelp")}</small>`}
+            ` : html`<p class="hint intro">${messages.t("intro")}</p>`}
           </div>
           <footer class="ui-dialog-footer">
-            <button class="ui-button" type="button" @click=${() => { this.onCancel?.(); }}>Cancel</button>
-            <button class="ui-button ui-button--primary" type="submit" ?disabled=${!canSubmit}>${this.submitting ? (editing ? "Saving…" : "Adding…") : (editing ? "Save name" : "Add machine")}</button>
+            <button class="ui-button" type="button" @click=${() => { this.onCancel?.(); }}>${messages.t("cancel")}</button>
+            <button class="ui-button ui-button--primary" type="submit" ?disabled=${!canSubmit}>${this.submitting ? (editing ? messages.t("saving") : messages.t("adding")) : (editing ? messages.t("save") : messages.t("addTitle"))}</button>
           </footer>
         </form>
       </modal-surface>
@@ -138,22 +141,21 @@ export class MachineDialog extends LitElement {
     :host { --ui-dialog-width: 560px; --ui-input-font-family: var(--pi-control-monospace-font-family, var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)); }
     .hint { color: var(--pi-muted); }
     .intro { margin: 4px 0 0; line-height: 1.4; }
-    .optional { color: var(--pi-muted); font-weight: 400; }
     .field-error { color: var(--pi-danger); }
   `];
 }
 
 export function machineBaseUrlValidationMessage(value: string): string | undefined {
   const raw = value.trim();
-  if (raw === "") return "Remote PI WEB URL is required.";
+  if (raw === "") return messages.t("urlRequired");
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    return "Enter a valid URL including http:// or https://.";
+    return messages.t("urlInvalid");
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return "Use an http:// or https:// URL.";
-  if (url.username !== "" || url.password !== "") return "Do not include credentials in the machine URL.";
-  if (url.search !== "" || url.hash !== "") return "Do not include a query string or fragment.";
+  if (url.protocol !== "http:" && url.protocol !== "https:") return messages.t("urlProtocol");
+  if (url.username !== "" || url.password !== "") return messages.t("urlCredentials");
+  if (url.search !== "" || url.hash !== "") return messages.t("urlQuery");
   return undefined;
 }

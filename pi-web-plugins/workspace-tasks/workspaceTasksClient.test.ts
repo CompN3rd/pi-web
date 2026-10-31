@@ -3,22 +3,14 @@ import { TASKS_CONFIG_PATH } from "./config";
 import { loadWorkspaceTasksConfig, type WorkspaceTasksFileReader } from "./workspaceTasksClient";
 
 describe("workspace tasks client", () => {
-  it("loads the configured path through the public workspace file helper", async () => {
-    const readFile = vi.fn<WorkspaceTasksFileReader["readFile"]>(() => Promise.resolve({ content: JSON.stringify({ version: 1, tasks: [] }), truncated: false, binary: false }));
-
-    await loadWorkspaceTasksConfig({ readFile });
-
-    expect(readFile).toHaveBeenCalledWith(TASKS_CONFIG_PATH);
-  });
-
   it("loads and parses a valid tasks config through the public workspace file helper", async () => {
-    const files = reader({
+    const readFile = vi.fn<WorkspaceTasksFileReader["readFile"]>(() => Promise.resolve({
       content: JSON.stringify({ version: 1, tasks: [{ id: "build", title: "Build", command: "npm run build" }] }),
       truncated: false,
       binary: false,
-    });
+    }));
 
-    await expect(loadWorkspaceTasksConfig(files)).resolves.toEqual({
+    await expect(loadWorkspaceTasksConfig({ readFile })).resolves.toEqual({
       kind: "loaded",
       path: TASKS_CONFIG_PATH,
       config: {
@@ -26,6 +18,7 @@ describe("workspace tasks client", () => {
         tasks: [{ id: "build", title: "Build", command: "npm run build", confirm: false }],
       },
     });
+    expect(readFile).toHaveBeenCalledExactlyOnceWith(TASKS_CONFIG_PATH);
   });
 
   it("treats a missing optional tasks config as unconfigured", async () => {
@@ -33,8 +26,7 @@ describe("workspace tasks client", () => {
 
     await expect(loadWorkspaceTasksConfig(files)).resolves.toEqual({
       kind: "missing",
-      message: "No workspace tasks configured here.",
-      hint: `${TASKS_CONFIG_PATH} is optional. Create it in this workspace if you want custom tasks.`,
+
     });
   });
 
@@ -43,9 +35,7 @@ describe("workspace tasks client", () => {
 
     await expect(loadWorkspaceTasksConfig(files)).resolves.toMatchObject({
       kind: "unavailable",
-      message: "Could not load workspace tasks.",
-      hint: `Fix ${TASKS_CONFIG_PATH}, then click Refresh.`,
-      detail: `Unable to read ${TASKS_CONFIG_PATH}: nope`,
+      detail: { kind: "read", error: "nope" },
     });
   });
 
@@ -58,7 +48,7 @@ describe("workspace tasks client", () => {
 
     await expect(loadWorkspaceTasksConfig(files)).resolves.toMatchObject({
       kind: "unavailable",
-      detail: "Config version must be 1",
+      detail: { kind: "config", issue: { kind: "version" } },
     });
   });
 });

@@ -1,5 +1,9 @@
-import type { StylesheetIntegrationCapabilityV1, ContentRenderingCapability, PluginCapability, PiWebPlugin, PluginActivationContext, PluginActivationResult } from "@jmfederico/pi-web/plugin-api";
+import type { FileIconsCapability, StylesheetIntegrationCapabilityV1, FilePreviewingCapability, ContentRenderingCapability, PluginCapability, PiWebPlugin, PluginActivationContextV5, PluginActivationResultV5 } from "@jmfederico/pi-web/plugin-api";
+import { createFilesContent } from "./filesLocalization";
+import { FileIcon } from "./FileIcon";
 import { FilesCodeViewer } from "./FilesCodeViewer";
+import { FilesDocumentPreview } from "./FilesDocumentPreview";
+import { createDocumentPreviewers } from "./documentPreviewers";
 import { WorkspaceFilesPanel } from "./FilesPanel";
 import { FilesRuntime } from "./FilesRuntime";
 import { WorkspaceFileViewer } from "./FilesViewer";
@@ -13,6 +17,7 @@ export type { FilesViewerDependencies } from "./viewerLoader";
 export const FILES_PANEL_ELEMENT = "pi-web-files-panel";
 export const FILES_VIEWER_ELEMENT = "pi-web-files-viewer";
 export const FILES_CODE_VIEWER_ELEMENT = "pi-web-files-code-viewer";
+export const FILES_DOCUMENT_PREVIEW_ELEMENT = "pi-web-files-document-preview";
 
 const filesCustomElementOwnersKey = Symbol.for("pi-web.files.custom-element-owners.v1");
 
@@ -29,6 +34,36 @@ function isContentRenderingCapability(value: unknown): value is ContentRendering
     && "listRenderers" in value && typeof value.listRenderers === "function"
     && "renderText" in value && typeof value.renderText === "function"
     && "renderMarkdown" in value && typeof value.renderMarkdown === "function";
+}
+
+function isFilePreviewingCapability(value: unknown): value is FilePreviewingCapability {
+  return typeof value === "object" && value !== null
+    && "listPreviewers" in value && typeof value.listPreviewers === "function"
+    && "renderPreview" in value && typeof value.renderPreview === "function";
+}
+
+const filePreviewingCapability: PluginCapability<FilePreviewingCapability> = {
+  pluginId: "pi-web", id: "file-previewing", version: 1,
+  parse(value) {
+    if (!isFilePreviewingCapability(value)) throw new Error("Files requires file previewing capability v1");
+    return value;
+  },
+};
+
+const fileIconsCapability: PluginCapability<FileIconsCapability> = {
+  pluginId: "pi-web", id: "file-icons", version: 1,
+  parse(value) {
+    if (!isFileIconsCapability(value)) {
+      throw new Error("Files requires file icons capability v1");
+    }
+    return value;
+  },
+};
+
+function isFileIconsCapability(value: unknown): value is FileIconsCapability {
+  return typeof value === "object" && value !== null
+    && "resolveIcon" in value && typeof value.resolveIcon === "function"
+    && "subscribe" in value && typeof value.subscribe === "function";
 }
 
 const stylesheetIntegrationCapability: PluginCapability<StylesheetIntegrationCapabilityV1, 1> = {
@@ -49,17 +84,22 @@ function isStylesheetIntegration(value: unknown): value is StylesheetIntegration
 }
 
 const plugin = {
-  requires: [stylesheetIntegrationCapability, contentRenderingCapability],
-  apiVersion: 4,
+  requires: [stylesheetIntegrationCapability, contentRenderingCapability, filePreviewingCapability, fileIconsCapability],
+  apiVersion: 5,
   name: "Files",
   activate: (context) => activateFilesPlugin(context, new FilesRuntime()),
 } satisfies PiWebPlugin;
 
 export default plugin;
 
-export function activateFilesPlugin(context: PluginActivationContext, filesRuntime: FilesRuntime): PluginActivationResult {
+export function activateFilesPlugin(context: PluginActivationContextV5, filesRuntime: FilesRuntime): PluginActivationResultV5 {
+  if (context.localization === undefined) throw new Error("The Files plugin requires a localization-capable PI WEB host");
+  const content = createFilesContent(context.localization);
+  filesRuntime.setLocalization(context.localization);
   defineFilesCustomElements();
   let contentRendering: ContentRenderingCapability | undefined;
+  let filePreviewing: FilePreviewingCapability | undefined;
+  let fileIcons: FileIconsCapability | undefined;
   let stylesheetIntegration: StylesheetIntegrationCapabilityV1 | undefined;
   const panelId = `${context.runtimePluginId}:workspace.files`;
   const icon = context.svg`
@@ -70,35 +110,43 @@ export function activateFilesPlugin(context: PluginActivationContext, filesRunti
   return {
     start: ({ capabilities }) => {
       contentRendering = capabilities.resolve(contentRenderingCapability);
+      filePreviewing = capabilities.resolve(filePreviewingCapability);
+      fileIcons = capabilities.resolve(fileIconsCapability);
       stylesheetIntegration = capabilities.resolve(stylesheetIntegrationCapability);
     },
     contributions: {
+      filePreviewers: createDocumentPreviewers({
+        html: context.html,
+        content,
+        getContentRendering: () => contentRendering,
+        getStylesheetIntegration: () => stylesheetIntegration,
+      }),
       workspacePanels: [{
         id: "workspace.files",
-        title: "Files",
+        get title() { return content.messages.t("files"); },
         icon,
         order: 10,
         invalidationResources: ["workspace.files"],
         fileOpenQuery: (_workspaceContext, path) => ({ file: path }),
         onInvalidate: (workspaceContext, invalidation) => filesRuntime.invalidate(workspaceContext, invalidation),
-        render: (workspaceContext) => context.html`<pi-web-files-panel .stylesheetIntegration=${stylesheetIntegration} .context=${workspaceContext} .runtime=${filesRuntime} .contentRendering=${contentRendering}></pi-web-files-panel>`,
+        render: (workspaceContext) => context.html`<pi-web-files-panel .content=${content} .stylesheetIntegration=${stylesheetIntegration} .context=${workspaceContext} .runtime=${filesRuntime} .fileIcons=${fileIcons} .filePreviewing=${filePreviewing}></pi-web-files-panel>`,
       }],
       actions: [
         {
           id: "view.files",
-          title: "Go to Files",
+          get title() { return content.messages.t("goFiles"); },
           shortcut: "mod+2",
           shortcutAliases: ["core:view.files"],
-          group: "Navigation",
+          get group() { return content.messages.t("navigation"); },
           enabled: (runtimeContext) => runtimeContext.state.selectedWorkspace !== undefined,
           run: (runtimeContext) => { runtimeContext.selectWorkspaceTool(panelId); },
         },
         {
           id: "workspace.refresh-files",
-          title: "Refresh Files",
+          get title() { return content.messages.t("refreshFiles"); },
           shortcut: "mod+shift+f",
           shortcutAliases: ["core:workspace.refresh-files"],
-          group: "Workspace",
+          get group() { return content.messages.t("workspace"); },
           enabled: (runtimeContext) => runtimeContext.state.selectedWorkspace !== undefined,
           run: (runtimeContext) => runtimeContext.refreshWorkspacePanels(panelId),
         },
@@ -111,7 +159,9 @@ export function defineFilesCustomElements(): void {
   if (typeof customElements === "undefined") throw new Error("Files requires browser Custom Elements support");
   defineCustomElement(FILES_CODE_VIEWER_ELEMENT, FilesCodeViewer);
   defineCustomElement(FILES_VIEWER_ELEMENT, WorkspaceFileViewer);
+  defineCustomElement(FILES_DOCUMENT_PREVIEW_ELEMENT, FilesDocumentPreview);
   defineCustomElement(FILES_PANEL_ELEMENT, WorkspaceFilesPanel);
+  defineCustomElement("pi-web-files-icon", FileIcon);
 }
 
 function defineCustomElement(name: string, constructor: CustomElementConstructor): void {

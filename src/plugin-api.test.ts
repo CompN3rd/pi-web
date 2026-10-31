@@ -1,5 +1,11 @@
 import { describe, expectTypeOf, it } from "vitest";
 import type {
+  FilePreviewRequest,
+  FilePreviewerInput,
+  FilePreviewRenderRequest,
+  FilePreviewerContribution,
+  FilePreviewingCapability,
+  PluginContributionsV5,
   DeleteWorkspaceFileResponse,
   FileContentResponse,
   FileTreeResponse,
@@ -71,6 +77,16 @@ type ReadonlyKeys<Value> = {
 
 type WritableKeys<Value> = Exclude<keyof Value, ReadonlyKeys<Value>>;
 type IsOptional<Value, Key extends keyof Value> = Pick<Value, Key> extends Required<Pick<Value, Key>> ? false : true;
+
+it("exports the browser v5 generic file preview contract", () => {
+  expectTypeOf<PluginContributionsV5["filePreviewers"]>().toEqualTypeOf<FilePreviewerContribution[] | undefined>();
+  expectTypeOf<FilePreviewRequest["file"]>().toEqualTypeOf<Readonly<FileContentResponse>>();
+  expectTypeOf<FilePreviewerInput["files"]>().toEqualTypeOf<WorkspaceFilesContextValue>();
+  expectTypeOf<FilePreviewerInput["signal"]>().toEqualTypeOf<AbortSignal>();
+  expectTypeOf<FilePreviewRenderRequest>().toExtend<FilePreviewRequest>();
+  expectTypeOf<FilePreviewingCapability["renderPreview"]>().parameter(0).toEqualTypeOf<FilePreviewRenderRequest>();
+  expectTypeOf<Extract<keyof PluginContributions, "filePreviewers">>().toEqualTypeOf<never>();
+});
 
 interface ExistingV2WorkspaceFiles {
   readFile(path: string): Promise<FileContentResponse>;
@@ -159,7 +175,7 @@ describe("public browser plugin API", () => {
   });
 
   it("keeps the removal precondition internal and contribution results writable", () => {
-    expectTypeOf<keyof WorkspaceRemovalPresentation>().toEqualTypeOf<"actionLabel" | "confirmation">();
+    expectTypeOf<keyof WorkspaceRemovalPresentation>().toEqualTypeOf<"actionLabel" | "confirmation" | "localization">();
     expectTypeOf<WritableKeys<PluginActivationResult>>().toEqualTypeOf<keyof PluginActivationResult>();
     expectTypeOf<WritableKeys<PluginContributions>>().toEqualTypeOf<keyof PluginContributions>();
   });
@@ -197,13 +213,17 @@ describe("public browser plugin API", () => {
     type PeerChannelIsOptional = IsOptional<PluginPeer, "openChannel">;
     type PeerRequest = NonNullable<PluginPeer["request"]>;
     type PeerChannel = NonNullable<PluginPeer["openChannel"]>;
+    type PeerResource = NonNullable<PluginPeer["resourceUrl"]>;
+    type ResourceOnlyIsValid = { resourceUrl: PeerResource } extends PluginPeer ? true : false;
     // eslint-disable-next-line @typescript-eslint/no-generated-empty-object-type -- Record<never, never> deliberately probes that an empty object does not satisfy the peer contract.
     type EmptyPeerIsValid = Record<never, never> extends PluginPeer ? true : false;
     type RequestOnlyIsValid = { request: PeerRequest } extends PluginPeer ? true : false;
     type ChannelOnlyIsValid = { openChannel: PeerChannel } extends PluginPeer ? true : false;
     type BothCapabilitiesAreValid = { request: PeerRequest; openChannel: PeerChannel } extends PluginPeer ? true : false;
     expectTypeOf<keyof WorkspaceContext>().toEqualTypeOf<"machine" | "workspace" | "state" | "files" | "projects" | "peer" | "host">();
-    expectTypeOf<keyof PluginPeer>().toEqualTypeOf<"request" | "openChannel">();
+    expectTypeOf<keyof PluginPeer>().toEqualTypeOf<"request" | "openChannel" | "resourceUrl">();
+    expectTypeOf<ResourceOnlyIsValid>().toEqualTypeOf<true>();
+    expectTypeOf<ReturnType<PeerResource>>().toEqualTypeOf<string>();
     expectTypeOf<PeerIsOptional>().toEqualTypeOf<true>();
     expectTypeOf<PeerRequestIsOptional>().toEqualTypeOf<true>();
     expectTypeOf<PeerChannelIsOptional>().toEqualTypeOf<true>();

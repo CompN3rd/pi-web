@@ -52,6 +52,17 @@ describe("required Terminal server composition port", () => {
     expect(service).not.toHaveProperty("legacyRoutes");
   });
 
+  it("snapshots optional generated title provenance while preserving raw fallback", () => {
+    let titlePresentation: unknown = { kind: "workspaceRemoval", label: "feature" };
+    const service = snapshotRequiredTerminalService({
+      closeForCwd: vi.fn(), runCommand: () => ({ ...run, titlePresentation }), bindActivitySink: vi.fn(),
+    });
+    const options = { projectId: run.projectId, workspaceId: run.workspaceId, cwd: "/repo", origin: "core", title: run.title, command: "true" };
+    expect(service.runCommand(options).titlePresentation).toEqual(titlePresentation);
+    titlePresentation = { kind: "future" };
+    expect(service.runCommand(options)).toEqual(run);
+  });
+
   it("keeps the host command port workspace-only and rejects maintenance or unknown scopes", () => {
     const maintenance = { ...run, scope: "maintenance", projectId: undefined, workspaceId: undefined };
     let result: unknown = { ...run, scope: "workspace" };

@@ -20,6 +20,10 @@ export interface AppState {
   workspaces: Workspace[];
   sessions: SessionInfo[];
   messages: ChatLine[];
+  /** Selected conversation delivery/freshness, independent of runtime activity. */
+  conversationSync?: "catching-up" | "checked" | "stale" | "interrupted" | undefined;
+  /** Time of the last accepted history snapshot, not a guarantee of live delivery. */
+  conversationRefreshedAt?: number | undefined;
   messagePageStart: number;
   messagePageEnd: number;
   messagePageTotal: number;
@@ -96,7 +100,7 @@ export interface ClosedExtensionDialog {
 /** `machineId` stays bound to the machine selected when the auth operation began. */
 export type AuthDialogState =
   | { step: "method"; machineId: string }
-  | { step: "starting"; machineId: string; title: string; error?: string }
+  | { step: "starting"; machineId: string; mode: "login" | "logout"; error?: string }
   | { step: "providers"; mode: "login"; machineId: string; authType?: "oauth" | "api_key"; providers: AuthProviderOption[] }
   | { step: "oauth"; flow: OAuthFlowState; machineId: string; responding?: boolean; inputValue?: string; error?: string }
   | { step: "logout"; machineId: string; providers: AuthProviderOption[] };

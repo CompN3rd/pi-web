@@ -91,6 +91,135 @@ describe("WorkspaceProviderRegistry", () => {
     expect(Object.isFrozen(linked.removal)).toBe(true);
   });
 
+  it("keeps lookups read-only, including cold and changed project identities", async () => {
+    const probe = vi.fn(() => Promise.resolve<"claim">("claim"));
+    const list = vi.fn((input: { path: string }) => Promise.resolve([workspace("root", input.path, true)]));
+    const registry = registryFor([contribution("owner", provider({ probe, list }))]);
+    expect(await registry.lookup(project)).toBeUndefined();
+    expect(probe).not.toHaveBeenCalled();
+    const discovered = await registry.resolve(project);
+    expect(await registry.lookup(project)).toBe(discovered);
+    expect(await registry.lookup({ ...project, path: hostPath("/moved") })).toBeUndefined();
+    expect(list).toHaveBeenCalledOnce();
+    await registry.closeAll();
+  });
+
+  it("keeps established identity readable while a mutation-triggered refresh runs", async () => {
+    const replacement = deferred<ProviderWorkspace[]>();
+    const started = deferred<undefined>();
+    const list = vi.fn().mockResolvedValueOnce([workspace("root", project.path, true)])
+      .mockImplementationOnce(() => { started.resolve(undefined); return replacement.promise; });
+    const registry = registryFor([contribution("owner", provider({ probe: () => Promise.resolve("claim"), list }))]);
+    const established = await registry.resolve(project);
+    registry.requestRefresh(project.id);
+    await started.promise;
+    expect(await registry.lookup(project)).toBe(established);
+    replacement.resolve([workspace("new", hostPath("/new"), true)]);
+    const refreshed = await registry.resolve(project);
+    expect(await registry.lookup(project)).toBe(refreshed);
+    expect(refreshed.workspaces[0]?.path).toBe(hostPath("/new"));
+    expect(list).toHaveBeenCalledTimes(2);
+    await registry.closeAll();
+  });
+
+  it("keeps caller-owned authority checks out of the shared workspace record", async () => {
+    const started = deferred<undefined>();
+    const list = vi.fn((_input: unknown, signal: AbortSignal) => {
+      if (list.mock.calls.length === 1) return Promise.resolve([workspace("root", project.path, true)]);
+      started.resolve(undefined);
+      return new Promise<ProviderWorkspace[]>((_resolve, reject) => {
+        signal.addEventListener("abort", () => { reject(new Error("Disconnected")); }, { once: true });
+      });
+    });
+    const registry = registryFor([contribution("owner", provider({ probe: () => Promise.resolve("claim"), list }))]);
+    const known = await registry.resolve(project);
+    const controller = new AbortController();
+    const checking = registry.checkCurrent(project, controller.signal);
+    const rejected = expect(checking).rejects.toThrow();
+    await started.promise;
+    // Neither an in-flight check nor its cancellation interrupts routine reads.
+    expect(await registry.lookup(project)).toBe(known);
+    controller.abort();
+    await rejected;
+    expect(await registry.lookup(project)).toBe(known);
+    await registry.closeAll();
+  });
+
+  it("does not publish older discovery after a newer mutation refresh", async () => {
+    const stale = deferred<ProviderWorkspace[]>();
+    const started = deferred<undefined>();
+    const list = vi.fn().mockImplementationOnce(() => {
+      started.resolve(undefined);
+      return stale.promise;
+    }).mockResolvedValue([workspace("new", hostPath("/new"), true)]);
+    const onPublished = vi.fn();
+    const registry = new WorkspaceProviderRegistry({
+      contributions: [contribution("owner", provider({ probe: () => Promise.resolve("claim"), list }))],
+      logger: { warn: vi.fn() }, pathInspector: () => true, onPublished,
+    });
+    const oldDiscovery = registry.resolve(project);
+    await started.promise;
+    expect(await registry.lookup(project)).toBeUndefined();
+    registry.requestRefresh(project.id);
+    const fresh = await registry.resolve(project);
+    stale.resolve([workspace("old", hostPath("/old"), true)]);
+    await oldDiscovery;
+    expect(await registry.lookup(project)).toBe(fresh);
+    expect(fresh.workspaces[0]?.path).toBe(hostPath("/new"));
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(onPublished).toHaveBeenCalledExactlyOnceWith(project.id);
+    await registry.closeAll();
+  });
+
+  it("logs projection notification failures without failing already-published discovery", async () => {
+    const warn = vi.fn();
+    const registry = new WorkspaceProviderRegistry({
+      contributions: [], logger: { warn },
+      onPublished: () => { throw new Error("Projection unavailable"); },
+    });
+    const published = await registry.resolve(project);
+    expect(await registry.lookup(project)).toBe(published);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: project.id }),
+      "workspace discovery projection notification failed",
+    );
+    await registry.closeAll();
+  });
+
+  it("drains superseded discovery still performing path inspection during shutdown", async () => {
+    const inspection = deferred<boolean>();
+    const started = deferred<undefined>();
+    const pathInspector = vi.fn().mockImplementationOnce(() => {
+      started.resolve(undefined);
+      return inspection.promise;
+    }).mockReturnValue(true);
+    const registry = new WorkspaceProviderRegistry({
+      contributions: [contribution("owner", provider({
+        probe: () => Promise.resolve("claim"),
+        list: () => Promise.resolve([workspace("root", project.path, true)]),
+      }))],
+      logger: { warn: vi.fn() },
+      pathInspector,
+    });
+    const oldDiscovery = registry.resolve(project);
+    await started.promise;
+    registry.requestRefresh(project.id);
+    await registry.resolve(project);
+    let closed = false;
+    const closing = registry.closeAll().then(() => { closed = true; });
+    try {
+      // Give the shutdown promise a full event-loop turn to settle if it has
+      // accidentally lost ownership of the superseded scan.
+      await new Promise<void>((resolveTurn) => { setImmediate(resolveTurn); });
+      expect(closed).toBe(false);
+    } finally {
+      inspection.resolve(true);
+      await oldDiscovery;
+      await closing;
+    }
+    expect(closed).toBe(true);
+  });
+
   it("coalesces only equivalent in-flight resolutions and never retains a completed result", async () => {
     const firstBaselineList = deferred<ProviderWorkspace[]>();
     let baselineLists = 0;
@@ -158,6 +287,32 @@ describe("WorkspaceProviderRegistry", () => {
 
     blockedList.resolve(topology);
     await pendingResolution;
+  });
+
+  it("preserves removal provenance and binds it to the destructive confirmation precondition", async () => {
+    const resolveRemoval = async (localization: unknown) => {
+      const linked = workspace("linked", hostPath("/linked"), false, {
+        removal: { actionLabel: "Delete workspace", confirmation: "Raw confirmation" },
+      });
+      // Exercise untyped plugin output at the provider validation boundary.
+      Object.defineProperty(linked.removal, "localization", { value: localization, enumerable: true });
+      const registry = registryFor([contribution("owner", provider({
+        probe: () => Promise.resolve("claim"),
+        list: () => Promise.resolve([
+          workspace("main", hostPath("/repo"), true), linked,
+        ]),
+        prepareRemove: () => Promise.resolve({ title: "Remove", command: "tool remove" }),
+      }))]);
+      return (await registry.resolve(project)).workspaces.find(({ isMain }) => !isMain)?.removal;
+    };
+    const metadata = { kind: "gitWorktree", label: "review", path: hostPath("/linked") };
+    const first = await resolveRemoval(metadata);
+    expect(first?.localization).toEqual(metadata);
+    expect(Object.isFrozen(first?.localization)).toBe(true);
+    expect((await resolveRemoval({ ...metadata }))?.precondition).toBe(first?.precondition);
+    expect((await resolveRemoval({ ...metadata, label: "changed" }))?.precondition).not.toBe(first?.precondition);
+    expect(await resolveRemoval({ kind: "future" })).not.toHaveProperty("localization");
+    expect(await resolveRemoval({ ...metadata, path: 42 })).not.toHaveProperty("localization");
   });
 
   it("keeps workspace ids stable while opaque removal preconditions bind owner snapshot drift", async () => {
@@ -542,6 +697,33 @@ describe("WorkspaceProviderRegistry", () => {
     prepareController.abort(new DOMException("Removal request cancelled", "AbortError"));
     await planExpectation;
     expect(preparedSignal?.aborted).toBe(true);
+  });
+
+  it.each([
+    { kind: "workspaceRemoval", label: "feature/<img>" }, null, {}, { kind: "future", label: "x" },
+    { kind: "workspaceRemoval", label: "x".repeat(4097) },
+  ])("snapshots optional removal-plan title provenance or retains raw fallback (%j)", async (metadata) => {
+    const plan = { title: "Provider title", command: "tool remove" };
+    Object.defineProperty(plan, "titlePresentation", { value: metadata });
+    const registry = registryFor([contribution("provider", provider({
+      probe: () => Promise.resolve("claim"),
+      list: () => Promise.resolve([
+        workspace("main", hostPath("/repo"), true),
+        workspace("view", hostPath("/view"), false, { removal: { actionLabel: "Remove", confirmation: "Remove?" } }),
+      ]),
+      prepareRemove: () => Promise.resolve(plan),
+    }))]);
+    const id = (await registry.resolve(project)).workspaces.find(({ isMain }) => !isMain)?.id;
+    if (id === undefined) throw new Error("Expected removal target");
+    const parsed = await (await registry.resolveRemoval(project, id)).prepare();
+    expect(parsed.title).toBe(plan.title);
+    expect(parsed.command).toBe(plan.command);
+    if (metadata?.kind === "workspaceRemoval" && metadata.label.length <= 4096) {
+      expect(parsed.titlePresentation).toEqual(metadata);
+      expect(Object.isFrozen(parsed.titlePresentation)).toBe(true);
+      metadata.label = "mutated";
+      expect(parsed.titlePresentation?.label).toBe("feature/<img>");
+    } else expect(parsed).not.toHaveProperty("titlePresentation");
   });
 
   it("re-resolves removal targets and contains stale, invalid, and timed-out provider plans", async () => {

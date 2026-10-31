@@ -1,3 +1,5 @@
+import { LocalizationController } from "../localization/browser";
+import { formattedTextMessages as messages } from "../formattedTextMessages";
 import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { VisibleContentController } from "../formatting/deferredContent";
@@ -17,6 +19,7 @@ export class FormattedText extends LitElement {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this, undefined, () => { this.labelsDirty = true; });
   }
 
   @property() text = "";
@@ -35,6 +38,8 @@ export class FormattedText extends LitElement {
   private displayedText = "";
   private replacing = false;
   private layoutChanged = false;
+  private labelsDirty = true;
+  private readonly copyStates = new WeakMap<HTMLButtonElement, "idle" | "copied" | "failed">();
 
   protected override willUpdate(changes: PropertyValues<this>): void {
     const inputs = ["text", "intentKey", "imagesEnabled", "codeBlocks", "contentRendering", "machineId", "workspaceContext"] as const;
@@ -81,6 +86,20 @@ export class FormattedText extends LitElement {
     // HTML is memoized independently of geometry; apply hints on every DOM mount,
     // in this update's microtask before paint or the chat's position-restoration frame.
     restoreExternalMarkdownImageDimensions(this.renderRoot);
+    if (this.labelsDirty) {
+      this.labelsDirty = false;
+      // Sanitized HTML is cached independently of language. Update only owned
+      // attributes, preserving source/preview DOM, focus and transient copy state.
+      this.renderRoot.querySelectorAll<HTMLButtonElement>(".code-copy-button").forEach((button) => {
+        this.setCopyButtonState(button, this.copyStates.get(button) ?? "idle");
+      });
+      this.renderRoot.querySelectorAll(".code-block-header").forEach((header) => {
+        header.setAttribute("aria-label", messages.t("controls"));
+      });
+      this.renderRoot.querySelectorAll(".table-scroll").forEach((table) => {
+        table.setAttribute("aria-label", messages.t("table"));
+      });
+    }
     if (this.layoutChanged) {
       this.layoutChanged = false;
       this.dispatchEvent(new CustomEvent("content-layout-changed", { bubbles: true, composed: true }));
@@ -105,6 +124,7 @@ export class FormattedText extends LitElement {
   }
 
   private showMarkdown(): void {
+    this.labelsDirty = true;
     this.layoutChanged = true;
     this.content = html`${unsafeHTML(this.markup)}`;
     this.displayedText = this.text;
@@ -112,6 +132,7 @@ export class FormattedText extends LitElement {
   }
 
   private enhanceMarkdown(): void {
+    this.labelsDirty = true;
     try {
       this.layoutChanged = true;
       this.content = this.contentRendering?.renderMarkdown({
@@ -170,9 +191,10 @@ export class FormattedText extends LitElement {
   }
 
   private setCopyButtonState(button: HTMLButtonElement, state: "idle" | "copied" | "failed"): void {
+    this.copyStates.set(button, state);
     const icon = button.querySelector("span");
     if (icon !== null) icon.textContent = state === "copied" ? "✓" : "⧉";
-    const label = state === "copied" ? "Copied code block" : state === "failed" ? "Failed to copy code block" : "Copy code block";
+    const label = messages.t(state === "idle" ? "copy" : state);
     button.title = label;
     button.setAttribute("aria-label", label);
   }

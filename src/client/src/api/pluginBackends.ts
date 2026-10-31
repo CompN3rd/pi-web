@@ -17,6 +17,8 @@ import {
   serializePluginBackendChannelOpenEnvelope,
   utf8ByteLength,
   pairedPluginBackendPath,
+  pairedPluginBackendResourcePath as sharedPairedPluginBackendResourcePath,
+  PLUGIN_BACKEND_RESOURCE_INPUT_MAX_BYTES,
   pluginBackendScopeFromRoute,
   type PluginBackendScopeKind,
 } from "../../../shared/pluginBackendProtocol";
@@ -84,6 +86,33 @@ export function pairedPluginBackendChannelUrl(
 ): string {
   const path = pairedPluginBackendChannelPath(target, operation);
   return context === undefined ? resolveAppWebSocketUrl(path) : resolveAppWebSocketUrl(path, context);
+}
+
+export function pairedPluginBackendResourcePath(
+  target: PluginBackendRequestTarget,
+  operation: string,
+  input: JsonValue,
+): string {
+  if (!isPiWebPluginId(target.pluginId)) throw new Error(`Invalid PI WEB plugin id: ${target.pluginId}`);
+  if (target.machineId === "") throw new Error("Machine id is required");
+  if (target.projectId === "" || target.workspaceId === "") throw new Error("Scope ids must not be empty");
+  if (target.workspaceId !== undefined && target.projectId === undefined) throw new Error("Workspace scope requires a project id");
+  pluginBackendScopeFromRoute(target, wireScope(target));
+  const validatedOperation = requirePluginBackendOperation(operation);
+  const revision = requirePluginBackendRevision(target.backendRevision);
+  const clonedInput = cloneBoundedPluginBackendJson(input, "Plugin backend resource input", PLUGIN_BACKEND_RESOURCE_INPUT_MAX_BYTES);
+  const query = new URLSearchParams({ revision, input: JSON.stringify(clonedInput) });
+  return `api/machines/${encodeURIComponent(target.machineId)}${sharedPairedPluginBackendResourcePath({ ...target, operation: validatedOperation })}?${query.toString()}`;
+}
+
+export function pairedPluginBackendResourceUrl(
+  target: PluginBackendRequestTarget,
+  operation: string,
+  input: JsonValue,
+  context?: AppUrlContext,
+): string {
+  const path = pairedPluginBackendResourcePath(target, operation, input);
+  return context === undefined ? resolveAppUrl(path) : resolveAppUrl(path, context);
 }
 
 export function requestPairedPluginBackend(

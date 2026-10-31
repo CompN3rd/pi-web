@@ -1,5 +1,10 @@
+import { localization } from "../localization/browser";
+import definitions from "./errorBanner.messages";
 import { html, type TemplateResult } from "lit";
 import type { ServerNoticeSeverity } from "../../../shared/apiTypes";
+
+const messages = localization.registerMessages("core.banners", definitions);
+const dismissKeys = { error: "dismissError", warning: "dismissWarning", info: "dismissInfo" } as const;
 
 /**
  * The shared application banner. Browser-local failures use the default error
@@ -13,17 +18,10 @@ export function errorBanner(
   onRetry?: () => void,
 ): TemplateResult | null {
   if (error === "") return null;
-  const severityLabel = bannerSeverityLabel(severity);
-  const dismissLabel = `Dismiss ${severityLabel.toLowerCase()}`;
+  const dismissLabel = messages.t(dismissKeys[severity]);
   return html`<div class=${`error ${severity}`} role="alert">
     <span class="error-text">${error}</span>
-    ${onRetry === undefined ? null : html`<button type="button" class="error-retry" @click=${() => { onRetry(); }}>Retry</button>`}
+    ${onRetry === undefined ? null : html`<button type="button" class="error-retry" @click=${() => { onRetry(); }}>${messages.t("retry")}</button>`}
     <button type="button" class="error-dismiss" aria-label=${dismissLabel} title=${dismissLabel} @click=${() => { onDismiss(); }}>✕</button>
   </div>`;
-}
-
-function bannerSeverityLabel(severity: ServerNoticeSeverity): "Info" | "Warning" | "Error" {
-  if (severity === "error") return "Error";
-  if (severity === "warning") return "Warning";
-  return "Info";
 }

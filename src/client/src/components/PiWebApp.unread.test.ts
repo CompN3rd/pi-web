@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import type { TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Machine, SessionInfo, SessionUnreadEvent, SessionUnreadSummary } from "../api";
+import type { Machine, SessionInfo, SessionStatus, SessionUnreadEvent, SessionUnreadSummary } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import type { BrowserRealtimeEvent } from "../sessionSocket";
 import type { AppMobileMainTab } from "./appShell/AppMobileMainTabs";
@@ -35,6 +35,7 @@ describe("PiWebApp session unread wiring", () => {
     expect([...navigationUnreadSessionIds(app)]).toEqual([background.id]);
     expect(fetchMock).not.toHaveBeenCalled();
     exposeSelectedChat(app);
+    await incorporateSelectedCompletion(app, background);
     await vi.waitFor(() => { expect(navigationUnreadSessionIds(app).size).toBe(0); });
     expect(mobileNavigationTab(app)).not.toHaveProperty("badge");
 
@@ -66,6 +67,7 @@ describe("PiWebApp session unread wiring", () => {
     expect([...navigationUnreadSessionIds(app)]).toEqual([selected.id]);
     expect(fetchMock).not.toHaveBeenCalled();
 
+    await incorporateSelectedCompletion(app, selected);
     documentState.visible = true;
     documentState.focused = true;
     setState(app, { error: "refresh" });
@@ -86,6 +88,7 @@ describe("PiWebApp session unread wiring", () => {
     expect([...navigationUnreadSessionIds(app)]).toEqual([selected.id]);
     expect(fetchMock).not.toHaveBeenCalled();
 
+    await incorporateSelectedCompletion(app, selected);
     setMobileNavigationLayout(app, false);
     invokeUpdated(app);
     await vi.waitFor(() => { expect(navigationUnreadSessionIds(app).size).toBe(0); });
@@ -106,10 +109,81 @@ describe("PiWebApp session unread wiring", () => {
     expect([...navigationUnreadSessionIds(app)]).toEqual([selected.id]);
     expect(fetchMock).not.toHaveBeenCalled();
 
+    await incorporateSelectedCompletion(app, selected);
     modalOpen = false;
     invokeUpdated(app);
     await vi.waitFor(() => { expect(navigationUnreadSessionIds(app).size).toBe(0); });
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not clear a new completion using the original join readiness", async () => {
+    const fetchMock = stubJsonFetch({ catalogId: "catalog-a", catalogRevision: 2, sessions: [] });
+    const app = createApp();
+    enableUnread(app);
+    const selected = session("selected");
+    setAppState(app, { ...initialAppState(), sessions: [selected], selectedSession: selected, mainView: "chat" });
+    exposeSelectedChat(app);
+    handleRealtimeEvent(app, unreadEvent(1, unreadSummary(selected, 1)));
+    invokeUpdated(app);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const controller = sessionController(app);
+    expect(Reflect.get(controller, "refreshSelectedSession")).toHaveBeenCalledOnce();
+    await incorporateSelectedCompletion(app, selected);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not clear a completion arriving while the snapshot is in flight", async () => {
+    const fetchMock = stubJsonFetch({});
+    const app = createApp();
+    enableUnread(app);
+    const selected = session("selected");
+    setAppState(app, { ...initialAppState(), sessions: [selected], selectedSession: selected, mainView: "chat" });
+    exposeSelectedChat(app);
+    handleRealtimeEvent(app, unreadEvent(1, unreadSummary(selected, 1)));
+    const commit = captureSelectedSnapshot(app, selected);
+    handleRealtimeEvent(app, unreadEvent(2, unreadSummary(selected, 2)));
+    commit();
+    await Promise.resolve();
+    invokeUpdated(app);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect([...navigationUnreadSessionIds(app)]).toEqual([selected.id]);
+  });
+
+  it("waits for render and discards a pending boundary after switching away and back", async () => {
+    const fetchMock = stubJsonFetch({});
+    const app = createApp();
+    enableUnread(app);
+    const selected = session("selected");
+    const other = session("other");
+    setAppState(app, { ...initialAppState(), sessions: [selected, other], selectedSession: selected, mainView: "chat" });
+    exposeSelectedChat(app);
+    handleRealtimeEvent(app, unreadEvent(1, unreadSummary(selected, 1)));
+    const rendered = deferred<boolean>();
+    Object.defineProperty(app, "updateComplete", { value: rendered.promise });
+    captureSelectedSnapshot(app, selected)();
+    expect(fetchMock).not.toHaveBeenCalled();
+    setState(app, { selectedSession: other });
+    setState(app, { selectedSession: selected });
+    exposeSelectedChat(app);
+    rendered.resolve(true);
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect([...navigationUnreadSessionIds(app)]).toEqual([selected.id]);
+  });
+
+  it("rejects a snapshot whose messages are replaced before render", async () => {
+    const fetchMock = stubJsonFetch({});
+    const app = createApp();
+    enableUnread(app);
+    const selected = session("selected");
+    setAppState(app, { ...initialAppState(), sessions: [selected], selectedSession: selected, mainView: "chat" });
+    exposeSelectedChat(app);
+    handleRealtimeEvent(app, unreadEvent(1, unreadSummary(selected, 1)));
+    captureSelectedSnapshot(app, selected)();
+    setState(app, { messages: [] });
+    await Promise.resolve();
+    invokeUpdated(app);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("applies another client's authoritative clear without issuing a redundant acknowledgement", () => {
@@ -184,6 +258,40 @@ describe("PiWebApp session unread wiring", () => {
     setAppState(app, { ...initialAppState(), sessions: [foreground, background], selectedSession: foreground, mainView: "chat" });
 
     expect(navigationUnreadSessionIds(app).size).toBe(0);
+  });
+
+  it("keeps a manually unread selected chat unread until leaving and returning", async () => {
+    const selected = session("selected");
+    const other = session("other");
+    const marked = { catalogId: "catalog-a", catalogRevision: 1, sessions: [unreadSummary(selected, 1)] };
+    const response = deferred<typeof marked>();
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockImplementationOnce(async () => new Response(JSON.stringify(await response.promise), { status: 200 }))
+      .mockResolvedValue(new Response(JSON.stringify({ catalogId: "catalog-a", catalogRevision: 2, sessions: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const app = createApp();
+    enableUnread(app);
+    setAppState(app, { ...initialAppState(), sessions: [selected, other], selectedSession: selected, mainView: "chat" });
+    exposeSelectedChat(app);
+    const mark = navigationPanelValue(app, ".onMarkSessionUnread=");
+    if (!isMarkSessionRead(mark)) throw new Error("Expected mark-unread callback");
+    mark(selected);
+    // Socket delivery precedes the HTTP response and must not trigger auto-read.
+    handleRealtimeEvent(app, unreadEvent(1, unreadSummary(selected, 1)));
+    await incorporateSelectedCompletion(app, selected);
+    response.resolve(marked);
+    await vi.waitFor(() => { expect([...navigationUnreadSessionIds(app)]).toEqual([selected.id]); });
+    invokeUpdated(app);
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://pi.example.test/api/machines/local/sessions/selected/unread");
+    setState(app, { selectedSession: other });
+    setState(app, { selectedSession: selected });
+    exposeSelectedChat(app);
+    await incorporateSelectedCompletion(app, selected);
+    await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(2); });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://pi.example.test/api/machines/local/sessions/selected/unread/acknowledge");
+    await vi.waitFor(() => { expect(navigationUnreadSessionIds(app).size).toBe(0); });
   });
 
   it("acknowledges a session explicitly marked as read from navigation", async () => {
@@ -289,6 +397,10 @@ function handleRealtimeEvent(app: PiWebApp, event: BrowserRealtimeEvent): void {
 }
 
 function enableUnread(app: PiWebApp): void {
+  Object.defineProperty(app, "updateComplete", { configurable: true, value: Promise.resolve(true) });
+  const controller: unknown = Reflect.get(app, "sessions");
+  if (typeof controller !== "object" || controller === null) throw new Error("Missing sessions");
+  Reflect.set(controller, "refreshSelectedSession", vi.fn().mockResolvedValue(undefined));
   if (!Reflect.set(app, "unreadConnected", true)) throw new Error("Could not connect PiWebApp unread state");
 }
 
@@ -308,6 +420,39 @@ function exposeSelectedChat(app: PiWebApp): void {
     throw new Error("Could not mark selected chat ready");
   }
   invokeUpdated(app);
+}
+
+function sessionController(app: PiWebApp): object {
+  const controller: unknown = Reflect.get(app, "sessions");
+  if (typeof controller !== "object" || controller === null) throw new Error("Missing session controller");
+  return controller;
+}
+
+function isSnapshotObserver(value: unknown): value is (machineId: string, sessionId: string) => unknown {
+  return typeof value === "function";
+}
+
+function isSnapshotContinuation(value: unknown): value is (status: SessionStatus) => void {
+  return typeof value === "function";
+}
+
+function captureSelectedSnapshot(app: PiWebApp, selected: SessionInfo): () => void {
+  const controller = sessionController(app);
+  const observe: unknown = Reflect.get(controller, "observeSessionSnapshot");
+  if (!isSnapshotObserver(observe)) throw new Error("Missing snapshot observer");
+  const commit: unknown = observe("local", selected.id);
+  if (!isSnapshotContinuation(commit)) throw new Error("Missing snapshot continuation");
+  const status: SessionStatus = {
+    sessionId: selected.id, isStreaming: false, isCompacting: false, isBashRunning: false,
+    pendingMessageCount: 0, queuedMessages: [], cost: 0,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  return () => { commit(status); };
+}
+
+async function incorporateSelectedCompletion(app: PiWebApp, selected: SessionInfo): Promise<void> {
+  captureSelectedSnapshot(app, selected)();
+  await Promise.resolve();
 }
 
 function setMobileNavigationLayout(app: PiWebApp, mobile: boolean): void {

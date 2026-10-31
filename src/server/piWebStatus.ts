@@ -13,6 +13,7 @@ import { piWebRuntimeIdentity } from "../shared/piWebRuntime.js";
 import { parsePiWebRuntimeComponent } from "../shared/piWebStatusParsing.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import { isHostAbsoluteAgentDir, loadPiWebConfig, PI_CODING_AGENT_DIR_ENV, type LoadedPiWebConfig } from "../config.js";
+import { versionChecksDisabled } from "../shared/versionCheckPolicy.js";
 import { createPiWebReleaseLookupCache, type PiWebReleaseLookup } from "./piWebReleaseLookupCache.js";
 
 const PI_WEB_PACKAGE_NAME = "@jmfederico/pi-web";
@@ -627,11 +628,9 @@ function buildMessages(components: PiWebStatusResponse["components"], release: P
   if (!components.sessiond.available) {
     messages.push({
       id: "sessiond-unavailable",
-      severity: "warning",
-      title: "Session daemon version unavailable",
-      body: commands.status === undefined
-        ? `PI WEB could not check the session daemon version${components.sessiond.error === undefined ? "." : `: ${components.sessiond.error}`}. Check the session daemon service or process that runs this installation.`
-        : `PI WEB could not check the session daemon version${components.sessiond.error === undefined ? "." : `: ${components.sessiond.error}`}`,
+      severity: "info",
+      title: "Session daemon version unknown",
+      body: `The last check could not determine the session daemon version. This can happen during an update or restart. If checks keep failing, check the session daemon service or process.${components.sessiond.error === undefined ? "" : ` Last check: ${components.sessiond.error}`}`,
       ...optionalMessageCommand(commands.status),
     });
   } else if (components.sessiond.stale) {
@@ -655,10 +654,7 @@ function optionalMessageCommand(command: string | undefined): Pick<PiWebStatusMe
 }
 
 function skipVersionCheck(): boolean {
-  return ["PI_WEB_SKIP_VERSION_CHECK", "PI_WEB_OFFLINE", "PI_SKIP_VERSION_CHECK", "PI_OFFLINE"].some((key) => {
-    const value = process.env[key];
-    return value !== undefined && value !== "";
-  });
+  return versionChecksDisabled(process.env);
 }
 
 function isInstalledVersionNewer(installedVersion: string | undefined, runtimeVersion: string | undefined): boolean {

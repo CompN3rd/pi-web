@@ -1,4 +1,5 @@
 import { api, type Machine, type MachineHealth, type MachineRuntime } from "../api";
+import { machineMessages as messages } from "../machineMessages";
 import { resetWorkspaceScopedState } from "../appState";
 import { BrowserErrorReporter, machineBrowserErrorScope } from "../browserErrors";
 import type { GetState, NavigationDestinationOptions, NavigationSelection, SetState, UpdateUrl } from "./types";
@@ -111,7 +112,10 @@ export class MachineController {
       const machines = state.machines.map((machine) => machine.id === machineId ? withMachineIdentity(machine, identity) : machine);
       this.setState({ machines, ...(state.selectedMachine === undefined ? {} : { selectedMachine: machines.find((machine) => machine.id === state.selectedMachine?.id) ?? state.selectedMachine }) });
     } catch (error) {
-      if (revision === this.identityRevisionByMachine.get(machineId)) this.setState({ error: `Settings saved, but refreshing the machine name failed: ${String(error)}` });
+      if (revision === this.identityRevisionByMachine.get(machineId)) {
+        const detail = String(error);
+        this.browserErrors.reportLocalized(machineBrowserErrorScope(machineId), () => messages.t("refreshFailed", { error: detail }));
+      }
     }
   }
 
@@ -150,7 +154,7 @@ export class MachineController {
   async deleteMachine(machine: Machine | undefined = this.getState().selectedMachine, options: { selectFallback?: boolean } = {}): Promise<Machine | undefined> {
     if (machine === undefined) return undefined;
     if (machine.kind === "local") {
-      this.browserErrors.report(machineBrowserErrorScope(machine.id), "The local machine cannot be removed.");
+      this.browserErrors.reportLocalized(machineBrowserErrorScope(machine.id), () => messages.t("cannotRemove"));
       return undefined;
     }
     try {
@@ -207,7 +211,7 @@ export class MachineController {
 
     const health = await this.safeRemoteHealth(requestedMachine);
     this.setState({ machineStatuses: { ...this.getState().machineStatuses, [health.machineId]: health } });
-    if (!health.ok) this.browserErrors.report(machineBrowserErrorScope(requestedMachine.id), `${requestedMachine.name} is unavailable; reconnecting…`);
+    if (!health.ok) this.browserErrors.reportLocalized(machineBrowserErrorScope(requestedMachine.id), () => messages.t("reconnecting", { name: requestedMachine.name }));
     return requestedMachine;
   }
 

@@ -6,13 +6,15 @@ import type { ContentRendererContributionV5 as ContentRendererContribution } fro
 import type { ContentRendererChoice } from "../plugins/contentRenderers";
 import { ContentRendererHost } from "./ContentRendererHost";
 import { writeClipboardText } from "../clipboard";
+import { localization } from "../localization/browser";
 
 vi.mock("../clipboard", () => ({ writeClipboardText: vi.fn().mockResolvedValue(true) }));
 
 useDeferredContent();
 
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await localization.setPreferences({ language: "en", formatLocale: "en" });
   localStorage.clear();
   vi.restoreAllMocks();
   vi.clearAllMocks();
@@ -38,24 +40,6 @@ function button(host: ContentRendererHost, label: string): HTMLButtonElement {
   if (found === undefined) throw new Error(`Missing ${label} button`);
   return found;
 }
-
-it.each(["automatic", "manual"] as const)("names the %s view button after the selected renderer", async (renderMode) => {
-  const draw = vi.fn(() => html`<b>Named content</b>`);
-  const host = hostWith([{ id: "highlighted", label: "Highlighted", renderer: {
-    id: "highlighted", title: "Highlighted", renderMode, render: draw,
-  } }]);
-  document.body.append(host);
-  await settleDeferredContent(host);
-  const namedButton = button(host, "Highlighted");
-  expect(namedButton.getAttribute("aria-pressed")).toBe(String(renderMode === "automatic"));
-  button(host, "Raw").click();
-  await settleDeferredContent(host);
-  expect(namedButton.getAttribute("aria-pressed")).toBe("false");
-  namedButton.click();
-  await settleDeferredContent(host);
-  expect(namedButton.getAttribute("aria-pressed")).toBe("true");
-  expect(host.renderRoot.querySelector("b")?.textContent).toBe("Named content");
-});
 
 it("shows every named view and Raw, and explicitly activates manual views while cancelling previous work", async () => {
   const automatic = vi.fn<ContentRendererContribution["render"]>(() => html`<b>Automatic</b>`);
@@ -91,6 +75,34 @@ it("shows every named view and Raw, and explicitly activates manual views while 
   await settleDeferredContent(host);
   expect(manual).toHaveBeenCalledTimes(2);
   expect(diagram.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("scopes choice hooks to named views and Raw, keeping selection aligned with aria-pressed", async () => {
+  const host = hostWith([
+    { id: "first", label: "First", renderer: { id: "first", render: () => html`<b>First</b>` } },
+    { id: "second", label: "Second", renderer: { id: "second", render: () => html`<b>Second</b>` } },
+  ]);
+  document.body.append(host);
+  await settleDeferredContent(host);
+  const scope = host.renderRoot.querySelector('[data-ui-context="content-views"]');
+  const choices = [...(scope?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+  expect(choices).toEqual([button(host, "First"), button(host, "Second"), button(host, "Raw")]);
+  expect(choices.every((choice) => choice.matches(".ui-choice.ui-button"))).toBe(true);
+  const copy = button(host, "Copy source");
+  expect(scope?.contains(copy)).toBe(false);
+  expect(copy.matches(".ui-choice, [data-selected]")).toBe(false);
+
+  const expectSelection = (expected: string[]) => {
+    expect(choices.map((choice) => choice.getAttribute("data-selected"))).toEqual(expected);
+    expect(choices.map((choice) => choice.getAttribute("aria-pressed"))).toEqual(expected);
+  };
+  expectSelection(["false", "false", "true"]);
+  button(host, "First").click();
+  await settleDeferredContent(host);
+  expectSelection(["true", "false", "false"]);
+  button(host, "Raw").click();
+  await settleDeferredContent(host);
+  expectSelection(["false", "false", "true"]);
 });
 
 it("updates the automatic default until a view is explicitly selected", async () => {
@@ -280,6 +292,69 @@ it("attaches source-policy modifiers only to raw source, never to preview conten
   await settleDeferredContent(host);
   expect(host.renderRoot.querySelector("#content > .plain-code-block.source-wrap")?.textContent).toBe("source");
   expect(host.renderRoot.querySelector("#content")?.className).toBe("");
+});
+
+it("translates controls and cached feedback live without restarting previews or changing source", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const remove = localization.registerCatalog({ id: "test:content-renderer-fr", namespace: "core.content-renderer", locale: "fr", load: () => Promise.resolve({
+    controls: "Commandes du bloc", raw: "Brut", rawSource: "Source brute", renderedContent: "Contenu rendu",
+    previewFailed: "Échec de l’aperçu. La source brute est affichée ci-dessous.", copySource: "Copier la source",
+    copiedSource: "Source copiée", copyFailed: "Échec de la copie",
+  }) });
+  try {
+    const draw = vi.fn<ContentRendererContribution["render"]>(() => html`<b>User diagram</b>`);
+    const host = automaticHost(draw);
+    host.text = 'const value = "مرحبا <b>user text</b>";';
+    document.body.append(host);
+    await settleDeferredContent(host);
+    button(host, "Copy source").click();
+    await settleDeferredContent(host);
+    expect(button(host, "Copied source")).toBeDefined();
+    const preview = host.renderRoot.querySelector(".preview");
+    await localization.setPreferences({ language: "fr", formatLocale: "de" });
+    await settleDeferredContent(host);
+    expect(host.renderRoot.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Commandes du bloc");
+    expect(button(host, "Brut")).toBeDefined();
+    expect(button(host, "Source copiée").textContent).toBe("✓");
+    expect(host.renderRoot.querySelector('[role="status"]')?.textContent).toBe("Source copiée");
+    expect(host.renderRoot.querySelector(".preview")).toBe(preview);
+    expect(preview?.getAttribute("aria-label")).toBe("Contenu rendu");
+    expect(draw).toHaveBeenCalledOnce();
+    expect(draw.mock.calls[0]?.[0].signal.aborted).toBe(false);
+    vi.mocked(writeClipboardText).mockResolvedValueOnce(false);
+    button(host, "Source copiée").click();
+    await settleDeferredContent(host);
+    expect(button(host, "Échec de la copie")).toBeDefined();
+    draw.mock.calls[0]?.[0].fail(new Error("Private raw diagnostic"));
+    await settleDeferredContent(host);
+    expect(host.renderRoot.textContent).toContain("Échec de l’aperçu");
+    expect(host.renderRoot.textContent).not.toContain("Private raw diagnostic");
+    expect(host.renderRoot.querySelector("pre")?.textContent).toBe(host.text);
+    expect(host.renderRoot.querySelector("pre")?.getAttribute("dir")).toBe("ltr");
+    await localization.setPreferences({ language: "ar-XB", formatLocale: "en" });
+    await settleDeferredContent(host);
+    expect(host.renderRoot.textContent).not.toContain("Échec de l’aperçu");
+    expect(host.renderRoot.querySelector("pre")?.textContent).toBe(host.text);
+    expect(writeClipboardText).toHaveBeenCalledWith(host.text);
+    expect(draw).toHaveBeenCalledOnce();
+  } finally { remove(); await localization.ready; }
+});
+
+it("keeps plain raw source LTR under pseudo RTL and refreshes labels after reconnect", async () => {
+  const host = hostWith([]);
+  host.text = "user source مرحبا";
+  host.codeBlocks = { presentation: "plain", overflow: "wrap", copy: true };
+  document.body.append(host);
+  await settleDeferredContent(host);
+  host.remove();
+  await localization.setPreferences({ language: "ar-XB", formatLocale: "en" });
+  document.body.append(host);
+  await settleDeferredContent(host);
+  const source = host.renderRoot.querySelector(".plain-code-block");
+  expect(source?.textContent).toBe(host.text);
+  expect(source?.getAttribute("dir")).toBe("ltr");
+  expect(source?.getAttribute("aria-label")).not.toBe("Raw source");
+  expect(host.renderRoot.querySelector(".copy")?.getAttribute("aria-label")).not.toBe("Copy source");
 });
 
 describe("content renderer disclosure lifecycle", () => {

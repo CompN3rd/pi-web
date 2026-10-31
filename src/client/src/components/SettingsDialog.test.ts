@@ -6,16 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configApi, piPackagesApi, pluginsApi } from "../api";
 import { deepActiveElement, dialogSection, dialogSurface, pressKey, requiredElement, settleRenderedDialog, surfaceBackdrop } from "./modalSurfaceTestSupport";
 import { SettingsDialog } from "./SettingsDialog";
+import * as themeCatalog from "../themeCatalog";
+import { builtInThemeCatalog } from "../themeCatalog.testSupport";
 import type { SettingsSessiondPanel } from "./settings/SettingsSessiondPanel";
 import type { SettingsPluginsPanel } from "./settings/SettingsPluginsPanel";
 import type { SettingsGeneralPanel } from "./settings/SettingsGeneralPanel";
 import { configResponse, pluginsResponse } from "./SettingsDialog.testSupport";
 
 beforeEach(() => {
+  vi.spyOn(themeCatalog, "loadThemeCatalog").mockResolvedValue(builtInThemeCatalog());
   // The dialog loads gateway and selected-machine settings data when it
   // connects; stub those boundary calls so the shell tests stay deterministic.
   vi.spyOn(configApi, "config").mockResolvedValue(configResponse({}));
-  vi.spyOn(configApi, "namingModels").mockResolvedValue({ models: [] });
   vi.spyOn(pluginsApi, "plugins").mockResolvedValue(pluginsResponse([]));
   vi.spyOn(piPackagesApi, "packages").mockResolvedValue({ packages: [] });
 });
@@ -28,7 +30,7 @@ afterEach(() => {
 
 describe("settings-dialog modal surface", () => {
   it("keeps save confirmations scoped to the section that performed the save", async () => {
-    vi.spyOn(configApi, "saveConfig").mockResolvedValue(configResponse({ spawnSessions: false }));
+    vi.spyOn(configApi, "updateConfig").mockResolvedValue(configResponse({ spawnSessions: false }));
     const dialog = await mountDialog();
     dialog.section = "sessiond";
     await dialog.updateComplete;

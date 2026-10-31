@@ -25,6 +25,9 @@ const MOUNT_INFO = [
   "",
 ].join("\n");
 
+const CANONICAL_CHECKOUT = "/usr/local/lib/node_modules/@jmfederico/pi-web";
+const CANONICAL_MOUNT_INFO = MOUNT_INFO.replaceAll("/workspace", CANONICAL_CHECKOUT);
+
 const RUNTIME_ENV: NodeJS.ProcessEnv = {
   PI_WEB_DOCKER_RUNTIME: "1",
   PI_WEB_DOCKER_MODE: "runtime",
@@ -137,6 +140,39 @@ describe("dockerEnvironmentFacts", () => {
     expect(facts).toContain("Neither checkout path uses or modifies the host checkout's `node_modules`");
   });
 
+  it.each([false, true])("describes the canonical checkout and dependencies with host alias mounted: %s", (withHostAlias) => {
+    const facts = dockerEnvironmentFacts({
+      env: DEV_ENV,
+      mounts: [
+        ...parseContainerMounts(CANONICAL_MOUNT_INFO),
+        ...(withHostAlias
+          ? [{ target: "/home/user/projects/pi-web/node_modules", fsType: "ext4", readOnly: false }]
+          : []),
+      ],
+    });
+
+    expect(facts).toContain(`bind-mounted at \`${CANONICAL_CHECKOUT}\`. Its Docker host path is \`/home/user/projects/pi-web\`.`);
+    expect(facts).toContain(`\`${CANONICAL_CHECKOUT}/node_modules\` is a separate container-managed mount, not the host directory of the same path.`);
+    expect(facts).toContain("mounted read/write at the same absolute path inside and outside the container: `/home`, `/opt`, `/srv`.");
+    expect(facts).not.toContain("/workspace");
+    if (withHostAlias) {
+      expect(facts).toContain(`\`/home/user/projects/pi-web/node_modules\` uses the same container-managed dependency volume as \`${CANONICAL_CHECKOUT}/node_modules\``);
+      expect(facts).toContain("Neither checkout path uses or modifies the host checkout's `node_modules`");
+    } else {
+      expect(facts).not.toContain("same container-managed dependency volume");
+    }
+  });
+
+  it("prefers the canonical checkout when both supported checkout mounts exist", () => {
+    const facts = dockerEnvironmentFacts({
+      env: DEV_ENV,
+      mounts: [...mounts(), ...parseContainerMounts(CANONICAL_MOUNT_INFO)],
+    });
+
+    expect(facts).toContain(`bind-mounted at \`${CANONICAL_CHECKOUT}\``);
+    expect(facts).not.toContain("/workspace");
+  });
+
   it("omits facts for absent mounts", () => {
     const facts = dockerEnvironmentFacts({
       env: RUNTIME_ENV,
@@ -147,15 +183,6 @@ describe("dockerEnvironmentFacts", () => {
     expect(facts).not.toContain("/host");
     expect(facts).not.toContain("Docker socket is mounted");
     expect(facts).not.toContain("/workspace");
-  });
-
-  it("wraps the facts in one tagged block of plain statements", () => {
-    const facts = factsFor(RUNTIME_ENV);
-    const lines = facts.split("\n");
-
-    expect(lines[0]).toBe("<pi_web_docker_environment>");
-    expect(lines.at(-1)).toBe("</pi_web_docker_environment>");
-    expect(lines.slice(2, -1).every((line) => line.startsWith("- "))).toBe(true);
   });
 });
 

@@ -1,7 +1,10 @@
+import { argumentSummaryPresentation, summarizeArgs } from "./chatPresentation";
 import { ASK_USER_ANSWERS_CUSTOM_TYPE } from "../../shared/apiTypes";
 import { parseAskUserOutcome, parseAskUserRequest } from "./api/parsers";
 import { isSessionMediaId, validImageDimensions } from "../../shared/sessionMedia";
-import type { ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./chatTypes";
+import type { ChatFallbackPart, ChatLine, ChatPart, ToolExecutionPart, ToolPreview } from "./chatTypes";
+
+export { summarizeArgs } from "./chatPresentation";
 
 export function normalizeMessages(messages: unknown[]): ChatLine[] {
   const lines: ChatLine[] = [];
@@ -65,6 +68,7 @@ export function appendThinking(messages: ChatLine[], text: string): ChatLine[] {
 }
 
 export function normalizeMessage(message: unknown): ChatLine[] {
+  if (getString(message, "role") === "custom" && getBoolean(message, "display") === false) return [];
   if (isChatLine(message)) {
     if (!message.parts.some((part) => getString(part, "type") === "image")) return [message];
     return [{ ...message, parts: message.parts.flatMap((part) => getString(part, "type") === "image" ? normalizeImage(part) : [part]) }];
@@ -72,7 +76,19 @@ export function normalizeMessage(message: unknown): ChatLine[] {
   if (getString(message, "role") === "bashExecution") return [withMessageMeta(normalizeBashExecution(message), message)];
   const rawRole = getString(message, "role");
   const role = normalizeRole(rawRole);
-  const contentParts = normalizeContent(getProperty(message, "content"), message);
+  const content = getProperty(message, "content");
+  const contentParts = normalizeContent(content, message);
+  const customType = getString(message, "customType");
+  // Preserve every typed custom message; specialized host presentation stays
+  // in the fallback without restricting plugin selection.
+  if (rawRole === "custom" && customType !== undefined) {
+    const details = getProperty(message, "details");
+    return [withMessageMeta({ role: "system", parts: [{
+      type: "customMessage", customType, content,
+      ...(details === undefined ? {} : { details }),
+      parts: contentParts.filter((part) => part.type !== "empty"),
+    }] }, message)];
+  }
   const supersededRecord = rawRole === "toolResult"
     ? askUserRecordFromToolDetails(getString(message, "toolName") ?? "", getProperty(message, "details"))
     : undefined;
@@ -101,7 +117,7 @@ function assistantErrorLine(message: unknown): ChatLine | undefined {
   if (getString(message, "role") !== "assistant" || getString(message, "stopReason") !== "error") return undefined;
   const errorMessage = getString(message, "errorMessage")?.trim();
   const detail = errorMessage === undefined || errorMessage === "" ? "The model returned an error." : errorMessage;
-  return textMessage("system", `Model response failed: ${detail}`);
+  return { role: "system", parts: [{ type: "text", text: `Model response failed: ${detail}`, presentation: { kind: "modelError", detail: errorMessage ?? "" } }] };
 }
 
 function isChatLine(message: unknown): message is ChatLine {
@@ -181,7 +197,13 @@ function normalizeBashExecution(message: unknown): ChatLine {
   if (getBoolean(message, "truncated") === true) lines.push("", "output truncated");
   const fullOutputPath = getString(message, "fullOutputPath");
   if (fullOutputPath !== undefined && fullOutputPath !== "") lines.push("", `full output: ${fullOutputPath}`);
-  return { role: "bash", parts: [{ type: "text", text: lines.join("\n") }] };
+  return { role: "bash", parts: [{ type: "text", text: lines.join("\n"), presentation: {
+    kind: "bash", command, excluded: getBoolean(message, "excludeFromContext") === true,
+    cancelled: getBoolean(message, "cancelled") === true, truncated: getBoolean(message, "truncated") === true,
+    ...(output == null ? {} : { output: stringifyPrimitive(output) }),
+    ...(exitCode == null ? {} : { exitCode: stringifyPrimitive(exitCode) }),
+    ...(fullOutputPath === undefined || fullOutputPath === "" ? {} : { fullOutputPath }),
+  } }] };
 }
 
 function normalizeRole(role: unknown): ChatLine["role"] {
@@ -191,7 +213,7 @@ function normalizeRole(role: unknown): ChatLine["role"] {
   return "system";
 }
 
-function normalizeContent(content: unknown, message: unknown): ChatPart[] {
+function normalizeContent(content: unknown, message: unknown): ChatFallbackPart[] {
   const askUserRecord = askUserRecordPart(message);
   if (askUserRecord !== undefined) return [askUserRecord];
   if (typeof content === "string") {
@@ -200,7 +222,7 @@ function normalizeContent(content: unknown, message: unknown): ChatPart[] {
   }
   if (!Array.isArray(content)) return objectFallback(content);
 
-  return content.flatMap((part): ChatPart[] => {
+  return content.flatMap((part): ChatFallbackPart[] => {
     const type = getString(part, "type");
     const text = getString(part, "text");
     const displayText = getString(part, "displayText");
@@ -216,7 +238,7 @@ function normalizeContent(content: unknown, message: unknown): ChatPart[] {
       const toolCallId = getString(part, "id");
       const skillRead = toolName === "read" ? parseSkillReadPath(getString(args, "path")) : undefined;
       if (skillRead !== undefined) return [{ type: "skillRead", ...skillRead, ...(toolCallId === undefined ? {} : { toolCallId }) }];
-      return [{ type: "toolCall", ...(toolCallId === undefined ? {} : { toolCallId }), toolName, summary: summarizeArgs(args), ...(args === undefined ? {} : { args }) }];
+      return [{ type: "toolCall", ...(toolCallId === undefined ? {} : { toolCallId }), toolName, summary: summarizeArgs(args), ...argumentSummaryPresentation(args), ...(args === undefined ? {} : { args }) }];
     }
     if (type === "image") return normalizeImage(part);
     return objectFallback(part);
@@ -225,7 +247,7 @@ function normalizeContent(content: unknown, message: unknown): ChatPart[] {
     : part);
 }
 
-function normalizeImage(part: unknown): ChatPart[] {
+function normalizeImage(part: unknown): ChatFallbackPart[] {
   const mimeType = getString(part, "mimeType");
   const mediaId = getProperty(part, "mediaId");
   const dimensions = validImageDimensions(getProperty(part, "width"), getProperty(part, "height"));
@@ -240,7 +262,7 @@ function normalizeImage(part: unknown): ChatPart[] {
     const data = getString(part, "data");
     if (data !== undefined && data !== "" && mimeType !== undefined && mimeType !== "") return [{ type: "image", mimeType, data, ...dimensions }];
   }
-  return [{ type: "text", text: "[image]" }];
+  return [{ type: "text", text: "[image]", presentation: { kind: "imagePlaceholder" } }];
 }
 
 function askUserRecordPart(message: unknown): Extract<ChatPart, { type: "askUserRecord" }> | undefined {
@@ -361,6 +383,7 @@ function toolExecutionFromCall(part: Extract<ChatPart, { type: "toolCall" }>): T
     ...(part.toolCallId === undefined ? {} : { toolCallId: part.toolCallId }),
     toolName: part.toolName,
     summary: part.summary,
+    ...(part.summaryPresentation === undefined ? {} : { summaryPresentation: part.summaryPresentation }),
     ...(part.args === undefined ? {} : { args: part.args }),
     status: "pending",
   };
@@ -397,31 +420,10 @@ export function previewFromDetails(details: unknown): ToolPreview | undefined {
   };
 }
 
-function objectFallback(value: unknown): ChatPart[] {
+function objectFallback(value: unknown): ChatFallbackPart[] {
   if (value == null) return [];
-  if (typeof value === "object") return [{ type: "text", text: summarizeArgs(value) }];
+  if (typeof value === "object") return [{ type: "text", text: summarizeArgs(value), presentation: { kind: "arguments", args: value } }];
   return [{ type: "text", text: stringifyPrimitive(value) }];
-}
-
-export function summarizeArgs(args: unknown): string {
-  if (!isRecord(args)) return stringifyPrimitive(args);
-  const command = getString(args, "command");
-  if (command !== undefined) return command;
-  const path = getString(args, "path");
-  if (path !== undefined) return path;
-  if (typeof args["oldText"] === "string" && typeof args["newText"] === "string") return "edit text replacement";
-  const edits = args["edits"];
-  if (Array.isArray(edits)) return `${String(edits.length)} edit${edits.length === 1 ? "" : "s"}`;
-  const entries = Object.entries(args).filter(([, value]) => value != null).slice(0, 3);
-  return entries.map(([key, value]) => `${key}: ${shortValue(value)}`).join(" · ");
-}
-
-function shortValue(value: unknown): string {
-  if (typeof value === "string") return value.length > 80 ? `${value.slice(0, 77)}…` : value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return `${String(value.length)} item${value.length === 1 ? "" : "s"}`;
-  if (typeof value === "object" && value !== null) return "object";
-  return "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

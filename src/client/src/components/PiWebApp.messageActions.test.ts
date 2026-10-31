@@ -12,6 +12,9 @@ import { loadDraft, saveDraft } from "../promptDraftStorage";
 import { ChatView } from "./ChatView";
 import { PiWebApp } from "./PiWebApp";
 import { PromptEditor } from "./PromptEditor";
+import { localization } from "../localization/browser";
+
+const removeCatalogs: (() => void)[] = [];
 
 // Keep the actual shell/editor lifecycle, without starting network bootstrap.
 class MessageActionApp extends PiWebApp {
@@ -37,6 +40,8 @@ afterEach(async () => {
   }
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  for (const remove of removeCatalogs.splice(0)) remove();
+  await localization.setPreferences({ language: "en", formatLocale: "en" });
 });
 
 it("connects public plugin callbacks and core history actions to the app's scoped helpers", async () => {
@@ -246,6 +251,46 @@ it("confirms queue recall consequences and protects an existing composer draft",
   ]);
   expect(mutate).not.toHaveBeenCalled();
   expect(editor.view?.state.doc.toString()).toBe("unsent draft");
+});
+
+it("resolves both destructive confirmations at invocation after live language changes", async () => {
+  const { app, controller, editor, view, state, runCommand } = await setupComposerChat("RAW unsent draft");
+  const queuedMessages = [{ kind: "steer" as const, text: "RAW queued text", hasAttachments: true }];
+  Reflect.set(app, "state", { ...state, status: { sessionId: session.id, isStreaming: false, isCompacting: false, isBashRunning: false,
+    pendingMessageCount: 1, queuedMessages, cost: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  await app.updateComplete;
+  await view.updateComplete;
+  const recall = view.shadowRoot?.querySelector<HTMLButtonElement>('[title^="Recall this message"]');
+  if (!recall) throw new Error("Expected recall control");
+  const mutate = vi.spyOn(controller, "mutateQueuedMessage").mockResolvedValue(undefined);
+  const confirm = vi.fn<(text: string) => boolean>();
+  vi.stubGlobal("confirm", confirm);
+  removeCatalogs.push(localization.registerCatalog({ id: "chat-action-confirmations", namespace: "core.chatActions", locale: "de", load: () => Promise.resolve({
+    recall: "Zurückholen? {attachments, select, yes {Anhänge gehen verloren.} other {}} {steers, number}/{followUps, number}",
+    recallDraft: "Entwurf durch zurückgeholten Text ersetzen?",
+    backDraft: "Entwurf durch früheren Text ersetzen?",
+  }) }));
+  await localization.setPreferences({ language: "de", formatLocale: "de" });
+  await app.updateComplete;
+  await view.updateComplete;
+  confirm.mockReturnValueOnce(true).mockReturnValueOnce(false);
+  recall.click();
+  expect(confirm.mock.calls.map(([text]) => text)).toEqual([
+    "Zurückholen? Anhänge gehen verloren. 0/0", "Entwurf durch zurückgeholten Text ersetzen?",
+  ]);
+  expect(mutate).not.toHaveBeenCalled();
+  expect(editor.disabled).toBe(false);
+  expect(editor.view?.state.doc.toString()).toBe("RAW unsent draft");
+
+  Reflect.set(app, "state", state);
+  app.requestUpdate();
+  await app.updateComplete;
+  await view.updateComplete;
+  confirm.mockReset().mockReturnValue(false);
+  click(view, "Go back to this message");
+  await vi.waitFor(() => { expect(confirm).toHaveBeenCalledExactlyOnceWith("Entwurf durch früheren Text ersetzen?"); });
+  expect(runCommand).not.toHaveBeenCalled();
+  expect(editor.view?.state.doc.toString()).toBe("RAW unsent draft");
 });
 
 it.each([false, true])("locks the composer during queue recall and warns only for attachments (%s)", async (hasAttachments) => {

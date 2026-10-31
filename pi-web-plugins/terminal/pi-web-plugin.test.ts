@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 
 import type { ApplicationPanelContextV5, PluginActivationContextV5, PluginRuntimeContextV5, WorkspacePanelContextV5 } from "@jmfederico/pi-web/plugin-api";
+import { LocalizationService } from "../../src/client/src/localization/service";
+import { createPluginLocalization } from "../../src/client/src/plugins/localization";
 import { html, svg, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalBrowserRuntime } from "./TerminalBrowserRuntime";
@@ -138,6 +140,7 @@ function activationContext(runtimePluginId = "pi-web.terminal"): PluginActivatio
     apiVersion: 5,
     pluginId: "pi-web.terminal",
     runtimePluginId,
+    localization: createPluginLocalization(new LocalizationService(), "pi-web.terminal", runtimePluginId, new AbortController().signal),
     html,
     svg,
     signal: new AbortController().signal,

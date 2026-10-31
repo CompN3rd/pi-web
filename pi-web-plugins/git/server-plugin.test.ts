@@ -86,6 +86,7 @@ describe("bundled Git workspace provider", () => {
         isMain: false,
         publicMetadata: { isGitRepo: true, isGitWorktree: true, branch: "feature/with-space" },
         removal: {
+          localization: { kind: "gitWorktree", label: "feature/with-space", path: linked },
           actionLabel: "Delete workspace",
           confirmation: `Delete workspace feature/with-space?\n\nThis will run git worktree remove and delete:\n${linked}\n\nThe Git branch will not be deleted.`,
         },
@@ -243,6 +244,7 @@ describe("bundled Git workspace provider", () => {
       signal: new AbortController().signal,
     })).resolves.toEqual({
       title: "Delete workspace: feature/remove",
+      titlePresentation: { kind: "workspaceRemoval", label: "feature/remove" },
       command: `git worktree remove '${linked.replaceAll("'", "'\\''")}'`,
     });
   });

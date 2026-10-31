@@ -77,6 +77,23 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     }
   });
 
+  app.post<{ Params: { sessionId: string }; Body: Record<string, unknown> | undefined }>(`${prefix}/sessions/:sessionId/unread`, async (request, reply) => {
+    let sessionId: string;
+    let cwd: string;
+    try {
+      const body = requireRecord(request.body);
+      sessionId = requireNonEmptyBoundedString(request.params.sessionId, "sessionId", SESSION_UNREAD_SESSION_ID_MAX_LENGTH);
+      cwd = normalizeRequestCwd(requireNonEmptyBoundedString(body["cwd"], "cwd", SESSION_UNREAD_CWD_MAX_LENGTH));
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+    try {
+      return await sessions.markUnread(sessionId, cwd);
+    } catch (error) {
+      return reply.code(503).send({ error: errorMessage(error) });
+    }
+  });
+
   app.post<{ Params: { sessionId: string }; Body: Record<string, unknown> | undefined }>(`${prefix}/sessions/:sessionId/unread/acknowledge`, async (request, reply) => {
     let sessionId: string;
     let acknowledgement: SessionUnreadAcknowledgeRequest;

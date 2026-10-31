@@ -61,18 +61,18 @@ describe("workspace tasks config", () => {
     expect(parseTasksConfigText("{")).toMatchObject({ ok: false });
     expect(parseTasksConfigText(JSON.stringify({ version: 2, tasks: [] }))).toEqual({
       ok: false,
-      error: "Config version must be 1",
+      error: { kind: "version" },
     });
   });
 
   it("rejects missing, empty, or duplicate required fields", () => {
     expect(parseTasksConfigText(JSON.stringify({ version: 1 }))).toEqual({
       ok: false,
-      error: "Config tasks must be an array",
+      error: { kind: "tasks" },
     });
     expect(parseTasksConfigText(JSON.stringify({ version: 1, tasks: [{ id: "", title: "T", command: "cmd" }] }))).toEqual({
       ok: false,
-      error: "Task 1 id must be a non-empty string",
+      error: { kind: "required", index: 1, field: "id" },
     });
     expect(parseTasksConfigText(JSON.stringify({
       version: 1,
@@ -82,18 +82,18 @@ describe("workspace tasks config", () => {
       ],
     }))).toEqual({
       ok: false,
-      error: "Duplicate task id: one",
+      error: { kind: "duplicate", id: "one" },
     });
   });
 
   it("rejects invalid optional field types", () => {
     expect(parseTasksConfigText(JSON.stringify({ version: 1, tasks: [{ id: "one", title: "One", command: "cmd", confirm: "yes" }] }))).toEqual({
       ok: false,
-      error: "Task 1 confirm must be a boolean",
+      error: { kind: "confirm", index: 1 },
     });
     expect(parseTasksConfigText(JSON.stringify({ version: 1, tasks: [{ id: "one", title: "One", command: "cmd", group: "" }] }))).toEqual({
       ok: false,
-      error: "Task 1 group must be a non-empty string when provided",
+      error: { kind: "optional", index: 1, field: "group" },
     });
   });
 });

@@ -963,6 +963,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await expect(service.runCommand(sessionRef("failed-runtime-reload"), "/reload")).resolves.toEqual({
       type: "unsupported",
       message: "Reload failed: reload failed after rotation",
+      presentation: { kind: "commandResult", feedback: { code: "reloadFailed", detail: "reload failed after rotation" } },
     });
     expect(service.notificationInbox(sessionRef("failed-runtime-reload")).notifications.map((notification) => notification.message)).toEqual([
       "candidate before failure",
@@ -997,6 +998,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await expect(service.runCommand(sessionRef("failed-before-rotation"), "/reload")).resolves.toEqual({
       type: "unsupported",
       message: "Reload failed: reload failed before rotation",
+      presentation: { kind: "commandResult", feedback: { code: "reloadFailed", detail: "reload failed before rotation" } },
     });
     expect(service.notificationInbox(sessionRef("failed-before-rotation"))).toEqual(before);
 
@@ -1287,6 +1289,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await expect(service.runCommand(sessionRef("runtime-reload-session"), "/reload")).resolves.toEqual({
       type: "done",
       message: "Session runtime resources reloaded. Extensions, skills, prompt templates, themes, and context/system prompt files are refreshed for this session. Reload the browser page separately for PI WEB browser plugin changes.",
+      presentation: { kind: "commandResult", feedback: { code: "reloaded" } },
     });
 
     expect(fake.calls.reload).toBe(1);
@@ -1510,6 +1513,7 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
         open: () => fakeSessionManager(),
       },
       workspaceActivity: {
+        applySessionIntervention: () => undefined,
         applySessionStatus: () => undefined,
         applySessionActivity: () => undefined,
         removeSession: () => undefined,

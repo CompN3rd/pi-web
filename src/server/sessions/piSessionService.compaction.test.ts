@@ -45,7 +45,11 @@ describe("compaction feedback", () => {
       await vi.waitFor(() => { expect(f.service.notificationInbox(f.ref).notifications).toHaveLength(1); });
       await Promise.resolve();
       const snapshot = f.service.notificationInbox(f.ref);
-      expect(snapshot.notifications).toMatchObject([{ message, severity }]);
+      const presentation = { kind: aborted ? (reason === "manual" ? "compactionCancelled" : "automaticCompactionCancelled") : "compactionFailed" };
+      expect(snapshot.notifications).toMatchObject([{ message, severity, presentation }]);
+      expect(f.hub.sessionEvents.filter(({ event }) => event.type === "notifications.inbox")).toMatchObject([
+        { event: { delta: { kind: "added", notification: { message, presentation } } } },
+      ]);
       expect(f.service.notificationCatalog().sessions).toMatchObject([{ sessionId: f.ref.id, retainedCount: 1 }]);
       expect(f.hub.sessionEvents.filter(({ event }) => event.type === "notifications.inbox")).toHaveLength(1);
       expect(f.hub.sessionEvents.filter(({ event }) => event.type === "notifications.inbox").map(({ sessionId }) => sessionId)).toEqual([f.ref.id]);
@@ -77,7 +81,7 @@ describe("compaction feedback", () => {
       await expect(f.service.runCommand(f.ref, "/compact")).resolves.toEqual({ type: "done" });
       await vi.waitFor(() => {
         expect(f.service.notificationInbox(f.ref).notifications).toMatchObject([
-          { message: "Couldn’t compact history. Try again.", severity: "error" },
+          { message: "Couldn’t compact history. Try again.", severity: "error", presentation: { kind: "compactionFailed" } },
         ]);
       });
       expect(f.hub.sessionEvents.filter(({ event }) => event.type === "command.output" || event.type === "session.error")).toEqual([]);

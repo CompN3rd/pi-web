@@ -8,6 +8,7 @@ import { comparePackageVersions, getPiWebRuntime, getPiWebStatus, getPiWebVersio
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import { piWebRuntimeIdentity } from "../shared/piWebRuntime.js";
 import type { PiWebRuntimeComponent } from "../shared/apiTypes.js";
+import { WEB_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
 
 const originalSkipVersionCheck = process.env["PI_WEB_SKIP_VERSION_CHECK"];
 const originalHome = process.env["HOME"];
@@ -160,7 +161,7 @@ describe("PI WEB status", () => {
 
     const runtime = await getPiWebRuntime(daemon);
 
-    expect(runtime.components.web.capabilities).toEqual(["plugins.lifecycle"]);
+    expect(runtime.components.web.capabilities).toEqual([...WEB_RUNTIME_CAPABILITIES]);
     expect(runtime.components.sessiond.capabilities).toEqual([]);
     expect(runtime.capabilities).toEqual(["plugins.lifecycle"]);
   });
@@ -233,7 +234,7 @@ describe("PI WEB status", () => {
     });
 
     expect(runtime.components.web.available).toBe(true);
-    expect(runtime.components.web.capabilities).toEqual(["plugins.lifecycle"]);
+    expect(runtime.components.web.capabilities).toEqual([...WEB_RUNTIME_CAPABILITIES]);
     expect(runtime.components.web.runtimeVersion).toBeDefined();
     expect(runtime.components.web).not.toHaveProperty("deprecatedAgentInputs");
     expect(runtime.components.web.error).toContain("Could not check for deprecated agent configuration inputs");
@@ -304,7 +305,9 @@ describe("PI WEB status", () => {
 
       expect(status.components.sessiond.available).toBe(false);
       expect(status.components.sessiond.error).toBe("runtime check returned HTTP 500");
-      expect(status.messages.map((message) => message.id)).toContain("sessiond-unavailable");
+      const notice = status.messages.find((message) => message.id === "sessiond-unavailable");
+      expect(notice).toMatchObject({ severity: "info", title: "Session daemon version unknown" });
+      expect(notice?.body).toContain("The last check could not determine the session daemon version.");
     } finally {
       await rm(home, { recursive: true, force: true });
     }

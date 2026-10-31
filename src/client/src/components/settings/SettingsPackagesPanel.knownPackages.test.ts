@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PiPackagesResponse } from "../../api";
-import { SettingsPackagesPanel } from "./SettingsPackagesPanel";
+import { SettingsPackagesPanel, packagesMessages } from "./SettingsPackagesPanel";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -25,28 +25,14 @@ describe("settings-packages-panel installable known packages", () => {
 
     const section = panel.shadowRoot?.querySelector(".known-package-section");
     expect(section?.textContent).toContain("Relays");
-    expect(section?.textContent).toContain("Relay method prompts and skill.");
+    expect(section?.textContent).toContain(packagesMessages.t("relayDescription"));
 
     const installButton = knownPackageInstallButton(panel, "Relays");
+    expect(onInstallPackage).not.toHaveBeenCalled();
     installButton.click();
     await panel.updateComplete;
 
-    expect(onInstallPackage).toHaveBeenCalledWith("/pi-web/dist/pi-packages/relays");
-  });
-
-  it("does not install optional Captain’s Log until the user clicks Install", async () => {
-    const onInstallPackage = vi.fn();
-    const source = "/pi-web/dist/pi-packages/captains-log";
-    const panel = await mountPanel(
-      { packages: [], installableKnownPackages: [{ id: "@jmfederico/pi-captains-log", label: "Captain’s Log", description: "Optional session logging.", source }] },
-      { onInstallPackage },
-    );
-
-    expect(panel.shadowRoot?.textContent).toContain("Available packages");
-    expect(onInstallPackage).not.toHaveBeenCalled();
-    knownPackageInstallButton(panel, "Captain’s Log").click();
-    await panel.updateComplete;
-    expect(onInstallPackage).toHaveBeenCalledExactlyOnceWith(source);
+    expect(onInstallPackage).toHaveBeenCalledExactlyOnceWith("/pi-web/dist/pi-packages/relays");
   });
 
   it("disables the known-package install button while any package operation is pending", async () => {

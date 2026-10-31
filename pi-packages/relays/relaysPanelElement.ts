@@ -1,4 +1,5 @@
 import type { StylesheetIntegrationCapabilityV1, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
+import { relayText, relayValue, type RelaysContent } from "./relaysLocalization.js";
 import { isMarkdownDocumentPath, renderRelayDocumentHtml } from "./markdownDocument.js";
 import { isRelayPacketPath } from "./relayIdentity.js";
 import {
@@ -50,6 +51,49 @@ interface RelaySelection {
  * horizontal scroll position and keyboard focus survive document switches.
  */
 class PiWebRelaysPanel extends HTMLElement {
+  private contentValue: RelaysContent | undefined;
+  private releaseLocalization: (() => void) | undefined;
+
+  set content(value: RelaysContent | undefined) {
+    if (value === this.contentValue) return;
+    this.releaseLocalization?.();
+    this.releaseLocalization = undefined;
+    this.contentValue = value;
+    this.subscribeLocalization();
+    this.updateLocalization();
+  }
+
+  private subscribeLocalization(): void {
+    if (this.isConnected && this.releaseLocalization === undefined) {
+      this.releaseLocalization = this.contentValue?.localization.subscribe(() => { this.updateLocalization(); });
+    }
+  }
+
+  /** Update chrome in place: never reload files, replace tabs, or disturb focus/scroll. */
+  private updateLocalization(): void {
+    const direction = this.contentValue?.localization.direction ?? "ltr";
+    for (const region of [this.toolbar, this.tabStrip, this.viewer]) region.dir = direction;
+    const title = this.toolbar.querySelector(".ui-toolbar-title");
+    if (title !== null) title.textContent = relayText(this.contentValue, "relays");
+    const refresh = this.toolbar.querySelector("[data-refresh]");
+    refresh?.setAttribute("aria-label", relayText(this.contentValue, "refresh"));
+    refresh?.setAttribute("title", relayText(this.contentValue, "refresh"));
+    this.toolbar.querySelector("[data-relay-picker]")?.setAttribute("aria-label", relayText(this.contentValue, "relay"));
+    this.tabStrip.setAttribute("aria-label", relayText(this.contentValue, "documents"));
+    for (const chip of this.tabStrip.querySelectorAll(".contains-active")) chip.setAttribute("title", relayText(this.contentValue, "containsOpen"));
+    if (this.documentContent?.kind === "loaded" && !this.documentContent.binary) {
+      for (const table of this.viewer.querySelectorAll(".table-scroll")) table.setAttribute("aria-label", relayText(this.contentValue, "table"));
+      for (const notice of this.viewer.querySelectorAll<HTMLElement>("[data-message]")) {
+        if (notice.dataset["message"] === "partial") notice.textContent = relayText(this.contentValue, "partial");
+        if (notice.dataset["message"] === "truncated") notice.textContent = relayText(this.contentValue, "truncated");
+      }
+    } else {
+      const scrollTop = this.viewer.scrollTop;
+      this.renderViewer();
+      this.viewer.scrollTop = scrollTop;
+    }
+  }
+
   private integration: StylesheetIntegrationCapabilityV1 | undefined;
   private releaseStyles: (() => void) | undefined;
 
@@ -62,16 +106,21 @@ class PiWebRelaysPanel extends HTMLElement {
   }
 
   connectedCallback(): void {
+    this.subscribeLocalization();
+    this.updateLocalization();
     this.releaseStyles ??= this.integration?.registerRoot(this.root, { sharedUi: true });
   }
 
   disconnectedCallback(): void {
+    this.releaseLocalization?.();
+    this.releaseLocalization = undefined;
     this.releaseStyles?.();
     this.releaseStyles = undefined;
   }
 
   private contextValue: WorkspacePanelContext | undefined;
   private listing: RelaysListing | undefined;
+  private invalidRelayLink = false;
   private selectedRelayPath: string | undefined;
   private documents: RelayDocumentsListing | undefined;
   private selectedDocumentPath: string | undefined;
@@ -90,8 +139,8 @@ class PiWebRelaysPanel extends HTMLElement {
     this.root.innerHTML = `
       ${relaysStyles()}
       <section class="toolbar ui-toolbar" hidden></section>
-      <nav class="document-tabs ui-tabs" aria-label="Relay documents" hidden></nav>
-      <section class="viewer"><div class="empty">Select a workspace.</div></section>
+      <nav class="document-tabs ui-tabs" aria-label="${escapeAttr(relayText(this.contentValue, "documents"))}" hidden></nav>
+      <section class="viewer"><div class="empty">${escapeHtml(relayText(this.contentValue, "selectWorkspace"))}</div></section>
     `;
     this.toolbar = requiredRegion(this.root, ".toolbar");
     this.tabStrip = requiredRegion(this.root, "nav.document-tabs");
@@ -153,7 +202,8 @@ class PiWebRelaysPanel extends HTMLElement {
 
     const requestedPath = selection.relayPath ?? linkedRelayPath(context);
     if (requestedPath !== undefined && !isRelayPacketPath(requestedPath)) {
-      this.listing = { kind: "unavailable", detail: "Relay links must select a normalized workspace-relative packet directory." };
+      this.invalidRelayLink = true;
+      this.listing = { kind: "unavailable", detail: "" };
       this.renderAll();
       return;
     }
@@ -305,6 +355,7 @@ class PiWebRelaysPanel extends HTMLElement {
 
   private resetScanState(): void {
     this.listing = undefined;
+    this.invalidRelayLink = false;
     this.selectedRelayPath = undefined;
     this.documents = undefined;
     this.selectedDocumentPath = undefined;
@@ -329,10 +380,10 @@ class PiWebRelaysPanel extends HTMLElement {
     }
     this.toolbar.hidden = false;
     this.toolbar.innerHTML = `
-      <strong class="ui-toolbar-title">Relays</strong>
+      <strong class="ui-toolbar-title">${escapeHtml(relayText(this.contentValue, "relays"))}</strong>
       <span class="toolbar-actions ui-toolbar-group">
         ${this.renderRelayPicker()}
-        <button type="button" class="ui-button ui-button--compact ui-button--icon" data-refresh aria-label="Refresh" title="Refresh">${refreshIconSvg()}</button>
+        <button type="button" class="ui-button ui-button--compact ui-button--icon" data-refresh aria-label="${escapeAttr(relayText(this.contentValue, "refresh"))}" title="${escapeAttr(relayText(this.contentValue, "refresh"))}">${refreshIconSvg()}</button>
       </span>
     `;
   }
@@ -343,13 +394,13 @@ class PiWebRelaysPanel extends HTMLElement {
     // A single relay opens immediately; a one-option picker would be noise.
     if (listing.relays.length === 1) {
       const relay = listing.relays[0];
-      return relay === undefined ? "" : `<span class="relay-name" title="${escapeAttr(relay.path)}">${escapeHtml(relay.name)}</span>`;
+      return relay === undefined ? "" : `<span dir="auto" class="relay-name" title="${escapeAttr(relay.path)}">${escapeHtml(relay.name)}</span>`;
     }
     const options = listing.relays.map((relay) => {
       const selected = relay.path === this.selectedRelayPath ? " selected" : "";
       return `<option value="${escapeAttr(relay.path)}"${selected}>${escapeHtml(relay.name)}</option>`;
     }).join("");
-    return `<select class="ui-select" data-relay-picker aria-label="Relay">${options}</select>`;
+    return `<select dir="auto" class="ui-select" data-relay-picker aria-label="${escapeAttr(relayText(this.contentValue, "relay"))}">${options}</select>`;
   }
 
   private renderTabs(): void {
@@ -386,14 +437,14 @@ class PiWebRelaysPanel extends HTMLElement {
 
   private renderFileTab(file: RelayFileNode): string {
     const active = file.path === this.selectedDocumentPath;
-    return `<button type="button" class="ui-button ui-tab document-tab${active ? " selected" : ""}" data-document-path="${escapeAttr(file.path)}" title="${escapeAttr(file.relativePath)}"${active ? ' aria-current="page"' : ""}>${escapeHtml(file.name)}</button>`;
+    return `<button type="button" class="ui-button ui-tab document-tab${active ? " selected" : ""}" data-document-path="${escapeAttr(file.path)}" title="${escapeAttr(file.relativePath)}"${active ? ' aria-current="page"' : ""}><bdi>${escapeHtml(file.name)}</bdi></button>`;
   }
 
   private renderDirectoryChip(directory: RelayDirectoryNode, containsActivePath: string | undefined): string {
     const expanded = this.expandedDirs.has(directory.path);
     const containsActive = directory.path === containsActivePath;
-    const title = containsActive ? "Contains the open document" : directory.relativePath;
-    return `<button type="button" class="ui-button ui-tab document-tab directory-tab${containsActive ? " contains-active" : ""}" data-directory-path="${escapeAttr(directory.path)}" title="${escapeAttr(title)}" aria-expanded="${expanded ? "true" : "false"}">${chevronSvg()}${escapeHtml(directory.name)}</button>`;
+    const title = containsActive ? relayText(this.contentValue, "containsOpen") : directory.relativePath;
+    return `<button type="button" class="ui-button ui-tab document-tab directory-tab${containsActive ? " contains-active" : ""}" data-directory-path="${escapeAttr(directory.path)}" title="${escapeAttr(title)}" aria-expanded="${expanded ? "true" : "false"}">${chevronSvg()}<bdi>${escapeHtml(directory.name)}</bdi></button>`;
   }
 
   /** Move the active marker between the mounted tab buttons without rebuilding them. */
@@ -410,7 +461,7 @@ class PiWebRelaysPanel extends HTMLElement {
 
   private renderViewer(): void {
     if (this.contextValue === undefined) {
-      this.viewer.innerHTML = `<div class="empty">Select a workspace.</div>`;
+      this.viewer.innerHTML = `<div class="empty">${escapeHtml(relayText(this.contentValue, "selectWorkspace"))}</div>`;
       return;
     }
     this.viewer.innerHTML = this.renderViewerContent();
@@ -418,27 +469,27 @@ class PiWebRelaysPanel extends HTMLElement {
 
   private renderViewerContent(): string {
     const listing = this.listing;
-    if (listing === undefined) return `<p class="muted">Scanning ${escapeHtml(RELAYS_ROOT)}…</p>`;
-    if (listing.kind === "unavailable") return renderErrorState("Could not scan workspace relays.", listing.detail);
-    if (listing.kind === "missing" || listing.relays.length === 0) return renderEmptyState();
+    if (listing === undefined) return `<p class="muted">${escapeHtml(relayText(this.contentValue, "scanning", { path: relayValue(this.contentValue, RELAYS_ROOT) }))}</p>`;
+    if (listing.kind === "unavailable") return renderErrorState(relayText(this.contentValue, "scanFailed"), this.invalidRelayLink ? relayText(this.contentValue, "invalidLink") : listing.detail);
+    if (listing.kind === "missing" || listing.relays.length === 0) return renderEmptyState(this.contentValue);
     return this.renderSelectedRelay();
   }
 
   private renderSelectedRelay(): string {
     const documents = this.documents;
-    if (documents === undefined) return `<p class="muted">Loading relay documents…</p>`;
-    if (documents.kind === "unavailable") return renderErrorState("Could not list this relay's documents.", documents.detail);
+    if (documents === undefined) return `<p class="muted">${escapeHtml(relayText(this.contentValue, "loadingDocuments"))}</p>`;
+    if (documents.kind === "unavailable") return renderErrorState(relayText(this.contentValue, "listFailed"), documents.detail);
     if (documents.kind === "missing") {
-      return `<div class="empty-state"><strong>This relay no longer exists.</strong><p>Click Refresh to rescan ${escapeHtml(RELAYS_ROOT)}.</p></div>`;
+      return `<div class="empty-state"><strong>${escapeHtml(relayText(this.contentValue, "relayMissing"))}</strong><p>${escapeHtml(relayText(this.contentValue, "rescanRoot", { path: relayValue(this.contentValue, RELAYS_ROOT) }))}</p></div>`;
     }
     const partialNotice = documents.partial
-      ? `<div class="status info">Some nested content is not listed — this relay tree is deeper or larger than the panel lists.</div>`
+      ? `<div class="status info" data-message="partial">${escapeHtml(relayText(this.contentValue, "partial"))}</div>`
       : "";
     if (documents.documentCount === 0) {
       return `${partialNotice}
         <div class="empty-state">
-          <strong>This relay has no documents yet.</strong>
-          <p>Relay packets contain <code>charter.md</code> (goal), <code>status.md</code> (current baton), and <code>log.md</code> (history). An optional <code>decisions.md</code> keeps consequential decisions and their reasons.</p>
+          <strong>${escapeHtml(relayText(this.contentValue, "noDocuments"))}</strong>
+          <p>${escapeHtml(relayText(this.contentValue, "packetHelp", { charter: relayValue(this.contentValue, "charter.md"), status: relayValue(this.contentValue, "status.md"), log: relayValue(this.contentValue, "log.md"), decisions: relayValue(this.contentValue, "decisions.md") }))}</p>
         </div>
       `;
     }
@@ -448,22 +499,22 @@ class PiWebRelaysPanel extends HTMLElement {
   private renderSelectedDocument(): string {
     const documentPath = this.selectedDocumentPath;
     const content = this.documentContent;
-    if (documentPath === undefined) return `<p class="muted">Select a document.</p>`;
-    if (content === undefined) return `<p class="muted">Loading ${escapeHtml(documentName(documentPath))}…</p>`;
-    if (content.kind === "unavailable") return renderErrorState("Could not read this document.", content.detail);
+    if (documentPath === undefined) return `<p class="muted">${escapeHtml(relayText(this.contentValue, "selectDocument"))}</p>`;
+    if (content === undefined) return `<p class="muted">${escapeHtml(relayText(this.contentValue, "loadingDocument", { name: relayValue(this.contentValue, documentName(documentPath)) }))}</p>`;
+    if (content.kind === "unavailable") return renderErrorState(relayText(this.contentValue, "readFailed"), content.detail);
     if (content.kind === "missing") {
-      return `<div class="empty-state"><strong>This document no longer exists.</strong><p>Click Refresh to rescan the relay.</p></div>`;
+      return `<div class="empty-state"><strong>${escapeHtml(relayText(this.contentValue, "documentMissing"))}</strong><p>${escapeHtml(relayText(this.contentValue, "rescanRelay"))}</p></div>`;
     }
     if (content.binary) {
-      return `<div class="empty-state"><strong>Binary file: ${escapeHtml(documentName(documentPath))}</strong><p>Binary documents have no text preview.</p></div>`;
+      return `<div class="empty-state"><strong>${escapeHtml(relayText(this.contentValue, "binary", { name: relayValue(this.contentValue, documentName(documentPath)) }))}</strong><p>${escapeHtml(relayText(this.contentValue, "binaryHelp"))}</p></div>`;
     }
     const truncation = content.truncated
-      ? `<div class="status info">This document is truncated — only the beginning is shown.</div>`
+      ? `<div class="status info" data-message="truncated">${escapeHtml(relayText(this.contentValue, "truncated"))}</div>`
       : "";
     if (isMarkdownDocumentPath(documentPath)) {
-      return `${truncation}<div class="document markdown">${renderRelayDocumentHtml(content.content)}</div>`;
+      return `${truncation}<div dir="auto" class="document markdown">${renderRelayDocumentHtml(content.content, relayText(this.contentValue, "table"))}</div>`;
     }
-    return `${truncation}<pre class="document">${escapeHtml(content.content)}</pre>`;
+    return `${truncation}<pre dir="ltr" class="document">${escapeHtml(content.content)}</pre>`;
   }
 }
 
@@ -529,17 +580,17 @@ function documentName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-function renderEmptyState(): string {
+function renderEmptyState(content: RelaysContent | undefined): string {
   return `
     <div class="empty-state">
-      <strong>No relays in this workspace.</strong>
-      <p>Relay packets live in <code>${escapeHtml(RELAYS_ROOT)}/&lt;name&gt;/</code>. This workspace has none yet.</p>
+      <strong>${escapeHtml(relayText(content, "noRelays"))}</strong>
+      <p>${escapeHtml(relayText(content, "emptyHelp", { path: relayValue(content, `${RELAYS_ROOT}/<name>/`) }))}</p>
     </div>
   `;
 }
 
 function renderErrorState(message: string, detail: string): string {
-  return `<div class="status error"><strong>${escapeHtml(message)}</strong><pre>${escapeHtml(detail)}</pre></div>`;
+  return `<div class="status error"><strong>${escapeHtml(message)}</strong><pre dir="auto">${escapeHtml(detail)}</pre></div>`;
 }
 
 function relaysStyles(): string {
@@ -563,12 +614,13 @@ function relaysStyles(): string {
       select { min-width: 0; max-width: 240px; }
       /* Folder controls interleave with file tabs; shared groups keep nested controls contiguous. */
       .directory-tab .chevron { flex: 0 0 auto; width: 9px; height: 9px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.12s ease; }
-      .directory-tab[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+      .document-tabs[dir="rtl"] .directory-tab .chevron { transform: scaleX(-1); }
+      .directory-tab[aria-expanded="true"] .chevron, .document-tabs[dir="rtl"] .directory-tab[aria-expanded="true"] .chevron { transform: rotate(90deg); }
       /* The selection survives a folder collapse: the nearest collapsed ancestor
          highlights instead, without taking the fill reserved for the open document. */
       .directory-tab.contains-active { color: var(--pi-accent); }
       .directory-tab.contains-active::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--pi-accent); }
-      code, pre { border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      code, pre { direction: ltr; unicode-bidi: isolate; border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
       code { padding: 2px 5px; }
       pre { margin: 0; overflow: auto; padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
       .document.markdown { line-height: 1.5; overflow-wrap: anywhere; }
@@ -580,12 +632,12 @@ function relaysStyles(): string {
       .document.markdown h2 { font-size: 16px; }
       .document.markdown h3 { font-size: 14px; }
       .document.markdown h4 { font-size: 13px; }
-      .document.markdown ul, .document.markdown ol { padding-left: 22px; }
+      .document.markdown ul, .document.markdown ol { padding-inline-start: 22px; }
       .document.markdown li + li { margin-top: 3px; }
       .document.markdown pre { white-space: pre; overflow-wrap: normal; }
       .document.markdown pre code { border: 0; background: transparent; padding: 0; }
       .document.markdown img { box-sizing: border-box; max-width: 100%; }
-      .document.markdown blockquote { border-left: 3px solid var(--pi-border-muted); color: var(--pi-muted); padding-left: 10px; }
+      .document.markdown blockquote { border-inline-start: 3px solid var(--pi-border-muted); color: var(--pi-muted); padding-inline-start: 10px; }
       .document.markdown a { color: var(--pi-accent); }
       .document.markdown .table-scroll { max-width: 100%; overflow-x: auto; }
       /* Cells wrap at word boundaries only: a wide table keeps its natural width

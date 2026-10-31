@@ -145,6 +145,19 @@ describe("machine-scoped runtime API", () => {
 });
 
 describe("settings config and plugin APIs", () => {
+  it("updates and resets settings in one PATCH at the gateway or selected machine", async () => {
+    const response = { ...piWebConfigResponse({ quietMode: false }), enforcedSettings: { "/host": "PI_WEB_HOST" }, configSources: { "/quietMode": "defaults" }, defaultsConfig: { quietMode: false }, defaultsPath: "/etc/defaults.json" };
+    const fetchMock = stubSequenceFetch([jsonResponse(response), jsonResponse(response)]);
+    const update = { set: { quietMode: true }, unset: ["/defaultTheme"] };
+    await expect(configApi.updateConfig(update)).resolves.toEqual(response);
+    await configApi.updateConfig({ unset: ["/uploads"] }, "remote /a");
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://pi.example.test/api/config", "https://pi.example.test/api/machines/remote%20%2Fa/config",
+    ]);
+    expect(fetchCall(fetchMock, 0)[1]?.method).toBe("PATCH");
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual(update);
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 1)[1]))).toEqual({ unset: ["/uploads"] });
+  });
   it("loads naming models through the selected machine under the application base", async () => {
     vi.stubEnv("BASE_URL", "./");
     vi.stubGlobal("document", { baseURI: "https://pi.example.test/nested/" });
@@ -262,6 +275,15 @@ describe("Pi package API", () => {
 });
 
 describe("session API compatibility", () => {
+  it("marks unread through encoded machine and session routes", async () => {
+    const snapshot = { catalogId: "catalog-a", catalogRevision: 1, sessions: [] };
+    const fetchMock = stubSequenceFetch([jsonResponse(snapshot)]);
+    await expect(sessionsApi.markUnread({ id: "s /?", cwd: "/repo" }, "remote a")).resolves.toEqual(snapshot);
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/sessions/s%20%2F%3F/unread");
+    expect(fetchCall(fetchMock, 0)[1]?.method).toBe("POST");
+    expect(JSON.parse(requestBody(fetchCall(fetchMock, 0)[1]))).toEqual({ cwd: "/repo" });
+  });
+
   it("reads and acknowledges daemon-owned unread state through encoded machine routes", async () => {
     const unread = {
       catalogId: "catalog-a",
@@ -577,6 +599,18 @@ describe("session API compatibility", () => {
     expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/local/sessions/s-1/transcript-snapshot?cwd=%2Frepo&media=reference");
   });
 
+  it("passes transcript cancellation to HTTP without adding transport options to the query", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockReturnValue(new Promise(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const pending = sessionsApi.transcriptSnapshot({ id: "s-1", cwd: "/repo" }, { limit: 25, signal: controller.signal, timeoutMs: 1000 });
+    controller.abort();
+    await expect(pending).rejects.toBe(controller.signal.reason);
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/local/sessions/s-1/transcript-snapshot?cwd=%2Frepo&limit=25&media=reference");
+    expect(fetchCall(fetchMock, 0)[1]?.signal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("rejects an incomplete transcript snapshot instead of returning a partial response", async () => {
     stubJsonFetch({ page: { messages: [], start: 0, total: 0 }, status: dialogStatusWire(), seq: 0 });
 
@@ -695,29 +729,32 @@ describe("workspace file read API", () => {
 });
 
 describe("workspace file write API", () => {
-  it("sends text content with Content-Type text/plain", async () => {
-    const fetchMock = stubJsonFetch({ path: "hello.txt", size: 11, modifiedAt: "2026-06-10T00:00:00.000Z", created: true });
+  it("writes text on the local route and parses the file response", async () => {
+    const response = { path: "hello.txt", size: 11, modifiedAt: "2026-06-10T00:00:00.000Z", created: true };
+    const fetchMock = stubJsonFetch(response);
 
-    await workspacesApi.writeWorkspaceFile("p 1", "w/1", "hello.txt", "hello world");
+    await expect(workspacesApi.writeWorkspaceFile("p 1", "w/1", "hello.txt", "hello world")).resolves.toEqual(response);
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchCall(fetchMock, 0);
     expect(url).toBe("https://pi.example.test/api/machines/local/projects/p%201/workspaces/w%2F1/file?path=hello.txt");
     expect(init?.method).toBe("PUT");
     expect(new Headers(init?.headers).get("content-type")).toBe("text/plain");
+    expect(init?.body).toEqual(new TextEncoder().encode("hello world"));
   });
 
-  it("sends binary content with Content-Type application/octet-stream", async () => {
+  it("writes binary bytes through the encoded remote route", async () => {
     const fetchMock = stubJsonFetch({ path: "image.png", size: 4, modifiedAt: "2026-06-10T00:00:00.000Z", created: true });
     const binary = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 
-    await workspacesApi.writeWorkspaceFile("p 1", "w/1", "image.png", binary);
+    await workspacesApi.writeWorkspaceFile("p 1", "w/1", "image.png", binary, undefined, "remote a");
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchCall(fetchMock, 0);
-    expect(url).toBe("https://pi.example.test/api/machines/local/projects/p%201/workspaces/w%2F1/file?path=image.png");
+    expect(url).toBe("https://pi.example.test/api/machines/remote%20a/projects/p%201/workspaces/w%2F1/file?path=image.png");
     expect(init?.method).toBe("PUT");
     expect(new Headers(init?.headers).get("content-type")).toBe("application/octet-stream");
+    expect(init?.body).toEqual(binary);
   });
 
   it("sends createDirs and overwrite query parameters", async () => {
@@ -729,31 +766,6 @@ describe("workspace file write API", () => {
     const [url] = fetchCall(fetchMock, 0);
     expect(url).toContain("createDirs=false");
     expect(url).toContain("overwrite=false");
-  });
-
-  it("parses WriteWorkspaceFileResponse correctly", async () => {
-    const fetchMock = stubJsonFetch({ path: "output/result.txt", size: 42, modifiedAt: "2026-06-10T12:00:00.000Z", created: true });
-
-    const result = await workspacesApi.writeWorkspaceFile("p 1", "w/1", "output/result.txt", "content");
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-
-    expect(result).toEqual({
-      path: "output/result.txt",
-      size: 42,
-      modifiedAt: "2026-06-10T12:00:00.000Z",
-      created: true,
-    });
-  });
-
-  it("routes through machine prefix for remote machines", async () => {
-    const fetchMock = stubJsonFetch({ path: "file.txt", size: 5, modifiedAt: "2026-06-10T00:00:00.000Z", created: false });
-
-    await workspacesApi.writeWorkspaceFile("p 1", "w/1", "file.txt", "data", undefined, "remote a");
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url] = fetchCall(fetchMock, 0);
-    expect(url).toContain("api/machines/remote%20a/");
   });
 });
 
@@ -818,7 +830,7 @@ function piWebConfigResponse(config: PiWebConfigValues) {
     exists: true,
     config,
     effectiveConfig: config,
-    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+    envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
   };
 }
 

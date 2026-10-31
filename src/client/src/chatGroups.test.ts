@@ -1,10 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { canonicalEntryActionHeaders, groupChatMessages, groupConsecutiveImageOutputs, summarizeChatGroup, type ChatGroup } from "./chatGroups";
+import { canonicalEntryActionHeaders, groupChatMessages, groupConsecutiveImageOutputs, type ChatGroup } from "./chatGroups";
 import type { ChatLine } from "./components/shared";
+import type { ChatFallbackPart } from "./chatTypes";
 
 const text = (role: ChatLine["role"], value: string): ChatLine => ({ role, parts: [{ type: "text", text: value }] });
 
 describe("groupChatMessages", () => {
+  it("groups custom fallbacks exactly like their original parts without an eligible renderer", () => {
+    const parts: ChatFallbackPart[] = [
+      { type: "thinking", text: "working" },
+      { type: "text", text: "original", displayText: "transformed" },
+      { type: "image", mimeType: "image/png", data: "QUJD" },
+    ];
+    const fallback: ChatLine = { role: "system", entryId: "card", meta: { timestamp: "2026-07-20T10:00:00.000Z" }, parts };
+    const custom: ChatLine = { ...fallback, parts: [{
+      type: "customMessage", customType: "extension.card", content: "raw", details: { card: true }, parts,
+    }] };
+    const before: ChatLine = { role: "assistant", parts: [{ type: "thinking", text: "before" }] };
+    const after = text("assistant", "after");
+    expect(groupChatMessages([before, custom, after], 10)).toEqual(groupChatMessages([before, fallback, after], 10));
+    expect(groupChatMessages([custom], 10, (customType) => customType === "other.card"))
+      .toEqual(groupChatMessages([fallback], 10));
+    expect(custom.parts[0]?.type).toBe("customMessage");
+  });
+
+  it("keeps details-only cards invisible unless their custom type has an eligible renderer", () => {
+    const card: ChatLine = { role: "system", entryId: "card", parts: [{
+      type: "customMessage", customType: "extension.card", content: "", details: { ready: true }, parts: [],
+    }] };
+    expect(groupChatMessages([card], 10)).toEqual([]);
+    expect(groupChatMessages([card], 10, (customType) => customType === "extension.card")).toEqual([
+      { kind: "message", index: 10, message: card },
+    ]);
+  });
+
   it("groups technical parts until a readable message is encountered", () => {
     const messages: ChatLine[] = [
       { role: "assistant", parts: [{ type: "thinking", text: "plan" }, { type: "toolCall", toolName: "read", summary: "file" }] },
@@ -260,18 +289,4 @@ it("gives top-level question requests the canonical header while hiding coalesce
   expect(groups.map((group) => group.kind)).toEqual(["group", "message", "message"]);
   expect(groups[1]).toEqual({ kind: "message", index: 1, message: question });
   expect([...canonicalEntryActionHeaders(groups)]).toEqual([renderedMessages(groups)[2]]);
-});
-
-describe("summarizeChatGroup", () => {
-  it("summarizes special event groups", () => {
-    expect(summarizeChatGroup([{ ...text("assistant", "a"), source: "compaction" }])).toBe("1 history compaction summary");
-    expect(summarizeChatGroup([
-      { ...text("assistant", "a"), source: "branch_summary" },
-      { ...text("assistant", "b"), source: "branch_summary" },
-    ])).toBe("2 branch summaries");
-  });
-
-  it("summarizes mixed groups by role counts", () => {
-    expect(summarizeChatGroup([text("tool", "a"), text("system", "b"), text("tool", "c")])).toBe("3 events · 2 tool · 1 system");
-  });
 });

@@ -1,5 +1,9 @@
 import { html, type TemplateResult } from "lit";
 import type { Machine, MachineRuntime, PiWebDeprecatedAgentInput } from "../api";
+import { localization } from "../localization/browser";
+import definitions from "./deprecatedAgentInputs.messages";
+
+const messages = localization.registerMessages("core.deprecatedAgentInputs", definitions);
 
 /** One machine's deprecated agent-configuration report, attributed for the banner. */
 export interface DeprecatedAgentInputsWarning {
@@ -30,14 +34,13 @@ export function deprecatedAgentInputsWarnings(machines: readonly Machine[], mach
  * and that support ends in a future release.
  */
 export function deprecatedAgentInputsWarningText(warning: DeprecatedAgentInputsWarning): string {
-  const inputs = warning.inputs.map(describeDeprecatedAgentInput).join("; ");
-  return `${warning.machineName}: ${inputs}. Support for deprecated agent configuration inputs will be removed in a future release.`;
+  const inputs = localization.list(warning.inputs.map(describeDeprecatedAgentInput), { type: "unit" });
+  return messages.t("warning", { machine: warning.machineName, inputs });
 }
 
 function describeDeprecatedAgentInput(input: PiWebDeprecatedAgentInput): string {
-  const label = input.source === "config" ? `config key ${input.name}` : `environment variable ${input.name}`;
-  if (input.replacement === undefined) return `${label} is deprecated and ignored; remove it, there is no replacement`;
-  return `${label} is deprecated; set ${input.replacement} instead`;
+  if (input.replacement === undefined) return messages.t(input.source === "config" ? "configIgnored" : "environmentIgnored", { name: input.name });
+  return messages.t(input.source === "config" ? "configReplacement" : "environmentReplacement", { name: input.name, replacement: input.replacement });
 }
 
 /**

@@ -6,19 +6,21 @@
 // the internals for your own.
 
 import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
-import { copyDiagnostics, renderInfoPanel } from "./infoInternals.js";
+import { createInfoContent } from "./infoInternals.js";
 
 const plugin = {
   apiVersion: 4,
   name: "Info Plugin",
-  activate: ({ html, svg }) => ({
-    contributions: {
+  activate: ({ html, svg, localization }) => {
+    if (localization === undefined) throw new Error("The Info plugin requires a localization-capable PI WEB host");
+    const { messages, copyDiagnostics, renderInfoPanel } = createInfoContent(localization);
+    return { contributions: {
       actions: [
         {
           id: "copy-diagnostics",
-          title: "Copy PI WEB Diagnostics",
-          description: "Copy version, installation, and status details for this machine, ready to paste into a bug report",
-          group: "Info",
+          get title() { return messages.t("copyDiagnostics"); },
+          get description() { return messages.t("copyDescription"); },
+          get group() { return messages.t("info"); },
           run: (context) => copyDiagnostics(context),
         },
       ],
@@ -26,13 +28,13 @@ const plugin = {
         {
           id: "workspace.kind-label",
           order: 100,
-          items: (context) => [{ type: "text", text: context.workspace.provider?.pluginId ?? "folder", title: context.workspace.path }],
+          items: (context) => [{ type: "text", text: context.workspace.provider?.pluginId ?? messages.t("folder"), title: context.workspace.path }],
         },
       ],
       applicationPanels: [
         {
           id: "workspace.info",
-          title: "Info",
+          get title() { return messages.t("info"); },
           icon: svg`
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="9"></circle>
@@ -44,8 +46,8 @@ const plugin = {
           render: (context) => renderInfoPanel(html, context),
         },
       ],
-    },
-  }),
+    } };
+  },
 } satisfies PiWebPlugin;
 
 export default plugin;

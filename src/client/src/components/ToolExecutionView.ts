@@ -1,3 +1,6 @@
+import { localizedArgumentSummary } from "../localizedChatPresentation";
+import { LocalizationController, localization } from "../localization/browser";
+import { toolExecutionMessages as messages } from "../toolExecutionMessages";
 import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -9,8 +12,9 @@ import { uiTranscriptStyles } from "./ui/transcriptStyles";
 const MAX_COLLAPSED_DIFF_LINES = 180;
 
 interface ToolTarget {
-  label: "Command" | "File" | "Input";
+  kind: "command" | "file" | "input";
   text: string;
+  generated?: boolean;
 }
 
 @customElement("tool-execution-view")
@@ -18,6 +22,7 @@ export class ToolExecutionView extends LitElement {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this);
   }
 
   @property({ attribute: false }) execution: ToolExecutionPart | undefined;
@@ -48,8 +53,9 @@ export class ToolExecutionView extends LitElement {
     const diffStats = this.diffStats;
     const previewMismatch = actualDiff !== undefined && preview?.diff !== undefined && actualDiff !== preview.diff;
     const errorText = execution.status === "error" ? execution.resultText : preview?.error;
-    const bodyText = visibleDiff === undefined ? execution.resultText : undefined;
+    const bodyText = visibleDiff === undefined ? localizedResultText(execution) : undefined;
     const target = toolTarget(execution, path);
+    const edits = editCount(execution);
 
     return html`
       <section class=${`tool-card ui-transcript-surface ui-transcript-activity ui-transcript-tool ${execution.status}`}>
@@ -60,31 +66,31 @@ export class ToolExecutionView extends LitElement {
             ${this.renderHeaderTarget(target)}
           </div>
           <div class="tool-meta">
-            ${editCountLabel(execution) === undefined ? null : html`<span>${editCountLabel(execution)}</span>`}
-            ${diffStats === undefined ? null : html`<span class="diff-stats"><b class="added">+${diffStats.added}</b><span>/</span><b class="removed">-${diffStats.removed}</b></span>`}
-            <span class="status-label">${statusLabel(execution.status)}</span>
+            ${edits === undefined ? null : html`<span>${messages.t("edits", { count: edits })}</span>`}
+            ${diffStats === undefined ? null : html`<span class="diff-stats"><b class="added">${localization.number(diffStats.added, { signDisplay: "always" })}</b><span>/</span><b class="removed">${localization.number(-diffStats.removed, { signDisplay: "always" })}</b></span>`}
+            <span class="status-label">${messages.t("status", { status: execution.status })}</span>
           </div>
         </div>
 
-        ${previewMismatch ? html`<p class="notice">Applied diff differs from the preview.</p>` : null}
+        ${previewMismatch ? html`<p class="notice">${messages.t("mismatch")}</p>` : null}
         ${errorText === undefined || errorText === "" ? null : html`<pre class="error-text">${errorText}</pre>`}
-        ${visibleDiff === undefined ? this.renderTextBody(bodyText, execution.status === "error", target) : this.renderDiffBody(visibleDiff, actualDiff === undefined ? "Preview diff" : "Applied diff", target)}
+        ${visibleDiff === undefined ? this.renderTextBody(bodyText, execution.status === "error", target) : this.renderDiffBody(visibleDiff, messages.t(actualDiff === undefined ? "previewDiff" : "appliedDiff"), target)}
       </section>
     `;
   }
 
   private renderHeaderTarget(target: ToolTarget | undefined) {
     if (target === undefined) return null;
-    const className = target.label === "File" ? "path" : "summary";
-    return html`<span class=${className} title=${target.text} aria-label=${`${target.label}: ${target.text}`}>${target.text}</span>`;
+    const className = target.kind === "file" ? "path" : target.generated === true ? "summary generated-summary" : "summary";
+    return html`<span class=${className} title=${target.text} aria-label=${messages.t("targetDescription", { kind: target.kind, text: target.text })}>${target.text}</span>`;
   }
 
   private renderExpandedTarget(target: ToolTarget | undefined) {
     if (target === undefined) return null;
     return html`
       <div class="detail-target">
-        <span class="detail-label">${target.label}</span>
-        <pre class="detail-target-value">${target.text}</pre>
+        <span class="detail-label">${messages.t("targetLabel", { kind: target.kind })}</span>
+        <pre class=${target.generated === true ? "detail-target-value generated-summary" : "detail-target-value"}>${target.text}</pre>
       </div>
     `;
   }
@@ -96,11 +102,11 @@ export class ToolExecutionView extends LitElement {
       <details class="text-body" ?open=${expanded} @toggle=${(event: Event) => {
         if (event.currentTarget instanceof HTMLDetailsElement) this.textOpen = event.currentTarget.open;
       }}>
-        <summary class="ui-transcript-disclosure">Details</summary>
+        <summary class="ui-transcript-disclosure">${messages.t("details")}</summary>
         ${expanded ? html`${this.renderExpandedTarget(target)}
         ${text === undefined || text === "" ? null : html`
           <div class="detail-result">
-            <span class="detail-label">Result</span>
+            <span class="detail-label">${messages.t("result")}</span>
             <pre>${text}</pre>
           </div>
         `}` : null}
@@ -114,7 +120,7 @@ export class ToolExecutionView extends LitElement {
       <details class="diff-details" ?open=${this.diffOpen} @toggle=${(event: Event) => { this.onDiffToggle(event); }}>
         <summary class="ui-transcript-disclosure">
           <span>${label}</span>
-          <small>${String(lineCount)} ${lineCount === 1 ? "line" : "lines"}</small>
+          <small>${messages.t("lines", { count: lineCount })}</small>
         </summary>
         ${this.diffOpen ? this.renderDiffContent(diff, label, target) : null}
       </details>
@@ -128,13 +134,13 @@ export class ToolExecutionView extends LitElement {
     return html`
         ${this.renderExpandedTarget(target)}
         <div class="diff-toolbar">
-          <span>${truncated ? `Showing ${String(visibleLines.length)} of ${String(lines.length)} lines` : "Full diff"}</span>
-          <button class="ui-button ui-button--compact" type="button" @click=${() => { void this.copyDiff(diff); }}>${this.copied ? "Copied" : "Copy diff"}</button>
+          <span>${truncated ? messages.t("showing", { visible: visibleLines.length, total: lines.length }) : messages.t("fullDiff")}</span>
+          <button class="ui-button ui-button--compact" type="button" @click=${() => { void this.copyDiff(diff); }}>${messages.t(this.copied ? "copied" : "copyDiff")}</button>
         </div>
-        <pre class="diff" aria-label=${label}><code class="diff-content">${visibleLines.map((line) => html`<span class=${diffLineClass(line)}>${line}</span>`)}</code></pre>
+        <pre class="diff" dir="ltr" aria-label=${label}><code class="diff-content">${visibleLines.map((line) => html`<span class=${diffLineClass(line)}>${line}</span>`)}</code></pre>
         ${truncated ? html`
           <button class="show-more ui-button ui-button--compact" type="button" @click=${() => { this.showFullDiff = true; }}>
-            Show all ${String(lines.length)} diff lines
+            ${messages.t("showAll", { count: lines.length })}
           </button>
         ` : null}
     `;
@@ -169,8 +175,9 @@ export class ToolExecutionView extends LitElement {
     strong { flex: 0 0 auto; color: var(--pi-text); }
     .path, .summary { display: block; flex: 1 1 auto; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; white-space: pre; color: var(--pi-text); font: 13px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); direction: ltr; text-align: left; unicode-bidi: isolate; }
     .summary { color: var(--pi-text-secondary); }
-    .tool-meta { flex: 0 0 auto; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: var(--pi-text-secondary); font-size: 12px; }
-    .diff-stats { display: inline-flex; gap: 3px; }
+    .summary.generated-summary, .detail-target-value.generated-summary { direction: inherit; text-align: start; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .tool-meta { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: var(--pi-text-secondary); font-size: 12px; }
+    .diff-stats { display: inline-flex; gap: 3px; direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; }
     .added, .diff .added { color: color-mix(in srgb, var(--pi-success) 65%, var(--pi-text) 35%); }
     .removed, .diff .removed { color: color-mix(in srgb, var(--pi-danger) 65%, var(--pi-text) 35%); }
     .status-label { color: var(--pi-text-secondary); }
@@ -188,9 +195,9 @@ export class ToolExecutionView extends LitElement {
     .diff-details { min-width: 0; max-width: 100%; }
     .diff-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; color: var(--pi-muted); }
     .diff-details > summary span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .diff-details > summary small { flex: 0 0 auto; color: var(--pi-dim); }
-    .diff-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; margin-top: 8px; color: var(--pi-muted); font-size: 12px; padding-inline: 12px; }
-    .diff-toolbar span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .diff-details > summary small { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--pi-dim); }
+    .diff-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; margin-top: 8px; color: var(--pi-muted); font-size: 12px; padding-inline: 12px; }
+    .diff-toolbar span { min-width: 0; overflow-wrap: anywhere; }
     .diff { box-sizing: border-box; width: calc(100% - 24px); max-width: 100%; min-width: 0; margin: 0 12px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; border: 1px solid var(--pi-border-muted); border-radius: 0; background: var(--pi-bg); padding: 8px 0; color: var(--pi-muted); font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); line-height: 1.45; }
     .diff-content { display: block; width: max-content; min-width: 100%; }
     .diff span { display: block; min-height: 1.45em; padding: 0 8px; white-space: pre; }
@@ -204,11 +211,21 @@ export class ToolExecutionView extends LitElement {
   `];
 }
 
+function localizedResultText(execution: ToolExecutionPart): string | undefined {
+  // Only the owned transient update is presentation; final and legacy tool output stays verbatim.
+  const presentation = getProperty(execution.details, "presentation");
+  if (execution.toolName === "edit" && execution.status === "running" && getString(presentation, "kind") === "editPreviewComputed") {
+    return messages.t("previewComputed");
+  }
+  return execution.resultText;
+}
+
 function toolTarget(execution: ToolExecutionPart, path: string | undefined): ToolTarget | undefined {
-  if (path !== undefined && path !== "") return { label: "File", text: path };
+  if (path !== undefined && path !== "") return { kind: "file", text: path };
   const command = getString(execution.args, "command");
-  if (command !== undefined && command !== "") return { label: "Command", text: command };
-  if (execution.summary !== "") return { label: "Input", text: execution.summary };
+  if (command !== undefined && command !== "") return { kind: "command", text: command };
+  const summary = execution.summaryPresentation === undefined ? execution.summary : localizedArgumentSummary(execution.summaryPresentation);
+  if (summary !== "") return { kind: "input", text: summary, ...(execution.summaryPresentation === undefined ? {} : { generated: true }) };
   return undefined;
 }
 
@@ -216,11 +233,11 @@ function pathFromArgs(args: unknown): string | undefined {
   return getString(args, "path") ?? getString(args, "file_path");
 }
 
-function editCountLabel(execution: ToolExecutionPart): string | undefined {
+function editCount(execution: ToolExecutionPart): number | undefined {
   if (execution.toolName !== "edit") return undefined;
   const edits = getProperty(execution.args, "edits");
-  if (Array.isArray(edits)) return `${String(edits.length)} edit${edits.length === 1 ? "" : "s"}`;
-  if (typeof getProperty(execution.args, "oldText") === "string" && typeof getProperty(execution.args, "newText") === "string") return "1 edit";
+  if (Array.isArray(edits)) return edits.length;
+  if (typeof getProperty(execution.args, "oldText") === "string" && typeof getProperty(execution.args, "newText") === "string") return 1;
   return undefined;
 }
 
@@ -261,13 +278,6 @@ function statusIcon(status: ToolExecutionPart["status"]): string {
   if (status === "error") return "✖";
   if (status === "running") return "●";
   return "○";
-}
-
-function statusLabel(status: ToolExecutionPart["status"]): string {
-  if (status === "success") return "done";
-  if (status === "error") return "failed";
-  if (status === "running") return "running";
-  return "pending";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

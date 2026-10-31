@@ -1,6 +1,15 @@
+import { chatTranscriptMessages as messages } from "../../chatTranscriptMessages";
+import { localization } from "../../localization/browser";
+import type { ChatGroupSummary } from "../../chatGroups";
+
+export function localizedChatGroupSummary(summary: ChatGroupSummary): string {
+  const roles = Object.entries(summary.roles).map(([role, count]) => messages.t("roleCount", { role, count }));
+  return messages.t("groupSummary", { kind: summary.kind, count: summary.count, roles: localization.list(roles) });
+}
+
 /** The message-header label used when a tool message renders as an image output. */
 export function chatToolOutputLabel(toolName?: string): string {
-  return toolName === undefined || toolName === "" ? "tool output" : `${toolName} output`;
+  return messages.t("toolOutput", { name: toolName ?? "", named: toolName === undefined || toolName === "" ? "no" : "yes" });
 }
 
 // `live` marks the growing tail group while the session is active. It is
@@ -11,5 +20,5 @@ export function chatMessageGroupClassName(live: boolean): string {
 }
 
 export function chatMessageGroupLabel(live: boolean): string {
-  return live ? "live events" : "events";
+  return messages.t("groupLabel", { live: live ? "yes" : "no" });
 }

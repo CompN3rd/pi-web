@@ -2,13 +2,21 @@ import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { css, html, LitElement, nothing, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
+import { LocalizationController, localization } from "../../localization/browser";
+import source from "./settingsPlugins.messages";
 import type { PiWebConfigResponse, PiWebPluginInfo, PiWebPluginsResponse } from "../../api";
 import { PI_WEB_PLUGIN_RECOVERY_COMMANDS } from "../../../../shared/pluginRecoveryCommands";
 import { REQUIRED_TERMINAL_PLUGIN_ID } from "../../../../shared/requiredTerminalPlugin";
+import { uiButtonStyles } from "../ui/controlStyles";
+import { enforcedSetting, settingControls, settingPath } from "./settingsConfigUpdate";
 import { uiFormStyles } from "../ui/formStyles";
 import { uiSettingsStyles } from "../ui/settingsStyles";
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
+
+export const pluginsMessages = localization.registerMessages("core.settingsPlugins", source);
+const strong = (parts: unknown[]): TemplateResult => html`<strong>${parts}</strong>`;
+const code = (parts: unknown[]): TemplateResult => html`<code dir="ltr">${parts}</code>`;
 
 export type SettingsPluginRow = PiWebPluginInfo & { configOnly: boolean; editable: boolean };
 
@@ -16,6 +24,7 @@ export type SettingsPluginRow = PiWebPluginInfo & { configOnly: boolean; editabl
 export class SettingsPluginsPanel extends LitElement {
   constructor() {
     super();
+    new LocalizationController(this);
     stylesheetIntegrationCapability.createController(this);
   }
 
@@ -26,8 +35,10 @@ export class SettingsPluginsPanel extends LitElement {
   @property({ type: Boolean }) recoveryCommandsSupported = false;
   @property() error = "";
   @property() savedMessage = "";
-  @property() targetLabel = "local (local gateway)";
+  @property() targetLabel = "";
+  private get target(): string { return this.targetLabel || pluginsMessages.t("localTarget"); }
   @property({ attribute: false }) onReload?: () => void | Promise<void>;
+  @property({ attribute: false }) onResetPlugin?: (pluginId: string) => void | Promise<void>;
   @property({ attribute: false }) onTogglePlugin?: (pluginId: string, enabled: boolean) => void | Promise<void>;
 
   override render(): TemplateResult {
@@ -35,10 +46,10 @@ export class SettingsPluginsPanel extends LitElement {
     const hasPluginResponse = this.pluginsResponse !== undefined;
     return html`
       <settings-panel-frame
-        heading="PI WEB plugins"
-        .description=${pluginsDescription(this.targetLabel)}
-        actionLabel="Refresh plugins"
-        actionTitle=${`Refresh plugin settings and status from ${this.targetLabel}`}
+        .heading=${pluginsMessages.t("heading")}
+        .description=${html`${pluginsMessages.rich("description", { target: this.target, strong })}`}
+        .actionLabel=${pluginsMessages.t("refresh")}
+        .actionTitle=${pluginsMessages.t("refreshTitle", { target: this.target })}
         .actionDisabled=${this.loading || this.saving}
         .notices=${this.panelNotices(plugins.length > 0)}
         .onAction=${this.onReload}
@@ -52,7 +63,7 @@ export class SettingsPluginsPanel extends LitElement {
     const notices: SettingsNotice[] = [];
     if (this.error !== "") notices.push({ type: "error", content: this.error });
     if (this.shouldShowConfigUnavailableNotice(showTrustedCodeWarning)) {
-      notices.push({ type: "availability", content: "Plugin settings are unavailable. Choose Refresh plugins to try again before making changes." });
+      notices.push({ type: "availability", content: pluginsMessages.t("unavailableConfig") });
     }
     if (this.savedMessage !== "") notices.push({ type: "success", content: this.savedNotice() });
 
@@ -60,52 +71,50 @@ export class SettingsPluginsPanel extends LitElement {
     if (runtime?.status === "unavailable") {
       notices.push({
         type: "availability",
-        title: "Running plugin status unavailable",
-        content: html`You can edit saved settings, but PI WEB cannot verify which server plugins are running. ${runtime.message ?? "Check the machine connection, then choose Refresh plugins."}`,
+        title: pluginsMessages.t("unavailableTitle"),
+        content: pluginsMessages.t("unavailableRuntime", { detail: runtime.message ?? pluginsMessages.t("connectionHelp") }),
       });
     } else if (runtime?.status === "incompatible") {
       notices.push({
         type: "error",
-        title: "Plugin lifecycle version mismatch",
-        content: html`${runtime.message ?? "The web process and session daemon do not support the same plugin lifecycle protocol."} Update and restart both components before loading server-backed browser plugins.`,
+        title: pluginsMessages.t("incompatibleTitle"),
+        content: pluginsMessages.t("incompatible", { detail: runtime.message ?? pluginsMessages.t("incompatibleFallback") }),
       });
     }
     if (runtime?.safeStart !== undefined) {
       notices.push({
         type: "warning",
-        title: "Server-plugin safe mode active",
-        content: runtime.safeStart === "bundled-only"
-          ? html`Only bundled server plugins were imported. Clear safe mode with <code>${runtime.recovery.clearSafeStart}</code>.`
-          : html`No server plugins were loaded. Terminal is unavailable; use the folder workspace to investigate. Clear safe mode with <code>${runtime.recovery.clearSafeStart}</code>.`,
+        title: pluginsMessages.t("safeTitle"),
+        content: html`${pluginsMessages.rich(runtime.safeStart === "bundled-only" ? "safeBundled" : "safeNone", { command: runtime.recovery.clearSafeStart, code })}`,
       });
     }
     if (runtime?.desiredSafeStart !== undefined && runtime.desiredSafeStart !== (runtime.safeStart ?? "off")) {
       notices.push({
         type: "warning",
-        title: "Safe-mode restart pending",
+        title: pluginsMessages.t("pendingTitle"),
         content: runtime.desiredSafeStart === "off"
-          ? "Safe mode is turned off in saved settings, but remains active until the session daemon restarts."
-          : `Saved settings request ${runtime.desiredSafeStart} safe mode. It takes effect on the next session daemon restart.`,
+          ? pluginsMessages.t("pendingOff")
+          : pluginsMessages.t("pendingSafe", { mode: runtime.desiredSafeStart }),
       });
     }
     if (runtime?.restartRequired === true) {
       notices.push({
         type: "warning",
-        title: "Saved changes aren’t active yet",
-        content: `Restart the session daemon on ${this.targetLabel} to apply server-plugin settings or package updates. Restarting interrupts active sessions.`,
+        title: pluginsMessages.t("restartTitle"),
+        content: pluginsMessages.t("restart", { target: this.target }),
       });
     }
     for (const diagnostic of this.pluginsResponse?.diagnostics ?? []) {
       notices.push({
         type: diagnostic.kind === "conflict" ? "error" : "warning",
-        title: diagnostic.kind === "conflict" ? "Plugin id conflict" : "Plugin discovery diagnostic",
-        content: `${diagnostic.snapshot === "active" ? "Running plugins" : "Available plugins"}: ${diagnostic.message}`,
+        title: pluginsMessages.t(diagnostic.kind === "conflict" ? "conflictTitle" : "diagnosticTitle"),
+        content: pluginsMessages.t("diagnostic", { snapshot: diagnostic.snapshot, detail: diagnostic.message }),
       });
     }
     if (showTrustedCodeWarning) {
       notices.push({
         type: "security",
-        content: html`<strong>Trusted code warning:</strong> PI WEB plugins and Pi packages can run with your user permissions. Enable plugins only from sources you trust.`,
+        content: html`${pluginsMessages.rich("trusted", { strong })}`,
       });
     }
     return notices;
@@ -113,9 +122,9 @@ export class SettingsPluginsPanel extends LitElement {
 
   private savedNotice(): string {
     if (this.pluginsResponse?.serverRuntime.status !== "available" || this.pluginsResponse.serverRuntime.restartRequired) {
-      return `${this.savedMessage} Restart the session daemon to apply server-plugin changes. Restarting interrupts active sessions. Reload this browser tab to apply browser-only changes.`;
+      return pluginsMessages.t("savedRestart", { saved: this.savedMessage });
     }
-    return `${this.savedMessage} Reload this browser tab to apply browser-only plugin changes.`;
+    return pluginsMessages.t("savedBrowser", { saved: this.savedMessage });
   }
 
   private shouldShowConfigUnavailableNotice(hasLoadedPlugins: boolean): boolean {
@@ -125,18 +134,18 @@ export class SettingsPluginsPanel extends LitElement {
   private renderPanelContent(plugins: SettingsPluginRow[], hasPluginResponse: boolean): TemplateResult {
     if (!hasPluginResponse && plugins.length === 0) {
       return html`
-        <div class="loading-card ui-settings-summary">${this.loading ? "Loading PI WEB plugins…" : `PI WEB plugin list unavailable for ${this.targetLabel}. Choose Refresh plugins to try again.`}</div>
+        <div class="loading-card ui-settings-summary">${this.loading ? pluginsMessages.t("loading") : pluginsMessages.t("unavailableList", { target: this.target })}</div>
         ${this.renderRecoveryCommands()}
       `;
     }
     if (plugins.length === 0) {
       return html`
-        <div class="loading-card ui-settings-summary">No PI WEB plugins are discovered or active on ${this.targetLabel}.</div>
+        <div class="loading-card ui-settings-summary">${pluginsMessages.t("empty", { target: this.target })}</div>
         ${this.renderRecoveryCommands()}
       `;
     }
     return html`
-      <div class="plugin-note ui-settings-summary">Changes save automatically on ${this.targetLabel}. Toggles show saved settings, not whether a plugin is running. Reload this browser tab for browser-only changes; server-plugin changes require a session daemon restart.</div>
+      <div class="plugin-note ui-settings-summary">${pluginsMessages.t("automatic", { target: this.target })}</div>
       <div class="plugin-list ui-settings-list">
         ${plugins.map((plugin) => this.renderPlugin(plugin))}
       </div>
@@ -145,26 +154,28 @@ export class SettingsPluginsPanel extends LitElement {
   }
 
   private renderPlugin(plugin: SettingsPluginRow): TemplateResult {
+    const path = settingPath("plugins", plugin.id, "enabled");
     const configured = this.configResponse?.config.plugins?.[plugin.id];
     const configuredState = plugin.required === true
-      ? "Required · cannot be disabled here"
+      ? pluginsMessages.t("requiredState")
       : !plugin.discovered && configured === undefined
-        ? "Package no longer available in saved settings"
-        : configured?.enabled === false ? "Saved: disabled" : configured?.enabled === true ? "Saved: enabled" : "Enabled by default";
+        ? pluginsMessages.t("missingState")
+        : pluginsMessages.t(configured?.enabled === false ? "disabledState" : configured?.enabled === true ? "enabledState" : "defaultState");
     return html`
       <article class=${`plugin-card ui-settings-row${plugin.enabled ? "" : " disabled"}`}>
         <div class="plugin-main">
-          <strong>${plugin.id}</strong>
-          <small>${plugin.configOnly ? "Saved settings only · package not found" : `${plugin.source} · ${plugin.scope}${plugin.machineSpecific ? " · machine-specific" : ""}${plugin.required === true ? " · required" : ""}${plugin.discovered ? "" : " · running version only"}`}</small>
+          <strong dir="auto">${plugin.id}</strong>
+          <small>${plugin.configOnly ? pluginsMessages.t("configOnly") : pluginsMessages.t("provenance", { source: plugin.source, scope: plugin.scope, machine: plugin.machineSpecific ? "yes" : "no", required: plugin.required === true ? "yes" : "no", discovered: plugin.discovered ? "yes" : "no" })}</small>
           <small>${configuredState}</small>
+          ${settingControls(this.configResponse, path, this.loading || this.saving || !plugin.editable, this.onResetPlugin ? () => this.onResetPlugin?.(plugin.id) : undefined)}
           ${this.renderPluginStatuses(plugin)}
-          ${plugin.server?.message === undefined ? nothing : html`<small class="diagnostic">${plugin.server.message}</small>`}
-          ${plugin.server?.health?.message === undefined ? nothing : html`<small class="diagnostic">Health: ${plugin.server.health.message}</small>`}
-          ${plugin.server === undefined || plugin.required === true ? nothing : html`<small class="command">Offline disable: <code>${plugin.server.disableCommand}</code></small>`}
+          ${plugin.server?.message === undefined ? nothing : html`<small class="diagnostic" dir="auto">${plugin.server.message}</small>`}
+          ${plugin.server?.health?.message === undefined ? nothing : html`<small class="diagnostic">${pluginsMessages.t("healthDetail", { detail: plugin.server.health.message })}</small>`}
+          ${plugin.server === undefined || plugin.required === true ? nothing : html`<small class="command">${pluginsMessages.rich("offlineDisable", { command: plugin.server.disableCommand, code })}</small>`}
         </div>
         <label class="toggle ui-checkbox-field">
-          <input type="checkbox" aria-label=${plugin.required === true ? `${plugin.id} is required` : `Enable ${plugin.id}`} .checked=${live(plugin.enabled)} ?disabled=${this.loading || this.saving || this.configResponse === undefined || !plugin.editable} @change=${(event: Event) => { void this.togglePlugin(plugin, event); }}>
-          <span>${plugin.required === true ? "Required" : "Enable plugin"}</span>
+          <input type="checkbox" aria-label=${pluginsMessages.t(plugin.required === true ? "requiredAria" : "enableAria", { id: plugin.id })} .checked=${live(plugin.required === true || (this.configResponse?.effectiveConfig.plugins?.[plugin.id]?.enabled ?? plugin.enabled))} ?disabled=${this.loading || this.saving || this.configResponse === undefined || !plugin.editable || enforcedSetting(this.configResponse, path) !== undefined} @change=${(event: Event) => { void this.togglePlugin(plugin, event); }}>
+          <span>${pluginsMessages.t(plugin.required === true ? "required" : "enable")}</span>
         </label>
       </article>
     `;
@@ -173,12 +184,12 @@ export class SettingsPluginsPanel extends LitElement {
   private renderPluginStatuses(plugin: SettingsPluginRow): TemplateResult {
     const server = plugin.server;
     return html`
-      <div class="status-list" aria-label=${`${plugin.id} plugin states`}>
-        ${server === undefined ? html`<span class="status neutral">${plugin.configOnly ? "Configured only" : "Browser only"}</span>` : html`<span class=${`status ${serverStateTone(server.state)}`}>${serverStateLabel(server.state)}</span>`}
-        ${plugin.conflict ? html`<span class="status error">Conflict</span>` : nothing}
-        ${server?.staleRevision === true ? html`<span class="status warning">Package update pending</span>` : nothing}
-        ${server?.restartRequired === true ? html`<span class="status warning">Restart required</span>` : nothing}
-        ${server?.health === undefined ? nothing : html`<span class=${`status ${healthTone(server.health.status)}`}>Health ${server.health.status}</span>`}
+      <div class="status-list" aria-label=${pluginsMessages.t("statesAria", { id: plugin.id })}>
+        ${server === undefined ? html`<span class="status neutral">${pluginsMessages.t(plugin.configOnly ? "configuredOnly" : "browserOnly")}</span>` : html`<span class=${`status ${serverStateTone(server.state)}`}>${pluginsMessages.t("serverState", { state: server.state })}</span>`}
+        ${plugin.conflict ? html`<span class="status error">${pluginsMessages.t("conflict")}</span>` : nothing}
+        ${server?.staleRevision === true ? html`<span class="status warning">${pluginsMessages.t("updatePending")}</span>` : nothing}
+        ${server?.restartRequired === true ? html`<span class="status warning">${pluginsMessages.t("restartRequired")}</span>` : nothing}
+        ${server?.health === undefined ? nothing : html`<span class=${`status ${healthTone(server.health.status)}`}>${pluginsMessages.t("health", { status: server.health.status })}</span>`}
       </div>
     `;
   }
@@ -189,14 +200,14 @@ export class SettingsPluginsPanel extends LitElement {
     const recovery = responseRecovery ?? (this.recoveryCommandsSupported ? PI_WEB_PLUGIN_RECOVERY_COMMANDS : undefined);
     if (recovery === undefined) return nothing;
     return html`
-      <aside class="recovery ui-settings-summary" aria-label="Offline server-plugin recovery commands">
-        <strong>Offline recovery on ${this.targetLabel}</strong>
-        <small>Run these commands in a terminal on ${this.targetLabel}. They edit settings without connecting to the session daemon or loading plugins. They never include machine credentials.</small>
-        <small>Commands with <code>--restart</code> restart services and interrupt active sessions.</small>
-        <span>Check safe mode</span><code>${recovery.showSafeStart}</code>
-        <span>Start with bundled server plugins only</span><code>${recovery.bundledOnly}</code>
-        <span>Start without server plugins (including Terminal)</span><code>${recovery.noServerPlugins}</code>
-        <span>Clear safe mode and start normally</span><code>${recovery.clearSafeStart}</code>
+      <aside class="recovery ui-settings-summary" aria-label=${pluginsMessages.t("recoveryAria")}>
+        <strong>${pluginsMessages.t("recoveryTitle", { target: this.target })}</strong>
+        <small>${pluginsMessages.t("recoveryHelp", { target: this.target })}</small>
+        <small>${pluginsMessages.rich("recoveryRestart", { code })}</small>
+        <span>${pluginsMessages.t("showSafe")}</span><code dir="ltr">${recovery.showSafeStart}</code>
+        <span>${pluginsMessages.t("bundledOnly")}</span><code dir="ltr">${recovery.bundledOnly}</code>
+        <span>${pluginsMessages.t("noServer")}</span><code dir="ltr">${recovery.noServerPlugins}</code>
+        <span>${pluginsMessages.t("clearSafe")}</span><code dir="ltr">${recovery.clearSafeStart}</code>
       </aside>
     `;
   }
@@ -206,8 +217,8 @@ export class SettingsPluginsPanel extends LitElement {
     await this.onTogglePlugin?.(plugin.id, enabled);
   }
 
-  static override styles = [uiFormStyles, uiSettingsStyles, css`
-    :host { display: block; }
+  static override styles = [uiButtonStyles, uiFormStyles, uiSettingsStyles, css`
+    :host { display: block; overflow-wrap: anywhere; }
     .loading-card, .plugin-note { color: var(--pi-muted); }
     code { color: var(--pi-text); font: 12px var(--pi-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); overflow-wrap: anywhere; }
     .plugin-card { align-items: center; }
@@ -222,7 +233,7 @@ export class SettingsPluginsPanel extends LitElement {
     .status.success { border-color: var(--pi-success-border); color: var(--pi-success); background: var(--pi-success-surface); }
     .status.warning { border-color: var(--pi-warning-border); color: var(--pi-text); background: var(--pi-warning-surface); }
     .status.error { border-color: var(--pi-danger); color: var(--pi-danger); }
-    .toggle { white-space: nowrap; }
+    .toggle { min-width: 0; }
     .recovery small { color: var(--pi-muted); line-height: 1.4; }
     .recovery code { display: block; width: fit-content; max-width: 100%; }
 
@@ -267,17 +278,6 @@ export function settingsPluginRows(
   return rows.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function serverStateLabel(state: NonNullable<PiWebPluginInfo["server"]>["state"]): string {
-  switch (state) {
-    case "active": return "Active";
-    case "failed": return "Failed";
-    case "incompatible": return "Incompatible";
-    case "disabled": return "Disabled";
-    case "missing": return "Not active";
-    case "unknown": return "Active state unavailable";
-  }
-}
-
 function serverStateTone(state: NonNullable<PiWebPluginInfo["server"]>["state"]): "success" | "warning" | "error" | "neutral" {
   switch (state) {
     case "active": return "success";
@@ -295,8 +295,4 @@ function healthTone(status: NonNullable<NonNullable<PiWebPluginInfo["server"]>["
     case "degraded": return "warning";
     case "unhealthy": return "error";
   }
-}
-
-function pluginsDescription(targetLabel: string): TemplateResult {
-  return html`Manage saved plugin settings and check running server plugins on <strong>${targetLabel}</strong>. This is separate from installing Pi packages.`;
 }

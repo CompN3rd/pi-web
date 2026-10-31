@@ -399,7 +399,7 @@ describe("ask-user-card live form", () => {
     await Promise.resolve();
 
     const confirmation = requiredElement(root.querySelector("[aria-label='Confirm partial answers']"), "partial confirmation");
-    expect(confirmation.textContent).toContain("Send without answering:");
+    expect(confirmation.textContent).toContain("Send without answering these questions?");
     expect(confirmation.textContent).toContain("Choose a deployment target");
     expect(confirmation.textContent).toContain("Add implementation notes");
     expect(onSubmit).not.toHaveBeenCalled();

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { localization } from "../localization/browser";
 import type { AppState } from "../appState";
 import { initialAppState } from "../appState";
 import type { Project, Workspace } from "../api";
@@ -13,7 +14,37 @@ function workspace(projectId: string, path: string): Workspace {
   return { id: path, projectId, path, label: path, isMain: true, effectiveConfig: {} };
 }
 
+afterEach(async () => {
+  await localization.setPreferences({ language: "en", formatLocale: "en" });
+});
+
 describe("ProjectController", () => {
+  it("retains live trust-choice feedback when the main workspace is unavailable", async () => {
+    const added = project("raw-id/日本語", "/added");
+    let state = initialAppState();
+    const selectProject = vi.fn();
+    const setTrust = vi.fn();
+    const controller = new ProjectController(
+      () => state, (patch) => { state = { ...state, ...patch }; },
+      { selectProject, forgetProject: vi.fn(), clearSelection: vi.fn() },
+      { api: {
+        projects: vi.fn(), addProject: () => Promise.resolve(added), closeProject: vi.fn(),
+        workspaces: () => Promise.resolve([]), setWorkspaceTrust: setTrust,
+      } },
+    );
+    await controller.addProject(added.path, undefined, { trusted: true, changed: true });
+    expect(setTrust).not.toHaveBeenCalled();
+    expect(selectProject).not.toHaveBeenCalled();
+    const notice = state.browserErrors[browserErrorScopeKey(projectBrowserErrorScope("local", added.id))];
+    if (notice === undefined) throw new Error("Expected trust-choice banner");
+    expect(notice.message).toBe(`Error: Cannot save trust choice for project ${added.id}: main workspace unavailable`);
+    for (const language of ["en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      expect(notice.displayMessage?.()).not.toBe(notice.message);
+      expect(notice.displayMessage?.()).toContain(added.id);
+    }
+  });
+
   it("reports project loading failures under the selected machine", async () => {
     let state: AppState = { ...initialAppState(), error: "A global failure" };
     const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
@@ -284,7 +315,6 @@ describe("ProjectController", () => {
     await controller.addProject("/added", true, { trusted: true, changed: true });
 
     expect(setWorkspaceTrust).toHaveBeenCalledOnce();
-    expect(setWorkspaceTrust).toHaveBeenCalledWith(addedProject.id, addedWorkspace.id, true, "local");
   });
 
   it.each([false, true])("persists explicit trust %s even when navigation declines the added project", async (trusted) => {

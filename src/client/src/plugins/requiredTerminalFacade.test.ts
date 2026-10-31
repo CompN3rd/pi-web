@@ -1,6 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Workspace } from "../api";
+import { localization } from "../localization/browser";
+import { pluginRecoveryMessages as recovery } from "../pluginRecoveryMessages";
 import { requiredTerminalUnavailableError, snapshotRequiredTerminalBrowserFacade } from "./requiredTerminalFacade";
+
+it("keeps unavailable Terminal errors live without translating machine identifiers", async () => {
+  const local = requiredTerminalUnavailableError("local");
+  const remote = requiredTerminalUnavailableError("机器 /srv/work");
+  try {
+    for (const language of ["en", "en-XA", "ar-XB"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      expect(local.message).toBe(recovery.t("terminalUnavailable"));
+      expect(remote.message).toBe(recovery.t("remoteTerminalUnavailable", { id: "机器 /srv/work" }));
+      expect(remote.message).toContain("机器 /srv/work");
+    }
+  } finally {
+    await localization.setPreferences({ language: "en", formatLocale: "en" });
+  }
+});
 
 const workspace: Workspace = {
   id: "workspace-1",

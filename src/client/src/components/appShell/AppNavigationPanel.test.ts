@@ -169,17 +169,6 @@ describe("header identity", () => {
     expect(panel.onShowActions).toHaveBeenCalledOnce();
   });
 
-  it("keeps the machine switcher visible with a single machine", async () => {
-    const panel = await mountHeaderPanel([machine("local")]);
-
-    expect(panel.shadowRoot?.querySelector("machine-switcher")).toBeInstanceOf(MachineSwitcher);
-  });
-
-  it("forwards the location-indicator flag to the machine switcher", async () => {
-    const panel = await mountHeaderPanel([machine("local")], true);
-
-    expect(section(panel, "machine-switcher", MachineSwitcher).locationIndicator).toBe(true);
-  });
 });
 
 describe("machine status wiring", () => {
@@ -221,6 +210,35 @@ describe("machine status wiring", () => {
 });
 
 describe("stable list inputs", () => {
+  it("forwards Mark as unread through a stable callback to the latest parent handler", async () => {
+    const panel = await mountPanel({}, machine("local"));
+    const read = session("read");
+    const oldMarkUnread = vi.fn();
+    panel.sessions = [read];
+    panel.onMarkSessionUnread = oldMarkUnread;
+    panel.onSelectSession = vi.fn();
+    await panel.updateComplete;
+    const sessions = section(panel, "session-list", SessionList);
+    await sessions.updateComplete;
+    const callback = sessions.onMarkUnread;
+
+    const markUnread = vi.fn();
+    panel.onMarkSessionUnread = markUnread;
+    await panel.updateComplete;
+    await sessions.updateComplete;
+    expect(sessions.onMarkUnread).toBe(callback);
+
+    control(sessions, ".action-menu-toggle").click();
+    await sessions.updateComplete;
+    control(sessions, 'button[title="Mark session as unread"]').click();
+    await sessions.updateComplete;
+    expect(markUnread).toHaveBeenCalledExactlyOnceWith(read);
+    expect(oldMarkUnread).not.toHaveBeenCalled();
+    expect(panel.onSelectSession).not.toHaveBeenCalled();
+    expect(sessions.shadowRoot?.querySelector(".action-menu-panel")).toBeNull();
+  });
+
+
   it("skips unchanged lists on panel updates while invoking the latest callbacks", async () => {
     const panel = await mountPanel({}, machine("local"));
     const currentSession = session("session-1");
@@ -241,7 +259,7 @@ describe("stable list inputs", () => {
     // Render counts are the regression contract, not a proxy for visible output.
     const renders = lists.map((list) => vi.spyOn(list, "render"));
     const panelRender = vi.spyOn(panel, "render");
-    panel.locationIndicator = true;
+    panel.selectedMachine = { ...machine("local"), name: "Renamed machine" };
     await settle();
     expect(panelRender).toHaveBeenCalledOnce();
     for (const render of renders) expect(render).not.toHaveBeenCalled();
@@ -370,10 +388,9 @@ function section<T>(panel: AppNavigationPanel, selector: string, type: abstract 
   return element;
 }
 
-async function mountHeaderPanel(machines: Machine[], locationIndicator = false): Promise<AppNavigationPanel> {
+async function mountHeaderPanel(machines: Machine[]): Promise<AppNavigationPanel> {
   const panel = new AppNavigationPanel();
   panel.machines = machines;
-  panel.locationIndicator = locationIndicator;
   document.body.append(panel);
   await panel.updateComplete;
   return panel;

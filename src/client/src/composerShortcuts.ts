@@ -9,11 +9,15 @@ export function isComposerShortcut(actionId: string): boolean {
   return actionId === COMPOSER_SEND_DESKTOP || actionId === COMPOSER_SEND_MOBILE;
 }
 
-export function composerShortcutActions(preference = readPromptEnterPreference()): AppAction[] {
+export function composerShortcutActions(
+  preference = readPromptEnterPreference(),
+  present?: (mobile: boolean) => { title: string; description: string },
+): AppAction[] {
   return [false, true].map((mobile) => ({
     id: mobile ? COMPOSER_SEND_MOBILE : COMPOSER_SEND_DESKTOP,
     title: `Send message — ${mobile ? "touch or narrow screen" : "desktop"}`,
     description: "One key combination, active only in the message editor. Overrides global shortcuts there.",
+    ...present?.(mobile),
     group: "Chat composer",
     shortcut: defaultSendShortcut({ matches: mobile }, preference),
     // Settings-only descriptors; submission stays owned by the focused editor.

@@ -2,14 +2,26 @@ import { describe, expect, it } from "vitest";
 import { ASK_USER_COMMENT_MAX_LENGTH, ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
 import { parseAskUserRequest, parseAskUserOutcome, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachine, parseMachineRuntime, parseMessagePage, parseMcpAuthServersResponse, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamEvent, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution } from "./parsers";
 
-import { KNOWN_THINKING_LEVELS } from "../../../shared/thinkingLevels";
-
 const legacyActivityWarning = {
   severity: "info", source: "PI-WEB",
   message: "Recently active in another PI-WEB instance. Avoid working on this session in both instances at once.",
 };
 
 describe("API parsers", () => {
+  it("preserves optional intervention state and validates live transitions", () => {
+    const info = { id: "s", path: "/s.jsonl", cwd: "/repo", created: "now", modified: "now", messageCount: 1, firstMessage: "hi" };
+    for (const interventionRequired of [true, false]) {
+      expect(parseSessionInfo({ ...info, interventionRequired }).interventionRequired).toBe(interventionRequired);
+      expect(parseSessionStatus({ ...statusWire(), interventionRequired }).interventionRequired).toBe(interventionRequired);
+      const event = parseRealtimeStreamEvent({ type: "status.update", status: { ...statusWire(), interventionRequired } });
+      expect(event.type === "status.update" && event.status.interventionRequired).toBe(interventionRequired);
+    }
+    expect(parseSessionInfo(info).interventionRequired).toBeUndefined();
+    expect(parseSessionStatus(statusWire()).interventionRequired).toBeUndefined();
+    expect(() => parseSessionInfo({ ...info, interventionRequired: "yes" })).toThrow("interventionRequired");
+    expect(() => parseSessionStatus({ ...statusWire(), interventionRequired: 1 })).toThrow("interventionRequired");
+  });
+
   it("preserves remote naming metadata and supports older machine responses", () => {
     const machine = { id: "remote", name: "Alias", kind: "remote", createdAt: "now", updatedAt: "now" };
     expect(parseMachine(machine)).toEqual(machine);
@@ -77,8 +89,15 @@ describe("API parsers", () => {
     expect(() => parseOAuthFlowState({ ...flow, prompt: { requestId: "text", message: "Value", promptType: "kind" } })).toThrow("Invalid OAuth prompt type");
   });
 
+  it("retains deployment defaults and setting source metadata, rejecting malformed metadata", () => {
+    const response = { path: "config.json", exists: true, config: {}, effectiveConfig: {}, envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false }, defaultsConfig: { basePaths: [], environmentFacts: false, extensionDialogsTimeoutMs: 0 }, defaultsPath: "defaults.json", enforcedSettings: { "/quietMode": "PI_WEB_QUIET_MODE" }, configSources: { "/basePaths": "defaults" } };
+    expect(parsePiWebConfigResponse(response)).toEqual(response);
+    expect(() => parsePiWebConfigResponse({ ...response, enforcedSettings: { "/quietMode": true } })).toThrow("configuration source");
+    expect(() => parsePiWebConfigResponse({ ...response, defaultsConfig: { basePaths: [42] } })).toThrow();
+  });
+
   it("parses and validates installation identity in config responses", () => {
-    const response = { path: "config.json", exists: true, config: { installationName: " Build lab " }, effectiveConfig: {}, envOverrides: { host: false, port: false, allowedHosts: false, maxUploadBytes: false, spawnSessions: false, subsessions: false, askUser: false } };
+    const response = { path: "config.json", exists: true, config: { installationName: " Build lab " }, effectiveConfig: {}, envOverrides: { host: false, port: false, allowedHosts: false, maxUploadBytes: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false } };
     expect(parsePiWebConfigResponse(response).config.installationName).toBe("Build lab");
     expect(() => parsePiWebConfigResponse({ ...response, config: { installationName: 42 } })).toThrow("installationName");
   });
@@ -89,20 +108,30 @@ describe("API parsers", () => {
       exists: true,
       config: { host: "0.0.0.0", port: 8504, allowedHosts: ["example.local"], shortcuts: { "core:view.chat": "mod+1", "core:session.stop": null }, plugins: { info: { enabled: false, settings: { compact: true } } }, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: "manual/uploads" }, attachments: { defaultFolder: "saved/attachments" }, maxUploadBytes: 1234, agent: { command: "agent-lab", dir: "~/agent-profiles/lab" } },
       effectiveConfig: { host: "127.0.0.1", port: 8504, allowedHosts: true, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: ".pi-web/uploads" }, attachments: { defaultFolder: ".pi-web/attachments" }, agent: { command: "agent-lab", dir: "/Users/dev/agent-profiles/lab" } },
-      envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+      envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
     })).toEqual({
       path: "/tmp/config.json",
       exists: true,
       config: { host: "0.0.0.0", port: 8504, allowedHosts: ["example.local"], shortcuts: { "core:view.chat": "mod+1", "core:session.stop": null }, plugins: { info: { enabled: false, settings: { compact: true } } }, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: "manual/uploads" }, attachments: { defaultFolder: "saved/attachments" }, maxUploadBytes: 1234, agent: { command: "agent-lab", dir: "~/agent-profiles/lab" } },
       effectiveConfig: { host: "127.0.0.1", port: 8504, allowedHosts: true, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: ".pi-web/uploads" }, attachments: { defaultFolder: ".pi-web/attachments" }, agent: { command: "agent-lab", dir: "/Users/dev/agent-profiles/lab" } },
-      envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+      envOverrides: { host: true, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
     });
   });
 
   it("preserves archive destinations for config round-trips without a UI control", () => {
     const sessionArchive = { directory: "/external/archives" };
-    const response = { path: "/tmp/config.json", exists: true, config: { sessionArchive }, effectiveConfig: { sessionArchive }, envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false } };
+    const response = { path: "/tmp/config.json", exists: true, config: { sessionArchive }, effectiveConfig: { sessionArchive }, envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false } };
     expect(parsePiWebConfigResponse(response)).toMatchObject({ config: { sessionArchive }, effectiveConfig: { sessionArchive } });
+  });
+
+  it("preserves and validates gateway localization defaults in both response fields", () => {
+    const defaultLocalization = { language: "fr", formatLocale: "de-DE", timeZone: "UTC", hourCycle: "h23" };
+    const response = { path: "/tmp/config.json", exists: true, config: {}, effectiveConfig: {},
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false } };
+    for (const field of ["config", "effectiveConfig"] as const) {
+      expect(parsePiWebConfigResponse({ ...response, [field]: { defaultLocalization } })[field]).toEqual({ defaultLocalization });
+      expect(() => parsePiWebConfigResponse({ ...response, [field]: { defaultLocalization: { timeZone: "Invalid/Zone" } } })).toThrow("PI WEB config defaultLocalization");
+    }
   });
 
   it("preserves theme defaults and rejects malformed theme data", () => {
@@ -110,7 +139,7 @@ describe("API parsers", () => {
     const response = {
       path: "/tmp/config.json", exists: true,
       config: { defaultTheme }, effectiveConfig: { defaultTheme },
-      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
     };
     expect(parsePiWebConfigResponse(response)).toMatchObject({ config: { defaultTheme }, effectiveConfig: { defaultTheme } });
     expect(() => parsePiWebConfigResponse({ ...response, config: { defaultTheme: "dark" } })).toThrow("PI WEB config defaultTheme");
@@ -119,7 +148,7 @@ describe("API parsers", () => {
   it("preserves optional streaming defaults and rejects invalid values in both config fields", () => {
     const response = {
       path: "/tmp/config.json", exists: true, config: {}, effectiveConfig: {},
-      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
     };
     expect(parsePiWebConfigResponse(response)).toMatchObject({ config: {}, effectiveConfig: {} });
     for (const field of ["config", "effectiveConfig"] as const) {
@@ -136,7 +165,7 @@ describe("API parsers", () => {
   it("preserves quiet mode and rejects invalid values in both config fields", () => {
     const response = {
       path: "/tmp/config.json", exists: true, config: {}, effectiveConfig: {},
-      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
     };
     for (const field of ["config", "effectiveConfig"] as const) {
       expect(parsePiWebConfigResponse(response)[field]).not.toHaveProperty("quietMode");
@@ -149,25 +178,15 @@ describe("API parsers", () => {
     }
   });
 
-  it("preserves naming configuration and rejects malformed naming fields", () => {
+  it("rejects the retired sessionNaming key in every config response layer", () => {
     const response = {
       path: "/tmp/config.json", exists: true, config: {}, effectiveConfig: {},
-      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
     };
-    for (const field of ["config", "effectiveConfig"] as const) {
-      for (const sessionNaming of [{}, { model: "openai/gpt-5" }, { maxTokens: 48 }, { timeoutMs: 1 }, { timeoutMs: 10000 }, { timeoutMs: 2147483647 }, { model: "openai/gpt-5", maxTokens: 32, thinkingLevel: "off", timeoutMs: 15000 }, ...KNOWN_THINKING_LEVELS.map((thinkingLevel) => ({ thinkingLevel }))]) {
-        expect(parsePiWebConfigResponse({ ...response, [field]: { sessionNaming } })[field]).toEqual({ sessionNaming });
+    for (const field of ["config", "effectiveConfig", "defaultsConfig"] as const) {
+      for (const sessionNaming of [{ model: "openai/gpt-5" }, {}, null, undefined]) {
+        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming } })).toThrow("Retired PI WEB sessionNaming config field");
       }
-      for (const sessionNaming of [[], "model", { model: 42 }, { model: "no-provider" }, { maxTokens: 0 }, { maxTokens: -1 }, { maxTokens: 1.5 }]) {
-        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming } })).toThrow();
-      }
-      for (const thinkingLevel of ["", "ultra", "MINIMAL", " minimal ", null, false, 42, {}, []]) {
-        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming: { thinkingLevel } } })).toThrow();
-      }
-      for (const timeoutMs of [0, -1, 1.5, 2147483648, Number.MAX_SAFE_INTEGER, NaN, Infinity, -Infinity, "10000", null, false, {}, []]) {
-        expect(() => parsePiWebConfigResponse({ ...response, [field]: { sessionNaming: { timeoutMs } } })).toThrow();
-      }
-      expect(parsePiWebConfigResponse(response)[field]).not.toHaveProperty("sessionNaming");
     }
   });
 
@@ -177,7 +196,7 @@ describe("API parsers", () => {
       exists: true,
       config: {},
       effectiveConfig: {},
-      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false },
+      envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false },
     };
 
     expect(() => parsePiWebConfigResponse({ ...response, config: { attachments: "saved/attachments" } })).toThrow("Invalid PI WEB attachments field");
@@ -274,8 +293,24 @@ describe("API parsers", () => {
       .toThrow("Invalid PI WEB deprecated agent inputs");
   });
 
+  it("parses messaging settings in every configuration layer and rejects non-booleans", () => {
+    const response = { path: "config.json", exists: true, config: { sessionMessages: false }, effectiveConfig: { sessionMessages: true }, defaultsConfig: { sessionMessages: true }, envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: true, askUser: false } };
+    expect(parsePiWebConfigResponse(response)).toEqual(response);
+    for (const layer of ["config", "effectiveConfig", "defaultsConfig"] as const) {
+      expect(() => parsePiWebConfigResponse({ ...response, [layer]: { sessionMessages: "false" } })).toThrow();
+    }
+  });
+
+  it("accepts legacy config responses without the messaging override flag but rejects malformed supplied values", () => {
+    const response = { path: "config.json", exists: true, config: {}, effectiveConfig: {}, envOverrides: { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false } };
+    expect(parsePiWebConfigResponse(response)).toEqual({ ...response, envOverrides: { ...response.envOverrides, sessionMessages: false } });
+    for (const sessionMessages of ["false", 0, null]) {
+      expect(() => parsePiWebConfigResponse({ ...response, envOverrides: { ...response.envOverrides, sessionMessages } })).toThrow();
+    }
+  });
+
   it("rejects config responses missing a required override flag", () => {
-    const envOverrides = { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, askUser: false };
+    const envOverrides = { host: false, port: false, allowedHosts: false, spawnSessions: false, subsessions: false, sessionMessages: false, askUser: false };
     for (const flag of ["host", "port", "allowedHosts", "spawnSessions", "subsessions", "askUser"] as const) {
       const incomplete = Object.fromEntries(Object.entries(envOverrides).filter(([key]) => key !== flag));
       expect(() => parsePiWebConfigResponse({
@@ -566,6 +601,22 @@ describe("API parsers", () => {
     });
   });
 
+  it("preserves known presentation metadata across startup, session and global wire boundaries", () => {
+    const base = { sessionId: "test", phase: "active", label: "raw fallback", detail: "raw detail", at: "now" };
+    const startup = { ...base, startupPresentation: { intent: "create", stage: "extensions", catalogRefreshing: true } };
+    expect(parseSessionStartupProgressEvent({ type: "session.startup", activity: startup })).toEqual({ type: "session.startup", activity: startup });
+    for (const runtimePresentation of [{ kind: "runningTool" }, { kind: "model", value: "raw-model" }, { kind: "compactionFailed", detailKind: "compactionFailed" }]) {
+      const activity = { ...base, runtimePresentation };
+      const event = { type: "activity.update", activity };
+      expect(parseSessionStreamEvent(event)).toEqual(event);
+      expect(parseRealtimeStreamEvent(event)).toEqual(event);
+    }
+    for (const runtimePresentation of [null, "invalid", { kind: "future" }, { kind: "model", value: 3 }, { kind: "runningTool", detailKind: "future" }]) {
+      expect(parseSessionStreamEvent({ type: "activity.update", activity: { ...base, runtimePresentation } })).toEqual({ type: "activity.update", activity: base });
+    }
+    expect(parseSessionStartupProgressEvent({ type: "session.startup", activity: { ...base, startupPresentation: { intent: "create", stage: "future", catalogRefreshing: true } } })).toEqual({ type: "session.startup", activity: base });
+  });
+
   it("carries the startup marker so an opening session is not mistaken for a working one", () => {
     const activity = { sessionId: "session-1", phase: "active", label: "Opening session", detail: "Starting the Pi session", at: "2026-07-20T00:00:01.000Z", startup: true };
 
@@ -601,6 +652,7 @@ describe("API parsers", () => {
       ],
       totals: { archiveCount: 2, deleteCount: 4 },
       skippedBusySessionIds: ["busy-1"],
+      skippedPinnedSessionIds: ["pinned-1"],
     };
 
     expect(parseSessionCleanupPreviewResponse(preview)).toEqual(preview);
@@ -862,6 +914,16 @@ describe("API parsers", () => {
     ]);
   });
 
+  it("keeps known warning provenance and ignores malformed or future cosmetic metadata", () => {
+    const warning = { severity: "warning", message: "English fallback", dismiss: { id: "opaque-id" } };
+    const presentations = [{ kind: "anthropicSubscriptionAuth" }, { kind: "future" }, null, [], "invalid", { kind: 1 }];
+    const parsed = parseSessionStatus({ ...statusWire(), warnings: presentations.map((presentation) => ({ ...warning, presentation })) });
+    expect(parsed.warnings).toEqual([
+      { ...warning, presentation: { kind: "anthropicSubscriptionAuth" } },
+      ...presentations.slice(1).map(() => warning),
+    ]);
+  });
+
   it("omits warnings entirely when the field is absent", () => {
     const parsed = parseSessionStatus({
       sessionId: "s1",
@@ -941,6 +1003,25 @@ describe("API parsers", () => {
       removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
       effectiveConfig: {},
     });
+  });
+
+  it.each([
+    { kind: "gitWorktree", label: "review", path: "/repo/review" },
+    { kind: "future" },
+    { kind: "gitWorktree", label: 42, path: "/repo/review" },
+    null,
+  ])("retains valid optional removal localization and ignores unknown cosmetics: %j", (localization) => {
+    const removal = parseWorkspace({
+      id: "w1", projectId: "p1", path: "/repo/review", label: "review", isMain: false,
+      removal: { actionLabel: "Delete workspace", confirmation: "Raw confirmation", precondition: "v1.token", localization },
+      effectiveConfig: {},
+    }).removal;
+    expect(removal?.confirmation).toBe("Raw confirmation");
+    expect(removal?.precondition).toBe("v1.token");
+    if (localization?.kind === "gitWorktree" && typeof localization.label === "string") {
+      expect(removal?.localization).toEqual(localization);
+      expect(Object.isFrozen(removal?.localization)).toBe(true);
+    } else expect(removal).not.toHaveProperty("localization");
   });
 
   it("freezes host-owned workspace snapshots recursively", () => {
@@ -1187,6 +1268,27 @@ describe("API parsers", () => {
     expect(() => parseSessionTreeForkResult({ session })).toThrow("cancelled");
   });
 
+  it.each([
+    { kind: "compactionCancelled" }, { kind: "automaticCompactionCancelled" }, { kind: "compactionFailed" },
+    { kind: "future" }, { kind: 42 }, null, [], "compactionFailed",
+  ].map((presentation) => ({ presentation })))("preserves known notification provenance and ignores cosmetic future/malformed metadata $presentation", ({ presentation }) => {
+    const inbox = notificationInboxWire();
+    const notification = { ...notificationWire(1), presentation };
+    const expected = presentation !== null && !Array.isArray(presentation) && typeof presentation === "object"
+      && typeof presentation.kind === "string" && ["compactionCancelled", "automaticCompactionCancelled", "compactionFailed"].includes(presentation.kind)
+      ? presentation : undefined;
+    expect(parseSessionNotificationInboxSnapshot({ ...inbox, notifications: [notification] }).notifications[0]?.presentation).toEqual(expected);
+    const event = {
+      type: "notifications.inbox", daemonInstanceId: "daemon-a", catalogRevision: 2,
+      summary: inbox.summary, dismissThrough: inbox.dismissThrough,
+      delta: { kind: "added", notification },
+    };
+    const parsed = parseSessionNotificationInboxEvent(event);
+    if (parsed.delta.kind !== "added") throw new Error("Expected added notification");
+    expect(parsed.delta.notification.presentation).toEqual(expected);
+    expect(parsed.delta.notification.message).toBe(notification.message);
+  });
+
   it("strictly parses selected notification snapshots and realtime events", () => {
     const inbox = notificationInboxWire();
 
@@ -1201,6 +1303,14 @@ describe("API parsers", () => {
     })).toMatchObject({ type: "notifications.inbox", delta: { kind: "added", notification: { severity: "warning" } } });
     expect(parseRealtimeStreamEvent({ type: "models.changed", revision: 3 })).toEqual({ type: "models.changed", revision: 3 });
     expect(() => parseRealtimeStreamEvent({ type: "models.changed", revision: -1 })).toThrow("safe integer");
+  });
+
+  it("validates scoped pin invalidations without trusting extra wire fields", () => {
+    const event = { type: "session-pins.changed", projectId: "p", workspaceId: "w", revision: 2 };
+    expect(parseRealtimeStreamEvent({ ...event, ids: ["untrusted"] })).toEqual(event);
+    for (const malformed of [{ projectId: "" }, { workspaceId: null }, { revision: -1 }]) {
+      expect(() => parseRealtimeStreamEvent({ ...event, ...malformed })).toThrow();
+    }
   });
 
   it("rebuilds global workspace invalidations from the validated project id", () => {

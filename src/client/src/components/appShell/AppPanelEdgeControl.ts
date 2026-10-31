@@ -1,3 +1,5 @@
+import { LocalizationController, localization } from "../../localization/browser";
+import { appShellMessages as m } from "../../appShellMessages";
 import { stylesheetIntegrationCapability } from "../../plugins/styles";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
@@ -21,6 +23,7 @@ const TAP_MOVE_TOLERANCE_PX = 4;
 export class AppPanelEdgeControl extends LitElement {
   constructor() {
     super();
+    new LocalizationController(this);
     stylesheetIntegrationCapability.createController(this);
   }
 
@@ -30,7 +33,7 @@ export class AppPanelEdgeControl extends LitElement {
   @property({ type: Number }) minWidth?: number;
   @property({ type: Number }) maxWidth?: number;
   @property() controls = "";
-  @property() resizeLabel = "Resize panel";
+  @property() resizeLabel: string | undefined;
   @property({ attribute: false }) onResizeStart?: () => number | undefined;
   @property({ attribute: false }) onResize?: (width: number) => void;
   @property({ attribute: false }) onResizeEnd?: () => void;
@@ -56,8 +59,8 @@ export class AppPanelEdgeControl extends LitElement {
         class="resize-handle"
         role="separator"
         tabindex="0"
-        aria-label=${this.resizeLabel}
-        title=${`${this.resizeLabel}. Double-click or double-tap to reset.`}
+        aria-label=${this.resizeLabel ?? m.t(this.side === "navigation" ? "resizeNavigation" : "resizeWorkspace")}
+        title=${m.t("resizeHint", { label: this.resizeLabel ?? m.t(this.side === "navigation" ? "resizeNavigation" : "resizeWorkspace") })}
         aria-controls=${this.controls}
         aria-orientation="vertical"
         aria-valuemin=${String(constraints.minWidth)}
@@ -97,7 +100,7 @@ export class AppPanelEdgeControl extends LitElement {
     event.preventDefault();
     if (Math.abs(event.clientX - activeResize.startClientX) <= TAP_MOVE_TOLERANCE_PX) return;
     activeResize.moved = true;
-    this.commitPanelWidth(panelWidthFromDrag(this.side, activeResize.startWidth, activeResize.startClientX, event.clientX, this.resizeConstraints()));
+    this.commitPanelWidth(panelWidthFromDrag(this.side, activeResize.startWidth, activeResize.startClientX, localization.direction === "rtl" ? 2 * activeResize.startClientX - event.clientX : event.clientX, this.resizeConstraints()));
   }
 
   private onResizePointerUp(event: PointerEvent): void {
@@ -123,7 +126,8 @@ export class AppPanelEdgeControl extends LitElement {
     if (!this.resizable || !RESIZE_KEYS.has(event.key)) return;
     const currentWidth = this.resizeStartWidth();
     if (currentWidth === undefined) return;
-    const nextWidth = panelWidthFromKeyboard(this.side, currentWidth, event.key, { largeStep: event.shiftKey, constraints: this.resizeConstraints() });
+    const key = localization.direction === "rtl" ? (event.key === "ArrowLeft" ? "ArrowRight" : event.key === "ArrowRight" ? "ArrowLeft" : event.key) : event.key;
+    const nextWidth = panelWidthFromKeyboard(this.side, currentWidth, key, { largeStep: event.shiftKey, constraints: this.resizeConstraints() });
     if (nextWidth === undefined) return;
 
     event.preventDefault();

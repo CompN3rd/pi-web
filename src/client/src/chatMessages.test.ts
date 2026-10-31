@@ -82,6 +82,35 @@ describe("chat message normalization", () => {
     ]);
   });
 
+  it("preserves custom identity, raw payload and original fallback presentation", () => {
+    const content = [{ type: "text", text: "original", displayText: "transformed" }, imageReference];
+    const details = { status: "ready", nested: { count: 2 } };
+    const raw = { role: "custom", customType: "extension.card", display: true, content, details,
+      entryId: "custom-1", timestamp: "2026-07-20T10:00:00.000Z" };
+    const normalized = normalizeMessages([raw]);
+    expect(normalized).toEqual([{
+      role: "system", entryId: raw.entryId, meta: { timestamp: raw.timestamp },
+      parts: [{ type: "customMessage", customType: raw.customType, content, details,
+        parts: [{ type: "text", text: "original", displayText: "transformed" }, imageReference] }],
+    }]);
+    expect(normalizeMessages(normalized)).toEqual(normalized);
+    expect(normalizeMessages([{ ...raw, display: undefined }])).toEqual(normalized);
+  });
+
+  it.each(["", []])("keeps details-only custom messages with empty fallback (%j)", (content) => {
+    const details = { card: "ready" };
+    expect(normalizeMessages([{ role: "custom", customType: "extension.card", content, details }])).toEqual([
+      { role: "system", parts: [{ type: "customMessage", customType: "extension.card", content, details, parts: [] }] },
+    ]);
+  });
+
+  it("does not normalize hidden custom messages, including ask_user records", () => {
+    expect(normalizeMessages([
+      { role: "custom", customType: "extension.card", display: false, content: "secret", details: { card: true } },
+      { role: "custom", customType: ASK_USER_ANSWERS_CUSTOM_TYPE, display: false, content: "secret", details: askUserOutcome },
+    ])).toEqual([]);
+  });
+
   it("preserves already-normalized chat lines", () => {
     const line = { role: "assistant" as const, parts: [{ type: "text" as const, text: "cached" }] };
 
@@ -98,17 +127,26 @@ describe("chat message normalization", () => {
     });
     const recordLine = { role: "system" as const, parts: [{ type: "askUserRecord" as const, outcome: askUserOutcome }] };
 
-    expect(normalized).toEqual([recordLine]);
+    expect(normalized).toEqual([{ role: "system", parts: [{
+      type: "customMessage", customType: ASK_USER_ANSWERS_CUSTOM_TYPE,
+      content: "model-facing answer text", details: askUserOutcome, parts: recordLine.parts,
+    }] }]);
     expect(groupChatMessages(normalized)).toEqual([{ kind: "message", index: 0, message: recordLine }]);
   });
 
   it("falls back to model-facing text when an ask_user answer record is malformed", () => {
-    expect(normalizeMessage({
+    const normalized = normalizeMessage({
       role: "custom",
       customType: ASK_USER_ANSWERS_CUSTOM_TYPE,
       content: "Answered 0 of 1; unanswered: db",
       details: { askId: "missing-the-rest" },
-    })).toEqual([textMessage("system", "Answered 0 of 1; unanswered: db")]);
+    });
+    const fallback = textMessage("system", "Answered 0 of 1; unanswered: db");
+    expect(normalized).toEqual([{ role: "system", parts: [{
+      type: "customMessage", customType: ASK_USER_ANSWERS_CUSTOM_TYPE,
+      content: "Answered 0 of 1; unanswered: db", details: { askId: "missing-the-rest" }, parts: fallback.parts,
+    }] }]);
+    expect(groupChatMessages(normalized)).toEqual(groupChatMessages([fallback]));
   });
 
   it("projects a superseded ask from the later ask_user tool result", () => {
@@ -225,12 +263,12 @@ describe("chat message normalization", () => {
     { byteSize: -1 }, { byteSize: 1.5 }, { byteSize: Infinity }, { byteSize: "3" }, { byteSize: undefined },
   ])("fails closed for a malformed image reference: %j", (invalid) => {
     expect(normalizeMessage({ role: "user", content: [{ ...imageReference, ...invalid, data: "QUJD" }] }))
-      .toEqual([textMessage("user", "[image]")]);
+      .toEqual([{ role: "user", parts: [{ type: "text", text: "[image]", presentation: { kind: "imagePlaceholder" } }] }]);
   });
 
   it("also validates image references in already-shaped cached chat lines", () => {
     expect(normalizeMessage({ role: "user", entryId: "cached-image", parts: [{ ...imageReference, mediaId: "invalid", data: "QUJD" }] }))
-      .toEqual([{ role: "user", entryId: "cached-image", parts: [{ type: "text", text: "[image]" }] }]);
+      .toEqual([{ role: "user", entryId: "cached-image", parts: [{ type: "text", text: "[image]", presentation: { kind: "imagePlaceholder" } }] }]);
   });
 
   it("does not reinterpret non-image parts as media references", () => {
@@ -272,7 +310,7 @@ describe("chat message normalization", () => {
 
   it("falls back to a placeholder for image content without data", () => {
     expect(normalizeMessage({ role: "user", content: [{ type: "image", mimeType: "image/png" }] })).toEqual([
-      { role: "user", parts: [{ type: "text", text: "[image]" }] },
+      { role: "user", parts: [{ type: "text", text: "[image]", presentation: { kind: "imagePlaceholder" } }] },
     ]);
   });
 
@@ -284,14 +322,14 @@ describe("chat message normalization", () => {
 
   it("shows assistant model errors as system chat messages", () => {
     expect(normalizeMessage({ role: "assistant", content: [], stopReason: "error", errorMessage: "429 rate limit", timestamp: "2026-05-09T12:00:00.000Z", provider: "openai", model: "gpt-4.1" })).toEqual([
-      { role: "system", parts: [{ type: "text", text: "Model response failed: 429 rate limit" }], meta: { timestamp: "2026-05-09T12:00:00.000Z", model: { provider: "openai", id: "gpt-4.1" } } },
+      { role: "system", parts: [{ type: "text", text: "Model response failed: 429 rate limit", presentation: { kind: "modelError", detail: "429 rate limit" } }], meta: { timestamp: "2026-05-09T12:00:00.000Z", model: { provider: "openai", id: "gpt-4.1" } } },
     ]);
   });
 
   it("keeps partial assistant content and adds a visible error line", () => {
     expect(normalizeMessage({ role: "assistant", content: [{ type: "text", text: "partial answer" }], stopReason: "error", errorMessage: "connection lost" })).toEqual([
       textMessage("assistant", "partial answer"),
-      textMessage("system", "Model response failed: connection lost"),
+      { role: "system", parts: [{ type: "text", text: "Model response failed: connection lost", presentation: { kind: "modelError", detail: "connection lost" } }] },
     ]);
   });
 
@@ -340,7 +378,7 @@ describe("chat message normalization", () => {
       truncated: true,
       fullOutputPath: "/tmp/out.log",
     })).toEqual([
-      textMessage("bash", "excluded from context\n\n$ npm test\n\nok\n\nexit 0\n\noutput truncated\n\nfull output: /tmp/out.log"),
+      { role: "bash", parts: [{ type: "text", text: "excluded from context\n\n$ npm test\n\nok\n\nexit 0\n\noutput truncated\n\nfull output: /tmp/out.log", presentation: { kind: "bash", command: "npm test", output: "ok", excluded: true, cancelled: false, truncated: true, exitCode: "0", fullOutputPath: "/tmp/out.log" } }] },
     ]);
   });
 });

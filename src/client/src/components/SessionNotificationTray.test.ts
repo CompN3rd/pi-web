@@ -2,6 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SelectedSessionNotificationView } from "../sessionNotifications";
 import { SessionNotificationTray } from "./SessionNotificationTray";
+import { localization } from "../localization/browser";
+import { sessionNotificationMessages as messages } from "../sessionNotificationMessages";
+import { notificationDismissLabel } from "../sessionNotifications";
+import { sessionNotificationSources } from "../../../shared/sessionNotificationPresentation";
 
 const notification = {
   id: "daemon-a:1", message: "plain <strong>text</strong>\nsecond line", truncated: false,
@@ -34,9 +38,30 @@ async function settle(view: SessionNotificationTray) {
   await view.updateComplete;
   await view.updateComplete;
 }
-afterEach(() => { document.body.replaceChildren(); localStorage.clear(); vi.restoreAllMocks(); });
+afterEach(async () => {
+  document.body.replaceChildren(); localStorage.clear(); vi.restoreAllMocks();
+  await localization.setPreferences({ language: "en", formatLocale: "en" });
+});
 
 describe("SessionNotificationTray", () => {
+  it.each(["compactionCancelled", "automaticCompactionCancelled", "compactionFailed"] as const)("localizes %s live from refresh-safe provenance without translating matching extension content", async (kind) => {
+    const generated = { ...notification, presentation: { kind }, message: sessionNotificationSources[kind] };
+    const extension = { ...notification, id: "extension", message: generated.message };
+    const view = await mount(inbox({ notifications: [generated, extension], retainedCount: 2 }));
+    for (const language of ["en", "en-XA", "ar-XB", "en"]) {
+      await localization.setPreferences({ language, formatLocale: "en" });
+      await settle(view);
+      const rows = view.renderRoot.querySelectorAll(".notification-row");
+      const text = rows[0]?.querySelector(".notification-message")?.textContent;
+      expect(text).toBe(messages.t(kind));
+      expect(text === generated.message).toBe(language === "en");
+      expect(rows[0]?.querySelector(".notification-row-dismiss")?.getAttribute("aria-label")).toBe(notificationDismissLabel(generated));
+      expect(rows[1]?.querySelector(".notification-message")?.textContent).toBe(extension.message);
+      expect(generated.message).toBe(sessionNotificationSources[kind]);
+      expect(view.notificationInbox?.notifications[0]).toBe(generated);
+    }
+  });
+
   it.each([".notification-row-dismiss", ".notification-clear"])("recovers header focus after %s empties the tray, then releases it on focus exit", async (selector) => {
     const view = await mount();
     const button = required(view, selector);
@@ -119,7 +144,6 @@ describe("SessionNotificationTray", () => {
     expect(required(view, ".notification-overflow").textContent).toContain("3");
     expect(required(view, ".notification-truncated").textContent).not.toBe("");
     expect(required(view, ".notification-row-dismiss").hasAttribute("disabled")).toBe(true);
-    for (const button of view.renderRoot.querySelectorAll("button")) expect(button.classList.contains("ui-button")).toBe(true);
     const toggle = required(view, ".notification-toggle");
     expect(required(view, `#${String(toggle.getAttribute("aria-controls"))}`)).toBe(required(view, ".notification-list"));
     view.notificationInbox = inbox({ dismissAllPending: true }); await settle(view);

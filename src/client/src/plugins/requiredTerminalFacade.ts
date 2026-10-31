@@ -1,3 +1,4 @@
+import { PluginRecoveryError, pluginRecoveryMessages as messages } from "../pluginRecoveryMessages";
 import type { AnyTerminalCommandRun, MaintenanceTerminalCommandRun, TerminalCommandRun, TerminalCommandRunStatus, Workspace } from "../api";
 import type { MaintenanceTerminal, ContributionQueryValue, PluginCapability, PluginPeer, QualifiedContributionId, WorkspacePanelTerminal, WorkspacePluginBinding, WorkspaceTerminalCommandInput } from "./types";
 
@@ -58,7 +59,7 @@ export const REQUIRED_TERMINAL_BROWSER_FACADE_CAPABILITY = Object.freeze({
   parse: snapshotRequiredTerminalBrowserFacade,
 }) satisfies PluginCapability<RequiredTerminalBrowserFacadeV1, 1>;
 
-export class RequiredTerminalBrowserUnavailableError extends Error {
+export class RequiredTerminalBrowserUnavailableError extends PluginRecoveryError {
   override name = "RequiredTerminalBrowserUnavailableError";
 }
 
@@ -115,9 +116,9 @@ export function snapshotRequiredTerminalBrowserFacade(value: unknown): RequiredT
 
 export function requiredTerminalUnavailableError(machineId: string): RequiredTerminalBrowserUnavailableError {
   return new RequiredTerminalBrowserUnavailableError(
-    machineId === "local"
-      ? "Required Terminal plugin is unavailable. Open Settings for recovery guidance."
-      : `Required Terminal plugin is unavailable on machine ${machineId}. Open Settings for recovery guidance.`,
+    () => machineId === "local"
+      ? messages.t("terminalUnavailable")
+      : messages.t("remoteTerminalUnavailable", { id: machineId }),
   );
 }
 

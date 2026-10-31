@@ -1,3 +1,5 @@
+import { LocalizationController } from "../localization/browser";
+import { projectWorkspaceMessages as messages } from "../projectWorkspaceMessages";
 import { stylesheetIntegrationCapability } from "../plugins/styles";
 import { LitElement, html } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
@@ -21,6 +23,7 @@ export class ProjectDialog extends LitElement {
   constructor() {
     super();
     stylesheetIntegrationCapability.createController(this);
+    new LocalizationController(this);
   }
 
   @property({ attribute: false }) onSubmit?: (path: string, create: boolean, trust: ProjectTrustChoice | undefined) => void;
@@ -133,16 +136,15 @@ export class ProjectDialog extends LitElement {
     return html`
       <label class="check ui-checkbox-field">
         <input type="checkbox" aria-describedby=${this.trust?.error === undefined ? "project-trust-help" : "project-trust-help project-trust-error"} .checked=${this.trust?.trusted ?? false} ?disabled=${unavailable} @change=${(event: InputEvent) => { if (event.target instanceof HTMLInputElement) this.onTrustChange(event.target.checked); }} />
-        <span>Trust this project</span>
+        <span>${messages.t("trustProject")}</span>
       </label>
       <small id="project-trust-help" class="trust-hint">
-        Trusting lets pi load this project's .pi settings, extensions, skills, and packages.
-        Extensions and packages can execute code on this machine. Only trust projects you know and trust.
-        <a href="https://pi.dev/docs/latest/security" target="_blank" rel="noreferrer">Learn about project trust</a>
+        ${messages.t("trustHelp")}
+        <a href="https://pi.dev/docs/latest/security" target="_blank" rel="noreferrer">${messages.t("learnTrust")}</a>
       </small>
       ${this.trust?.error === undefined ? null : html`
-        <small id="project-trust-error" class="trust-error ui-form-error" role="alert">Could not check project trust: ${this.trust.error}. Retry to load the existing trust decision.</small>
-        <button class="ui-button" type="button" @click=${() => { void this.loadTrust(); }}>Retry trust check</button>
+        <small id="project-trust-error" class="trust-error ui-form-error" role="alert">${messages.t("trustError", { error: this.trust.error })}</small>
+        <button class="ui-button" type="button" @click=${() => { void this.loadTrust(); }}>${messages.t("retryTrust")}</button>
       `}
     `;
   }
@@ -175,42 +177,42 @@ export class ProjectDialog extends LitElement {
       <modal-surface
         .onClose=${() => this.onCancel?.()}
         .initialFocus=${"input"}
-        .label=${"Add project"}
+        .label=${messages.t("addProject")}
         @keydown=${(event: KeyboardEvent) => { this.onKeyDown(event); }}
       >
         <form class="ui-form" @submit=${(event: SubmitEvent) => { event.preventDefault(); }}>
         <header class="ui-dialog-header">
-          <strong class="ui-dialog-title">Add project</strong>
-          <button class="ui-button ui-button--icon" type="button" @click=${() => { this.onCancel?.(); }} aria-label="Close add project">×</button>
+          <strong class="ui-dialog-title">${messages.t("addProject")}</strong>
+          <button class="ui-button ui-button--icon" type="button" @click=${() => { this.onCancel?.(); }} aria-label=${messages.t("closeAdd")}>×</button>
         </header>
         <div class="body ui-dialog-body ui-form-body">
-          <small id="project-machine-help" class="machine-hint">${this.machineId === "local" ? "Folders on the local machine (where PI WEB runs)." : `Folders on remote machine: ${this.machineId}.`} Paths are on this machine, not your browser's device.</small>
+          <small id="project-machine-help" class="machine-hint">${this.machineId === "local" ? messages.t("localFolders") : messages.t("remoteFolders", { machine: this.machineId })}</small>
           <label class="ui-form-field">
-            Project folder
-            <input class="ui-input" aria-describedby=${this.suggestionError ? "project-machine-help project-folder-error" : "project-machine-help project-folder-status"} .value=${this.path} @input=${(event: InputEvent) => { this.onPathInput(event); }} placeholder="/path/to/project or ~/code/project" />
+            ${messages.t("folder")}
+            <input class="ui-input" dir="ltr" aria-describedby=${this.suggestionError ? "project-machine-help project-folder-error" : "project-machine-help project-folder-status"} .value=${this.path} @input=${(event: InputEvent) => { this.onPathInput(event); }} placeholder=${messages.t("folderPlaceholder")} />
           </label>
           ${this.suggestionError ? html`
-            <div id="project-folder-error" class="trust-error ui-form-error" role="alert">Could not load folders on this machine. Check the connection and retry, or enter a folder path.</div>
-            <button class="ui-button" type="button" @click=${() => { void this.loadSuggestions(); }}>Retry folder lookup</button>
+            <div id="project-folder-error" class="trust-error ui-form-error" role="alert">${messages.t("folderError")}</div>
+            <button class="ui-button" type="button" @click=${() => { void this.loadSuggestions(); }}>${messages.t("retryFolders")}</button>
           ` : null}
           <div id="project-folder-status" class="suggestions ui-selection-list" aria-live="polite">
-            ${this.loading ? html`<div class="hint">Loading folders…</div>` : null}
+            ${this.loading ? html`<div class="hint">${messages.t("loadingFolders")}</div>` : null}
             ${this.suggestions.map((suggestion, index) => html`
               <button type="button" class=${`ui-button ui-selection-option ${index === this.selected ? "selected" : ""}`} @click=${() => { this.pick(suggestion); }}>
-                ${suggestion.path}
+                <bdi dir="ltr">${suggestion.path}</bdi>
               </button>
             `)}
-            ${!this.loading && !this.suggestionError && this.suggestions.length === 0 ? html`<div class="hint">No matching folders. Enter a new path to create it.</div>` : null}
+            ${!this.loading && !this.suggestionError && this.suggestions.length === 0 ? html`<div class="hint">${messages.t("noFolders")}</div>` : null}
           </div>
           <label class="check ui-checkbox-field">
             <input type="checkbox" .checked=${this.createMissing} @change=${(event: InputEvent) => { this.onCreateMissingChange(event); }} />
-            Create the folder if it does not exist
+            ${messages.t("createFolder")}
           </label>
           ${this.renderTrustChoice()}
         </div>
         <footer class="ui-dialog-footer">
-          <button class="ui-button" type="button" @click=${() => { this.onCancel?.(); }}>Cancel</button>
-          <button class="ui-button ui-button--primary" type="button" ?disabled=${this.path.trim() === ""} @click=${() => { this.submit(); }}>Add project</button>
+          <button class="ui-button" type="button" @click=${() => { this.onCancel?.(); }}>${messages.t("cancel")}</button>
+          <button class="ui-button ui-button--primary" type="button" ?disabled=${this.path.trim() === ""} @click=${() => { this.submit(); }}>${messages.t("addProject")}</button>
         </footer>
         </form>
       </modal-surface>

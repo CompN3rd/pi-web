@@ -1,6 +1,12 @@
+import type { ServerNoticePresentation } from "./serverNoticePresentation.js";
+import type { CommandResultPresentation } from "./commandResultPresentation.js";
+import type { CommandOutputPresentation } from "./commandOutputPresentation.js";
+import type { SessionNotificationPresentation } from "./sessionNotificationPresentation.js";
+import type { RuntimeActivityPresentation } from "./sessionActivityPresentation.js";
 import type { MachineStatusUiEvent } from "./machineStatus.js";
 import type { TerminalPluginMode } from "./requiredTerminalPlugin.js";
-import type { ThinkingLevel } from "./thinkingLevels.js";
+import type { PiWebDefaultLocalization } from "./defaultLocalization.js";
+export type { PiWebDefaultLocalization, LocalizationHourCycle } from "./defaultLocalization.js";
 import type {
   DeleteWorkspaceFileResponse,
   FileContentMediaType,
@@ -78,6 +84,8 @@ export type MachineStatus = "unknown" | "online" | "offline" | "error";
  */
 export const PI_WEB_CAPABILITIES = {
   pluginLifecycle: "plugins.lifecycle",
+  sessionCleanupPinnedExclusions: "sessions.cleanup.pinnedExclusions",
+  sessionPinsDaemonOwned: "sessions.pins.daemonOwned",
 } as const;
 
 export type PiWebCapability = typeof PI_WEB_CAPABILITIES[keyof typeof PI_WEB_CAPABILITIES];
@@ -175,6 +183,8 @@ export interface PiWebConfigValues {
   installationName?: string;
   /** App-wide theme default; browser-local theme preferences take precedence. */
   defaultTheme?: PiWebThemePreference;
+  /** Gateway-wide localization defaults; browser-local preferences take precedence. */
+  defaultLocalization?: PiWebDefaultLocalization;
   /** Gateway-wide send behavior while streaming; defaults to steer. */
   defaultStreamingBehavior?: "steer" | "followUp";
   /**
@@ -187,7 +197,9 @@ export interface PiWebConfigValues {
   allowedHosts?: string[] | true;
   shortcuts?: PiWebShortcutConfig;
   plugins?: PiWebPluginConfigMap;
-  /** External filesystem roots PI WEB may expose outside a workspace. */
+  /** Deployment base roots; combined with independently configurable path additions. */
+  basePaths?: string[];
+  /** Additional external filesystem roots PI WEB may expose outside a workspace. */
   pathAccess?: PiWebPathAccessConfig;
   /** Workspace-relative defaults for manual file uploads. */
   uploads?: PiWebUploadsConfig;
@@ -197,20 +209,14 @@ export interface PiWebConfigValues {
   maxUploadBytes?: number;
   /** Destination for newly archived transcripts; the index remains in the PI WEB data directory. */
   sessionArchive?: { directory?: string };
-  /** Machine-wide naming overrides; defaults are the session model, 24 tokens, and minimal thinking. */
-  sessionNaming?: {
-    model?: string;
-    maxTokens?: number;
-    thinkingLevel?: ThinkingLevel;
-    /** Total wall time in milliseconds; defaults to 10000 when omitted. */
-    timeoutMs?: number;
-  };
   /** When true, LLMs can start new sessions via the spawn_session tool. */
   spawnSessions?: boolean;
+  /** When true, LLMs can send messages to other sessions. On by default; independent of spawning. */
+  sessionMessages?: boolean;
   /**
-   * When true, LLMs can start tracked child sessions via the
-   * spawn_subsession / list_subsessions / check_subsession / read_subsession
-   * tools. On by default; set to `false` to disable. Requires spawnSessions
+   * When true, LLMs can start, inspect, stop, resume, and archive tracked
+   * child sessions through the subsession tools.
+   * On by default; set to `false` to disable. Requires spawnSessions
    * to be enabled.
    */
   subsessions?: boolean;
@@ -375,6 +381,7 @@ export interface PiWebConfigEnvOverrides {
   port: boolean;
   allowedHosts: boolean;
   spawnSessions: boolean;
+  sessionMessages: boolean;
   subsessions: boolean;
   askUser: boolean;
 }
@@ -385,6 +392,13 @@ export interface PiWebConfigResponse {
   config: PiWebConfigValues;
   effectiveConfig: PiWebConfigValues;
   envOverrides: PiWebConfigEnvOverrides;
+  /** JSON-pointer setting identifiers mapped to controlling environment variable names. */
+  enforcedSettings?: Record<string, string>;
+  /** JSON-pointer setting identifiers mapped to their winning configuration source. */
+  configSources?: Record<string, string>;
+  /** Optional deployment-owned defaults, never written by Settings. */
+  defaultsPath?: string;
+  defaultsConfig?: PiWebConfigValues;
 }
 
 export interface Project {
@@ -479,6 +493,8 @@ export type ServerNoticeScope =
 
 /** One independent server-created event retained until dismissal, eligible plugin eviction, or daemon end. */
 export interface ServerNotice {
+  /** Optional generated presentation; message remains the English/raw fallback. */
+  presentation?: ServerNoticePresentation;
   id: string;
   severity: ServerNoticeSeverity;
   message: string;
@@ -558,6 +574,8 @@ export type SessionNotificationSeverity = "info" | "warning" | "error";
 export interface SessionNotification {
   id: string;
   message: string;
+  /** Optional PI WEB-owned wording; absent for extension-authored notifications. */
+  presentation?: SessionNotificationPresentation;
   truncated: boolean;
   severity: SessionNotificationSeverity;
   receivedAt: string;
@@ -639,6 +657,8 @@ export interface SessionNotificationSummaryEvent {
 
 export interface SessionInfo extends SessionRef {
   path: string;
+  /** Session yielded for human input; any new agent run clears this state. */
+  interventionRequired?: boolean;
   /** Only true for positively verified tracked agent subsessions; absent otherwise. */
   agentSubsession?: boolean;
   /** True when the server has verified a backing session file exists; false when known transient. */
@@ -691,6 +711,8 @@ export interface SessionBulkDeleteArchivedResponse {
 }
 
 export interface SessionCleanupRequest {
+  /** Exclude sessions pinned in navigation preferences. Omit/false to retain existing cleanup behavior. */
+  skipPinned?: boolean;
   /** Archive non-archived sessions whose modified time is older than this many days. Omit/null to disable. */
   archiveIdleDays?: number | null;
   /** Permanently delete archived sessions whose archivedAt time is older than this many days. Omit/null to disable. */
@@ -721,6 +743,7 @@ export interface SessionCleanupPreviewResponse {
   projects: SessionCleanupProjectSummary[];
   totals: SessionCleanupTotals;
   skippedBusySessionIds?: string[];
+  skippedPinnedSessionIds?: string[];
 }
 
 export interface SessionCleanupExecuteResponse extends SessionCleanupPreviewResponse {
@@ -729,6 +752,8 @@ export interface SessionCleanupExecuteResponse extends SessionCleanupPreviewResp
 }
 
 export interface SessionActivity {
+  /** Optional runtime-owned presentation; label/detail stay compatible raw fallbacks. */
+  runtimePresentation?: RuntimeActivityPresentation;
   sessionId: string;
   phase: "active" | "idle" | "error";
   label: string;
@@ -742,6 +767,14 @@ export interface SessionActivity {
    * work to report. `isSessionActive()` reads this to keep the two apart.
    */
   startup?: boolean;
+  /** Optional structured browser presentation; raw label/detail remain the wire fallback.
+   * Independent of `startup`: pending browser rows retain this when re-attributing progress.
+   */
+  startupPresentation?: {
+    intent: "create" | "open";
+    stage: "runtime" | "extensions";
+    catalogRefreshing: boolean;
+  };
 }
 
 export interface SessionQueueMessageMutation {
@@ -1187,6 +1220,8 @@ export type SessionWarningSeverity = "info" | "warning" | "error";
 export interface SessionWarning {
   severity: SessionWarningSeverity;
   message: string;
+  /** Cosmetic provenance for PI WEB-owned notices; message remains the English fallback. */
+  presentation?: { kind: "anthropicSubscriptionAuth" };
   source?: string;
   path?: string;
   dismiss?: { id: string };
@@ -1194,6 +1229,8 @@ export interface SessionWarning {
 
 export interface SessionStatus {
   sessionId: string;
+  /** Live value, including false; absent on older daemons. */
+  interventionRequired?: boolean;
   /** True when the server has verified a backing session file exists; false when known transient. */
   persisted?: boolean;
   /**
@@ -1305,11 +1342,28 @@ export type SessionTreeNodeKind =
   | "custom"
   | "other";
 
+/** Safe display provenance; text values are never translation keys. */
+export type SessionTreeSummaryPart = { type: "text"; text: string } | { type: "image" };
+export type SessionTreeSummaryStatus =
+  | "message" | "user-message" | "assistant-response" | "assistant-error" | "assistant-aborted"
+  | "hidden-custom-message" | "compaction-summary" | "branch-summary";
+export type SessionTreeSummaryField = "shell" | "model" | "thinking-level" | "session-name" | "label" | "custom-entry" | "entry";
+export type SessionTreeSummaryPresentation =
+  | { type: "status"; status: SessionTreeSummaryStatus }
+  | { type: "content"; parts: SessionTreeSummaryPart[]; fallback: SessionTreeSummaryStatus }
+  | { type: "named"; field: SessionTreeSummaryField; value?: string }
+  | { type: "assistant-tools"; names: string[] }
+  | { type: "tool-result"; isError: boolean; toolName?: string; parts: SessionTreeSummaryPart[] }
+  | { type: "custom-message"; customType?: string; parts: SessionTreeSummaryPart[] };
+
 export interface SessionTreeNode {
   id: string;
   parentId: string | null;
   kind: SessionTreeNodeKind;
+  /** English compatibility preview for older clients. */
   summary: string;
+  /** Absent on older servers; clients must retain summary as a raw fallback. */
+  summaryPresentation?: SessionTreeSummaryPresentation;
   timestamp?: string;
   label?: string;
 }
@@ -1394,10 +1448,10 @@ export interface SessionTranscriptSnapshot extends SessionStreamSnapshot {
 }
 
 export type CommandResult =
-  | { type: "done"; message?: string; session?: SessionInfo; promptDraft?: string }
-  | { type: "select"; requestId: string; title: string; options: CommandOption[] }
+  | { type: "done"; message?: string; presentation?: CommandResultPresentation; session?: SessionInfo; promptDraft?: string }
+  | { type: "select"; requestId: string; title: string; presentation?: CommandResultPresentation; options: CommandOption[] }
   | { type: "tree"; tree: SessionTreeSnapshot }
-  | { type: "unsupported"; message: string };
+  | { type: "unsupported"; message: string; presentation?: CommandResultPresentation };
 
 /**
  * Transport-level per-session sequence stamp. `SessionEventHub.publish` assigns a
@@ -1423,7 +1477,7 @@ type SessionUiEventBody =
   | { type: "message.end"; message?: unknown }
   | { type: "status.update"; status: SessionStatus }
   | { type: "activity.update"; activity: SessionActivity }
-  | { type: "command.output"; level: "info" | "success" | "error"; message: string }
+  | { type: "command.output"; level: "info" | "success" | "error"; message: string; presentation?: CommandOutputPresentation }
   | SessionNotificationInboxEvent
   | { type: "session.error"; message: string }
   /** Technical details for the browser console, never transcript or notification content. */
@@ -1447,6 +1501,14 @@ export interface WorkspaceChangedEvent {
   projectId: string;
 }
 
+/** Scoped invalidation; consumers reload the current daemon-owned pin preference. */
+export interface SessionPinsChangedEvent {
+  type: "session-pins.changed";
+  projectId: string;
+  workspaceId: string;
+  revision: number;
+}
+
 export type GlobalSessionEvent =
   | Extract<SessionUiEventBody, { type: "status.update" | "activity.update" | "session.name" | "session.created" }>
   | SessionNotificationSummaryEvent
@@ -1454,5 +1516,6 @@ export type GlobalSessionEvent =
   | SessionStartupProgressEvent
   | ModelScopeChangedEvent
   | WorkspaceChangedEvent
+  | SessionPinsChangedEvent
   | ServerNoticeEvent;
 export type RealtimeEvent = GlobalSessionEvent | MachineStatusUiEvent;

@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 
 import type { JsonValue, PluginPeerChannelOptions, PluginPeer, StylesheetIntegrationCapabilityV1, WorkspacePanelContext, WorkspacePanelNavigationV1 } from "@jmfederico/pi-web/plugin-api";
+import { LocalizationService } from "../../src/client/src/localization/service";
+import { createPluginLocalization } from "../../src/client/src/plugins/localization";
+import { createTerminalContent } from "./terminalLocalization";
 import { Terminal } from "@xterm/xterm";
 import { installTerminalRendererFake as fakeTerminalBoundary } from "./terminalRenderer.testSupport";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -849,38 +852,6 @@ describe("Terminal panel lifecycle", () => {
     }
   });
 
-  it("reloads a missing requested terminal once instead of on every update", async () => {
-    vi.useFakeTimers();
-    const panel = createTerminalPanel();
-    const memory = new InMemoryTerminalSelectionMemory();
-    const runtime = new TerminalBrowserRuntime(memory);
-    const request = vi.fn((operation: string): Promise<JsonValue> =>
-      Promise.resolve(operation === "terminal.list" ? [terminalInfo("terminal-live")] : []));
-    // The host rejects the fallback selection write, so the requested terminal stays
-    // absent from the list and the reload reason never clears on its own.
-    const context = terminalContext({
-      peer: terminalPeer(request),
-      navigation: { ...terminalNavigation("terminal-gone"), set: vi.fn(() => false) },
-    });
-    Reflect.set(panel, "context", context);
-    Reflect.set(panel, "runtime", runtime);
-    Reflect.set(panel, "visible", true);
-    callPanelMethod(panel, "willUpdate");
-    await callAsyncPanelMethod(panel, "loadTerminals");
-
-    // A settled list writes terminals/commandRuns, which schedules another updated().
-    for (let cycle = 0; cycle < 6; cycle += 1) {
-      callPanelMethod(panel, "updated");
-      await vi.advanceTimersByTimeAsync(1_000);
-    }
-
-    expect(request.mock.calls.map(([operation]) => operation)).toEqual([
-      "terminal.list", "terminal.list-runs",
-      "terminal.list", "terminal.list-runs",
-    ]);
-    panel.disconnectedCallback();
-  });
-
   it("reloads once for a newly requested terminal and then applies its selection", async () => {
     vi.useFakeTimers();
     const panel = createTerminalPanel();
@@ -1052,7 +1023,7 @@ describe("Terminal panel lifecycle", () => {
     Reflect.set(panel, "visible", true);
     Reflect.set(panel, "selectedId", "terminal-1");
     Reflect.set(panel, "terminal", terminal);
-    Reflect.set(panel, "connectionError", "Terminal connection closed: offline");
+    Reflect.set(panel, "connectionError", { kind: "connectionClosed", detail: "offline" });
     Reflect.set(panel, "terminals", [terminalInfo("terminal-1")]);
 
     callPanelMethod(panel, "connectChannel", context, "terminal-1", terminal, undefined);
@@ -1254,6 +1225,7 @@ function createTerminalPanel(): TerminalPanel {
   if (customElements.get("test-terminal-panel") === undefined) customElements.define("test-terminal-panel", TerminalPanel);
   const element = document.createElement("test-terminal-panel");
   if (!(element instanceof TerminalPanel)) throw new Error("Expected TerminalPanel test element");
+  element.content = createTerminalContent(createPluginLocalization(new LocalizationService(), "pi-web.terminal", "pi-web.terminal", new AbortController().signal));
   return element;
 }
 

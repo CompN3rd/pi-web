@@ -1,25 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { sessiondDescription, sessiondPanelNotices } from "./SettingsSessiondPanel";
+import { sessiondPanelNotices } from "./SettingsSessiondPanel";
 
-// This suite asserts the session-daemon panel's dynamic behavior through public
-// seams rather than by inspecting rendered Lit `TemplateResult` internals:
-// notice composition/ordering and the description string come from the exported
-// `sessiondPanelNotices`/`sessiondDescription` helpers. Static labels and layout
-// are intentionally not asserted here (no DOM harness); per the testing-guide
-// skill those are not verified by scraping template internals.
+// Notice composition is pure; localized scope/restart guidance is covered by DOM tests.
 
 describe("session daemon panel notices", () => {
-  it("names the selected machine in the scope description", () => {
-    expect(sessiondDescription("Lab Mac (remote machine)")).toContain("Lab Mac (remote machine)");
-  });
-
-  it("keeps restart timing and interruption consequences in the description", () => {
-    const description = sessiondDescription("local (local gateway)");
-    expect(description).toContain("Naming changes apply to the next naming request without a restart.");
-    expect(description).toContain("Agent permission changes require that machine’s session daemon to restart.");
-    expect(description).toContain("Restarting interrupts active sessions and running work.");
-  });
-
   it("orders save/load error notices before the saved confirmation", () => {
     const notices = sessiondPanelNotices({
       error: "Failed to save session-daemon config.",
