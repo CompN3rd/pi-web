@@ -64,6 +64,7 @@ function fakeRuntime(sessionId = "session-1", patch: Partial<TestSession> = {}) 
     promptTemplates: [],
     resourceLoader: { getSkills: () => ({ skills: [] }) },
     subscribe: () => () => undefined,
+    bindExtensions: () => Promise.resolve(),
     getSessionStats: () => ({ sessionId, totalMessages: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
     getContextUsage: () => undefined,
     prompt: (text: string, options: unknown) => {
@@ -146,6 +147,82 @@ describe("PiSessionService", () => {
     await service.dispose();
     expect(fake.calls.abort).toBe(1);
     expect(fake.calls.dispose).toBe(1);
+  });
+
+  it("subscribes before binding extensions and waits for startup before exposing the session", async () => {
+    const hub = new CapturingSessionEventHub();
+    const order: string[] = [];
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const fake = fakeRuntime("startup", {
+      subscribe: () => { order.push("subscribe"); return () => undefined; },
+      bindExtensions: async (bindings) => {
+        order.push("bind");
+        bindings.onError?.({ extensionPath: "test.ts", event: "session_start", error: "startup warning" });
+        await ready;
+      },
+    });
+    const service = new PiSessionService(hub, {
+      createAgentRuntime: runtimeCreator(fake.runtime), sessionManager: sessionGateway([]),
+    });
+    try {
+      const starting = service.start("/workspace");
+      await vi.waitFor(() => { expect(order).toEqual(["subscribe", "bind"]); });
+      let statusResolved = false;
+      const status = service.status("startup").then(() => { statusResolved = true; });
+      await Promise.resolve();
+      expect(statusResolved).toBe(false);
+      release();
+      await starting;
+      await status;
+      expect(hub.sessionEvents).toContainEqual({ sessionId: "startup", event: { type: "session.error", message: "Extension test.ts: startup warning" } });
+    } finally {
+      release();
+      await service.dispose();
+    }
+  });
+
+  it("rebinds extension lifecycle after runtime replacement", async () => {
+    const firstBind = vi.fn(() => Promise.resolve());
+    const nextBind = vi.fn(() => Promise.resolve());
+    const fake = fakeRuntime("first", { bindExtensions: firstBind });
+    const next = fakeRuntime("next", { bindExtensions: nextBind });
+    let rebind: ((session: PiAgentSession) => Promise<void>) | undefined;
+    const runtime = { ...fake.runtime, setRebindSession: (callback?: (session: PiAgentSession) => Promise<void>) => { rebind = callback; } };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      createAgentRuntime: runtimeCreator(runtime), sessionManager: sessionGateway([]),
+    });
+    try {
+      await service.start("/workspace");
+      runtime.session = next.session;
+      await rebind?.(next.session);
+      expect(firstBind).toHaveBeenCalledTimes(1);
+      expect(nextBind).toHaveBeenCalledTimes(1);
+      expect((await service.status("next")).sessionId).toBe("next");
+      expect(service.activeCount()).toBe(1);
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("disposes a runtime whose extension binding fails", async () => {
+    const unsubscribe = vi.fn();
+    const fake = fakeRuntime("failed", {
+      subscribe: () => unsubscribe,
+      bindExtensions: () => Promise.reject(new Error("resource discovery failed")),
+    });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      createAgentRuntime: runtimeCreator(fake.runtime), sessionManager: sessionGateway([]),
+    });
+    try {
+      await expect(service.start("/workspace")).rejects.toThrow("resource discovery failed");
+      expect(service.activeCount()).toBe(0);
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      expect(fake.calls.abort).toBe(1);
+      expect(fake.calls.dispose).toBe(1);
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("clears stale active activity once a previously active session becomes idle", async () => {

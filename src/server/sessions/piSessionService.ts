@@ -12,6 +12,7 @@ import {
   SessionManager,
   type CreateAgentSessionRuntimeFactory,
   type EditToolDetails,
+  type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionModel, ClientSessionStatus, ClientThinkingLevel, SessionUiEvent } from "../types.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
@@ -89,6 +90,7 @@ export interface PiAgentSession {
   promptTemplates: readonly { name: string; description?: string }[];
   resourceLoader: { getSkills(): { skills: readonly { name: string; description?: string }[] } };
   subscribe(listener: (event: unknown) => void): () => void;
+  bindExtensions: AgentSession["bindExtensions"];
   compact(instructions?: string): Promise<{ summary: string; tokensBefore: number }>;
   getUserMessagesForForking(): readonly { entryId: string; text: string }[];
   getSessionStats(): { sessionId: string; totalMessages: number; userMessages: number; assistantMessages: number; toolCalls: number; tokens: ClientSessionStatus["tokens"]; cost: number };
@@ -222,6 +224,8 @@ export class PiSessionService {
 
   async dispose(): Promise<void> {
     clearInterval(this.heartbeat);
+    // Startup hooks can own resources; finish them before emitting shutdown.
+    await Promise.allSettled(Array.from(this.active.values(), (active) => active.initializing ?? Promise.resolve()));
     const activeSessions = Array.from(new Set(this.active.values()));
     this.active.clear();
     this.activities.clear();
@@ -570,7 +574,10 @@ export class PiSessionService {
 
   private async getActive(sessionId: string): Promise<ActiveSession<PiSessionRuntime>> {
     const active = this.active.get(sessionId);
-    if (active) return active;
+    if (active) {
+      await active.initializing;
+      return active;
+    }
 
     const archived = await this.archiveStore.get(sessionId);
     if (archived?.archivePath !== undefined) return this.create(this.sessionManager.open(archived.archivePath), archived.cwd);
@@ -583,17 +590,13 @@ export class PiSessionService {
   private async create(sessionManager: PiSessionManager, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
     const runtime = await this.createAgentRuntime(this.createRuntime, { cwd, agentDir: this.agentDir, sessionManager });
     const active: ActiveSession<PiSessionRuntime> = { runtime, unsubscribe: noop };
-    this.bindRuntime(active);
-    runtime.setRebindSession(() => {
-      this.bindRuntime(active);
-      return Promise.resolve();
-    });
-    this.active.set(runtime.session.sessionId, active);
+    runtime.setRebindSession(() => this.bindRuntime(active));
+    await this.bindRuntime(active);
     this.publishStatus(runtime.session);
     return active;
   }
 
-  private bindRuntime(active: ActiveSession<PiSessionRuntime>): void {
+  private bindRuntime(active: ActiveSession<PiSessionRuntime>): Promise<void> {
     active.unsubscribe();
     for (const [sessionId, candidate] of this.active.entries()) {
       if (candidate === active) this.active.delete(sessionId);
@@ -605,6 +608,17 @@ export class PiSessionService {
       this.publishStatus(session);
     });
     this.active.set(session.sessionId, active);
+    // Subscribe before startup hooks: extensions can publish messages during initialization.
+    // Defer binding one microtask so concurrent readers always see the readiness barrier.
+    active.initializing = Promise.resolve().then(() => session.bindExtensions({
+      onError: (error) => {
+        this.events.publish(session.sessionId, { type: "session.error", message: `Extension ${error.extensionPath}: ${error.error}` });
+      },
+    })).catch(async (error: unknown) => {
+      await this.closeActive(session.sessionId);
+      throw error;
+    });
+    return active.initializing;
   }
 
   private maybeGenerateSessionName(session: PiAgentSession, firstMessage: string): void {
