@@ -19,6 +19,8 @@ export interface PluginActivationContext {
 
 export interface PluginActivationResult {
   contributions: PluginContributions;
+  /** Release activation-owned listeners, timers, and other resources when removed or replaced. */
+  dispose?: () => void;
 }
 
 export interface PluginContributions {
