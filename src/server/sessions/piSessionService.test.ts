@@ -208,6 +208,71 @@ describe("PiSessionService", () => {
     }
   });
 
+  it("rejects model and lifecycle mutations before side effects during exclusive admission", async () => {
+    const operations = new SessionOperationGate();
+    const fake = fakeRuntime();
+    const gateway = sessionGateway([sessionRecord("session-1")]);
+    const create = vi.fn((cwd: string) => gateway.create(cwd));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      operationGate: operations, createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: { ...gateway, create },
+    });
+    try {
+      await service.status("session-1");
+      await operations.runExclusive(async () => {
+        const requests = [
+          service.start("/workspace"), service.list("/workspace"), service.availableModels("session-1"),
+          service.setModel("session-1", "test", "model"), service.cycleModel("session-1", "forward"),
+          service.setThinkingLevel("session-1", "off"), service.cycleThinkingLevel("session-1"),
+          service.archive("session-1"), service.archiveTree("session-1"), service.restore("session-1"),
+          service.detachParent("session-1"), service.abort("session-1"), service.dispose(),
+        ];
+        await Promise.all(requests.map((request) => expect(request).rejects.toThrow("reloading")));
+        service.stop("session-1");
+        expect(create).not.toHaveBeenCalled();
+        expect(fake.calls.abort).toBe(0);
+        expect(fake.calls.dispose).toBe(0);
+        expect(service.activeCount()).toBe(1);
+      });
+      // Rejected disposal must not mark the service disposed.
+      await service.status("session-1");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it.each(["model", "abort", "stop", "dispose"] as const)("holds admission throughout asynchronous %s work", async (kind) => {
+    const operations = new SessionOperationGate();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const entered = vi.fn();
+    const fake = fakeRuntime();
+    const model = fake.session.modelRegistry.find("anthropic", "claude-3-5-sonnet-20241022");
+    if (model === undefined) throw new Error("Missing test model");
+    fake.session.cycleModel = async () => { entered(); await pending; return { model, thinkingLevel: "off", isScoped: false }; };
+    fake.session.abort = async () => { entered(); await pending; };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      operationGate: operations, createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("session-1")]),
+    });
+    try {
+      await service.status("session-1");
+      const request = kind === "model" ? service.cycleModel("session-1", "forward")
+        : kind === "abort" ? service.abort("session-1")
+          : kind === "dispose" ? service.dispose() : undefined;
+      if (kind === "stop") service.stop("session-1");
+      await expect(operations.runExclusive(() => undefined)).rejects.toThrow("all session activity");
+      await vi.waitFor(() => { expect(entered).toHaveBeenCalled(); });
+      await expect(operations.runExclusive(() => undefined)).rejects.toThrow("all session activity");
+      release();
+      await request;
+      await vi.waitFor(async () => { await expect(operations.runExclusive(() => undefined)).resolves.toBeUndefined(); });
+    } finally {
+      release();
+      await service.dispose();
+    }
+  });
+
   it("coalesces concurrent saved-session opens, including ID prefixes, before runtime creation finishes", async () => {
     const fake = fakeRuntime("saved-session");
     let release!: () => void;

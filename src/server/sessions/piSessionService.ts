@@ -231,6 +231,10 @@ export class PiSessionService {
   }
 
   async dispose(): Promise<void> {
+    return this.operations.run(() => this.disposeAdmitted());
+  }
+
+  private async disposeAdmitted(): Promise<void> {
     this.disposed = true;
     clearInterval(this.heartbeat);
     // Creation may not have registered a session yet. Drain it before taking the snapshot.
@@ -250,6 +254,10 @@ export class PiSessionService {
   }
 
   async list(cwd: string): Promise<ClientSession[]> {
+    return this.operations.run(() => this.listAdmitted(cwd));
+  }
+
+  private async listAdmitted(cwd: string): Promise<ClientSession[]> {
     const [sessions, archivedRecords] = await Promise.all([this.sessionManager.list(cwd), this.archiveStore.list()]);
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
     const archivedForCwd = await Promise.all(
@@ -268,6 +276,10 @@ export class PiSessionService {
   }
 
   async start(cwd: string): Promise<ClientSession> {
+    return this.operations.run(() => this.startAdmitted(cwd));
+  }
+
+  private async startAdmitted(cwd: string): Promise<ClientSession> {
     this.assertNotDisposed();
     const active = await this.create(this.sessionManager.create(cwd), cwd);
     const { session } = active.runtime;
@@ -292,6 +304,10 @@ export class PiSessionService {
   }
 
   async availableModels(sessionId: string): Promise<ClientSessionModel[]> {
+    return this.operations.run(() => this.availableModelsAdmitted(sessionId));
+  }
+
+  private async availableModelsAdmitted(sessionId: string): Promise<ClientSessionModel[]> {
     const session = await this.getOrOpen(sessionId);
     session.modelRegistry.refresh();
     const models = session.scopedModels.length > 0
@@ -301,6 +317,10 @@ export class PiSessionService {
   }
 
   async setModel(sessionId: string, provider: string, modelId: string): Promise<ClientSessionStatus> {
+    return this.operations.run(() => this.setModelAdmitted(sessionId, provider, modelId));
+  }
+
+  private async setModelAdmitted(sessionId: string, provider: string, modelId: string): Promise<ClientSessionStatus> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     session.modelRegistry.refresh();
@@ -317,6 +337,10 @@ export class PiSessionService {
   }
 
   async cycleModel(sessionId: string, direction: "forward" | "backward"): Promise<ClientSessionStatus> {
+    return this.operations.run(() => this.cycleModelAdmitted(sessionId, direction));
+  }
+
+  private async cycleModelAdmitted(sessionId: string, direction: "forward" | "backward"): Promise<ClientSessionStatus> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     const result = await session.cycleModel(direction);
@@ -332,6 +356,10 @@ export class PiSessionService {
   }
 
   async setThinkingLevel(sessionId: string, level: ClientThinkingLevel): Promise<ClientSessionStatus> {
+    return this.operations.run(() => this.setThinkingLevelAdmitted(sessionId, level));
+  }
+
+  private async setThinkingLevelAdmitted(sessionId: string, level: ClientThinkingLevel): Promise<ClientSessionStatus> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     session.setThinkingLevel(level);
@@ -341,6 +369,10 @@ export class PiSessionService {
   }
 
   async cycleThinkingLevel(sessionId: string): Promise<ClientSessionStatus> {
+    return this.operations.run(() => this.cycleThinkingLevelAdmitted(sessionId));
+  }
+
+  private async cycleThinkingLevelAdmitted(sessionId: string): Promise<ClientSessionStatus> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     const level = session.cycleThinkingLevel();
@@ -443,6 +475,10 @@ export class PiSessionService {
   }
 
   async archive(sessionId: string): Promise<void> {
+    return this.operations.run(() => this.archiveAdmitted(sessionId));
+  }
+
+  private async archiveAdmitted(sessionId: string): Promise<void> {
     const session = await this.getOrOpen(sessionId);
     if (sessionHasActiveWork(session)) throw new Error("Stop current session activity before archiving");
     const archiveInput = await this.archiveInputForSession(session);
@@ -451,6 +487,10 @@ export class PiSessionService {
   }
 
   async archiveTree(sessionId: string): Promise<ClientArchiveSessionsResponse> {
+    return this.operations.run(() => this.archiveTreeAdmitted(sessionId));
+  }
+
+  private async archiveTreeAdmitted(sessionId: string): Promise<ClientArchiveSessionsResponse> {
     const session = await this.getOrOpen(sessionId);
     const catalog = await this.workspaceArchiveCandidates(session.sessionManager.getCwd());
     const root = findArchiveCandidateByIdOrPrefix(catalog, session.sessionId) ?? archiveCandidateFromActiveSession(session, false);
@@ -471,11 +511,17 @@ export class PiSessionService {
   }
 
   async restore(sessionId: string): Promise<void> {
-    await this.closeActive(sessionId);
-    await this.archiveStore.restore(sessionId);
+    return this.operations.run(async () => {
+      await this.closeActive(sessionId);
+      await this.archiveStore.restore(sessionId);
+    });
   }
 
   async detachParent(sessionId: string): Promise<void> {
+    return this.operations.run(() => this.detachParentAdmitted(sessionId));
+  }
+
+  private async detachParentAdmitted(sessionId: string): Promise<void> {
     const session = await this.getOrOpen(sessionId);
     const sessionFile = session.sessionFile;
     if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
@@ -483,6 +529,10 @@ export class PiSessionService {
   }
 
   async abort(sessionId: string): Promise<void> {
+    return this.operations.run(() => this.abortAdmitted(sessionId));
+  }
+
+  private async abortAdmitted(sessionId: string): Promise<void> {
     const active = this.active.get(sessionId);
     if (!active) return;
     clearSessionQueue(active.runtime.session);
@@ -492,7 +542,7 @@ export class PiSessionService {
   }
 
   stop(sessionId: string): void {
-    void this.closeActive(sessionId).catch(() => {
+    void this.operations.run(() => this.closeActive(sessionId)).catch(() => {
       // Best-effort shutdown; callers that need errors await closeActive directly.
     });
   }
