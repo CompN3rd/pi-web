@@ -295,12 +295,14 @@ export class PiSessionService {
   }
 
   async messages(sessionId: string, page?: { before?: number; limit?: number }): Promise<unknown[] | ClientMessagePage> {
-    const session = await this.getOrOpen(sessionId);
-    return pageMessagesAtSafeBoundary(historyMessages(session), page);
+    return this.operations.run(async () => {
+      const session = await this.getOrOpen(sessionId);
+      return pageMessagesAtSafeBoundary(historyMessages(session), page);
+    });
   }
 
   async status(sessionId: string): Promise<ClientSessionStatus> {
-    return this.statusFromSession(await this.getOrOpen(sessionId));
+    return this.operations.run(async () => this.statusFromSession(await this.getOrOpen(sessionId)));
   }
 
   async availableModels(sessionId: string): Promise<ClientSessionModel[]> {
@@ -351,8 +353,10 @@ export class PiSessionService {
   }
 
   async availableThinkingLevels(sessionId: string): Promise<ClientThinkingLevel[]> {
-    const session = await this.getOrOpen(sessionId);
-    return session.getAvailableThinkingLevels();
+    return this.operations.run(async () => {
+      const session = await this.getOrOpen(sessionId);
+      return session.getAvailableThinkingLevels();
+    });
   }
 
   async setThinkingLevel(sessionId: string, level: ClientThinkingLevel): Promise<ClientSessionStatus> {
@@ -383,6 +387,10 @@ export class PiSessionService {
   }
 
   async commands(sessionId: string): Promise<ClientCommand[]> {
+    return this.operations.run(() => this.commandsAdmitted(sessionId));
+  }
+
+  private async commandsAdmitted(sessionId: string): Promise<ClientCommand[]> {
     const session = await this.getOrOpen(sessionId);
     const commands: ClientCommand[] = [...BUILTIN_COMMANDS];
     for (const command of session.extensionRunner.getRegisteredCommands()) {

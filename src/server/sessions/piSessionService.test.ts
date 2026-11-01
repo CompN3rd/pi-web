@@ -208,6 +208,34 @@ describe("PiSessionService", () => {
     }
   });
 
+  it.each(["messages", "status", "availableThinkingLevels", "commands"] as const)("keeps %s snapshot computation admitted after runtime lookup", async (method) => {
+    const operations = new SessionOperationGate();
+    const fake = fakeRuntime();
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      operationGate: operations, createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("session-1")]),
+    });
+    const attempts: Promise<void>[] = [];
+    const probe = () => {
+      attempts.push(expect(operations.runExclusive(() => undefined)).rejects.toThrow("all session activity"));
+    };
+    try {
+      await service.status("session-1");
+      if (method === "messages") fake.session.sessionManager.getBranch = () => { probe(); return []; };
+      if (method === "status") fake.session.getContextUsage = () => { probe(); return undefined; };
+      if (method === "availableThinkingLevels") fake.session.getAvailableThinkingLevels = () => { probe(); return []; };
+      if (method === "commands") fake.session.extensionRunner.getRegisteredCommands = () => { probe(); return []; };
+      await service[method]("session-1");
+      expect(attempts.length).toBeGreaterThan(0);
+      await Promise.all(attempts);
+      await operations.runExclusive(async () => {
+        await expect(service[method]("session-1")).rejects.toThrow("reloading");
+      });
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("rejects model and lifecycle mutations before side effects during exclusive admission", async () => {
     const operations = new SessionOperationGate();
     const fake = fakeRuntime();
