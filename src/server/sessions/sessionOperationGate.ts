@@ -8,6 +8,16 @@ export class SessionOperationGate {
   private active = 0;
   private exclusive = false;
 
+  runSync<T>(operation: () => T): T {
+    if (this.exclusive) throw new Error("Session resources are reloading; try again shortly");
+    this.active++;
+    try {
+      return operation();
+    } finally {
+      this.active--;
+    }
+  }
+
   async run<T>(operation: () => T | Promise<T>): Promise<T> {
     if (this.exclusive) throw new Error("Session resources are reloading; try again shortly");
     this.active++;

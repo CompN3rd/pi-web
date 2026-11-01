@@ -756,6 +756,10 @@ export class PiSessionService {
   }
 
   applyAuthChange(change: AuthChange = {}): void {
+    this.operations.runSync(() => { this.applyAuthChangeAdmitted(change); });
+  }
+
+  private applyAuthChangeAdmitted(change: AuthChange): void {
     this.modelRegistry.refresh();
     for (const active of this.active.values()) {
       const { session } = active.runtime;

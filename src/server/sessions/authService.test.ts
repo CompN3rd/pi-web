@@ -1,8 +1,29 @@
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import { SessionOperationGate } from "./sessionOperationGate.js";
 import { AuthService, type AuthChange } from "./authService.js";
 
 describe("AuthService", () => {
+  it("rejects synchronous provider mutations before side effects during exclusive work", async () => {
+    const operationGate = new SessionOperationGate();
+    const authStorage = AuthStorage.inMemory({ anthropic: { type: "api_key", key: "original" } });
+    const auth = new AuthService({ operationGate, modelRegistry: ModelRegistry.create(authStorage) });
+    const changes: AuthChange[] = [];
+    auth.subscribe((change) => { changes.push(change); });
+    await operationGate.runExclusive(() => {
+      expect(() => auth.saveApiKey("anthropic", "replacement")).toThrow("reloading");
+      expect(() => auth.logoutProvider("anthropic")).toThrow("reloading");
+      expect(() => auth.authProviders("login")).toThrow("reloading");
+      expect(() => auth.startOAuthLogin("unknown")).toThrow("reloading");
+      expect(() => { auth.dispose(); }).toThrow("reloading");
+    });
+    expect(authStorage.get("anthropic")).toEqual({ type: "api_key", key: "original" });
+    expect(changes).toEqual([]);
+    auth.saveApiKey("anthropic", "replacement");
+    expect(changes).toEqual([{}]);
+    auth.dispose();
+  });
+
   it("saves API keys and emits a global auth change", () => {
     const { auth, authStorage, changes } = createAuthService();
 

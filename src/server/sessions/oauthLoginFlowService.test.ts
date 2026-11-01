@@ -1,6 +1,7 @@
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SessionOperationGate } from "./sessionOperationGate.js";
 import { OAuthLoginFlowService } from "./oauthLoginFlowService.js";
 
 type LoginHandler = (providerId: string, callbacks: OAuthLoginCallbacks) => Promise<void>;
@@ -10,6 +11,36 @@ afterEach(() => {
 });
 
 describe("OAuthLoginFlowService", () => {
+  it.each(["cancel", "dispose", "complete", "reject"] as const)("holds admission until provider settlement after %s", async (ending) => {
+    const operationGate = new SessionOperationGate();
+    const service = new OAuthLoginFlowService({ operationGate });
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const login = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+    const onComplete = vi.fn();
+    const state = service.start({ providerId: "test", providerName: "Test", authStorage: fakeAuthStorage(() => login), onComplete });
+    if (ending === "cancel") service.cancel(state.flowId);
+    if (ending === "dispose") service.dispose();
+    await expect(operationGate.runExclusive(() => undefined)).rejects.toThrow("activity");
+    if (ending === "reject") reject(new Error("failed"));
+    else resolve();
+    await flushAsyncLogin();
+    await expect(operationGate.runExclusive(() => undefined)).resolves.toBeUndefined();
+    expect(onComplete).toHaveBeenCalledTimes(ending === "complete" ? 1 : 0);
+    service.dispose();
+  });
+
+  it("rejects login before invoking the provider during exclusive work", async () => {
+    const operationGate = new SessionOperationGate();
+    const service = new OAuthLoginFlowService({ operationGate });
+    const login = vi.fn(() => Promise.resolve());
+    await operationGate.runExclusive(() => {
+      expect(() => service.start({ providerId: "test", providerName: "Test", authStorage: fakeAuthStorage(login) })).toThrow("reloading");
+    });
+    expect(login).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it("round-trips prompt responses and completes the flow", async () => {
     let promptValue: string | undefined;
     const service = new OAuthLoginFlowService();
