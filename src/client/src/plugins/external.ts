@@ -23,6 +23,9 @@ interface ExternalPluginDependencies {
   warn: (message: string, error: unknown) => void;
 }
 
+// Cache-busting only: a counter also keeps same-millisecond refreshes distinct on HTTP.
+let reloadRevision = 0;
+
 /** Owns only external registrations; concurrent refresh requests share one reload. */
 export class ExternalPluginLoader {
   private readonly ids = new Set<string>();
@@ -34,7 +37,7 @@ export class ExternalPluginLoader {
       fetchManifest: fetchPluginManifest,
       importModule: (url): Promise<unknown> => import(/* @vite-ignore */ url),
       baseUrl: () => window.location.href,
-      revision: () => crypto.randomUUID(),
+      revision: () => `${String(Date.now())}-${String(++reloadRevision)}`,
       warn: (message, error) => { console.warn(message, error); },
     },
   ) {}
@@ -46,7 +49,9 @@ export class ExternalPluginLoader {
 
   private async load(manifestUrl: string): Promise<void> {
     const manifest = await this.dependencies.fetchManifest(manifestUrl);
-    const entries = manifest?.plugins ?? [];
+    // A missing endpoint is not an authoritative empty manifest.
+    if (manifest === undefined) return;
+    const entries = manifest.plugins;
     const desiredIds = new Set(entries.map((entry) => entry.id));
     if (desiredIds.size !== entries.length) throw new Error("Duplicate plugin manifest id");
     const revision = this.dependencies.revision();

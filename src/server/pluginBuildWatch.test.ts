@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -58,6 +58,29 @@ it("rebuilds added, edited, deleted and recreated plugin roots without restartin
   await mkdir(resolve(source, ".."), { recursive: true });
   await writeFile(source, "export const value = 'recreated';");
   await waitForBuild("recreated");
+}, 30_000);
+
+it("watches descendants of an atomically replaced plugin root", async () => {
+  const cwd = await mkdtemp(resolve(tmpdir(), "plugin-watch-replace-"));
+  directories.push(cwd);
+  const root = resolve(cwd, "pi-web-plugins");
+  const replacement = resolve(cwd, "replacement");
+  for (const dir of [root, replacement]) await mkdir(resolve(dir, "nested"), { recursive: true });
+  await writeFile(resolve(root, "nested/plugin.ts"), "export const value = 'original';");
+  await writeFile(resolve(replacement, "nested/plugin.ts"), "export const value = 'replacement';");
+  const child = spawn(process.execPath, [buildScript, "--watch"], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+  children.push(child);
+  let output = "";
+  child.stdout.on("data", (data: Buffer) => { output += data.toString(); });
+  child.stderr.on("data", (data: Buffer) => { output += data.toString(); });
+  const contents = async () => readFile(resolve(cwd, "dist/pi-web-plugins/nested/plugin.js"), "utf8").catch(() => "missing");
+  await expect.poll(() => output, { timeout: 10_000 }).toContain("[plugins] watching");
+  await rename(root, resolve(cwd, "old-root"));
+  await rename(replacement, root);
+  await expect.poll(contents, { timeout: 10_000 }).toContain("replacement");
+  await writeFile(resolve(root, "nested/plugin.ts"), "export const value = 'edited-replacement';");
+  await expect.poll(contents, { timeout: 10_000 }).toContain("edited-replacement");
+  expect(child.exitCode, output).toBeNull();
 }, 30_000);
 
 it("keeps the session daemon outside the autoreloading development process group", async () => {

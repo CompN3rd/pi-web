@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { SessionOperationGate } from "./sessionOperationGate.js";
 import type { OAuthLoginCallbacks, OAuthSelectPrompt, OAuthPrompt } from "@earendil-works/pi-ai";
 import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import type { CommandOption, OAuthFlowState } from "../../shared/apiTypes.js";
@@ -24,7 +23,6 @@ interface OAuthFlowRecord {
 }
 
 export interface OAuthLoginFlowServiceOptions {
-  operationGate?: SessionOperationGate;
   terminalTtlMs?: number;
   runningTtlMs?: number;
   now?: () => number;
@@ -34,29 +32,18 @@ const DEFAULT_TERMINAL_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_RUNNING_TTL_MS = 30 * 60 * 1000;
 
 export class OAuthLoginFlowService {
-  private readonly operations: SessionOperationGate;
   private readonly flows = new Map<string, OAuthFlowRecord>();
   private readonly terminalTtlMs: number;
   private readonly runningTtlMs: number;
   private readonly now: () => number;
 
   constructor(options: OAuthLoginFlowServiceOptions = {}) {
-    this.operations = options.operationGate ?? new SessionOperationGate();
     this.terminalTtlMs = options.terminalTtlMs ?? DEFAULT_TERMINAL_TTL_MS;
     this.runningTtlMs = options.runningTtlMs ?? DEFAULT_RUNNING_TTL_MS;
     this.now = options.now ?? (() => Date.now());
   }
 
   start(options: {
-    providerId: string;
-    providerName: string;
-    authStorage: OAuthLoginStorage;
-    onComplete?: () => void;
-  }): OAuthFlowState {
-    return this.operations.runSync(() => this.startAdmitted(options));
-  }
-
-  private startAdmitted(options: {
     providerId: string;
     providerName: string;
     authStorage: OAuthLoginStorage;
@@ -94,10 +81,8 @@ export class OAuthLoginFlowService {
       },
     };
 
-    // Cancellation requests do not prove that a provider stopped writing credentials.
-    // Keep admission until the actual login promise (and completion refresh) settles.
-    void this.operations.run(async () => {
-        await options.authStorage.login(options.providerId, callbacks);
+    void options.authStorage.login(options.providerId, callbacks)
+      .then(() => {
         if (!this.isCurrentRunning(record)) return;
         record.pending = undefined;
         this.markTerminal(record, { ...withoutInteraction(record.state), status: "complete", progress: [...record.state.progress, "Login complete"] });

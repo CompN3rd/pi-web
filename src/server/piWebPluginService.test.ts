@@ -104,6 +104,46 @@ describe("PiWebPluginService", () => {
     await expect(service.manifest()).resolves.toEqual({ plugins: [] });
   });
 
+  it.each((["user", "project"] as const).flatMap((scope) => [
+    { scope, kind: "packages object", settings: { packages: {} } },
+    { scope, kind: "packages empty string", settings: { packages: "" } },
+    { scope, kind: "packages nonempty string", settings: { packages: "not-an-array" } },
+    { scope, kind: "packages null", settings: { packages: null } },
+    { scope, kind: "packages boolean", settings: { packages: false } },
+    { scope, kind: "packages number", settings: { packages: 0 } },
+    { scope, kind: "top-level array", settings: [] },
+  ]))("retains discovered packages and local assets during $scope settings $kind, then recovers", async ({ scope, settings }) => {
+    const agentDir = join(tempDir, "agent");
+    const cwd = join(tempDir, "workspace");
+    await mkdir(agentDir, { recursive: true });
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    const settingsPath = scope === "user" ? join(agentDir, "settings.json") : join(cwd, ".pi", "settings.json");
+    const packageDir = join(tempDir, "live-plugin");
+    await writePlugin(packageDir, {
+      packageJson: { piWeb: { plugins: [{ id: "live", module: "plugin.js" }] } },
+      files: { "plugin.js": "export default {};" },
+    });
+    await writePlugin(join(tempDir, "plugins/local"), {
+      packageJson: { piWeb: { plugins: [{ id: "local", module: "plugin.js" }] } },
+      files: { "plugin.js": "export default {};" },
+    });
+    await writeFile(settingsPath, JSON.stringify({ packages: [packageDir] }));
+    const service = new PiWebPluginService({ roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }], cwd, agentDir });
+    const initial = await service.manifest();
+    expect(initial.plugins).toHaveLength(2);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await writeFile(settingsPath, JSON.stringify(settings));
+    await expect(service.manifest()).resolves.toEqual(initial);
+    await expect(service.readAsset("live", "plugin.js")).resolves.toBeDefined();
+    await expect(service.readAsset("local", "plugin.js")).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Failed to refresh Pi package discovery"));
+
+    await writeFile(settingsPath, JSON.stringify({ packages: [] }));
+    expect((await service.manifest()).plugins.map((plugin) => plugin.id)).toEqual(["local"]);
+    await expect(service.readAsset("live", "plugin.js")).resolves.toBeUndefined();
+  });
+
   it("discovers source checkout plugin packages without symlinks", async () => {
     await mkdir(join(tempDir, "src", "server"), { recursive: true });
     await writeFile(join(tempDir, "src", "server", "index.ts"), "export {};\n");

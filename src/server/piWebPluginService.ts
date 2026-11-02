@@ -60,6 +60,7 @@ type ArraylessPluginRecord = Omit<PluginRecord, "source" | "scope">;
 export class DefaultPiPackageProvider implements PiPackageProvider {
   private readonly packageManager: DefaultPackageManager;
   private readonly settingsManager: SettingsManager;
+  private lastConfiguredPackages: ConfiguredPiPackage[] = [];
 
   constructor(cwd = process.cwd(), agentDir = getAgentDir()) {
     this.settingsManager = SettingsManager.create(cwd, agentDir);
@@ -77,7 +78,20 @@ export class DefaultPiPackageProvider implements PiPackageProvider {
     for (const { scope, error } of this.settingsManager.drainErrors()) {
       console.warn(`Failed to refresh ${scope} Pi package settings: ${error.message}`);
     }
-    return this.packageManager.listConfiguredPackages();
+    try {
+      // Enumeration accepts strings as iterables and treats null as missing, so
+      // validate each scope's collection before committing a new discovery snapshot.
+      for (const settings of [this.settingsManager.getGlobalSettings(), this.settingsManager.getProjectSettings()]) {
+        if (!isRecord(settings)) throw new Error("Pi settings must be an object");
+        const packages: unknown = settings["packages"];
+        if (packages !== undefined && !Array.isArray(packages)) throw new Error("Pi package settings must be an array");
+      }
+      this.lastConfiguredPackages = this.packageManager.listConfiguredPackages();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`Failed to refresh Pi package discovery; keeping previous packages: ${message}`);
+    }
+    return this.lastConfiguredPackages;
   }
 
   getInstalledPath(source: string, scope: "user" | "project"): string | undefined {

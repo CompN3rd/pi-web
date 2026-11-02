@@ -119,7 +119,7 @@ Choose **Refresh app data** after adding or editing a plugin; no daemon restart 
 curl http://127.0.0.1:8504/pi-web-plugins/manifest.json
 ```
 
-See the full [Plugin API](docs/plugins.md) for contribution types, package metadata, and troubleshooting, and [Reload boundaries](docs/hot-reload.md) for browser, web/API, and daemon reload behavior and limitations.
+See the full [Plugin API](docs/plugins.md) for contribution types, package metadata, and troubleshooting.
 
 ## Install
 
@@ -216,7 +216,7 @@ npm run dev:client
 
 `dev` runs only `dev:web` and `dev:client`; it does not start or stop the daemon. `dev:sessiond` deliberately does not watch source files. Restart that separate process manually when changing daemon code, after finishing active sessions/tools. If a daemon is already running via the user service, use it instead of starting a second one.
 
-`dev:web` also watches bundled plugin TypeScript and rebuilds the browser-loaded plugin JavaScript under `dist/pi-web-plugins/`. The watcher handles added/deleted directories and retains the last successful build on compilation errors. These rebuilds update files, not already activated browser plugins; choose **Refresh app data** to load them. You can restart `dev:web`, `dev:client`, or the combined `dev` command without stopping active Pi sessions.
+`dev:web` also watches bundled plugin TypeScript and rebuilds the browser-loaded plugin JavaScript under `dist/pi-web-plugins/`. The watcher handles added/deleted directories and retains the last successful build on compilation errors. Choose **Refresh app data** to activate rebuilt plugins. Restart `dev:plugin-packages` after adding/removing plugin packages or changing their dev scripts. You can restart `dev:web`, `dev:client`, or the combined `dev` command without stopping active Pi sessions.
 
 ## Production-style run from a checkout
 

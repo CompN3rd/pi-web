@@ -1,7 +1,6 @@
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { AuthProvidersResponse, AuthType, OAuthFlowState } from "../../shared/apiTypes.js";
 import { getLoginProviderOptions, getLogoutProviderOptions } from "./authProviderOptions.js";
-import { SessionOperationGate } from "./sessionOperationGate.js";
 import { OAuthLoginFlowService } from "./oauthLoginFlowService.js";
 
 export interface AuthChange {
@@ -12,21 +11,18 @@ type AuthChangeListener = (change: AuthChange) => void;
 type ModelRegistryInstance = ReturnType<typeof ModelRegistry.create>;
 
 export interface AuthServiceDependencies {
-  operationGate?: SessionOperationGate;
   modelRegistry?: ModelRegistryInstance;
   authFlows?: OAuthLoginFlowService;
 }
 
 export class AuthService {
   readonly modelRegistry: ModelRegistryInstance;
-  private readonly operations: SessionOperationGate;
   private readonly authFlows: OAuthLoginFlowService;
   private readonly listeners = new Set<AuthChangeListener>();
 
   constructor(deps: AuthServiceDependencies = {}) {
-    this.operations = deps.operationGate ?? new SessionOperationGate();
     this.modelRegistry = deps.modelRegistry ?? ModelRegistry.create(AuthStorage.create());
-    this.authFlows = deps.authFlows ?? new OAuthLoginFlowService({ operationGate: this.operations });
+    this.authFlows = deps.authFlows ?? new OAuthLoginFlowService();
   }
 
   subscribe(listener: AuthChangeListener): () => void {
@@ -37,27 +33,17 @@ export class AuthService {
   }
 
   dispose(): void {
-    this.operations.runSync(() => {
-      this.authFlows.dispose();
-      this.listeners.clear();
-    });
+    this.authFlows.dispose();
+    this.listeners.clear();
   }
 
   authProviders(mode: "login" | "logout", authType?: AuthType): AuthProvidersResponse {
-    return this.operations.runSync(() => this.authProvidersAdmitted(mode, authType));
-  }
-
-  private authProvidersAdmitted(mode: "login" | "logout", authType?: AuthType): AuthProvidersResponse {
     this.modelRegistry.refresh();
     const providers = mode === "logout" ? getLogoutProviderOptions(this.modelRegistry) : getLoginProviderOptions(this.modelRegistry, authType);
     return { providers };
   }
 
   saveApiKey(providerId: string, key: string): { accepted: true } {
-    return this.operations.runSync(() => this.saveApiKeyAdmitted(providerId, key));
-  }
-
-  private saveApiKeyAdmitted(providerId: string, key: string): { accepted: true } {
     if (key.trim() === "") throw new Error("API key is required");
     this.modelRegistry.authStorage.set(providerId, { type: "api_key", key });
     this.refreshAuthState();
@@ -65,20 +51,12 @@ export class AuthService {
   }
 
   logoutProvider(providerId: string): { accepted: true } {
-    return this.operations.runSync(() => this.logoutProviderAdmitted(providerId));
-  }
-
-  private logoutProviderAdmitted(providerId: string): { accepted: true } {
     this.modelRegistry.authStorage.logout(providerId);
     this.refreshAuthState({ removedProviderId: providerId });
     return { accepted: true };
   }
 
   startOAuthLogin(providerId: string): OAuthFlowState {
-    return this.operations.runSync(() => this.startOAuthLoginAdmitted(providerId));
-  }
-
-  private startOAuthLoginAdmitted(providerId: string): OAuthFlowState {
     const provider = this.requireOAuthLoginProvider(providerId);
     return this.authFlows.start({
       providerId,

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { watch } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 
@@ -88,22 +88,6 @@ async function buildFile(file, outputPath) {
   await writeFile(outputPath, output);
 }
 
-async function findPluginDirs(dir) {
-  try {
-    if (!(await stat(dir)).isDirectory()) return [];
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return [];
-    throw error;
-  }
-  const entries = await readDirectory(dir);
-  const dirs = [dir];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name === "node_modules") continue;
-    dirs.push(...await findPluginDirs(resolve(dir, entry.name)));
-  }
-  return dirs.sort((left, right) => left.localeCompare(right));
-}
-
 function isPluginSource(fileName) {
   return fileName.endsWith(".ts") && !fileName.endsWith(".d.ts");
 }
@@ -129,47 +113,24 @@ async function readDirectory(dir) {
 }
 
 async function watchAndBuild() {
-  const watchers = new Map();
+  let watcher;
   let timer;
   let building = false;
   let pending = false;
 
-  const closeWatchers = () => {
-    for (const watcher of watchers.values()) watcher.close();
-    watchers.clear();
-  };
-
-  const refreshWatchers = async () => {
-    const dirs = new Set([cwd, ...await findPluginDirs(rootDir)]);
-    for (const [dir, watcher] of watchers) {
-      if (dirs.has(dir)) continue;
-      watcher.close();
-      watchers.delete(dir);
-    }
-    for (const dir of dirs) {
-      if (watchers.has(dir)) continue;
-      try {
-        const watcher = watch(dir, (event, filename) => {
-          // Watch the parent too, so a missing/deleted root can be recreated.
-          if (dir === cwd && filename !== null && filename.toString() !== "pi-web-plugins") return;
-          // A renamed directory may now refer to a different inode.
-          if (event === "rename") {
-            watcher.close();
-            watchers.delete(dir);
-          }
-          scheduleBuild();
-        });
-        watcher.on("error", (error) => {
-          console.error(`[plugins] ${formatUnknownError(error)}`);
-          watcher.close();
-          watchers.delete(dir);
-          scheduleBuild();
-        });
-        watchers.set(dir, watcher);
-      } catch (error) {
-        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+  const refreshWatcher = () => {
+    watcher?.close();
+    try {
+      watcher = watch(rootDir, { recursive: true }, (_event, filename) => {
+        if (filename?.toString().split(/[\\/]/u).includes("node_modules")) return;
         scheduleBuild();
-      }
+      });
+      watcher.on("error", (error) => {
+        console.error(`[plugins] ${formatUnknownError(error)}`);
+        scheduleBuild();
+      });
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") throw error;
     }
   };
 
@@ -182,7 +143,7 @@ async function watchAndBuild() {
     try {
       do {
         pending = false;
-        await refreshWatchers();
+        refreshWatcher();
         await buildAll();
       } while (pending);
     } catch (error) {
@@ -200,9 +161,14 @@ async function watchAndBuild() {
     }, 100);
   };
 
+  // The root itself can be absent or replaced; its parent stays watched.
+  const parentWatcher = watch(cwd, (_event, filename) => {
+    if (filename === null || filename.toString() === "pi-web-plugins") scheduleBuild();
+  });
   const stop = () => {
     if (timer !== undefined) clearTimeout(timer);
-    closeWatchers();
+    watcher?.close();
+    parentWatcher.close();
     process.exit(0);
   };
 

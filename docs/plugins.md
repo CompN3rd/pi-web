@@ -142,7 +142,11 @@ A separate plugin package should:
 Typical local development loop from this repository:
 
 ```bash
+# Terminal 1: long-lived daemon; skip if the user service is already running
+npm run dev:sessiond
+# Terminal 2: autoreloading web/API, browser UI, and plugin builds
 npm run dev
+# Terminal 3: check discovery
 curl http://127.0.0.1:8504/pi-web-plugins/manifest.json
 ```
 

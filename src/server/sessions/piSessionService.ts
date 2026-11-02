@@ -12,7 +12,6 @@ import {
   SessionManager,
   type CreateAgentSessionRuntimeFactory,
   type EditToolDetails,
-  type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionModel, ClientSessionStatus, ClientThinkingLevel, SessionUiEvent } from "../types.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
@@ -22,7 +21,6 @@ import { SessionCommandService } from "./sessionCommandService.js";
 import { SessionArchiveStore, type ArchivedSessionRecord, type ArchiveSessionInput } from "./sessionArchiveStore.js";
 import { findArchiveCandidateByIdOrPrefix, planSessionArchiveTree, type SessionArchiveTreeCandidate } from "./sessionArchiveTree.js";
 import type { ActiveSession } from "./sessionRuntimeStore.js";
-import { SessionOperationGate } from "./sessionOperationGate.js";
 import type { AuthChange } from "./authService.js";
 import { fallbackSessionName, generateShortSessionName } from "./sessionNameGenerator.js";
 import { computeEditPreview, type EditPreviewResult } from "./editPreview.js";
@@ -91,7 +89,6 @@ export interface PiAgentSession {
   promptTemplates: readonly { name: string; description?: string }[];
   resourceLoader: { getSkills(): { skills: readonly { name: string; description?: string }[] } };
   subscribe(listener: (event: unknown) => void): () => void;
-  bindExtensions: AgentSession["bindExtensions"];
   compact(instructions?: string): Promise<{ summary: string; tokensBefore: number }>;
   getUserMessagesForForking(): readonly { entryId: string; text: string }[];
   getSessionStats(): { sessionId: string; totalMessages: number; userMessages: number; assistantMessages: number; toolCalls: number; tokens: ClientSessionStatus["tokens"]; cost: number };
@@ -168,7 +165,6 @@ function createPiWebEditToolDefinition(cwd: string) {
 }
 
 export interface PiSessionServiceDependencies {
-  operationGate?: SessionOperationGate;
   archiveStore?: SessionArchiveRepository;
   agentDir?: string;
   sessionManager?: PiSessionManagerGateway;
@@ -181,10 +177,6 @@ export interface PiSessionServiceDependencies {
 
 export class PiSessionService {
   private readonly active = new Map<string, ActiveSession<PiSessionRuntime>>();
-  private readonly opening = new Map<string, Promise<ActiveSession<PiSessionRuntime>>>();
-  private readonly creating = new Set<Promise<ActiveSession<PiSessionRuntime>>>();
-  private disposed = false;
-  private readonly operations: SessionOperationGate;
   private readonly activities = new Map<string, { phase: "active" | "idle" | "error"; label: string; detail?: string; at: string }>();
   private readonly heartbeat: NodeJS.Timeout;
   private readonly commandService: SessionCommandService<PiAgentSession>;
@@ -198,7 +190,6 @@ export class PiSessionService {
   private readonly workspaceActivity: Pick<WorkspaceActivityService, "applySessionStatus" | "applySessionActivity" | "removeSession" | "reconcileSessionActivity"> | undefined;
 
   constructor(private readonly events: SessionEventHub, deps: PiSessionServiceDependencies = {}) {
-    this.operations = deps.operationGate ?? new SessionOperationGate();
     this.archiveStore = deps.archiveStore ?? new SessionArchiveStore();
     this.agentDir = deps.agentDir ?? getAgentDir();
     this.sessionManager = deps.sessionManager ?? SessionManager;
@@ -222,7 +213,6 @@ export class PiSessionService {
         },
       },
       { listSessionNames: (cwd) => this.listSessionNames(cwd) },
-      this.operations,
     );
   }
 
@@ -231,16 +221,7 @@ export class PiSessionService {
   }
 
   async dispose(): Promise<void> {
-    return this.operations.run(() => this.disposeAdmitted());
-  }
-
-  private async disposeAdmitted(): Promise<void> {
-    this.disposed = true;
     clearInterval(this.heartbeat);
-    // Creation may not have registered a session yet. Drain it before taking the snapshot.
-    await Promise.allSettled(this.creating);
-    // Startup hooks can own resources; finish them before emitting shutdown.
-    await Promise.allSettled(Array.from(this.active.values(), (active) => active.initializing ?? Promise.resolve()));
     const activeSessions = Array.from(new Set(this.active.values()));
     this.active.clear();
     this.activities.clear();
@@ -254,10 +235,6 @@ export class PiSessionService {
   }
 
   async list(cwd: string): Promise<ClientSession[]> {
-    return this.operations.run(() => this.listAdmitted(cwd));
-  }
-
-  private async listAdmitted(cwd: string): Promise<ClientSession[]> {
     const [sessions, archivedRecords] = await Promise.all([this.sessionManager.list(cwd), this.archiveStore.list()]);
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
     const archivedForCwd = await Promise.all(
@@ -276,11 +253,6 @@ export class PiSessionService {
   }
 
   async start(cwd: string): Promise<ClientSession> {
-    return this.operations.run(() => this.startAdmitted(cwd));
-  }
-
-  private async startAdmitted(cwd: string): Promise<ClientSession> {
-    this.assertNotDisposed();
     const active = await this.create(this.sessionManager.create(cwd), cwd);
     const { session } = active.runtime;
     return {
@@ -295,21 +267,15 @@ export class PiSessionService {
   }
 
   async messages(sessionId: string, page?: { before?: number; limit?: number }): Promise<unknown[] | ClientMessagePage> {
-    return this.operations.run(async () => {
-      const session = await this.getOrOpen(sessionId);
-      return pageMessagesAtSafeBoundary(historyMessages(session), page);
-    });
+    const session = await this.getOrOpen(sessionId);
+    return pageMessagesAtSafeBoundary(historyMessages(session), page);
   }
 
   async status(sessionId: string): Promise<ClientSessionStatus> {
-    return this.operations.run(async () => this.statusFromSession(await this.getOrOpen(sessionId)));
+    return this.statusFromSession(await this.getOrOpen(sessionId));
   }
 
   async availableModels(sessionId: string): Promise<ClientSessionModel[]> {
-    return this.operations.run(() => this.availableModelsAdmitted(sessionId));
-  }
-
-  private async availableModelsAdmitted(sessionId: string): Promise<ClientSessionModel[]> {
     const session = await this.getOrOpen(sessionId);
     session.modelRegistry.refresh();
     const models = session.scopedModels.length > 0
@@ -319,10 +285,6 @@ export class PiSessionService {
   }
 
   async setModel(sessionId: string, provider: string, modelId: string): Promise<ClientSessionStatus> {
-    return this.operations.run(() => this.setModelAdmitted(sessionId, provider, modelId));
-  }
-
-  private async setModelAdmitted(sessionId: string, provider: string, modelId: string): Promise<ClientSessionStatus> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     session.modelRegistry.refresh();
@@ -339,10 +301,6 @@ export class PiSessionService {
   }
 
   async cycleModel(sessionId: string, direction: "forward" | "backward"): Promise<ClientSessionStatus> {
-    return this.operations.run(() => this.cycleModelAdmitted(sessionId, direction));
-  }
-
-  private async cycleModelAdmitted(sessionId: string, direction: "forward" | "backward"): Promise<ClientSessionStatus> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     const result = await session.cycleModel(direction);
@@ -353,17 +311,11 @@ export class PiSessionService {
   }
 
   async availableThinkingLevels(sessionId: string): Promise<ClientThinkingLevel[]> {
-    return this.operations.run(async () => {
-      const session = await this.getOrOpen(sessionId);
-      return session.getAvailableThinkingLevels();
-    });
+    const session = await this.getOrOpen(sessionId);
+    return session.getAvailableThinkingLevels();
   }
 
   async setThinkingLevel(sessionId: string, level: ClientThinkingLevel): Promise<ClientSessionStatus> {
-    return this.operations.run(() => this.setThinkingLevelAdmitted(sessionId, level));
-  }
-
-  private async setThinkingLevelAdmitted(sessionId: string, level: ClientThinkingLevel): Promise<ClientSessionStatus> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     session.setThinkingLevel(level);
@@ -373,10 +325,6 @@ export class PiSessionService {
   }
 
   async cycleThinkingLevel(sessionId: string): Promise<ClientSessionStatus> {
-    return this.operations.run(() => this.cycleThinkingLevelAdmitted(sessionId));
-  }
-
-  private async cycleThinkingLevelAdmitted(sessionId: string): Promise<ClientSessionStatus> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     const level = session.cycleThinkingLevel();
@@ -387,10 +335,6 @@ export class PiSessionService {
   }
 
   async commands(sessionId: string): Promise<ClientCommand[]> {
-    return this.operations.run(() => this.commandsAdmitted(sessionId));
-  }
-
-  private async commandsAdmitted(sessionId: string): Promise<ClientCommand[]> {
     const session = await this.getOrOpen(sessionId);
     const commands: ClientCommand[] = [...BUILTIN_COMMANDS];
     for (const command of session.extensionRunner.getRegisteredCommands()) {
@@ -406,10 +350,6 @@ export class PiSessionService {
   }
 
   async prompt(sessionId: string, text: string, streamingBehavior?: "steer" | "followUp"): Promise<void> {
-    return this.operations.run(() => this.promptAdmitted(sessionId, text, streamingBehavior));
-  }
-
-  private async promptAdmitted(sessionId: string, text: string, streamingBehavior?: "steer" | "followUp"): Promise<void> {
     await this.assertWritable(sessionId);
     const session = await this.getOrOpen(sessionId);
     this.maybeGenerateSessionName(session, text);
@@ -422,7 +362,7 @@ export class PiSessionService {
     }
     this.publishActivity(session, session.isCompacting ? "message queued during compaction" : behavior === "steer" ? "steering queued" : behavior === "followUp" ? "message queued" : "prompt accepted", "active");
     if (!isQueued) this.events.publish(sessionId, { type: "message.append", message: userTextMessage(text) });
-    void this.operations.run(() => session.prompt(text, behavior === undefined ? undefined : { streamingBehavior: behavior })).catch((error: unknown) => {
+    void session.prompt(text, behavior === undefined ? undefined : { streamingBehavior: behavior }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       this.publishActivity(session, "error", "error", message);
       this.events.publish(sessionId, { type: "session.error", message });
@@ -430,10 +370,6 @@ export class PiSessionService {
   }
 
   async shell(sessionId: string, text: string): Promise<void> {
-    return this.operations.run(() => this.shellAdmitted(sessionId, text));
-  }
-
-  private async shellAdmitted(sessionId: string, text: string): Promise<void> {
     await this.assertWritable(sessionId);
     const active = await this.getActive(sessionId);
     const { session } = active.runtime;
@@ -444,11 +380,11 @@ export class PiSessionService {
 
     this.publishActivity(session, "running bash", "active", command);
     this.events.publish(session.sessionId, { type: "shell.start", command, excludeFromContext: isExcluded });
-    void this.operations.run(() => session.executeBash(command, (chunk) => {
+    void session.executeBash(command, (chunk) => {
       this.events.publish(session.sessionId, { type: "shell.chunk", chunk });
       this.publishActivity(session, "running bash", "active", command);
       this.publishStatus(session);
-    }, { excludeFromContext: isExcluded })).then((result) => {
+    }, { excludeFromContext: isExcluded }).then((result) => {
       this.events.publish(session.sessionId, {
         type: "shell.end",
         output: result.output,
@@ -469,24 +405,16 @@ export class PiSessionService {
   }
 
   async runCommand(sessionId: string, text: string): Promise<ClientCommandResult> {
-    return this.operations.run(async () => {
-      await this.assertWritable(sessionId);
-      return this.commandService.run(sessionId, text);
-    });
+    await this.assertWritable(sessionId);
+    return this.commandService.run(sessionId, text);
   }
 
   async respondToCommand(sessionId: string, requestId: string, value: string): Promise<ClientCommandResult> {
-    return this.operations.run(async () => {
-      await this.assertWritable(sessionId);
-      return this.commandService.respond(sessionId, requestId, value);
-    });
+    await this.assertWritable(sessionId);
+    return this.commandService.respond(sessionId, requestId, value);
   }
 
   async archive(sessionId: string): Promise<void> {
-    return this.operations.run(() => this.archiveAdmitted(sessionId));
-  }
-
-  private async archiveAdmitted(sessionId: string): Promise<void> {
     const session = await this.getOrOpen(sessionId);
     if (sessionHasActiveWork(session)) throw new Error("Stop current session activity before archiving");
     const archiveInput = await this.archiveInputForSession(session);
@@ -495,10 +423,6 @@ export class PiSessionService {
   }
 
   async archiveTree(sessionId: string): Promise<ClientArchiveSessionsResponse> {
-    return this.operations.run(() => this.archiveTreeAdmitted(sessionId));
-  }
-
-  private async archiveTreeAdmitted(sessionId: string): Promise<ClientArchiveSessionsResponse> {
     const session = await this.getOrOpen(sessionId);
     const catalog = await this.workspaceArchiveCandidates(session.sessionManager.getCwd());
     const root = findArchiveCandidateByIdOrPrefix(catalog, session.sessionId) ?? archiveCandidateFromActiveSession(session, false);
@@ -519,17 +443,11 @@ export class PiSessionService {
   }
 
   async restore(sessionId: string): Promise<void> {
-    return this.operations.run(async () => {
-      await this.closeActive(sessionId);
-      await this.archiveStore.restore(sessionId);
-    });
+    await this.closeActive(sessionId);
+    await this.archiveStore.restore(sessionId);
   }
 
   async detachParent(sessionId: string): Promise<void> {
-    return this.operations.run(() => this.detachParentAdmitted(sessionId));
-  }
-
-  private async detachParentAdmitted(sessionId: string): Promise<void> {
     const session = await this.getOrOpen(sessionId);
     const sessionFile = session.sessionFile;
     if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
@@ -537,10 +455,6 @@ export class PiSessionService {
   }
 
   async abort(sessionId: string): Promise<void> {
-    return this.operations.run(() => this.abortAdmitted(sessionId));
-  }
-
-  private async abortAdmitted(sessionId: string): Promise<void> {
     const active = this.active.get(sessionId);
     if (!active) return;
     clearSessionQueue(active.runtime.session);
@@ -550,7 +464,7 @@ export class PiSessionService {
   }
 
   stop(sessionId: string): void {
-    void this.operations.run(() => this.closeActive(sessionId)).catch(() => {
+    void this.closeActive(sessionId).catch(() => {
       // Best-effort shutdown; callers that need errors await closeActive directly.
     });
   }
@@ -655,69 +569,31 @@ export class PiSessionService {
   }
 
   private async getActive(sessionId: string): Promise<ActiveSession<PiSessionRuntime>> {
-    return this.operations.run(() => this.getActiveAdmitted(sessionId));
-  }
-
-  private async getActiveAdmitted(sessionId: string): Promise<ActiveSession<PiSessionRuntime>> {
-    this.assertNotDisposed();
     const active = this.active.get(sessionId);
-    if (active) {
-      await active.initializing;
-      return active;
-    }
+    if (active) return active;
 
     const archived = await this.archiveStore.get(sessionId);
-    if (archived?.archivePath !== undefined) return this.openSaved(archived.sessionId, archived.archivePath, archived.cwd);
+    if (archived?.archivePath !== undefined) return this.create(this.sessionManager.open(archived.archivePath), archived.cwd);
 
     const match = (await this.sessionManager.listAll()).find((s) => s.id === sessionId || s.id.startsWith(sessionId));
     if (!match) throw new Error("Session not found");
-    return this.openSaved(match.id, match.path, match.cwd);
-  }
-
-  private async openSaved(sessionId: string, path: string, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
-    this.assertNotDisposed();
-    // Resolve aliases before coalescing, and recheck after asynchronous catalog lookup.
-    const active = this.active.get(sessionId);
-    if (active) {
-      await active.initializing;
-      return active;
-    }
-    const pending = this.opening.get(sessionId);
-    if (pending) return pending;
-    const opening = this.create(this.sessionManager.open(path), cwd);
-    this.opening.set(sessionId, opening);
-    try {
-      return await opening;
-    } finally {
-      this.opening.delete(sessionId);
-    }
-  }
-
-  private assertNotDisposed(): void {
-    if (this.disposed) throw new Error("Session service is disposed");
+    return this.create(this.sessionManager.open(match.path), match.cwd);
   }
 
   private async create(sessionManager: PiSessionManager, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
-    this.assertNotDisposed();
-    const creating = this.operations.run(() => this.createRuntimeSession(sessionManager, cwd));
-    this.creating.add(creating);
-    try {
-      return await creating;
-    } finally {
-      this.creating.delete(creating);
-    }
-  }
-
-  private async createRuntimeSession(sessionManager: PiSessionManager, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
     const runtime = await this.createAgentRuntime(this.createRuntime, { cwd, agentDir: this.agentDir, sessionManager });
     const active: ActiveSession<PiSessionRuntime> = { runtime, unsubscribe: noop };
-    runtime.setRebindSession(() => this.bindRuntime(active));
-    await this.bindRuntime(active);
+    this.bindRuntime(active);
+    runtime.setRebindSession(() => {
+      this.bindRuntime(active);
+      return Promise.resolve();
+    });
+    this.active.set(runtime.session.sessionId, active);
     this.publishStatus(runtime.session);
     return active;
   }
 
-  private bindRuntime(active: ActiveSession<PiSessionRuntime>): Promise<void> {
+  private bindRuntime(active: ActiveSession<PiSessionRuntime>): void {
     active.unsubscribe();
     for (const [sessionId, candidate] of this.active.entries()) {
       if (candidate === active) this.active.delete(sessionId);
@@ -729,17 +605,6 @@ export class PiSessionService {
       this.publishStatus(session);
     });
     this.active.set(session.sessionId, active);
-    // Subscribe before startup hooks: extensions can publish messages during initialization.
-    // Defer binding one microtask so concurrent readers always see the readiness barrier.
-    active.initializing = Promise.resolve().then(() => session.bindExtensions({
-      onError: (error) => {
-        this.events.publish(session.sessionId, { type: "session.error", message: `Extension ${error.extensionPath}: ${error.error}` });
-      },
-    })).catch(async (error: unknown) => {
-      await this.closeActive(session.sessionId);
-      throw error;
-    });
-    return active.initializing;
   }
 
   private maybeGenerateSessionName(session: PiAgentSession, firstMessage: string): void {
@@ -747,13 +612,10 @@ export class PiSessionService {
     const model = session.model;
     if (model === undefined) return;
 
-    void this.operations.run(async () => {
-      try {
-        const name = await generateShortSessionName(this.modelRegistry, model, firstMessage);
-        this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
-      } catch {
-        this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
-      }
+    void generateShortSessionName(this.modelRegistry, model, firstMessage).then((name) => {
+      this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
+    }).catch(() => {
+      this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
     });
   }
 
@@ -764,10 +626,6 @@ export class PiSessionService {
   }
 
   applyAuthChange(change: AuthChange = {}): void {
-    this.operations.runSync(() => { this.applyAuthChangeAdmitted(change); });
-  }
-
-  private applyAuthChangeAdmitted(change: AuthChange): void {
     this.modelRegistry.refresh();
     for (const active of this.active.values()) {
       const { session } = active.runtime;

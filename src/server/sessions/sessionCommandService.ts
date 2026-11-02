@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import type { SessionUiEvent } from "../../shared/apiTypes.js";
 import type { ClientCommandResult, ClientSession } from "../types.js";
 import { isBuiltinCommand } from "./builtinCommands.js";
-import { SessionOperationGate } from "./sessionOperationGate.js";
 
 export interface CommandSession {
   sessionId: string;
@@ -71,7 +70,6 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
       onCompactionEnd?: (session: TSession, result: "success" | "error", detail?: string) => void;
     } = {},
     private readonly naming: SessionCommandNaming = {},
-    private readonly operations: Pick<SessionOperationGate, "run"> = new SessionOperationGate(),
   ) {}
 
   async run(sessionId: string, text: string): Promise<ClientCommandResult> {
@@ -120,7 +118,7 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
 
   private compact(session: TSession, instructions: string): ClientCommandResult {
     this.lifecycle.onCompactionStart?.(session);
-    void this.operations.run(() => session.compact(instructions === "" ? undefined : instructions))
+    void session.compact(instructions === "" ? undefined : instructions)
       .then((result) => {
         this.events.publish(session.sessionId, {
           type: "command.output",
